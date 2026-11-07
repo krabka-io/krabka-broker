@@ -64,7 +64,7 @@ fn rendered_trigger(response: &TriggerBarrierResponse) -> Rendered {
 }
 
 #[when(
-    "the broker answers a trigger with a partial cut that has no marker in {topic} partition {partition:i32}"
+    "the broker answers a trigger with a partial cut that has no marker in {topic} partition {partition}"
 )]
 fn partial_cut(operator_messages: &mut OperatorMessages, topic: String, partition: i32) {
     // The epoch, the other partition and its offset only give the cut a
@@ -91,7 +91,7 @@ fn partial_cut(operator_messages: &mut OperatorMessages, topic: String, partitio
     operator_messages.rendered.set(rendered_trigger(&response));
 }
 
-#[then("the tool succeeds and reports no marker in {topic} partition {partition:i32}")]
+#[then("the tool succeeds and reports no marker in {topic} partition {partition}")]
 fn partial_cut_reported(operator_messages: &OperatorMessages, topic: String, partition: i32) {
     assert2::assert!(
         *operator_messages.rendered.get()
@@ -113,7 +113,7 @@ fn injection_in_flight(operator_messages: &mut OperatorMessages) {
 }
 
 #[then(
-    "the tool exits {exit:i32} and tells the operator that an injection is already in flight, retry"
+    "the tool exits {exit} and tells the operator that an injection is already in flight, retry"
 )]
 fn told_to_retry(operator_messages: &OperatorMessages, exit: i32) {
     assert2::assert!(
@@ -126,7 +126,7 @@ fn told_to_retry(operator_messages: &OperatorMessages, exit: i32) {
     );
 }
 
-#[when("the broker refuses a trigger with error {code:i16} and the reason {reason}")]
+#[when("the broker refuses a trigger with error {code} and the reason {reason}")]
 fn refused_with_reason(operator_messages: &mut OperatorMessages, code: i16, reason: String) {
     let response = TriggerBarrierResponse {
         error_code: code,
@@ -136,7 +136,7 @@ fn refused_with_reason(operator_messages: &mut OperatorMessages, code: i16, reas
     operator_messages.rendered.set(rendered_trigger(&response));
 }
 
-#[then("the tool exits {exit:i32} and reports {message}")]
+#[then("the tool exits {exit} and reports {message}")]
 fn refusal_reported(operator_messages: &OperatorMessages, exit: i32, message: String) {
     assert2::assert!(
         *operator_messages.rendered.get()
@@ -174,7 +174,7 @@ fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
     operator_messages.address.set(address);
 }
 
-#[then("the tool exits {exit:i32} because the outcome of the request is unknown")]
+#[then("the tool exits {exit} because the outcome of the request is unknown")]
 fn unreachable_reported(operator_messages: &OperatorMessages, exit: i32) {
     let rendered = operator_messages.rendered.get();
     let address = operator_messages.address.get();
