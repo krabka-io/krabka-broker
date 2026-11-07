@@ -196,54 +196,11 @@ async fn copy_one_inner(
             tier.metrics.worm_manifest_seal_failures_total.inc();
         }
     };
-    let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
-    // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
-    // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
-    // `RemoteLogSegmentMetadata` carries verbatim.
-    let epochs = export_epoch_map(ex, krabka_ids::LeaderEpoch(leader_epoch.0.max(0)));
-    let size = ex.size.bytes_i32();
-
-    let metadata = match RemoteLogSegmentMetadata::new(
-        id.clone(),
-        ex.base_offset.0,
-        ex.last_offset.0,
-        ex.max_timestamp,
-        broker_id,
-        now_ms(),
-        krabka_remote_storage::RemoteLogSegmentDetails::new(
-            size,
-            RemoteLogSegmentState::CopySegmentStarted,
-            epochs.clone(),
-        ),
-    ) {
-        Ok(m) => m,
-        Err(e) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: skipping segment with invalid metadata");
-            return CopyOutcome::Failed;
-        }
+    let Some((metadata, epochs)) = build_started_metadata(tp, broker_id, leader_epoch, ex, chain)
+    else {
+        return CopyOutcome::Failed;
     };
-    // KIP-405 txnIndexEmpty: set true when the log segment has no transaction
-    // index file (non-transactional topics or segments written before txn support).
-    let metadata = if ex.transaction_index_path.is_none() {
-        metadata.with_txn_index_empty(true)
-    } else {
-        metadata
-    };
-    // The chain stamp goes on before the copy: a WORM backend refuses to seal
-    // an unstamped manifest, and it refuses only *after* uploading every
-    // object, which would leave orphans in a bucket that takes nothing back.
-    let metadata = match chain {
-        Chain::Unchained => metadata,
-        Chain::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
-            Ok(custom) => metadata.with_custom_metadata(custom),
-            Err(e) => {
-                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
-                return CopyOutcome::Failed;
-            }
-        },
-    };
+    let id = metadata.remote_log_segment_id().clone();
 
     let md_started = metadata.clone();
     if let Err(e) = rlmm_mutate(rlmm, move |m| m.add_remote_log_segment_metadata(md_started)).await
@@ -420,6 +377,70 @@ async fn copy_one_inner(
         }
         _ => CopyOutcome::Copied { next },
     }
+}
+
+/// The `CopySegmentStarted` metadata for copying `ex`, stamped for `chain`,
+/// and the epoch map it carries. `None`, after a warning, when the metadata
+/// is invalid or the chain stamp cannot be encoded.
+fn build_started_metadata(
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    leader_epoch: krabka_ids::LeaderEpoch,
+    ex: &SegmentExport,
+    chain: Chain,
+) -> Option<(
+    RemoteLogSegmentMetadata,
+    BTreeMap<krabka_ids::LeaderEpoch, i64>,
+)> {
+    let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
+    // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
+    // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
+    // `RemoteLogSegmentMetadata` carries verbatim.
+    let epochs = export_epoch_map(ex, krabka_ids::LeaderEpoch(leader_epoch.0.max(0)));
+    let size = ex.size.bytes_i32();
+
+    let metadata = match RemoteLogSegmentMetadata::new(
+        id,
+        ex.base_offset.0,
+        ex.last_offset.0,
+        ex.max_timestamp,
+        broker_id,
+        now_ms(),
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
+            size,
+            RemoteLogSegmentState::CopySegmentStarted,
+            epochs.clone(),
+        ),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: skipping segment with invalid metadata");
+            return None;
+        }
+    };
+    // KIP-405 txnIndexEmpty: set true when the log segment has no transaction
+    // index file (non-transactional topics or segments written before txn support).
+    let metadata = if ex.transaction_index_path.is_none() {
+        metadata.with_txn_index_empty(true)
+    } else {
+        metadata
+    };
+    // The chain stamp goes on before the copy: a WORM backend refuses to seal
+    // an unstamped manifest, and it refuses only *after* uploading every
+    // object, which would leave orphans in a bucket that takes nothing back.
+    let metadata = match chain {
+        Chain::Unchained => metadata,
+        Chain::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
+            Ok(custom) => metadata.with_custom_metadata(custom),
+            Err(e) => {
+                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
+                return None;
+            }
+        },
+    };
+    Some((metadata, epochs))
 }
 
 /// Whether a refused `CopySegmentFinished` means somebody deleted the segment
