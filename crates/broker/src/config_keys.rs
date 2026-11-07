@@ -158,7 +158,6 @@ pub use self::{
     validation::{REMOTE_STORAGE_POLICY_MESSAGE, validate_topic_config_map},
 };
 use crate::api_catalog::UnstableApiVersions;
-#[cfg(test)]
 pub use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 pub const RETENTION_MS: &str = "retention.ms";
 pub const RETENTION_BYTES: &str = "retention.bytes";
