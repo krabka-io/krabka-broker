@@ -24,7 +24,7 @@ use {
     crate::{
         error::LogError,
         io::{FileIo, IoTarget, LogIo},
-        name,
+        name::{self, SegmentFile},
     },
     krabka_protocol::records::{HEADER_LEN, RecordBatchHeader},
     krabka_verified::local_recovery::{
@@ -42,18 +42,18 @@ use {
 };
 
 /// The file kinds a swap set carries: the log, then its sidecars.
-const SWAP_EXTENSIONS: [&str; 4] = ["log", "index", "timeindex", "txnindex"];
+const SWAP_EXTENSIONS: [&str; 4] = SegmentFile::extensions(SegmentFile::SWAP_SET);
 
 /// The sidecars of a swap set. The `.txnindex` is optional: the rewrite writes
 /// one only when an aborted transaction survives.
-const SWAP_SIDECARS: [&str; 3] = ["index", "timeindex", "txnindex"];
+const SWAP_SIDECARS: [&str; 3] = SegmentFile::extensions(SegmentFile::SWAP_SIDECARS);
 
 /// The files of a replaced segment that completing a swap deletes.
 ///
 /// The `.stampindex` is not in the swap set, so the survivor takes no stamp
 /// ranges over and the replaced segments' stamp sidecars go with them. One at
 /// the survivor's own base would otherwise read as the survivor's own.
-const REPLACED_EXTENSIONS: [&str; 5] = ["log", "index", "timeindex", "txnindex", "stampindex"];
+const REPLACED_EXTENSIONS: [&str; 5] = SegmentFile::extensions(SegmentFile::SEGMENT);
 
 /// The bytes of a v2 batch that its `batch_length` does not count: the base
 /// offset and the length field itself.
@@ -114,8 +114,8 @@ pub fn remove_replaced_segment(io: &dyn LogIo, dir: &Path, base: i64) -> Result<
 pub fn promote_log(io: &dyn LogIo, dir: &Path, base: i64) -> Result<(), LogError> {
     io.rename(
         IoTarget::CompactionSwap,
-        &swap_path(dir, base, "log"),
-        &final_path(dir, base, "log"),
+        &swap_path(dir, base, SegmentFile::Log.extension()),
+        &final_path(dir, base, SegmentFile::Log.extension()),
     )?;
     io.sync_dir(dir)?;
     Ok(())
@@ -136,7 +136,7 @@ pub fn promote_sidecars(io: &dyn LogIo, dir: &Path, base: i64) -> Result<(), Log
         let target = final_path(dir, base, ext);
         if swap.exists() {
             io.rename(IoTarget::CompactionSwap, &swap, &target)?;
-        } else if ext != "txnindex" && !target.exists() {
+        } else if ext != SegmentFile::TxnIndex.extension() && !target.exists() {
             File::create(&target)?;
         }
     }
@@ -167,7 +167,10 @@ pub fn recover_swaps(io: &dyn LogIo, dir: &Path) -> Result<(), LogError> {
     tracing::Span::current().record("swaps", listing.swap_bases.len());
     for &base in &listing.swap_bases {
         let facts = LocalRecoverySwapFacts {
-            log_cleaned_exists: listing.cleaned.contains(&SwapFile { base, ext: "log" }),
+            log_cleaned_exists: listing.cleaned.contains(&SwapFile {
+                base,
+                ext: SegmentFile::Log.extension(),
+            }),
             log_swap_exists: listing.log_swap_bases.contains(&base),
             final_log_exists: listing.log_bases.contains(&base),
         };
@@ -178,7 +181,8 @@ pub fn recover_swaps(io: &dyn LogIo, dir: &Path) -> Result<(), LogError> {
                 }
             }
             LocalRecoverySwapAction::CompleteSwap => {
-                let next = swap_next_offset(&swap_path(dir, base, "log"), base)?;
+                let next =
+                    swap_next_offset(&swap_path(dir, base, SegmentFile::Log.extension()), base)?;
                 let segments = listing.log_bases.iter().copied().chain([base]);
                 for segment in segments {
                     if local_recovery_swap_replaces(base, next, segment) {
@@ -284,7 +288,7 @@ impl Listing {
             };
             if let Some(SwapFile { base, ext }) = parse_suffixed(value, ".swap") {
                 listing.swap_bases.insert(base);
-                if ext == "log" {
+                if ext == SegmentFile::Log.extension() {
                     listing.log_swap_bases.insert(base);
                 }
             } else if let Some(file) = parse_suffixed(value, ".cleaned") {

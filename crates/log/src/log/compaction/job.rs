@@ -23,6 +23,7 @@ use {
         error::LogError,
         io::LogIo,
         log::rollover_flush::FlushTicket,
+        name::SegmentFile,
         recovery::swap::{cleaned_path, remove_if_present},
         segment::SealedInput,
         txn_index::AbortedTxn,
@@ -41,7 +42,7 @@ use {
 };
 
 /// The `.cleaned` sidecars a group's rewrite can leave, by extension.
-const CLEANED_EXTENSIONS: [&str; 4] = ["log", "index", "timeindex", "txnindex"];
+const CLEANED_EXTENSIONS: [&str; 4] = SegmentFile::extensions(SegmentFile::SWAP_SET);
 
 /// What a log knows about its compaction job, shared with the job.
 ///

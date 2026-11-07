@@ -9,6 +9,7 @@ use {
     crate::{
         error::LogError,
         io::LogIo,
+        name::SegmentFile,
         retention::{self, DirSync},
         segment::Segment,
     },
@@ -365,26 +366,14 @@ impl Log {
         {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
-        self.retire_files(
-            base,
-            now,
-            &[
-                "log",
-                "index",
-                "timeindex",
-                "txnindex",
-                "stampindex",
-                "snapshot",
-            ],
-            DirSync::Now,
-        )
+        self.retire_files(base, now, &SegmentFile::RETIRED_WITH_SEGMENT, DirSync::Now)
     }
 
     pub(super) fn retire_files(
         &mut self,
         base: Offset,
         now: SystemTime,
-        extensions: &[&str],
+        files: &[SegmentFile],
         sync: DirSync,
     ) -> Result<(), LogError> {
         let delay = self
@@ -397,8 +386,7 @@ impl Log {
             .checked_add(delay)
             .ok_or_else(|| LogError::InvalidArgument("file deletion deadline overflow".into()))?;
         let mut paths = Vec::new();
-        let result =
-            retention::retire_files(&*self.io, &self.dir, base, extensions, &mut paths, sync);
+        let result = retention::retire_files(&*self.io, &self.dir, base, files, &mut paths, sync);
         if !paths.is_empty() {
             self.pending_deletes.push(PendingDelete { deadline, paths });
         }

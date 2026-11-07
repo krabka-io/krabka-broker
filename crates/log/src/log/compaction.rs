@@ -14,6 +14,7 @@ use {
             replaces_producer_snapshot,
         },
         error::LogError,
+        name::SegmentFile,
         retention::{self, DirSync},
         segment::{SealedInput, Segment},
         txn_index::TxnIndex,
@@ -628,15 +629,16 @@ impl Log {
                 let dir = self.dir.clone();
                 let now = SystemTime::now();
                 atomic_swap_retiring(&*io, &dir, group_bases, rewrite, |base| {
-                    let mut files = vec!["log", "index", "timeindex"];
+                    let mut files =
+                        vec![SegmentFile::Log, SegmentFile::Index, SegmentFile::TimeIndex];
                     if !without_txn_file.contains(&base) {
-                        files.push("txnindex");
+                        files.push(SegmentFile::TxnIndex);
                     }
                     if with_stamp_index.contains(&base) {
-                        files.push("stampindex");
+                        files.push(SegmentFile::StampIndex);
                     }
                     if replaces_producer_snapshot(base, rewrite.new_base_offset) {
-                        files.push("snapshot");
+                        files.push(SegmentFile::Snapshot);
                     }
                     // The swap syncs the directory once all the consumed
                     // segments are retired, before anything depends on it.

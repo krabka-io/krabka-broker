@@ -10,8 +10,8 @@ use krabka_units::prelude::ByteSizeExt as _;
 use {
     super::Log,
     crate::{
-        error::LogError, producer_snapshot, retention::DirSync, segment::Segment,
-        txn_index::TxnIndex,
+        error::LogError, name::SegmentFile, producer_snapshot, retention::DirSync,
+        segment::Segment, txn_index::TxnIndex,
     },
     krabka_ids::Offset,
     std::{
@@ -76,12 +76,7 @@ impl Log {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
         let now = SystemTime::now();
-        self.retire_files(
-            base,
-            now,
-            &["log", "index", "timeindex", "txnindex", "stampindex"],
-            DirSync::Now,
-        )
+        self.retire_files(base, now, &SegmentFile::SEGMENT, DirSync::Now)
     }
 
     /// Retire the files of the newest sealed segment, then forget the segment
