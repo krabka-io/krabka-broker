@@ -124,7 +124,7 @@ mod tests {
         unknown = { 0, None },
         negative = { -1, None },
         topic = { 2, Some(ConfigResourceType::Topic) },
-        acl_cluster_byte = { 3, None },
+        between_topic_and_broker = { 3, None },
         broker = { 4, Some(ConfigResourceType::Broker) },
         broker_logger = { 8, Some(ConfigResourceType::BrokerLogger) },
         client_metrics = { 16, Some(ConfigResourceType::ClientMetrics) },
