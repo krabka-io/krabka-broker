@@ -145,26 +145,12 @@ async fn heap_profile(
             .into_response();
     };
     let mut ctl = ctl.lock().await;
-    let activated_here = !ctl.activated();
-    if activated_here {
-        if let Err(e) = ctl.activate() {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("jemalloc prof activate: {e}"),
-            )
-                .into_response();
-        }
-        let duration = requested_duration(
-            q.seconds,
-            config.profiling_heap_default_duration,
-            config.profiling_heap_max_duration,
-        );
-        time::sleep(duration.to_std()).await;
-    }
-    let dump = ctl.dump_pprof();
-    if activated_here && let Err(e) = ctl.deactivate() {
-        tracing::warn!(error = %e, "could not deactivate jemalloc profiling after heap dump");
-    }
+    let duration = requested_duration(
+        q.seconds,
+        config.profiling_heap_default_duration,
+        config.profiling_heap_max_duration,
+    );
+    let dump = sample_heap(&mut *ctl, duration).await;
     drop(ctl);
     match dump {
         Ok(pprof) => (
@@ -173,8 +159,75 @@ async fn heap_profile(
             pprof,
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("heap dump: {e}")).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     }
+}
+
+/// The jemalloc profiling controls the heap handler drives.
+///
+/// The trait is the seam that lets the unit tests run the sampling sequence
+/// without a jemalloc allocator.
+#[cfg(all(unix, any(feature = "heap-profiling", test)))]
+trait HeapProfCtl {
+    fn activated(&self) -> bool;
+    fn activate(&mut self) -> Result<(), String>;
+    fn deactivate(&mut self) -> Result<(), String>;
+    fn dump_pprof(&mut self) -> Result<Vec<u8>, String>;
+}
+
+#[cfg(all(unix, feature = "heap-profiling"))]
+impl HeapProfCtl for jemalloc_pprof::JemallocProfCtl {
+    fn activated(&self) -> bool { Self::activated(self) }
+
+    fn activate(&mut self) -> Result<(), String> {
+        Self::activate(self).map_err(|error| error.to_string())
+    }
+
+    fn deactivate(&mut self) -> Result<(), String> {
+        Self::deactivate(self).map_err(|error| error.to_string())
+    }
+
+    fn dump_pprof(&mut self) -> Result<Vec<u8>, String> {
+        Self::dump_pprof(self).map_err(|error| error.to_string())
+    }
+}
+
+/// Turns jemalloc profiling off when dropped.
+///
+/// The heap handler holds one while it sleeps, so a client that disconnects
+/// mid-sample, which drops the handler future, still leaves profiling off.
+#[cfg(all(unix, any(feature = "heap-profiling", test)))]
+struct DeactivateOnDrop<'a, C: HeapProfCtl>(&'a mut C);
+
+#[cfg(all(unix, any(feature = "heap-profiling", test)))]
+impl<C: HeapProfCtl> Drop for DeactivateOnDrop<'_, C> {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.deactivate() {
+            tracing::warn!(%error, "could not deactivate jemalloc profiling after heap dump");
+        }
+    }
+}
+
+/// Sample the heap for `duration` and dump it as pprof.
+///
+/// When profiling is already on, the dump happens at once and profiling stays
+/// on. Otherwise this activates profiling, sleeps, dumps, and deactivates,
+/// and the deactivation also runs when the future is dropped mid-sleep.
+#[cfg(all(unix, any(feature = "heap-profiling", test)))]
+async fn sample_heap<C: HeapProfCtl>(ctl: &mut C, duration: Time) -> Result<Vec<u8>, String> {
+    if ctl.activated() {
+        return ctl
+            .dump_pprof()
+            .map_err(|error| format!("heap dump: {error}"));
+    }
+    ctl.activate()
+        .map_err(|error| format!("jemalloc prof activate: {error}"))?;
+    let guard = DeactivateOnDrop(ctl);
+    time::sleep(duration.to_std()).await;
+    guard
+        .0
+        .dump_pprof()
+        .map_err(|error| format!("heap dump: {error}"))
 }
 
 /// The pprof routes with an explicit policy.
@@ -241,6 +294,90 @@ mod tests {
         assert!(
             profile_work(|| Err::<(), _>("report failed".into())).await
                 == Err("report failed".into())
+        );
+    }
+
+    /// Counts the profiling calls a heap sample makes.
+    #[cfg(unix)]
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct FakeProfCtl {
+        active: bool,
+        activations: u32,
+        deactivations: u32,
+        dumps: u32,
+    }
+
+    #[cfg(unix)]
+    impl HeapProfCtl for FakeProfCtl {
+        fn activated(&self) -> bool { self.active }
+
+        fn activate(&mut self) -> Result<(), String> {
+            self.active = true;
+            self.activations += 1;
+            Ok(())
+        }
+
+        fn deactivate(&mut self) -> Result<(), String> {
+            self.active = false;
+            self.deactivations += 1;
+            Ok(())
+        }
+
+        fn dump_pprof(&mut self) -> Result<Vec<u8>, String> {
+            self.dumps += 1;
+            Ok(vec![7])
+        }
+    }
+
+    /// A client that disconnects mid-sample drops the future; profiling must still end up off.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_heap_sample_deactivates_profiling() {
+        let mut ctl = FakeProfCtl::default();
+        let cancelled =
+            time::timeout(Duration::from_millis(10), sample_heap(&mut ctl, minutes(1))).await;
+        assert!(cancelled.is_err());
+        assert!(
+            ctl == FakeProfCtl {
+                active: false,
+                activations: 1,
+                deactivations: 1,
+                dumps: 0,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completed_heap_sample_dumps_then_deactivates() {
+        let mut ctl = FakeProfCtl::default();
+        assert!(sample_heap(&mut ctl, millis(1)).await == Ok(vec![7]));
+        assert!(
+            ctl == FakeProfCtl {
+                active: false,
+                activations: 1,
+                deactivations: 1,
+                dumps: 1,
+            }
+        );
+    }
+
+    /// Profiling someone else switched on is dumped at once and left on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn heap_sample_leaves_prior_activation_on() {
+        let mut ctl = FakeProfCtl {
+            active: true,
+            ..FakeProfCtl::default()
+        };
+        assert!(sample_heap(&mut ctl, minutes(1)).await == Ok(vec![7]));
+        assert!(
+            ctl == FakeProfCtl {
+                active: true,
+                activations: 0,
+                deactivations: 0,
+                dumps: 1,
+            }
         );
     }
 
