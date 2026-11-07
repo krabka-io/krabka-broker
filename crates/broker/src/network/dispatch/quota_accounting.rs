@@ -4,9 +4,9 @@ use {
     crate::{
         broker::Broker,
         handlers::ApiKeyCode,
-        metrics::{BrokerMetrics, QuotaCharge, QuotaType},
+        metrics::{BrokerMetrics, QuotaCharge},
         network::{auth::ConnectionAuth, request::ParsedRequest},
-        quota::{QuotaDelay, consume_request_quota},
+        quota::{QuotaDelay, QuotaType, consume_request_quota},
     },
     krabka_protocol::api_key::ApiKey,
     krabka_units::{Time, convert::TimeExt},

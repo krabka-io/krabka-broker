@@ -59,7 +59,7 @@ pub use self::{
         ClientMetricsRejection, ClientMetricsRejectionLabel, ClientSoftwareLabel,
         ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
         FetchDrainPath, FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel,
-        QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
+        QuotaEntityLabel, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
         SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel,
         WalShardLabel, WalVoterLabel,
     },
@@ -706,7 +706,7 @@ pub struct BrokerMetrics {
     /// caused it (`krabka_broker_quota_throttle_duration_seconds{quota_type}`).
     ///
     /// A request charges several quotas and sleeps for the largest delay of
-    /// them, so the sample lands under the [`QuotaType`] that produced that
+    /// them, so the sample lands under the [`QuotaType`](crate::quota::QuotaType) that produced that
     /// largest delay — the quota an operator would have to raise to make the
     /// throttle stop. Requests that no quota delayed are not observed here, so
     /// unlike [`Self::request_throttle_duration_seconds`] the `_count` of this

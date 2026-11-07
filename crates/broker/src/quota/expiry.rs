@@ -19,8 +19,8 @@
 //! one it would have refilled to anyway.
 
 use {
-    super::buckets::QuotaBuckets,
-    crate::metrics::{BrokerMetrics, QuotaType},
+    super::{QuotaType, buckets::QuotaBuckets},
+    crate::metrics::BrokerMetrics,
     krabka_units::{Time, convert::TimeExt as _, minutes},
     std::sync::Arc,
     tokio::time,

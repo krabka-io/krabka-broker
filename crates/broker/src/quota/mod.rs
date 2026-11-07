@@ -16,6 +16,7 @@ mod expiry;
 mod ip_names;
 mod lookup;
 mod producer;
+mod quota_type;
 mod request;
 mod throttle_slot;
 
@@ -25,6 +26,7 @@ pub use {
     ip_names::{IpNames, parse_ip_literal},
     lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key},
     producer::consume_producer_quota,
+    quota_type::QuotaType,
     request::consume_request_quota,
 };
 pub(crate) use {

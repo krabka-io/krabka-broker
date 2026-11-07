@@ -6,7 +6,7 @@
 
 use {
     super::{
-        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, QuotaType,
+        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
         QuotaTypeLabel, UNKNOWN_LABEL,
     },
     crate::{
@@ -15,7 +15,7 @@ use {
             KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY, TRIGGER_BARRIER_API_KEY,
             WRITE_BARRIER_MARKERS_API_KEY,
         },
-        quota::QuotaDelay,
+        quota::{QuotaDelay, QuotaType},
     },
     krabka_protocol::api_key,
     krabka_units::{Time, convert::TimeExt},

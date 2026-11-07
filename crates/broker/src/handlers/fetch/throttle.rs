@@ -6,9 +6,9 @@ use {
     crate::{
         broker::Broker,
         handlers::{ApiKeyCode, RequestContext},
-        metrics::{BrokerMetrics, QuotaType},
+        metrics::BrokerMetrics,
         quota::{
-            QuotaBuckets, QuotaDelay, debt_tokens, entity_field, lookup_quota_with_key,
+            QuotaBuckets, QuotaDelay, QuotaType, debt_tokens, entity_field, lookup_quota_with_key,
             throttle_time_ms,
         },
         throttle::{REPLICATION_QUOTA_WINDOW, TokenBucket, TopicThrottle},

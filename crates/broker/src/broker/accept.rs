@@ -6,9 +6,9 @@ use {
     crate::{
         broker::Broker,
         config::ListenerSpec,
-        metrics::{ConnectionCloseReason, QuotaType},
+        metrics::ConnectionCloseReason,
         network::{client::tune_socket, dispatch},
-        quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
+        quota::{QuotaType, lookup_ip_quota_with_key, positive_f64_to_u64},
     },
     krabka_raft::{AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionQuotas},
     krabka_units::{ByteSize, Time, convert::TimeExt as _},
