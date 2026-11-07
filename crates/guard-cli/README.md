@@ -37,7 +37,7 @@ Cargo working tree to build a subprocess from.
 ## Usage
 
 Every subcommand needs `--bootstrap-server` (`-b`), which also reads the
-`KRABKA_BOOTSTRAP_SERVER` environment variable On a TLS or SASL
+`KRABKA_BOOTSTRAP_SERVER` environment variable. On a TLS or SASL
 listener, add `--command-config <file>`, a Kafka client properties file like
 the one `kafka-topics --command-config` takes. Both flags go before the
 subcommand. [`krabka-cli-connection`](../cli-connection/README.md) lists the
@@ -50,7 +50,7 @@ krabka-guard -b broker-1:9093 --command-config ~/.krabka/alice.properties freeze
 The broker authorizes every request as the principal that file logs in as, and
 `--principal` has to name that principal. A SASL login as `alice` is
 `User:alice`. Without `--command-config` the tool connects in PLAINTEXT, where
-the principal is `User:ANONYMOUS` unless the listener maps it.
+the principal is `User:ANONYMOUS`.
 
 The broker's `[[operator_keys]]` table binds a key id to a principal and a
 public key:
@@ -116,7 +116,8 @@ The signing flags are `--sign-with <path>`, `--key-id <id>`, and
 broker authenticates on this connection, which `--command-config` decides: a
 SASL login as `alice` is `User:alice`. The signed bytes carry it, and the
 broker checks it against both the connection and the `[[operator_keys]]` entry,
-so a signed freeze over a connection that logs in as someone else is refused.
+so a signed freeze over a connection that logs in as someone else fails
+verification and exits `5`.
 
 ### `break-glass`
 

@@ -204,8 +204,8 @@ pub struct ScopeArgs {
 /// login as `alice` is `User:alice`, an mTLS login is the listener's mapped
 /// certificate name, and a PLAINTEXT connection is `User:ANONYMOUS`. Only the
 /// operator knows what their listener authenticates them as, so the tool asks
-/// rather than guesses, and the broker refuses a `--principal` that is not the
-/// one it authenticated.
+/// rather than guesses, and a signature whose `--principal` is not the one the
+/// broker authenticated fails verification.
 #[derive(Args, Debug, Clone)]
 pub struct FreezeSigningArgs {
     /// The PKCS#8 Ed25519 key file. It is read here, used here, and never
@@ -218,7 +218,8 @@ pub struct FreezeSigningArgs {
     pub key_id: Option<String>,
     /// The principal the broker authenticates on this connection, such as
     /// `User:alice` for a SASL login as `alice` through `--command-config`.
-    /// It is the author the record carries, and the broker refuses any other.
+    /// It is the author the signed bytes carry, and a signature naming any
+    /// other fails verification.
     #[arg(long, requires = "sign_with")]
     pub principal: Option<String>,
 }

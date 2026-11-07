@@ -28,7 +28,9 @@ use {
 /// The listener also carries inter-broker traffic, which logs in as the first
 /// of `users`. With no `super_users` every principal is allowed everything.
 /// With some, the broker enforces ACLs and only they bypass them, so a request
-/// shows which principal the broker authenticated.
+/// shows which principal the broker authenticated. `ANONYMOUS` bypasses them
+/// too, for the broker's own heartbeat on its PLAINTEXT controller listener;
+/// no client reaches that listener.
 #[bon::builder]
 pub fn sasl_plain_broker_config(
     log_dir: PathBuf,

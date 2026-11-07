@@ -39,6 +39,7 @@ never its value.
 | `ssl.keystore.location`, `ssl.key.location` | The client certificate chain and private key, as PEM, for mutual TLS. They go together. |
 | `ssl.server.name` | The TLS server name. Without it each connection uses its own target host. |
 | `sasl.mechanism` | `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512` |
+| `sasl.kerberos.service.host` | The host the SASL handshake names. PLAIN and SCRAM ignore it. |
 | `sasl.jaas.config` | The login module line that carries `username` and `password`. `tokenauth=true` makes a SCRAM login a delegation-token login. |
 
 A `sasl.*` property needs a SASL protocol and an `ssl.*` property needs `SSL`

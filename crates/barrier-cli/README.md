@@ -27,13 +27,15 @@ Cargo working tree to build a subprocess from.
 ## Usage
 
 Every subcommand needs `--bootstrap-server` (`-b`), which also reads the
-`KRABKA_BOOTSTRAP_SERVER` environment variable On a TLS or SASL
+`KRABKA_BOOTSTRAP_SERVER` environment variable. On a TLS or SASL
 listener, add `--command-config <file>`, a Kafka client properties file like
 the one `kafka-topics --command-config` takes. Both flags go before the
 subcommand. [`krabka-cli-connection`](../cli-connection/README.md) lists the
 properties the file takes. The broker authorizes every barrier api as the
 principal that file logs in as, which needs `Alter` on the cluster to define,
-delete or trigger a group, and `Describe` on the cluster to read one.
+delete or trigger a group, and `Describe` on the cluster to describe or list
+one. `verify` also reads the log, so it needs `Describe` and `Read` on the
+group's topics.
 
 Define a group over two topics, cut it every five minutes, and keep the last
 200 cuts:
