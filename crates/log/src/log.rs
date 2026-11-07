@@ -8,6 +8,8 @@
 //! private fields below stay in this module so that every one of those
 //! submodules, as a descendant, can reach them.
 
+#[cfg(not(target_os = "wasi"))]
+use std::collections::VecDeque;
 use {
     crate::{
         config::LogConfig,
@@ -21,7 +23,7 @@ use {
     },
     krabka_ids::{Offset, ProducerId},
     std::{
-        collections::{BTreeMap, HashMap, VecDeque},
+        collections::{BTreeMap, HashMap},
         path::PathBuf,
         sync::{Arc, RwLock, atomic::AtomicU64},
         time::{Instant, SystemTime},
