@@ -50,7 +50,7 @@ pub(super) struct RecoveredBatchOffsets {
 }
 
 /// The sequence and offset a producer's entry ends at after one data batch.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProducerTail {
     pub(super) last_sequence: i32,
     pub(super) last_offset: Offset,
