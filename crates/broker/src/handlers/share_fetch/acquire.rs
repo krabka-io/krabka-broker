@@ -614,6 +614,15 @@ async fn acquire_partition(
         persist_best_effort(mgr, group, p, &cell, &mut st).await;
         return;
     };
+    // Kafka's `ReplicaManager.readFromLog` answers `KAFKA_STORAGE_ERROR` for
+    // a partition whose log dir went offline, before it reads. A failed read
+    // takes the dir offline in `local_read_failure`, so the dead disk is not
+    // read again, and no records are acquired from it.
+    if broker.log_dir_status.is_offline(&part.log_dir.load()) {
+        persist_best_effort(mgr, group, p, &cell, &mut st).await;
+        fail_partition(p, false, codes::KAFKA_STORAGE_ERROR);
+        return;
+    }
     let upper = read_upper_bound(&part, read_committed).await;
     // A released or expired record at the delivery limit is archived
     // first, so it cannot hold the window shut.
@@ -1023,6 +1032,79 @@ mod tests {
         code: i16,
         offline: bool,
     ) {
+    }
+
+    /// What a share consumer gets from a partition row.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ShareRow {
+        error: i16,
+        acquired: Vec<OffsetRun>,
+    }
+
+    /// Once a failed read took the partition's log dir offline, the next
+    /// `ShareFetch` must not read the dead disk again, or hand out records
+    /// from it. Kafka's `ReplicaManager.readFromLog` answers
+    /// `KAFKA_STORAGE_ERROR` for an offline partition before it reads.
+    #[rstest::rstest]
+    #[case::online(false, ShareRow { error: codes::NONE, acquired: vec![OffsetRun::new(0, 1)] })]
+    #[case::offline(true, ShareRow { error: codes::KAFKA_STORAGE_ERROR, acquired: Vec::new() })]
+    #[tokio::test]
+    async fn a_partition_on_an_offline_log_dir_is_a_storage_error_and_acquires_nothing(
+        #[case] dir_offline: bool,
+        #[case] expected: ShareRow,
+    ) {
+        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
+        let shared = broker.broker_arc_for_test();
+        let group = "offline-log-dir";
+        let topic_id = create_topic()
+            .broker(&broker)
+            .client_id("share-acquire-test")
+            .name(group)
+            .call()
+            .await;
+        initialize_share_state(&broker, group, share_topic_uuid(topic_id), 0).await;
+        let row_of = |epoch: i32| {
+            let request = test_fetch_request()
+                .group_id(group.into())
+                .member_id("member".into())
+                .topic_id(topic_id.0)
+                .share_session_epoch(epoch)
+                .call();
+            let broker = &broker;
+            async move {
+                let rows = share_fetch_partition_rows(
+                    share_fetch_wire()
+                        .broker(broker)
+                        .request(&request)
+                        .call()
+                        .await,
+                );
+                let row = rows.into_iter().next().expect("one partition row");
+                ShareRow {
+                    error: row.error_code,
+                    acquired: acquired_share_records(&row),
+                }
+            }
+        };
+        // The first fetch opens the share session.
+        row_of(0).await;
+        produce_records()
+            .broker(&broker)
+            .topic(group)
+            .count(2)
+            .call()
+            .await;
+        if dir_offline {
+            let partition = shared
+                .partitions
+                .get(group, krabka_ids::PartitionIndex(0))
+                .expect("the topic has partition 0");
+            shared
+                .log_dir_status
+                .mark_offline(&partition.log_dir.load(), "a read failed with EIO");
+        }
+
+        assert!(row_of(1).await == expected);
     }
 
     /// What a client and the partition cache show after a renew-ack fetch
