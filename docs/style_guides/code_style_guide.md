@@ -360,6 +360,6 @@ See [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for how to run each tier: workspa
 
 ## Markdown and Prose (for docs you write)
 
-- **Write in ASD-STE100 Simplified Technical English.** See the [prose style guide](prose_style_guide.md). It covers word choice, sentence length, active voice, and the rule that `must` marks only a requirement the code enforces. It applies to comments and doc comments as well as to Markdown.
+- **Write plain, direct technical English.** See the [prose style guide](prose_style_guide.md). It covers word choice, active voice, and the rule that `must` marks only a requirement the code enforces. It applies to comments and doc comments as well as to Markdown.
 - **One line per paragraph — do not hard-wrap at 80 columns.** Let the renderer wrap. Some older Krabka docs are hard-wrapped. That is not a reason to reflow them, but new prose should follow this rule.
 - Follow the relevant guide for the document type: [design docs](design_doc_style_guide.md), [READMEs](readme_style_guide.md), [coverage reports](coverage_report_style_guide.md).
