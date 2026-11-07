@@ -311,19 +311,14 @@ async fn walk_partition(
     authenticated: Option<&BTreeMap<String, ObjectEntry>>,
     mut log: Option<&mut Log>,
 ) -> Result<Walked, RestoreError> {
-    let mut object_names = HashSet::new();
-    let mut batches = 0u64;
-    let mut records = 0u64;
-    let mut records_dropped = 0u64;
-    let mut observed_end = partition.delete_floor;
-    let mut materialized_end = partition.delete_floor;
+    let mut walk = PartitionWalk::new(partition);
     let partition_ref = PartitionRef {
         topic: partition.topic.clone(),
         partition: partition.partition,
     };
     for range in &partition.ranges {
         let object = fetch_object(store, cached_object, &range.object_key, authenticated).await?;
-        object_names.insert(range.object_key.as_str());
+        walk.saw_object(&range.object_key);
         validate_footer_range(&object, range)?;
         let mut range_batches = RangeBatches::new(&object, range)?;
         while let Some(framed) = range_batches.next_batch()? {
@@ -354,7 +349,7 @@ async fn walk_partition(
                         .records_in_batch(records_in_batch)
                         .build(),
                 )?;
-                materialized_end = base
+                let batch_end = base
                     .0
                     .checked_add(i64::from(prepared.last_offset_delta()))
                     .and_then(|last| last.checked_add(1))
@@ -366,33 +361,83 @@ async fn walk_partition(
                     log.reconcile_next_offset(base);
                     prepared.append_to(log, base)?;
                 }
-                batches += 1;
                 let (kept, dropped) = tally.records(records_in_batch);
-                records = records.saturating_add(kept);
-                records_dropped = records_dropped.saturating_add(dropped);
+                walk.record_batch(batch_end, kept, dropped);
             }
         }
         range_batches.finish()?;
-        observed_end = range
+        walk.finish_range(range)?;
+    }
+    walk.finish()
+}
+
+/// The running tally of a walk over one partition's captured ranges.
+struct PartitionWalk<'a> {
+    partition: &'a DisklessPartitionCapture,
+    object_names: HashSet<&'a str>,
+    batches: u64,
+    records: u64,
+    records_dropped: u64,
+    /// The exclusive end of the ranges validated so far.
+    observed_end: i64,
+    /// The exclusive end of the batches kept so far.
+    materialized_end: i64,
+}
+
+impl<'a> PartitionWalk<'a> {
+    fn new(partition: &'a DisklessPartitionCapture) -> Self {
+        Self {
+            partition,
+            object_names: HashSet::new(),
+            batches: 0,
+            records: 0,
+            records_dropped: 0,
+            observed_end: partition.delete_floor,
+            materialized_end: partition.delete_floor,
+        }
+    }
+
+    /// Count the WAL object named `key` among the objects the walk read.
+    fn saw_object(&mut self, key: &'a str) { self.object_names.insert(key); }
+
+    /// Count one kept batch that ends before `batch_end` and of whose records
+    /// the bound kept `kept` and dropped `dropped`.
+    fn record_batch(&mut self, batch_end: i64, kept: u64, dropped: u64) {
+        self.materialized_end = batch_end;
+        self.batches += 1;
+        self.records = self.records.saturating_add(kept);
+        self.records_dropped = self.records_dropped.saturating_add(dropped);
+    }
+
+    /// Advance the validated end past `range`, never below the delete floor.
+    fn finish_range(&mut self, range: &CapturedWalRange) -> Result<(), RestoreError> {
+        self.observed_end = range
             .entry
             .last_offset
             .checked_add(1)
             .ok_or_else(|| wal_overflow("batch offset"))?
-            .max(partition.delete_floor);
+            .max(self.partition.delete_floor);
+        Ok(())
     }
-    if observed_end != partition.recovery_cutoff {
-        return Err(RestoreError::Integrity(format!(
-            "{}-{} validated through {observed_end}, capture declares cutoff {}",
-            partition.topic, partition.partition, partition.recovery_cutoff
-        )));
+
+    /// Require the walk to have validated through the capture's recovery
+    /// cutoff, and report what it found.
+    fn finish(self) -> Result<Walked, RestoreError> {
+        let partition = self.partition;
+        if self.observed_end != partition.recovery_cutoff {
+            return Err(RestoreError::Integrity(format!(
+                "{}-{} validated through {}, capture declares cutoff {}",
+                partition.topic, partition.partition, self.observed_end, partition.recovery_cutoff
+            )));
+        }
+        Ok(Walked {
+            objects: self.object_names.len() as u64,
+            batches: self.batches,
+            records: self.records,
+            records_dropped: self.records_dropped,
+            materialized_end: self.materialized_end,
+        })
     }
-    Ok(Walked {
-        objects: object_names.len() as u64,
-        batches,
-        records,
-        records_dropped,
-        materialized_end,
-    })
 }
 
 /// One batch of a captured range whose framing and offset contiguity
