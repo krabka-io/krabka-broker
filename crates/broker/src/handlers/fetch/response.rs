@@ -1,9 +1,20 @@
 //! Assembly of the wire response: the resolved reads are grouped back into
-//! per-topic entries, down-converted for a v0-v3 fetcher, and metered.
+//! per-topic entries, refused for a pre-v10 consumer on a zstd topic,
+//! down-converted for a v0-v3 fetcher, and metered.
 
 use {
-    super::plan::PendingRead,
-    crate::{broker::Broker, handlers::fetch_downconvert::down_convert_payload_for_fetch},
+    super::plan::{PendingRead, refused_partition},
+    crate::{
+        broker::Broker,
+        codes::{TOPIC_AUTHORIZATION_FAILED, UNSUPPORTED_COMPRESSION_TYPE},
+        config_keys::BrokerLogDefaults,
+        handlers::{
+            fetch_downconvert::down_convert_payload_for_fetch, produce::resolve_topic_compression,
+        },
+    },
+    krabka_compression::CompressionType,
+    krabka_ids::PartitionIndex,
+    krabka_metadata::MetadataImage,
     krabka_protocol::{
         owned::fetch_response::{FetchableTopicResponse, LeaderIdAndEpoch},
         records::RecordsPayload,
@@ -97,6 +108,55 @@ pub(super) fn withhold_current_leader_before_kip_951(
         .flat_map(|topic| topic.partitions.iter_mut())
     {
         partition.current_leader = LeaderIdAndEpoch::default();
+    }
+}
+
+/// The first `Fetch` version whose client can read zstd batches (KIP-110).
+const KIP_110_FETCH_VERSION: i16 = 10;
+
+/// Refuse a consumer older than Fetch v10 every partition of a zstd topic.
+///
+/// This is the check at the head of Kafka 3.9's `maybeConvertFetchedData`
+/// in `KafkaApis.handleFetchRequest`: when the partition's log config has
+/// `compression.type=zstd` and `versionId < 10`, the row becomes
+/// `FetchResponse.partitionResponse(tp, UNSUPPORTED_COMPRESSION_TYPE)`, with
+/// every offset -1 and no records. Kafka reads the log config of the local
+/// replica, so a partition this broker does not host keeps its row. The
+/// config is the topic's own `compression.type` over the broker default,
+/// not the codec of the stored batches. Kafka converts consumer responses
+/// only, so the caller skips follower fetches.
+///
+/// Kafka would also turn a `TOPIC_AUTHORIZATION_FAILED` row of a hosted zstd
+/// topic into this error. That tells a principal without `DESCRIBE` how the
+/// topic is configured, so such a row keeps its authorization error.
+pub(super) fn refuse_zstd_topics_before_kip_110(
+    broker: &Broker,
+    image: &MetadataImage,
+    version: i16,
+    responses: &mut [FetchableTopicResponse],
+) {
+    if version >= KIP_110_FETCH_VERSION {
+        return;
+    }
+    let broker_default = BrokerLogDefaults::for_broker(image, &broker.config).compression_type;
+    for topic in responses {
+        if topic.topic.is_empty()
+            || resolve_topic_compression(image, &topic.topic, broker_default)
+                != Some(CompressionType::Zstd)
+        {
+            continue;
+        }
+        for partition in &mut topic.partitions {
+            if partition.error_code == TOPIC_AUTHORIZATION_FAILED
+                || broker
+                    .partitions
+                    .get(&topic.topic, PartitionIndex(partition.partition_index))
+                    .is_none()
+            {
+                continue;
+            }
+            *partition = refused_partition(partition.partition_index, UNSUPPORTED_COMPRESSION_TYPE);
+        }
     }
 }
 

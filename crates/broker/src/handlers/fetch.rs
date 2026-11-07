@@ -61,6 +61,8 @@ mod leader_read_tests;
 mod leader_throttle_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
+#[cfg(test)]
+mod zstd_topic_tests;
 
 pub use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
 use {
@@ -71,7 +73,7 @@ use {
         request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
             GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
-            withhold_current_leader_before_kip_951,
+            refuse_zstd_topics_before_kip_110, withhold_current_leader_before_kip_951,
         },
         session::{
             FetchKind, commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics,
@@ -327,6 +329,9 @@ pub async fn handle(
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
 
+    if !is_follower_fetch {
+        refuse_zstd_topics_before_kip_110(broker, &image, version, &mut responses);
+    }
     downconvert_legacy_responses(broker, version, &mut responses);
     withhold_current_leader_before_kip_951(version, &mut responses);
 
