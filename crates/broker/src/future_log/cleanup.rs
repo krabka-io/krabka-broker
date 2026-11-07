@@ -93,6 +93,7 @@ mod tests {
         krabka_log::{Log, LogConfig},
         std::{
             future,
+            path::Path,
             sync::{
                 Mutex,
                 atomic::{AtomicU64, Ordering},
@@ -143,6 +144,80 @@ mod tests {
             started.fetch_add(1, Ordering::SeqCst);
             future::pending::<()>().await;
         })
+    }
+
+    /// A move staged in a new directory `name` under `parent`, with `task` as
+    /// its replicator.
+    fn staged_move(
+        parent: &Path,
+        name: &str,
+        log: &Arc<Mutex<Log>>,
+        task: Option<JoinHandle<()>>,
+    ) -> Arc<FutureLogState> {
+        let future_path = parent.join(name);
+        fs::create_dir_all(&future_path).expect("create future dir");
+        Arc::new(FutureLogState {
+            target_log_dir: parent.to_path_buf(),
+            future_path,
+            future_log: Arc::clone(log),
+            cancel: CancellationToken::new(),
+            task: Mutex::new(task),
+        })
+    }
+
+    #[tokio::test]
+    async fn cancel_move_stops_its_task_and_removes_the_move() {
+        let PendingMoveFixture {
+            dir,
+            log,
+            logs,
+            started,
+            dropped,
+        } = pending_move_fixture();
+        let future_logs = Arc::new(logs);
+        let key = ("t".to_owned(), PartitionIndex(0));
+        let existing = staged_move(
+            dir.path(),
+            "t-0-future",
+            &log,
+            Some(pending_move(&started, &dropped)),
+        );
+        future_logs.insert(key.clone(), Arc::clone(&existing));
+        wait_tasks_started(|| started.load(Ordering::SeqCst) == 1, "move task starts").await;
+        let cancel = existing.cancel.clone();
+        let future_path = existing.future_path.clone();
+
+        cancel_move(&future_logs, &key, existing)
+            .await
+            .expect("cancel the move");
+
+        assert!(future_logs.is_empty());
+        assert!(cancel.is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst) == 1);
+        assert!(!future_path.exists());
+    }
+
+    #[tokio::test]
+    async fn cancel_move_keeps_an_entry_a_later_move_registered() {
+        let PendingMoveFixture { dir, log, logs, .. } = pending_move_fixture();
+        let future_logs = Arc::new(logs);
+        let key = ("t".to_owned(), PartitionIndex(0));
+        let existing = staged_move(dir.path(), "t-0-future", &log, None);
+        let later = staged_move(dir.path(), "later", &log, None);
+        future_logs.insert(key.clone(), Arc::clone(&later));
+        let future_path = existing.future_path.clone();
+
+        cancel_move(&future_logs, &key, existing)
+            .await
+            .expect("cancel the move");
+
+        assert!(
+            future_logs
+                .get(&key)
+                .is_some_and(|entry| Arc::ptr_eq(entry.value(), &later))
+        );
+        assert!(!future_path.exists());
+        assert!(later.future_path.exists());
     }
 
     #[tokio::test]
