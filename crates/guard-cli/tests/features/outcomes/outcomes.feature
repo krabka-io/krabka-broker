@@ -26,10 +26,11 @@ Feature: Every outcome reaches a runbook as one exit code
       Then the operator reads <explanation>
 
       Examples:
-        | case                  | answer                        | explanation                                               |
-        | missing approval      | BREAK_GLASS_APPROVAL_REQUIRED | error 1006 (no approved break-glass proposal covers this) |
-        | full registry         | FREEZE_LIMIT_EXCEEDED         | error 1012 (the registry is at freeze.max_entries)        |
-        | a Kafka code it keeps | CLUSTER_AUTHORIZATION_FAILED  | error 31                                                  |
+        | case                        | answer                         | explanation                                                             |
+        | missing approval            | BREAK_GLASS_APPROVAL_REQUIRED  | error 1006 (no approved break-glass proposal covers this)               |
+        | full registry               | FREEZE_LIMIT_EXCEEDED          | error 1012 (the registry is at freeze.max_entries)                      |
+        | proposer or repeat approver | BREAK_GLASS_DUPLICATE_APPROVER | error 1007 (this principal proposed the action or already approved it) |
+        | a Kafka code it keeps       | CLUSTER_AUTHORIZATION_FAILED   | error 31                                                                |
 
   Rule: A broker nobody can reach is not a refusal
 
