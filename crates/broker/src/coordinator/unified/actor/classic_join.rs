@@ -1115,7 +1115,7 @@ mod tests {
         if actor_alive {
             let describe = rpc::begin(&handle, |reply| GroupActorMessage::Describe { reply }).await;
             check!(
-                describe.await.is_ok(),
+                describe.await.is_ok_and(|view| view.is_some()),
                 "the group is still a consumer group"
             );
         } else {
@@ -1751,7 +1751,7 @@ mod tests {
             .expect("consumer group prepared");
         hosted_classic_join.response = Some(rpc::classic_join(handle, "", "t").await);
         let rx = rpc::begin(handle, |reply| GroupActorMessage::ClassicInspect { reply }).await;
-        hosted_classic_join.classic = Some(rx.await.is_ok());
+        hosted_classic_join.classic = Some(rx.await.ok().flatten().is_some());
         hosted_classic_join.tombstoned = Some(
             hosted_classic_join
                 .log
