@@ -49,6 +49,9 @@ fn cut_names_partitions(barrier: &BarrierScenario, datatable: Vec<Vec<String>>) 
         .collect();
     let transcript = barrier.transcript.get();
     assert2::check!(transcript.exit == 0, "{transcript:?}");
+    // A partition the cut names as missing is named too, and the tool writes
+    // those to stderr, so an empty stderr is part of "exactly".
+    assert2::check!(transcript.stderr.is_empty(), "{transcript:?}");
     let named: BTreeSet<(String, i32)> = transcript
         .cut_rows()
         .into_iter()

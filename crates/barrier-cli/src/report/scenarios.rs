@@ -17,6 +17,7 @@ use {
     },
     rstest_bdd_macros::{then, when},
     std::net::TcpListener,
+    tokio::runtime,
 };
 
 /// What one run of the reporter printed, and the code it ended on.
@@ -165,7 +166,7 @@ fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
         "orders-cut",
     ])
     .expect("the command line parses");
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("a runtime");
