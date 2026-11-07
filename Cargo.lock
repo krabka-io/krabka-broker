@@ -4144,8 +4144,12 @@ version = "1.1.5"
 dependencies = [
  "assert2",
  "fancy-regex 0.20.0",
+ "krabka-bdd",
  "regex",
  "regex-syntax",
+ "rstest",
+ "rstest-bdd",
+ "rstest-bdd-macros",
  "thiserror 2.0.21",
  "yare",
 ]
