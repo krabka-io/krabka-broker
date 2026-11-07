@@ -248,42 +248,8 @@ async fn copy_one_inner(
     // finished: the read path serves every finished segment, and it would then
     // be serving unattested data. Leaving it in `CopySegmentStarted` is what
     // makes the next tick retry it under a fresh segment id.
-    let next = match chain {
-        Chain::Unchained => ChainPosition::Unchained,
-        Chain::At(requested) => {
-            let Some(receipt) = returned
-                .as_ref()
-                .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
-            else {
-                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                       "remote-log-manager: write-once copy returned no chain receipt; \
-                        leaving the segment in CopySegmentStarted rather than serving \
-                        unattested data");
-                chain.record_seal_failure(tier);
-                return CopyOutcome::Failed;
-            };
-            if receipt.head.is_none()
-                || receipt.epoch_id != requested.epoch_id
-                || receipt.seq != requested.seq
-                || receipt.prev_head != requested.prev_head
-            {
-                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                       "remote-log-manager: write-once copy returned a mismatched chain receipt; \
-                        leaving the segment in CopySegmentStarted rather than serving \
-                        unattested data");
-                chain.record_seal_failure(tier);
-                return CopyOutcome::Failed;
-            }
-            // The receipt is the archive's word that a manifest over these
-            // objects is sealed and chained where the copy asked for it, so
-            // this is the one point at which a seal is known to have happened.
-            tier.metrics.worm_manifests_sealed_total.inc();
-            match receipt.next_stamp() {
-                Some(stamp) => ChainPosition::At(stamp),
-                None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
-                None => return CopyOutcome::Failed,
-            }
-        }
+    let Some(next) = finish_chain_receipt(tier, tp, ex, chain, returned.as_ref()) else {
+        return CopyOutcome::Failed;
     };
 
     // The backend's receipt is the chain position a restart reads back, so
@@ -324,6 +290,57 @@ async fn copy_one_inner(
         }
         _ => CopyOutcome::Copied { next },
     }
+}
+
+/// The chain position the copy after this one takes, given what the backend
+/// returned for `chain`. An unchained copy stays unchained. A chained copy
+/// needs a receipt that matches the stamp it asked for, and counts its seal.
+/// `None`, after an error and a seal failure where the receipt is missing or
+/// mismatched, when the segment must stay in `CopySegmentStarted`.
+fn finish_chain_receipt(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    ex: &SegmentExport,
+    chain: Chain,
+    returned: Option<&CustomMetadata>,
+) -> Option<ChainPosition> {
+    let next = match chain {
+        Chain::Unchained => ChainPosition::Unchained,
+        Chain::At(requested) => {
+            let Some(receipt) =
+                returned.and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
+            else {
+                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                       "remote-log-manager: write-once copy returned no chain receipt; \
+                        leaving the segment in CopySegmentStarted rather than serving \
+                        unattested data");
+                chain.record_seal_failure(tier);
+                return None;
+            };
+            if receipt.head.is_none()
+                || receipt.epoch_id != requested.epoch_id
+                || receipt.seq != requested.seq
+                || receipt.prev_head != requested.prev_head
+            {
+                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                       "remote-log-manager: write-once copy returned a mismatched chain receipt; \
+                        leaving the segment in CopySegmentStarted rather than serving \
+                        unattested data");
+                chain.record_seal_failure(tier);
+                return None;
+            }
+            // The receipt is the archive's word that a manifest over these
+            // objects is sealed and chained where the copy asked for it, so
+            // this is the one point at which a seal is known to have happened.
+            tier.metrics.worm_manifests_sealed_total.inc();
+            match receipt.next_stamp() {
+                Some(stamp) => ChainPosition::At(stamp),
+                None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
+                None => return None,
+            }
+        }
+    };
+    Some(next)
 }
 
 /// Upload `data` under `metadata` on the blocking pool, bounded by the tier's
