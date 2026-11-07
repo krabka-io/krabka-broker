@@ -18,8 +18,9 @@ use {
         follower_throttle::record_replicated,
         replication_target_changed,
         truncation::{
-            diverging_epoch_truncation_target, handle_epoch_fence,
+            Rewind, diverging_epoch_truncation_target, handle_epoch_fence,
             handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+            return_if_target_stale, rewind_follower, warn_if_target_stale,
         },
     },
     crate::{
@@ -186,11 +187,13 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
     }
     info!(topic = %cfg.topic, partition = cfg.partition.get(), end = end.0,
         batch_base = base.0, "replicator: restarting the empty log at the base of the leader's batch");
-    match part.reset_to(base).await {
-        Ok(()) => super::truncate_producer_state(cfg, base.0).await,
-        Err(error) => warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-            batch_base = base.0, "replicator: restarting at the leader's batch base failed"),
-    }
+    rewind_follower(
+        part,
+        cfg,
+        Rewind::ResetTo(base),
+        "replicator: restarting at the leader's batch base failed",
+    )
+    .await;
 }
 
 /// Applies one partition row of a response against the partition it names.
@@ -290,11 +293,11 @@ async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
     // Fetch at ~full CPU, starving metadata propagation and the
     // cooperative cancellation that would otherwise retire it — the
     // broker then never becomes ready and crashloops.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-        "replicator: stopping on fenced epoch from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: stopping on fenced epoch from stale target",
+        RowAction::Drop
+    );
     if error_code == codes::FENCED_LEADER_EPOCH {
         warn!(
             topic = %cfg.topic,
@@ -335,11 +338,11 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
     // end_offset:-1); a populated `epoch >= 0` marks a divergence.
     // Recheck immediately before mutating: metadata may have
     // changed since the response-level guard above.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping diverging_epoch truncation from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping diverging_epoch truncation from stale target",
+        RowAction::Drop
+    );
     if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
         let _target_guard = krabka_macros::replication_target_guard!(
             part,
@@ -347,26 +350,23 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
             "replicator: skipping diverging_epoch truncation from stale local target"
         );
         let leader_end_offset = diverging_epoch.end_offset;
-        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch).0;
-        match part.truncate_to(Offset(end_offset)).await {
-            Ok(()) => {
-                super::truncate_producer_state(cfg, end_offset).await;
-                info!(
-                    topic = %cfg.topic,
-                    partition = cfg.partition.get(),
-                    leader_epoch = diverging_epoch.epoch,
-                    leader_end_offset,
-                    end_offset,
-                    "replicator: truncated to diverging_epoch (KIP-320 in-band)"
-                );
-            }
-            Err(e) => warn!(
+        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch);
+        if rewind_follower(
+            &part,
+            cfg,
+            Rewind::TruncateTo(end_offset),
+            "replicator: truncate_to(diverging_epoch) failed",
+        )
+        .await
+        {
+            info!(
                 topic = %cfg.topic,
                 partition = cfg.partition.get(),
-                end_offset,
-                error = %e,
-                "replicator: truncate_to(diverging_epoch) failed"
-            ),
+                leader_epoch = diverging_epoch.epoch,
+                leader_end_offset,
+                end_offset = end_offset.0,
+                "replicator: truncated to diverging_epoch (KIP-320 in-band)"
+            );
         }
     }
     RowAction::Continue
@@ -434,25 +434,8 @@ async fn replicate_v2_batches(
         }
         // Capture byte count before the move into replicate_batch
         // so the metrics update only fires on a successful append.
-        // PERF — measured; decision: KEEP. `encoded_len()` is
-        // computed here for the metric and again inside the append
-        // path; threading a single computation through would save
-        // the re-walk, but that changes the writer API
-        // (cross-file). `benches/perf_deferrals.rs` times the walk
-        // against the `replicate_batch` it precedes, over the
-        // batch shapes a producer actually writes: 0.01% of the
-        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
-        // for 1000 x 100 B. Even that worst shape's ~4% sits
-        // inside the append's own run-to-run spread, so the
-        // re-walk is not separable from noise in production.
-        // Those three figures are what the `bench` job of the `ci`
-        // workflow measures on the nightly schedule and prints in
-        // its job summary; the latest scheduled `ci` run in the
-        // Actions tab is the reproducible reading, and its
-        // `criterion-baseline` artifact holds the samples.
-        // Revisit only if the replicator's shape mix moves to very
-        // wide batches of tiny records, where the walk is a
-        // per-record cost and the append is not.
+        // PERF: the append path walks the batch again. Measured at
+        // <=4% of the append and kept; see `benches/perf_deferrals.rs`.
         let batch_bytes = batch.encoded_batch_len();
         if let Err(e) = part.replicate_batch(batch).await {
             warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
