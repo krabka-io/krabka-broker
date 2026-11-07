@@ -13,6 +13,7 @@ use {
     crate::{
         broker::Broker,
         codes,
+        handlers::batch_headers::v2_batch_headers,
         metrics::{BrokerMetrics, RemoteTierPath},
         partition::Partition,
         remote_reader::RemoteReader,
@@ -22,13 +23,12 @@ use {
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
         primitives::uuid::Uuid as WireUuid,
-        records::{HEADER_LEN, RecordBatchHeader, RecordsPayload},
+        records::RecordsPayload,
     },
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition, corrupt_log},
     krabka_units::convert::TimeExt as _,
     krabka_verified::transaction,
     std::{sync::PoisonError, time::Instant},
-    zerocopy::FromBytes as _,
 };
 
 /// Whether a batch the remote tier returned may go out to a consumer now.
@@ -263,16 +263,8 @@ fn deliverable_run(
 ) -> Result<Option<DeliverableRun>, RemoteStorageError> {
     let mut end = 0_usize;
     let mut last_offset = None;
-    while end < archived.len() {
-        let header = archived
-            .get(end..end + HEADER_LEN)
-            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
-            .ok_or_else(|| corrupt_log("a truncated record batch header"))?;
-        let length = usize::try_from(header.batch_length.get())
-            .ok()
-            .and_then(|length| length.checked_add(BATCH_LENGTH_PREFIX))
-            .filter(|length| *length >= HEADER_LEN && end + length <= archived.len())
-            .ok_or_else(|| corrupt_log("a record batch length outside the read"))?;
+    for batch in v2_batch_headers(archived) {
+        let (span, header) = batch.map_err(|fault| corrupt_log(fault.what()))?;
         if !is_due(header.max_timestamp.get()) {
             break;
         }
@@ -283,17 +275,13 @@ fn deliverable_run(
                 .checked_add(i64::from(header.last_offset_delta.get()))
                 .ok_or_else(|| corrupt_log("a record batch whose last offset overflows"))?,
         );
-        end += length;
+        end = span.end;
     }
     Ok(last_offset.map(|last_offset| DeliverableRun {
         records: archived.slice(..end),
         last_offset,
     }))
 }
-
-/// The bytes in front of a v2 batch's `batch_length` count: the base offset
-/// (8) and the length itself (4).
-const BATCH_LENGTH_PREFIX: usize = 12;
 
 /// Answers a follower that fetched into the band the leader keeps only in the
 /// remote tier.
