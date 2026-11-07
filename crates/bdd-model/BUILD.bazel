@@ -5,9 +5,9 @@ package(default_visibility = ["//visibility:public"])
 # Consumed by `crate.from_cargo` (see //MODULE.bazel).
 exports_files(["Cargo.toml"])
 
+# `glossary.toml` is the tag and term glossary the crate embeds.
 crate_library(
     name = "bdd-model",
-    # `glossary.toml` is the tag and term glossary the crate embeds.
     compile_data = ["glossary.toml"],
 )
 
