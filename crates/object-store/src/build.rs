@@ -98,8 +98,14 @@ pub fn build_s3_store(cfg: &S3Config) -> Result<AmazonS3, ObjectStoreError> {
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
-    if let (Some(k), Some(s)) = (&cfg.access_key_id, &cfg.secret_access_key) {
-        builder = builder.with_access_key_id(k).with_secret_access_key(s);
+    // Each half goes to the builder on its own, so it refuses a key id without
+    // its secret, and a secret without its key id, rather than quietly falling
+    // back to another credential source.
+    if let Some(key_id) = &cfg.access_key_id {
+        builder = builder.with_access_key_id(key_id);
+    }
+    if let Some(secret) = &cfg.secret_access_key {
+        builder = builder.with_secret_access_key(secret);
     }
     if cfg.conditional_put {
         builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);

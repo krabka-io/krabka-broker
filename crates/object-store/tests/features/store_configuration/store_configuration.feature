@@ -53,7 +53,6 @@ Feature: An archive store is built from the operator's backend configuration
       When the broker attempts to build the archive store
       Then the archive store is built
 
-    @inprogress
     Scenario Outline: An S3 store given half of a static credential is refused
       Given an operator has configured the s3 backend with <half>
       When the broker attempts to build the archive store
