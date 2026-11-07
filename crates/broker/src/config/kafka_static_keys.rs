@@ -480,24 +480,18 @@ pub const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
         Some("replica_lag_time_max"),
         |c| time_ms(c.replica_lag_time_max),
     ),
-    KafkaStaticKey::new(
-        "replication.quota.window.num",
-        Some("replication_quota_window_num"),
-        |c| c.replication_quota_window_num.to_string(),
-    ),
-    KafkaStaticKey::new(
-        "replication.quota.window.size.seconds",
-        Some("replication_quota_window_size"),
-        |c| seconds(c.replication_quota_window_size),
-    ),
-    KafkaStaticKey::new(
-        "alter.log.dirs.replication.quota.window.num",
-        Some("alter_log_dirs_replication_quota_window_num"),
-        |c| c.alter_log_dirs_replication_quota_window_num.to_string(),
-    ),
+    KafkaStaticKey::new("replication.quota.window.num", None, |c| {
+        c.replication_quota_window_num.to_string()
+    }),
+    KafkaStaticKey::new("replication.quota.window.size.seconds", None, |c| {
+        seconds(c.replication_quota_window_size)
+    }),
+    KafkaStaticKey::new("alter.log.dirs.replication.quota.window.num", None, |c| {
+        c.alter_log_dirs_replication_quota_window_num.to_string()
+    }),
     KafkaStaticKey::new(
         "alter.log.dirs.replication.quota.window.size.seconds",
-        Some("alter_log_dirs_replication_quota_window_size"),
+        None,
         |c| seconds(c.alter_log_dirs_replication_quota_window_size),
     ),
     KafkaStaticKey::new(
