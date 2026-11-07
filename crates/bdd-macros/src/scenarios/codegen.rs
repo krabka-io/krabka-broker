@@ -88,11 +88,22 @@ pub fn expansion(
 ) -> TokenStream {
     let base = Ident::new(format!("{base}_scenarios"));
     let tracked: Vec<LitStr> = tracked.iter().map(|path| lit(path)).collect();
-    let features: Vec<TokenStream> = plans
-        .iter()
-        .filter(|plan| !plan.scenarios.is_empty())
-        .map(|plan| feature_module(arguments, plan))
-        .collect();
+    let features: Vec<TokenStream> = if arguments.drivers.is_empty() {
+        feature_modules(arguments, plans, None)
+    } else {
+        // One module per driver, each running every scenario against it.
+        arguments
+            .drivers
+            .iter()
+            .map(|driver| {
+                let modules = feature_modules(arguments, plans, Some(driver));
+                wrap(
+                    &format!("{driver}_driver"),
+                    &moxy::template! { @for module in &modules { {{ module }} } },
+                )
+            })
+            .collect()
+    };
     moxy::template! {
         @for path in &tracked {
             const _: &[u8] = ::core::include_bytes!({{ path }});
@@ -114,8 +125,36 @@ pub fn expansion(
     }
 }
 
+/// The modules of the feature files, with the scenarios `driver` runs.
+fn feature_modules(arguments: &Arguments, plans: &[Plan], driver: Option<&str>) -> Vec<TokenStream> {
+    plans
+        .iter()
+        .map(|plan| Plan {
+            scenarios: plan
+                .scenarios
+                .iter()
+                .filter(|scenario| runs_on(&scenario.tags, driver))
+                .cloned()
+                .collect(),
+            ..plan.clone()
+        })
+        .filter(|plan| !plan.scenarios.is_empty())
+        .map(|plan| feature_module(arguments, &plan, driver))
+        .collect()
+}
+
+/// Whether a scenario with `tags` runs against `driver`: a scenario tagged
+/// `@only_<driver>` runs against that driver alone.
+pub fn runs_on(tags: &[String], driver: Option<&str>) -> bool {
+    let mut only = tags.iter().filter_map(|tag| tag.strip_prefix("only_")).peekable();
+    match driver {
+        None => true,
+        Some(driver) => only.peek().is_none() || only.any(|name| name == driver),
+    }
+}
+
 /// The module of one feature file, with a module per rule and per outline.
-fn feature_module(arguments: &Arguments, plan: &Plan) -> TokenStream {
+fn feature_module(arguments: &Arguments, plan: &Plan, driver: Option<&str>) -> TokenStream {
     // Group by rule, then by outline, keeping file order.
     let mut rules: BTreeMap<usize, (Option<&str>, Vec<&PlannedScenario>)> = BTreeMap::new();
     let mut rule_order: Vec<Option<&str>> = Vec::new();
@@ -136,7 +175,7 @@ fn feature_module(arguments: &Arguments, plan: &Plan) -> TokenStream {
     }
     let mut body = Vec::new();
     for (rule_module, scenarios) in rules.into_values() {
-        let content = outline_modules(arguments, plan, &scenarios);
+        let content = outline_modules(arguments, plan, &scenarios, driver);
         body.push(match rule_module {
             Some(name) => wrap(&format!("rule_{name}"), &content),
             None => content,
@@ -156,13 +195,14 @@ fn outline_modules(
     arguments: &Arguments,
     plan: &Plan,
     scenarios: &[&PlannedScenario],
+    driver: Option<&str>,
 ) -> TokenStream {
     let mut parts = Vec::new();
     let mut index = 0;
     while let Some(scenario) = scenarios.get(index) {
         match &scenario.scenario_module {
             None => {
-                parts.push(test_fn(arguments, plan, scenario));
+                parts.push(test_fn(arguments, plan, scenario, driver));
                 index += 1;
             }
             Some(module) => {
@@ -170,7 +210,7 @@ fn outline_modules(
                     .iter()
                     .skip(index)
                     .take_while(|row| row.scenario_module.as_ref() == Some(module))
-                    .map(|row| test_fn(arguments, plan, row))
+                    .map(|row| test_fn(arguments, plan, row, driver))
                     .collect();
                 index += rows.len();
                 parts.push(wrap(
@@ -194,7 +234,12 @@ fn wrap(name: &str, content: &TokenStream) -> TokenStream {
 }
 
 /// One generated test with its static spec.
-fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> TokenStream {
+fn test_fn(
+    arguments: &Arguments,
+    plan: &Plan,
+    scenario: &PlannedScenario,
+    driver: Option<&str>,
+) -> TokenStream {
     let name = Ident::new(&scenario.test_name);
     let spec_name = Ident::new(format!(
         "__KRABKA_BDD_SPEC_{}",
@@ -203,7 +248,7 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
     let spec = spec(plan, scenario);
     let flavor = arguments.runtime.flavor();
     let ignore = ignore_reason(&scenario.tags).map(lit);
-    let params: Vec<TokenStream> = arguments
+    let mut params: Vec<TokenStream> = arguments
         .fixtures
         .iter()
         .map(|fixture| {
@@ -212,7 +257,7 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
             moxy::template! { {{ name }}: {{ ty }} }
         })
         .collect();
-    let inserts: Vec<TokenStream> = arguments
+    let mut inserts: Vec<TokenStream> = arguments
         .fixtures
         .iter()
         .map(|fixture| {
@@ -225,6 +270,14 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
             }
         })
         .collect();
+    if let (Some(source), Some(fixture)) = (driver, &arguments.driver) {
+        let source = Ident::new(source);
+        let ident = Ident::new(&fixture.name);
+        let name = lit(&fixture.name);
+        let ty = &fixture.ty;
+        params.push(moxy::template! { #[from({{ source }})] {{ ident }}: {{ ty }} });
+        inserts.push(moxy::template! { .with({{ name }}, {{ ident }}) });
+    }
     // `#[rstest]` generates the test itself, so it takes no `#[test]`.
     let test = if params.is_empty() {
         moxy::template! { #[test] }
@@ -374,7 +427,7 @@ fn number(value: &impl ToString) -> TokenStream { value.to_string().parse().unwr
 #[cfg(test)]
 mod tests {
     use {
-        super::{Runtime, ignore_reason},
+        super::{Runtime, ignore_reason, runs_on},
         assert2::assert,
         moxy::token::{LitStr, Span},
         rstest::rstest,
@@ -407,5 +460,20 @@ mod tests {
     ) {
         let runtime = runtime.map(|text| LitStr::new(text, Span::call_site()));
         assert!(Runtime::from_arguments(runtime.as_ref(), workers).ok() == expected);
+    }
+
+    #[rstest]
+    #[case(&[], None, true)]
+    #[case(&[], Some("wire"), true)]
+    #[case(&["only_wire"], Some("wire"), true)]
+    #[case(&["only_wire"], Some("in_process"), false)]
+    #[case(&["docker", "only_in_process"], Some("in_process"), true)]
+    fn only_tags_restrict_a_scenario_to_one_driver(
+        #[case] tags: &[&str],
+        #[case] driver: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let tags: Vec<String> = tags.iter().map(|tag| (*tag).to_owned()).collect();
+        assert!(runs_on(&tags, driver) == expected);
     }
 }

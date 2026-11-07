@@ -54,6 +54,12 @@ pub struct Arguments {
     pub world: Option<String>,
     /// `runtime = ".."` and `workers = N`.
     pub runtime: Runtime,
+    /// `driver = name: Type`: the fixture through which steps reach the
+    /// system, one per entry of `drivers`.
+    pub driver: Option<Fixture>,
+    /// `drivers = [fixture_fn, ..]`: every scenario runs once per driver, each
+    /// in its own module, with the driver from that rstest fixture fn.
+    pub drivers: Vec<String>,
 }
 
 /// Expands `scenarios!(...)`.
@@ -152,18 +158,26 @@ fn parse_arguments(tokens: TokenStream) -> Result<Arguments, ParseError> {
             Some("world") => arguments.world = Some(ident_value(&argument, "`world`")?),
             Some("runtime") => runtime = Some(string_value(&argument, "`runtime`")?),
             Some("workers") => workers = Some(int_value(&argument)?),
+            Some("driver") => arguments.driver = Some(driver(&argument)?),
+            Some("drivers") => arguments.drivers = idents(&argument, "`drivers`")?,
             Some(other) => {
                 return Err(ParseError::new(
                     first_span(&argument),
                     format!(
                         "unknown argument `{other}`: expected the directory, `tags`, \
-                         `fixtures`, `world`, `runtime` or `workers`"
+                         `fixtures`, `world`, `runtime`, `workers`, `driver` or `drivers`"
                     ),
                 ));
             }
         }
     }
     arguments.runtime = Runtime::from_arguments(runtime.as_ref(), workers)?;
+    if arguments.driver.is_some() == arguments.drivers.is_empty() {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "`driver = name: Type` and `drivers = [..]` go together",
+        ));
+    }
     Ok(arguments)
 }
 
@@ -288,6 +302,39 @@ fn fixtures(argument: &Argument) -> Result<Vec<Fixture>, ParseError> {
                     ty: ty.iter().cloned().collect(),
                 })
             }
+            _ => Err(malformed()),
+        })
+        .collect()
+}
+
+/// The entry of `driver = name: Type`.
+fn driver(argument: &Argument) -> Result<Fixture, ParseError> {
+    match value_tokens(argument) {
+        [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..]
+            if colon.as_str() == ":" && !ty.is_empty() =>
+        {
+            Ok(Fixture {
+                name: name.text().to_owned(),
+                ty: ty.iter().cloned().collect(),
+            })
+        }
+        _ => Err(ParseError::new(
+            first_span(argument),
+            "`driver` must be `name: Type`",
+        )),
+    }
+}
+
+/// The identifiers of `name = [a, b, ..]`.
+fn idents(argument: &Argument, what: &str) -> Result<Vec<String>, ParseError> {
+    let malformed = || ParseError::new(first_span(argument), format!("{what} must be `[name, ..]`"));
+    let [TokenTree::Group(group)] = value_tokens(argument) else {
+        return Err(malformed());
+    };
+    split_top_level(group.tokens.clone().into_iter())
+        .into_iter()
+        .map(|entry| match entry.as_slice() {
+            [TokenTree::Ident(name)] => Ok(name.text().to_owned()),
             _ => Err(malformed()),
         })
         .collect()
