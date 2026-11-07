@@ -65,8 +65,9 @@ pub enum Command {
         /// How long the coordinator retries a partition that has no marker
         /// yet. Takes any time unit, the same as `--interval`. The broker
         /// clamps this to its own configured ceiling. Omit to take the
-        /// broker's default. A value below one millisecond, other than `0`, is
-        /// refused, since the broker counts this in whole milliseconds.
+        /// broker's default. A negative value is refused, and so is one that
+        /// rounds to 0 ms (below 0.5ms) other than `0`, since the broker counts
+        /// this in whole milliseconds.
         #[arg(long, value_parser = parse_timeout)]
         timeout: Option<Time>,
     },
@@ -109,14 +110,14 @@ pub enum Command {
 /// meant milliseconds would otherwise wait thirty seconds without complaining.
 fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
 
-/// Parse `trigger --timeout`: a time argument that is `0` or at least one
-/// millisecond.
+/// Parse `trigger --timeout`: a non-negative time argument that is `0` or
+/// rounds to at least one millisecond.
 ///
-/// The request carries whole milliseconds and `0` asks for the broker's
-/// default, so `250us` would otherwise reach the broker as that default
-/// rather than as a short timeout.
+/// The request carries whole milliseconds and a non-positive value asks for
+/// the broker's default, so `250us` or `-5s` would otherwise reach the broker
+/// as that default rather than as the timeout the operator gave.
 fn parse_timeout(raw: &str) -> Result<Time, String> {
-    let timeout = parse_time(raw)?;
+    let timeout = parse::non_negative_time(raw).map_err(|e| e.to_string())?;
     if timeout.nanos_i64() != 0 && timeout.millis_i64() == 0 {
         return Err(format!(
             "{raw} rounds to 0 ms, which asks for the broker's default; give at least 1ms"
@@ -161,6 +162,8 @@ mod tests {
         submillisecond = { "250us", None },
         one_nanosecond = { "1ns", None },
         missing_unit = { "90", None },
+        negative = { "-5s", None },
+        large_negative = { "-30d", None },
     )]
     fn parse_timeout_refuses_a_value_that_rounds_to_zero_milliseconds(
         raw: &str,

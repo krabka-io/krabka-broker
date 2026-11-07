@@ -669,6 +669,7 @@ mod tests {
     /// Only a byte read counts as cached. An unexpected errno answers not
     /// cached rather than cached, so the caller does not read under the log
     /// lock from a disk it could not probe.
+    #[cfg(target_os = "linux")]
     #[yare::parameterized(
         read_a_byte = { Ok(1), Some(true) },
         read_nothing = { Ok(0), Some(false) },

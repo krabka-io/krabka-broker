@@ -577,9 +577,11 @@ mod tests {
     }
 
     /// A latest checkpoint that the controller cannot read or decode fails the
-    /// start with the read's own error. Before the fix, start-up read it as
-    /// "no voters" and reported a misleading bootstrap-mode error, or bound
-    /// the listener first.
+    /// start with the read's own error, before the controller listener binds.
+    /// Before the fix, start-up read it as "no voters" and reported a
+    /// misleading bootstrap-mode error, or bound the listener first. The
+    /// test holds the listener's port, so a start that binds first fails with
+    /// a bind error instead.
     #[yare::parameterized(
         truncated = { DamagedCheckpoint::Truncated, false },
         truncated_auto_join = { DamagedCheckpoint::Truncated, true },
@@ -608,10 +610,12 @@ mod tests {
                 .to_string(),
             Err(error) => error.to_string(),
         };
+        let taken = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Bootstrap,
             initial_voters: krabka_metadata::VoterSet::from_voters(iter::empty()),
             auto_join,
+            controller_listen_addr: taken.local_addr().expect("local address"),
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
 
