@@ -6,8 +6,7 @@
 
 use {
     super::{
-        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
-        RESOURCE_TYPE_TOPIC, dispatch,
+        dispatch,
         test_support::{
             broker_resource, client_metrics_resource, drive_many, drive_one, group_resource,
             resource, test_context,
@@ -25,7 +24,7 @@ use {
                 image_with_client_metrics_config, image_with_group_config, image_with_topic_config,
                 topic_resource,
             },
-            config_alter::config_value_size_error,
+            config_alter::{ConfigResourceType, config_value_size_error},
             test_support::{
                 assert_dispatch_response, config_resource_error_response,
                 duplicate_config_resource_response, ordered_rows,
@@ -63,12 +62,13 @@ fn expected_resource_response(
 #[tokio::test]
 async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
     allow_all_broker_setup!((handle, _dir, broker, ctx), start_broker, "admin");
-    let duplicate_topic = duplicate_config_resource_response(RESOURCE_TYPE_TOPIC, "duplicate");
+    let duplicate_topic =
+        duplicate_config_resource_response(ConfigResourceType::Topic.to_wire(), "duplicate");
     let rows = [
         (
             broker_resource("2", &[]),
             config_resource_error_response(
-                RESOURCE_TYPE_BROKER,
+                ConfigResourceType::Broker.to_wire(),
                 "2",
                 codes::INVALID_REQUEST,
                 Some("Unexpected broker id, expected 1, but received 2".into()),
@@ -77,7 +77,7 @@ async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         (
             broker_resource("1", &[]),
             krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-                resource_type: RESOURCE_TYPE_BROKER,
+                resource_type: ConfigResourceType::Broker.to_wire(),
                 resource_name: "1".into(),
                 error_code: codes::NONE,
                 error_message: None
@@ -96,7 +96,7 @@ async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         (
             topic_resource("missing", &[]),
             config_resource_error_response(
-                RESOURCE_TYPE_TOPIC,
+                ConfigResourceType::Topic.to_wire(),
                 "missing",
                 codes::UNKNOWN_TOPIC_OR_PARTITION,
                 Some("The topic 'missing' does not exist.".into()),
@@ -166,8 +166,8 @@ enum DeniedResourceCase {
 async fn denied_resources_report_their_authorization_error(case: DeniedResourceCase) {
     let (request, resource_type, resource_name, error_code, error_message) = match case {
         DeniedResourceCase::Topic => (
-            resource(RESOURCE_TYPE_TOPIC, "orders"),
-            RESOURCE_TYPE_TOPIC,
+            resource(ConfigResourceType::Topic.to_wire(), "orders"),
+            ConfigResourceType::Topic.to_wire(),
             "orders",
             codes::TOPIC_AUTHORIZATION_FAILED,
             "Topic authorization failed.",
@@ -176,7 +176,7 @@ async fn denied_resources_report_their_authorization_error(case: DeniedResourceC
         // AlterConfigs on Group(name), as IncrementalAlterConfigs does.
         DeniedResourceCase::Group => (
             group_resource("streams-app", &[]),
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             "streams-app",
             codes::GROUP_AUTHORIZATION_FAILED,
             "Group authorization failed.",
@@ -185,14 +185,14 @@ async fn denied_resources_report_their_authorization_error(case: DeniedResourceC
         // takes its message from the controller path.
         DeniedResourceCase::ClientMetrics => (
             client_metrics_resource("sub-a", &[]),
-            RESOURCE_TYPE_CLIENT_METRICS,
+            ConfigResourceType::ClientMetrics.to_wire(),
             "sub-a",
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
         ),
         DeniedResourceCase::Broker => (
-            resource(RESOURCE_TYPE_BROKER, "1"),
-            RESOURCE_TYPE_BROKER,
+            resource(ConfigResourceType::Broker.to_wire(), "1"),
+            ConfigResourceType::Broker.to_wire(),
             "1",
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
@@ -219,8 +219,12 @@ async fn authorized_group_resource_is_applied() {
     ))
     .await;
 
-    let expected =
-        expected_resource_response(RESOURCE_TYPE_GROUP, "streams-app", codes::NONE, None);
+    let expected = expected_resource_response(
+        ConfigResourceType::Group.to_wire(),
+        "streams-app",
+        codes::NONE,
+        None,
+    );
     assert!(resp == expected);
 }
 
@@ -232,8 +236,12 @@ async fn authorized_client_metrics_resource_is_applied() {
     ))
     .await;
 
-    let expected =
-        expected_resource_response(RESOURCE_TYPE_CLIENT_METRICS, "sub-a", codes::NONE, None);
+    let expected = expected_resource_response(
+        ConfigResourceType::ClientMetrics.to_wire(),
+        "sub-a",
+        codes::NONE,
+        None,
+    );
     assert!(resp == expected);
 }
 
@@ -244,8 +252,8 @@ async fn authorized_client_metrics_resource_is_applied() {
 #[tokio::test]
 async fn duplicate_resource_reference_is_a_validation_error_even_when_unauthorized() {
     let resp = Box::pin(drive_many(Arc::new(DenyAll), vec![
-        resource(RESOURCE_TYPE_TOPIC, "orders"),
-        resource(RESOURCE_TYPE_TOPIC, "orders"),
+        resource(ConfigResourceType::Topic.to_wire(), "orders"),
+        resource(ConfigResourceType::Topic.to_wire(), "orders"),
     ]))
     .await;
 
@@ -253,7 +261,7 @@ async fn duplicate_resource_reference_is_a_validation_error_even_when_unauthoriz
     for row in &resp.responses {
         check!(row.error_code == codes::INVALID_REQUEST);
         check!(row.error_message.as_deref() == Some("Each resource must appear at most once."));
-        check!(row.resource_type == RESOURCE_TYPE_TOPIC);
+        check!(row.resource_type == ConfigResourceType::Topic.to_wire());
         check!(row.resource_name == "orders");
     }
 }
@@ -262,7 +270,7 @@ async fn duplicate_resource_reference_is_a_validation_error_even_when_unauthoriz
 /// before authorization runs.
 #[tokio::test]
 async fn duplicate_config_key_is_a_validation_error_even_when_unauthorized() {
-    let mut duplicated = resource(RESOURCE_TYPE_TOPIC, "orders");
+    let mut duplicated = resource(ConfigResourceType::Topic.to_wire(), "orders");
     duplicated.configs.push(duplicated.configs[0].clone());
 
     let resp = invalid_config_row(duplicated).await;
@@ -275,7 +283,7 @@ async fn duplicate_config_key_is_a_validation_error_even_when_unauthorized() {
 /// could mean, so it is simply malformed. Checked before authorization.
 #[tokio::test]
 async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
-    let mut resource = resource(RESOURCE_TYPE_TOPIC, "orders");
+    let mut resource = resource(ConfigResourceType::Topic.to_wire(), "orders");
     resource.configs = ["retention.ms", "cleanup.policy"]
         .into_iter()
         .map(|name| AlterableConfig {
@@ -300,7 +308,7 @@ async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
 #[yare::parameterized(
     topic = {
         "topic",
-        resource(RESOURCE_TYPE_TOPIC, "orders"),
+        resource(ConfigResourceType::Topic.to_wire(), "orders"),
         codes::TOPIC_AUTHORIZATION_FAILED,
     },
     group = {
@@ -315,7 +323,7 @@ async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
     },
     broker = {
         "broker",
-        resource(RESOURCE_TYPE_BROKER, "1"),
+        resource(ConfigResourceType::Broker.to_wire(), "1"),
         codes::CLUSTER_AUTHORIZATION_FAILED,
     },
 )]
@@ -338,7 +346,8 @@ async fn authorized_broker_resource_is_applied() {
     ))
     .await;
 
-    let expected = expected_resource_response(RESOURCE_TYPE_BROKER, "1", codes::NONE, None);
+    let expected =
+        expected_resource_response(ConfigResourceType::Broker.to_wire(), "1", codes::NONE, None);
     assert!(resp == expected);
 }
 

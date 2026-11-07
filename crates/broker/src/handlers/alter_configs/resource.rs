@@ -15,7 +15,7 @@
 
 use {
     super::{
-        RESOURCE_TYPE_TOPIC, broker_configs::broker_config_records,
+        broker_configs::broker_config_records,
         client_metrics_configs::client_metrics_config_record, group_configs::group_config_record,
         topic_configs::topic_config_record,
     },
@@ -25,9 +25,9 @@ use {
         handlers::{
             RequestContext, audit_admin_success,
             config_alter::{
-                RecordBuilders, changes_min_isr, config_value_size_error, empty_resource_response,
-                guarded_resource_response, resource_preamble_refusal, resource_records,
-                resource_refusal, validate_resource_shape,
+                ConfigResourceType, RecordBuilders, changes_min_isr, config_value_size_error,
+                empty_resource_response, guarded_resource_response, resource_preamble_refusal,
+                resource_records, resource_refusal, validate_resource_shape,
             },
             response_encoding::ErrorRow as _,
         },
@@ -110,7 +110,7 @@ async fn process_resource_once(
         .iter()
         .any(|record| changes_min_isr(&image, record, true));
     if min_isr_changed {
-        let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
+        let topic = (resource.resource_type == ConfigResourceType::Topic.to_wire())
             .then_some(resource.resource_name.as_str());
         records.extend(clear_elr_records(&image, topic));
     }

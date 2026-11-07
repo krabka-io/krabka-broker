@@ -34,7 +34,7 @@ use {
             acl_gates::config_resource_refusal,
             audit_resource,
             config_alter::{
-                BrokerPreprocess, RecordBuilders, broker_preprocess_refusal,
+                BrokerPreprocess, ConfigResourceType, RecordBuilders, broker_preprocess_refusal,
                 guarded_resource_response, resource_preamble_refusal, resource_records,
                 resource_refusal,
             },
@@ -70,17 +70,10 @@ use {
         client_metrics_scope::client_metrics_records, group_scope::group_record,
         topic_scope::topic_config_record,
     },
-    crate::{
-        broker::Broker,
-        codes,
-        error::BrokerError,
-        handlers::describe_configs::{
-            RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-            RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-        },
-    },
+    crate::{broker::Broker, codes, error::BrokerError},
     std::{iter, mem},
 };
+
 /// A config's `config_operation` byte, as Kafka's `AlterConfigOp.OpType`
 /// reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,12 +184,12 @@ krabka_macros::decoded_dispatch! {
             .zip(duplicates)
             .enumerate()
         {
-            if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+            if resource.resource_type == ConfigResourceType::BrokerLogger.to_wire() {
                 local_indices.push(index);
                 local.push(resource);
                 continue;
             }
-            let refusal = (resource.resource_type == RESOURCE_TYPE_BROKER).then(|| {
+            let refusal = (resource.resource_type == ConfigResourceType::Broker.to_wire()).then(|| {
                 broker_preprocess_refusal(broker, ctx, &image, BrokerPreprocess {
                     resource: &resource,
                     shape: validate_resource_shape(&resource, duplicate),
@@ -305,20 +298,14 @@ fn preprocess_refusal(resource: &AlterConfigsResource, duplicate: bool) -> Optio
     validate_resource_shape(resource, duplicate)
         .err()
         .or_else(|| {
-            (!matches!(
-                resource.resource_type,
-                RESOURCE_TYPE_TOPIC
-                    | RESOURCE_TYPE_BROKER
-                    | RESOURCE_TYPE_GROUP
-                    | RESOURCE_TYPE_CLIENT_METRICS
-                    | RESOURCE_TYPE_BROKER_LOGGER
-            ))
-            .then(|| {
-                (
-                    codes::INVALID_REQUEST,
-                    format!("Unknown resource type {}", resource.resource_type),
-                )
-            })
+            ConfigResourceType::from_wire(resource.resource_type)
+                .is_none()
+                .then(|| {
+                    (
+                        codes::INVALID_REQUEST,
+                        format!("Unknown resource type {}", resource.resource_type),
+                    )
+                })
         })
 }
 
@@ -338,7 +325,7 @@ fn reaches_unknown_operation(
         .zip(refusals)
         .any(|(resource, refusal)| {
             refusal.is_none()
-                && resource.resource_type != RESOURCE_TYPE_BROKER_LOGGER
+                && resource.resource_type != ConfigResourceType::BrokerLogger.to_wire()
                 && resource
                     .configs
                     .iter()
@@ -426,7 +413,7 @@ async fn process_resource_once(
         return Ok(out.with_error(code, message));
     }
 
-    if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+    if resource.resource_type == ConfigResourceType::BrokerLogger.to_wire() {
         // Node-local and never persisted, so this returns without
         // reaching `submit_change` whatever the outcome.
         handle_broker_logger_scoped(
@@ -455,7 +442,7 @@ async fn process_resource_once(
                 .any(|item| item.name == MIN_INSYNC_REPLICAS);
         super::config_alter::changes_min_isr(&image, record, include_topic)
     }) {
-        let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
+        let topic = (resource.resource_type == ConfigResourceType::Topic.to_wire())
             .then_some(resource.resource_name.as_str());
         to_submit.extend(clear_elr_records(&image, topic));
     }
@@ -556,64 +543,70 @@ mod tests {
         allow_all_broker_setup!((handle, _dir, broker, ctx), start_broker, "admin");
         let resource = |kind, name| make_scoped_resource(kind, name, vec![]);
         let duplicate_topic = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            resource_type: RESOURCE_TYPE_TOPIC,
+            resource_type: ConfigResourceType::Topic.to_wire(),
             resource_name: "duplicate".into(),
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Each resource must appear at most once.".into())
         });
         let duplicate_logger = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+            resource_type: ConfigResourceType::BrokerLogger.to_wire(),
             resource_name: "2".into(),
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Each resource must appear at most once.".into())
         });
         let rows = [
             (
-                resource(RESOURCE_TYPE_BROKER_LOGGER, "1"),
+                resource(ConfigResourceType::BrokerLogger.to_wire(), "1"),
                 krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_BROKER_LOGGER,
+                    resource_type: ConfigResourceType::BrokerLogger.to_wire(),
                     resource_name: "1".into(),
                     error_code: codes::NONE,
                     error_message: None
                 }),
             ),
             (
-                resource(RESOURCE_TYPE_BROKER, "2"),
+                resource(ConfigResourceType::Broker.to_wire(), "2"),
                 config_resource_error_response(
-                    RESOURCE_TYPE_BROKER,
+                    ConfigResourceType::Broker.to_wire(),
                     "2",
                     codes::INVALID_REQUEST,
                     Some("Unexpected broker id, expected 1, but received 2".into()),
                 ),
             ),
             (
-                resource(RESOURCE_TYPE_TOPIC, "duplicate"),
+                resource(ConfigResourceType::Topic.to_wire(), "duplicate"),
                 duplicate_topic.clone(),
             ),
             (
-                resource(RESOURCE_TYPE_BROKER, "1"),
+                resource(ConfigResourceType::Broker.to_wire(), "1"),
                 krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_BROKER,
+                    resource_type: ConfigResourceType::Broker.to_wire(),
                     resource_name: "1".into(),
                     error_code: codes::NONE,
                     error_message: None
                 }),
             ),
             (
-                resource(RESOURCE_TYPE_TOPIC, "missing"),
+                resource(ConfigResourceType::Topic.to_wire(), "missing"),
                 config_resource_error_response(
-                    RESOURCE_TYPE_TOPIC,
+                    ConfigResourceType::Topic.to_wire(),
                     "missing",
                     codes::UNKNOWN_TOPIC_OR_PARTITION,
                     Some("The topic 'missing' does not exist.".into()),
                 ),
             ),
-            (resource(RESOURCE_TYPE_TOPIC, "duplicate"), duplicate_topic),
             (
-                resource(RESOURCE_TYPE_BROKER_LOGGER, "2"),
+                resource(ConfigResourceType::Topic.to_wire(), "duplicate"),
+                duplicate_topic,
+            ),
+            (
+                resource(ConfigResourceType::BrokerLogger.to_wire(), "2"),
                 duplicate_logger.clone(),
             ),
-            (resource(RESOURCE_TYPE_BROKER_LOGGER, "2"), duplicate_logger),
+            (
+                resource(ConfigResourceType::BrokerLogger.to_wire(), "2"),
+                duplicate_logger,
+            ),
         ];
         for order in [[0, 1, 2, 3, 4, 5, 6, 7], [7, 6, 5, 4, 3, 2, 1, 0]] {
             let ordered = ordered_rows(&rows, &order);
@@ -634,21 +627,21 @@ mod tests {
     /// merges it, so its unknown operation never fails the request.
     #[yare::parameterized(
         authorization_beats_preprocess = {
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             vec![make_set_cfg("log.retention.ms", "1")],
             "2",
             codes::CLUSTER_AUTHORIZATION_FAILED,
             "Cluster authorization failed.",
         },
         shape_beats_authorization = {
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             vec![make_set_cfg("log.retention.ms", "1"), make_set_cfg("log.retention.ms", "2")],
             "1",
             codes::INVALID_REQUEST,
             "Error due to duplicate config keys",
         },
         authorization_beats_unknown_operation = {
-            RESOURCE_TYPE_TOPIC,
+            ConfigResourceType::Topic.to_wire(),
             vec![config(RETENTION_MS, 4, Some("1"))],
             "orders",
             codes::TOPIC_AUTHORIZATION_FAILED,
@@ -692,34 +685,34 @@ mod tests {
     /// `UNKNOWN_SERVER_ERROR` with no message. A null value is refused by
     /// `preprocess` before the operation is looked at.
     #[yare::parameterized(
-        topic_four = { RESOURCE_TYPE_TOPIC, "orders", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
-        topic_negative = { RESOURCE_TYPE_TOPIC, "orders", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
+        topic_four = { ConfigResourceType::Topic.to_wire(), "orders", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
+        topic_negative = { ConfigResourceType::Topic.to_wire(), "orders", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
         topic_null_value = {
-            RESOURCE_TYPE_TOPIC, "orders", 4, None, codes::INVALID_REQUEST,
+            ConfigResourceType::Topic.to_wire(), "orders", 4, None, codes::INVALID_REQUEST,
             Some("Null value not supported for : retention.ms"),
         },
-        group_four = { RESOURCE_TYPE_GROUP, "workers", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
-        group_negative = { RESOURCE_TYPE_GROUP, "workers", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
+        group_four = { ConfigResourceType::Group.to_wire(), "workers", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
+        group_negative = { ConfigResourceType::Group.to_wire(), "workers", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None },
         client_metrics_four = {
-            RESOURCE_TYPE_CLIENT_METRICS, "metrics", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None,
+            ConfigResourceType::ClientMetrics.to_wire(), "metrics", 4, Some("1"), codes::UNKNOWN_SERVER_ERROR, None,
         },
         client_metrics_negative = {
-            RESOURCE_TYPE_CLIENT_METRICS, "metrics", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None,
+            ConfigResourceType::ClientMetrics.to_wire(), "metrics", -1, Some("1"), codes::UNKNOWN_SERVER_ERROR, None,
         },
         broker_four = {
-            RESOURCE_TYPE_BROKER, "1", 4, Some("1"), codes::INVALID_REQUEST,
+            ConfigResourceType::Broker.to_wire(), "1", 4, Some("1"), codes::INVALID_REQUEST,
             Some("Unknown operations type 4"),
         },
         cluster_negative = {
-            RESOURCE_TYPE_BROKER, "", -1, Some("1"), codes::INVALID_REQUEST,
+            ConfigResourceType::Broker.to_wire(), "", -1, Some("1"), codes::INVALID_REQUEST,
             Some("Unknown operations type -1"),
         },
         broker_logger_four = {
-            RESOURCE_TYPE_BROKER_LOGGER, "1", 4, Some("1"), codes::INVALID_REQUEST,
+            ConfigResourceType::BrokerLogger.to_wire(), "1", 4, Some("1"), codes::INVALID_REQUEST,
             Some("Unknown operation type 4 is not allowed for the BROKER_LOGGER resource"),
         },
         broker_logger_negative = {
-            RESOURCE_TYPE_BROKER_LOGGER, "1", -1, Some("1"), codes::INVALID_REQUEST,
+            ConfigResourceType::BrokerLogger.to_wire(), "1", -1, Some("1"), codes::INVALID_REQUEST,
             Some("Unknown operation type -1 is not allowed for the BROKER_LOGGER resource"),
         },
     )]
@@ -763,29 +756,28 @@ mod tests {
         let failed = |resource_type, name| {
             config_resource_error_response(resource_type, name, codes::UNKNOWN_SERVER_ERROR, None)
         };
-        let request = IncrementalAlterConfigsRequest {
-            resources: vec![
-                make_scoped_resource(RESOURCE_TYPE_TOPIC, "missing", vec![]),
-                make_scoped_resource(RESOURCE_TYPE_BROKER_LOGGER, "1", vec![]),
-                make_scoped_resource(RESOURCE_TYPE_TOPIC, "orders", unknown()),
-                make_scoped_resource(RESOURCE_TYPE_BROKER, "1", vec![]),
-                make_scoped_resource(RESOURCE_TYPE_BROKER, "", unknown()),
-                make_scoped_resource(RESOURCE_TYPE_GROUP, "workers", vec![]),
-                make_scoped_resource(RESOURCE_TYPE_TOPIC, "keys", vec![
-                    config(RETENTION_MS, ConfigOperation::Set.into(), Some("1")),
-                    config(RETENTION_MS, 4, Some("2")),
-                ]),
-                make_scoped_resource(RESOURCE_TYPE_GROUP, "nulls", vec![config(
-                    RETENTION_MS,
-                    4,
-                    None,
-                )]),
-                make_scoped_resource(RESOURCE_TYPE_GROUP, "twice", unknown()),
-                make_scoped_resource(RESOURCE_TYPE_GROUP, "twice", vec![]),
-                make_scoped_resource(3, "unknown-type", unknown()),
-            ],
-            ..Default::default()
-        };
+        let request =
+            IncrementalAlterConfigsRequest {
+                resources: vec![
+                    make_scoped_resource(ConfigResourceType::Topic.to_wire(), "missing", vec![]),
+                    make_scoped_resource(ConfigResourceType::BrokerLogger.to_wire(), "1", vec![]),
+                    make_scoped_resource(ConfigResourceType::Topic.to_wire(), "orders", unknown()),
+                    make_scoped_resource(ConfigResourceType::Broker.to_wire(), "1", vec![]),
+                    make_scoped_resource(ConfigResourceType::Broker.to_wire(), "", unknown()),
+                    make_scoped_resource(ConfigResourceType::Group.to_wire(), "workers", vec![]),
+                    make_scoped_resource(ConfigResourceType::Topic.to_wire(), "keys", vec![
+                        config(RETENTION_MS, ConfigOperation::Set.into(), Some("1")),
+                        config(RETENTION_MS, 4, Some("2")),
+                    ]),
+                    make_scoped_resource(ConfigResourceType::Group.to_wire(), "nulls", vec![
+                        config(RETENTION_MS, 4, None),
+                    ]),
+                    make_scoped_resource(ConfigResourceType::Group.to_wire(), "twice", unknown()),
+                    make_scoped_resource(ConfigResourceType::Group.to_wire(), "twice", vec![]),
+                    make_scoped_resource(3, "unknown-type", unknown()),
+                ],
+                ..Default::default()
+            };
         let refused = |resource_type, name, message: &str| {
             config_resource_error_response(
                 resource_type,
@@ -795,29 +787,34 @@ mod tests {
             )
         };
         let twice: AlterConfigsResourceResponse = refused(
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             "twice",
             "Each resource must appear at most once.",
         );
         let responses = vec![
-            failed(RESOURCE_TYPE_TOPIC, "missing"),
-            config_resource_error_response(RESOURCE_TYPE_BROKER_LOGGER, "1", codes::NONE, None),
-            failed(RESOURCE_TYPE_TOPIC, "orders"),
-            failed(RESOURCE_TYPE_BROKER, "1"),
+            failed(ConfigResourceType::Topic.to_wire(), "missing"),
             config_resource_error_response(
-                RESOURCE_TYPE_BROKER,
+                ConfigResourceType::BrokerLogger.to_wire(),
+                "1",
+                codes::NONE,
+                None,
+            ),
+            failed(ConfigResourceType::Topic.to_wire(), "orders"),
+            failed(ConfigResourceType::Broker.to_wire(), "1"),
+            config_resource_error_response(
+                ConfigResourceType::Broker.to_wire(),
                 "",
                 codes::INVALID_REQUEST,
                 Some("Unknown operations type 4".into()),
             ),
-            failed(RESOURCE_TYPE_GROUP, "workers"),
+            failed(ConfigResourceType::Group.to_wire(), "workers"),
             refused(
-                RESOURCE_TYPE_TOPIC,
+                ConfigResourceType::Topic.to_wire(),
                 "keys",
                 "Error due to duplicate config keys",
             ),
             refused(
-                RESOURCE_TYPE_GROUP,
+                ConfigResourceType::Group.to_wire(),
                 "nulls",
                 "Null value not supported for : retention.ms",
             ),
@@ -917,8 +914,8 @@ mod tests {
                     panic!("resource type name and configuration operations required")
                 };
                 let resource_type = match kind.as_str() {
-                    "topic" => RESOURCE_TYPE_TOPIC,
-                    "group" => RESOURCE_TYPE_GROUP,
+                    "topic" => ConfigResourceType::Topic.to_wire(),
+                    "group" => ConfigResourceType::Group.to_wire(),
                     _ => panic!("unknown resource kind: {kind}"),
                 };
                 let configs = if configs == "none" {

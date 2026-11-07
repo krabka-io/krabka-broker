@@ -50,13 +50,9 @@ use {
         handlers::{
             RequestContext, audit_resource,
             config_alter::{
-                BrokerPreprocess, broker_preprocess_refusal, config_resource_type,
-                duplicate_resource_flags, ordered_resource_responses, resource_error_rows,
-                validate_resource_shape,
-            },
-            describe_configs::{
-                RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
-                RESOURCE_TYPE_TOPIC,
+                BrokerPreprocess, ConfigResourceType, broker_preprocess_refusal,
+                config_resource_type, duplicate_resource_flags, ordered_resource_responses,
+                resource_error_rows, validate_resource_shape,
             },
             encode_response,
             forward_to_controller::to_active_controller_or_handle,
@@ -149,7 +145,7 @@ fn preprocess_resource(
     let (code, message) = broker_preprocess_refusal(broker, ctx, &image, BrokerPreprocess {
         resource,
         shape,
-        runs_preprocess: resource.resource_type == RESOURCE_TYPE_BROKER,
+        runs_preprocess: resource.resource_type == ConfigResourceType::Broker.to_wire(),
         preprocess: broker_configs::preprocess_broker_resource,
         broker_logger_supported: false,
     })?;
@@ -177,18 +173,18 @@ fn audit_resources_for(
         config_resource_type(resource.resource_type),
         resource.resource_name.clone(),
     )];
-    let keys = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => changed_config_keys(
+    let keys = match ConfigResourceType::from_wire(resource.resource_type) {
+        Some(ConfigResourceType::Topic) => changed_config_keys(
             resource,
             image.topic_config(&resource.resource_name),
             is_controller_managed_topic_config,
         ),
-        RESOURCE_TYPE_GROUP => changed_config_keys(
+        Some(ConfigResourceType::Group) => changed_config_keys(
             resource,
             image.group_config(&resource.resource_name),
             |_| false,
         ),
-        RESOURCE_TYPE_CLIENT_METRICS => changed_config_keys(
+        Some(ConfigResourceType::ClientMetrics) => changed_config_keys(
             resource,
             image.client_metrics_config(&resource.resource_name),
             |_| false,

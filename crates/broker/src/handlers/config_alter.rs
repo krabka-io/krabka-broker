@@ -24,10 +24,6 @@ use {
         },
         handlers::{
             RequestContext, config_resource_refusal,
-            describe_configs::{
-                RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-                RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-            },
             forward_to_controller::{guarded_operation_on_source, wrong_controller_message},
             response_encoding::ResourceErrorRow,
         },
@@ -50,6 +46,9 @@ use {
 
 #[cfg(test)]
 mod guarded_failure_tests;
+mod resource_type;
+
+pub use self::resource_type::{ConfigResourceAcl, ConfigResourceType};
 
 pub(super) trait ResourceErrorRequestResource {
     fn resource_type(&self) -> i8;
@@ -286,8 +285,8 @@ where
     Resource: ResourceErrorRequestResource,
 {
     let unstable = broker.config.features.unstable_api_versions;
-    match resource.resource_type() {
-        RESOURCE_TYPE_TOPIC => (builders.topic)(
+    match ConfigResourceType::from_wire(resource.resource_type()) {
+        Some(ConfigResourceType::Topic) => (builders.topic)(
             resource,
             image,
             &broker.config.topic_policy,
@@ -295,18 +294,21 @@ where
             unstable,
         )
         .map(|record| vec![record]),
-        RESOURCE_TYPE_BROKER => (builders.broker)(resource, BrokerConfigContext {
+        Some(ConfigResourceType::Broker) => (builders.broker)(resource, BrokerConfigContext {
             image,
             serving: forwarded_serving_node(broker, ctx, resource.resource_name()),
             log_dirs: &forwarded_log_dirs(broker, ctx),
             unstable,
         }),
-        RESOURCE_TYPE_GROUP => {
+        Some(ConfigResourceType::Group) => {
             (builders.group)(resource, image, &GroupBounds::of(&broker.config), unstable)
                 .map(|record| vec![record])
         }
-        RESOURCE_TYPE_CLIENT_METRICS => (builders.client_metrics)(resource, image),
-        other => unreachable!("resource type {other} passed the ACL dispatch"),
+        Some(ConfigResourceType::ClientMetrics) => (builders.client_metrics)(resource, image),
+        Some(ConfigResourceType::BrokerLogger) | None => unreachable!(
+            "resource type {} passed the ACL dispatch",
+            resource.resource_type()
+        ),
     }
 }
 
@@ -547,13 +549,7 @@ pub(super) fn config_value_size_error(
 }
 
 /// The audit `resource_type` for a KIP-133 config resource-type discriminant.
+/// A byte that names no type Kafka knows is `Unknown`.
 pub(super) fn config_resource_type(resource_type: i8) -> &'static str {
-    match resource_type {
-        RESOURCE_TYPE_TOPIC => "Topic",
-        RESOURCE_TYPE_BROKER => "Broker",
-        RESOURCE_TYPE_BROKER_LOGGER => "BrokerLogger",
-        RESOURCE_TYPE_CLIENT_METRICS => "ClientMetrics",
-        RESOURCE_TYPE_GROUP => "Group",
-        _ => "Unknown",
-    }
+    ConfigResourceType::from_wire(resource_type).map_or("Unknown", ConfigResourceType::audit_name)
 }

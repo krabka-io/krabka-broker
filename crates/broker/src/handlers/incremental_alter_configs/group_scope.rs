@@ -67,7 +67,7 @@ mod tests {
                 KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
             },
             handlers::{
-                describe_configs::RESOURCE_TYPE_GROUP,
+                config_alter::ConfigResourceType,
                 incremental_alter_configs::test_support::{make_scoped_resource, make_set_cfg},
             },
         },
@@ -151,7 +151,7 @@ mod tests {
     #[rstest_bdd_macros::when("the group configuration handler stages the request")]
     fn stage_group_configs(group_config: &mut GroupConfigScenario) {
         let resource = make_scoped_resource(
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             &group_config.group,
             group_config.configs.clone(),
         );
@@ -160,7 +160,7 @@ mod tests {
     #[rstest_bdd_macros::when("the controller merges operations and validates the group resource")]
     fn validate_group_record(group_config: &mut GroupConfigScenario) {
         let resource = make_scoped_resource(
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             &group_config.group,
             group_config.configs.clone(),
         );
@@ -229,12 +229,14 @@ mod tests {
     /// the builder reads an unknown code as SUBTRACT.
     #[test]
     fn an_unknown_operation_reaching_the_builder_reads_as_subtract() {
-        let resource = make_scoped_resource(RESOURCE_TYPE_GROUP, "g", vec![AlterableConfig {
-            name: KEY_SESSION_TIMEOUT_MS.into(),
-            config_operation: ConfigOperation::Unknown(9).into(),
-            value: Some("1".into()),
-            ..Default::default()
-        }]);
+        let resource = make_scoped_resource(ConfigResourceType::Group.to_wire(), "g", vec![
+            AlterableConfig {
+                name: KEY_SESSION_TIMEOUT_MS.into(),
+                config_operation: ConfigOperation::Unknown(9).into(),
+                value: Some("1".into()),
+                ..Default::default()
+            },
+        ]);
 
         assert!(
             drive(&resource, UnstableApiVersions::Enabled)
@@ -251,10 +253,9 @@ mod tests {
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
         let resource =
-            make_scoped_resource(RESOURCE_TYPE_GROUP, "streams-app", vec![make_set_cfg(
-                KEY_NUM_STANDBY_REPLICAS,
-                "1",
-            )]);
+            make_scoped_resource(ConfigResourceType::Group.to_wire(), "streams-app", vec![
+                make_set_cfg(KEY_NUM_STANDBY_REPLICAS, "1"),
+            ]);
         let record = drive(&resource, UnstableApiVersions::Enabled);
         assert!(matches!(
             record,
@@ -268,10 +269,9 @@ mod tests {
     #[test]
     fn group_config_rejects_values_outside_broker_bounds() {
         let resource =
-            make_scoped_resource(RESOURCE_TYPE_GROUP, "streams-app", vec![make_set_cfg(
-                KEY_SESSION_TIMEOUT_MS,
-                "1000",
-            )]);
+            make_scoped_resource(ConfigResourceType::Group.to_wire(), "streams-app", vec![
+                make_set_cfg(KEY_SESSION_TIMEOUT_MS, "1000"),
+            ]);
         let record = drive(&resource, UnstableApiVersions::Enabled);
         assert!(matches!(record, Err((codes::INVALID_CONFIG, _))));
     }

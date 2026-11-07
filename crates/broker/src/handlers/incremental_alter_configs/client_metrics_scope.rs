@@ -67,7 +67,7 @@ pub(super) fn client_metrics_records(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::handlers::describe_configs::RESOURCE_TYPE_CLIENT_METRICS, assert2::check,
+        super::*, crate::handlers::config_alter::ConfigResourceType, assert2::check,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
         std::collections::BTreeMap,
     };
@@ -105,7 +105,7 @@ mod tests {
 
     fn run(name: &str, ops: &[Op<'_>]) -> Result<Vec<MetadataRecord>, (i16, String)> {
         let resource = AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
+            resource_type: ConfigResourceType::ClientMetrics.to_wire(),
             resource_name: name.into(),
             configs: ops
                 .iter()
