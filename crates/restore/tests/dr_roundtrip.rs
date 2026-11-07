@@ -60,6 +60,8 @@ use {
     krabka_backup::{
         archive::ArchiveArgs,
         capture::capture_key,
+        cli::CaptureSigningArgs,
+        connection::SecurityArgs,
         manifest::{METADATA_CHECKPOINT, RLMM_SNAPSHOT},
         run,
     },
@@ -258,10 +260,16 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     check!(committed_offset(&pre_bootstrap).await == COMMITTED_OFFSET);
 
     // 2. The capture, and the check that it is whole.
-    let capture = run::capture(Some(&node_files), Some(&pre_bootstrap), &backup)
-        .await
-        .result
-        .expect("capture the restore inputs");
+    let capture = run::capture_configured(
+        Some(&node_files),
+        Some(&pre_bootstrap),
+        &SecurityArgs::default(),
+        &CaptureSigningArgs::default(),
+        &backup,
+    )
+    .await
+    .result
+    .expect("capture the restore inputs");
     run::verify(&capture, &backup)
         .await
         .result

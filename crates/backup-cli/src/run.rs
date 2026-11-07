@@ -137,38 +137,14 @@ fn now_ms() -> u64 {
     .unwrap_or(0)
 }
 
-/// Copy this node's restore inputs into the archive.
+/// Load command-config security and copy this node's restore inputs into the
+/// archive.
 ///
 /// # Errors
 ///
 /// The report result returns [`BackupError::Io`] when the capture found nothing to take or an
-/// artifact exceeds its restore size limit, and the archive's or the cluster's
-/// own error otherwise.
-pub async fn capture(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    archive: &ArchiveArgs,
-) -> OperationReport<String> {
-    let mut events = Vec::new();
-    let signing = CaptureSigningArgs::default();
-    let request = CaptureRequest {
-        log_dir,
-        bootstrap_server,
-        security: None,
-        signing: &signing,
-        archive,
-        captured_at_ms: now_ms(),
-    };
-    let result = run_capture(request, &mut events).await;
-    OperationReport { result, events }
-}
-
-/// Load command-config security and capture this node's restore inputs.
-///
-/// # Errors
-///
-/// The report result returns the same errors as [`capture`], plus command-config read or parse
-/// failures.
+/// artifact exceeds its restore size limit, command-config read or parse failures, and the
+/// archive's or the cluster's own error otherwise.
 pub async fn capture_configured(
     log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
@@ -1142,17 +1118,19 @@ mod tests {
         super::{
             ArtifactKind, BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture,
             FileEd25519Signer, GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT,
-            RLMM_SNAPSHOT, RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture,
-            check_capture_size, checkpoint_note, list, newest_metadata_checkpoint, restore_offsets,
-            upload_capped, verify, verify_offsets_boundary,
+            RLMM_SNAPSHOT, RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit,
+            capture_configured, check_capture_size, checkpoint_note, list,
+            newest_metadata_checkpoint, restore_offsets, upload_capped, verify,
+            verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
             capture::capture_key,
-            cli::CaptureTrustArgs,
+            cli::{CaptureSigningArgs, CaptureTrustArgs},
+            connection::SecurityArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
-            report::BackupEvent,
+            report::{BackupEvent, OperationReport},
         },
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
@@ -1181,6 +1159,22 @@ mod tests {
     }
 
     krabka_macros::snapshot_node_fixture!(node_with_rlmm);
+
+    /// A capture with no command config and no signing key.
+    async fn capture(
+        log_dir: Option<&Path>,
+        bootstrap_server: Option<&str>,
+        archive: &ArchiveArgs,
+    ) -> OperationReport<String> {
+        capture_configured(
+            log_dir,
+            bootstrap_server,
+            &SecurityArgs::default(),
+            &CaptureSigningArgs::default(),
+            archive,
+        )
+        .await
+    }
 
     #[yare::parameterized(
         manifest = { MANIFEST, 8 * 1024 * 1024 },
