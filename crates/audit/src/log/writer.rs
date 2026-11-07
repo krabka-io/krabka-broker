@@ -557,6 +557,47 @@ mod tests {
         check!(header(&recs[1], "prev_hash") == Some(expect));
     }
 
+    /// Golden chain headers for a short writer run without a spool: one
+    /// pending-loss marker, then two events. The chained records persist, so
+    /// their `seq` and `prev_hash` headers must not move.
+    #[tokio::test]
+    async fn chain_headers_match_recorded_golden_values() {
+        const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+        let TempSpool { dir: _dir, spool } = roomy_spool();
+        let sink = Arc::new(MemorySink::default());
+        let (log, receiver) = AuditLog::new(16);
+        receiver.pending_losses().add(1);
+        let mut params = params(
+            Arc::<MemorySink>::clone(&sink),
+            spool,
+            Arc::new(AuditStats::new()),
+        );
+        params.spool = None;
+        let handle = spawn_writer(receiver, params);
+        finish_lifecycle_writer(log, handle, &[NodeId(1), NodeId(2)]).await;
+
+        let headers: Vec<_> = sink
+            .records()
+            .iter()
+            .map(|r| (r.class, header(r, "seq"), header(r, "prev_hash")))
+            .collect();
+        let golden = [
+            (AuditEventClass::RecordsLost, "0", GENESIS),
+            (
+                AuditEventClass::ApplicationLifecycle,
+                "1",
+                "499daee543b7f50a26619d7a65ad3473ba9a1bceafa418a2da5c97f8e6ee4a96",
+            ),
+            (
+                AuditEventClass::ApplicationLifecycle,
+                "2",
+                "e66734f7f0d4ef0babdbc86788e6425783800e31389b840f1b378ba076fa8ef3",
+            ),
+        ]
+        .map(|(class, seq, prev)| (class, Some(seq.to_owned()), Some(prev.to_owned())));
+        check!(headers == golden);
+    }
+
     #[tokio::test]
     async fn checkpoints_emitted_by_count_and_verify_against_recomputed_head() {
         // checkpoint every 2 records; long interval so only count triggers
