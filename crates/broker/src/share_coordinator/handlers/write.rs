@@ -8,7 +8,7 @@ use {
     crate::{
         codes,
         share_coordinator::{
-            coordinator::{ShareCoordinator, ShareWrite},
+            coordinator::{ShareCoordinator, ShareStateOp, ShareWrite},
             persistence::StateBatch,
         },
     },
@@ -67,7 +67,7 @@ async fn write_state(
                 Err(error) => PartitionResult {
                     partition: pd.partition,
                     error_code: error.code(),
-                    error_message: Some(error.row_message("write")),
+                    error_message: Some(error.row_message(ShareStateOp::Write)),
                     ..Default::default()
                 },
             }

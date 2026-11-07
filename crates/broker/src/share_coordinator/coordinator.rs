@@ -147,8 +147,7 @@ pub enum ShareStateError {
     /// is the code after Kafka's
     /// `CoordinatorOperationExceptionHelper.handleOperationException`, and
     /// `message` is the message of the error before that mapping. Kafka
-    /// prefixes it with `Unable to read share group state: ` or
-    /// `Unable to write share group state: `.
+    /// prefixes it as [`ShareStateOp::failure_prefix`] says.
     Operation {
         code: ShareErrorCode,
         message: &'static str,
@@ -163,26 +162,12 @@ impl ShareStateError {
         }
     }
 
-    /// The wire error message. `operation` is `read` or `write`.
-    pub(crate) fn row_message(self, operation: &str) -> String {
+    /// The wire error message of a refused `op` partition: a refusal's own
+    /// message, or an operation error after the prefix of `op`.
+    pub(crate) fn row_message(self, op: ShareStateOp) -> String {
         match self {
             Self::Refused { message, .. } => message.to_owned(),
-            Self::Operation { message, .. } => {
-                format!("Unable to {operation} share group state: {message}")
-            }
-        }
-    }
-
-    /// The row message of a refused `ReadShareGroupStateSummary` partition: a
-    /// refusal's own message, or the operation error that Kafka's
-    /// `readStateSummary` prefixes with
-    /// `Unable to read share group state summary: `.
-    pub(crate) fn summary_row_message(self) -> String {
-        match self {
-            Self::Refused { message, .. } => message.to_owned(),
-            Self::Operation { message, .. } => {
-                format!("Unable to read share group state summary: {message}")
-            }
+            Self::Operation { message, .. } => format!("{}: {message}", op.failure_prefix()),
         }
     }
 
@@ -194,6 +179,42 @@ impl ShareStateError {
             message::NOT_COORDINATOR
         };
         Self::Operation { code, message }
+    }
+}
+
+/// One of the five KIP-932 share-state RPCs that the persister sends and the
+/// share coordinator serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareStateOp {
+    Initialize,
+    Read,
+    ReadSummary,
+    Write,
+    Delete,
+}
+
+impl ShareStateOp {
+    /// The Kafka API name of the RPC.
+    pub(crate) const fn api_name(self) -> &'static str {
+        match self {
+            Self::Initialize => "InitializeShareGroupState",
+            Self::Read => "ReadShareGroupState",
+            Self::ReadSummary => "ReadShareGroupStateSummary",
+            Self::Write => "WriteShareGroupState",
+            Self::Delete => "DeleteShareGroupState",
+        }
+    }
+
+    /// What Kafka's `ShareCoordinatorService` puts before the message of an
+    /// operation error in a row of this RPC.
+    const fn failure_prefix(self) -> &'static str {
+        match self {
+            Self::Initialize => "Unable to initialize share group state",
+            Self::Read => "Unable to read share group state",
+            Self::ReadSummary => "Unable to read share group state summary",
+            Self::Write => "Unable to write share group state",
+            Self::Delete => "Unable to delete share group state",
+        }
     }
 }
 

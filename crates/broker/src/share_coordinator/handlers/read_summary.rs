@@ -13,7 +13,9 @@
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
 use {
-    crate::share_coordinator::coordinator::{ShareCoordinator, UNINITIALIZED_START_OFFSET},
+    crate::share_coordinator::coordinator::{
+        ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET,
+    },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_summary_request::ReadShareGroupStateSummaryRequest,
@@ -73,7 +75,7 @@ async fn read_summaries(
                 Err(error) => PartitionResult {
                     partition: pd.partition,
                     error_code: error.code(),
-                    error_message: Some(error.summary_row_message()),
+                    error_message: Some(error.row_message(ShareStateOp::ReadSummary)),
                     ..Default::default()
                 },
             }

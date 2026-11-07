@@ -4,7 +4,7 @@
 //! partition's `__share_group_state` partition.
 
 use {
-    crate::share_coordinator::coordinator::ShareCoordinator,
+    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
     krabka_log::Offset,
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
@@ -49,7 +49,7 @@ async fn initialize_state(
                     Offset(pd.start_offset),
                 )
                 .await;
-            let verdict = super::operation_result(result, "initialize");
+            let verdict = super::operation_result(result, ShareStateOp::Initialize);
             PartitionResult {
                 partition: pd.partition,
                 error_code: verdict.code,

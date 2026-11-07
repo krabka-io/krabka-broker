@@ -7,7 +7,7 @@
 //! before the answer, so the older share-partition leader is fenced.
 
 use {
-    crate::share_coordinator::coordinator::ShareCoordinator,
+    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_request::ReadShareGroupStateRequest,
@@ -58,7 +58,7 @@ async fn read_state(
                 Err(error) => PartitionResult {
                     partition: pd.partition,
                     error_code: error.code(),
-                    error_message: Some(error.row_message("read")),
+                    error_message: Some(error.row_message(ShareStateOp::Read)),
                     ..Default::default()
                 },
             }
