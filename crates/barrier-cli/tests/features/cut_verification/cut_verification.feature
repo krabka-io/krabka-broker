@@ -20,7 +20,7 @@ Feature: Operators verify a cut against the log
       And a barrier group over the orders topic has been cut once
       And the records of orders partition 1 up to the marker have been deleted
       When the operator verifies cut 1 of the group
-      Then the cut does not match the log at orders partition 1
+      Then the cut does not match the log because orders partition 1 no longer holds the marker
 
   Rule: Every offset the log does not back is reported, not only the first
 

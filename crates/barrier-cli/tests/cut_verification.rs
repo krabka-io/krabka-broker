@@ -147,16 +147,23 @@ fn verifies(barrier: &BarrierScenario, markers: usize) {
     );
 }
 
-#[then("the cut does not match the log at {topic} partition {partition}")]
-fn mismatch_at(barrier: &BarrierScenario, topic: String, partition: i32) {
+#[then(
+    "the cut does not match the log because {topic} partition {partition} no longer holds the marker"
+)]
+fn marker_gone(barrier: &BarrierScenario, topic: String, partition: i32) {
     let transcript = barrier.transcript.get();
     check!(transcript.exit == 3, "{transcript:?}");
-    let rows = mismatch_rows(transcript);
-    let at: Vec<_> = rows
-        .iter()
-        .map(|(row_topic, row_partition, ..)| (row_topic.as_str(), *row_partition))
-        .collect();
-    check!(at == vec![(topic.as_str(), partition)], "{transcript:?}");
+    let offset = marker_offset(barrier, &topic, partition);
+    check!(
+        mismatch_rows(transcript)
+            == vec![(
+                topic,
+                partition,
+                offset,
+                format!("the log no longer holds offset {offset}, so the marker has left the log"),
+            )],
+        "{transcript:?}"
+    );
 }
 
 #[then("the tool reports {wrong} of {total} offsets as wrong")]
