@@ -21,9 +21,10 @@ use {
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
-    krabka_log::{Log, Offset, ProducerSnapshotEntry},
+    krabka_log::{Log, LogError, Offset, ProducerSnapshotEntry},
     krabka_raft::RaftError,
     std::{
+        io,
         path::PathBuf,
         sync::{Arc, Mutex},
     },
@@ -32,6 +33,9 @@ use {
         sync::{Notify, mpsc, oneshot},
     },
 };
+
+/// The sender that answers one produce job.
+type Ack = oneshot::Sender<Result<AppendedBatch, BrokerError>>;
 
 /// The first queued produce job and the most jobs one group may drain.
 pub(super) struct ProduceGroup {
@@ -108,7 +112,7 @@ pub(super) async fn append_group(
 pub(super) struct AppendedGroup {
     topic: String,
     partition: PartitionIndex,
-    acks: Vec<oneshot::Sender<Result<AppendedBatch, BrokerError>>>,
+    acks: Vec<Ack>,
     results: Vec<Result<AppendedBatch, BrokerError>>,
     leo: Offset,
     control_entries: Vec<ProducerSnapshotEntry>,
@@ -174,38 +178,11 @@ pub(super) async fn append_jobs(
     };
 
     let append_result = if wal.is_some() {
-        let Some(sequencer) = sequencer else {
-            for ack in acks {
-                let _ = ack.send(Err(storage_failure_error(
-                    "diskless append missing offset sequencer",
-                    "no sequencer configured",
-                )));
-            }
-            return None;
-        };
-        let Ok(count) = u32::try_from(datas.iter().map(ProduceData::record_count).sum::<i64>())
-        else {
-            for ack in acks {
-                let _ = ack.send(Err(storage_failure_error(
-                    "diskless append record count out of range",
-                    "record count out of range",
-                )));
-            }
-            return None;
-        };
-        match sequencer
-            .assign(identity.topic, identity.partition, count)
-            .await
-        {
+        match assign_diskless_base(sequencer, identity, &datas).await {
             Ok(base) => {
                 run_produce_append_batch_at(log, base, high_watermark, (datas, checks)).await
             }
-            Err(error) => {
-                for ack in acks {
-                    let _ = ack.send(Err(reservation_failure(&error)));
-                }
-                return None;
-            }
+            Err(error) => return fail_group(acks, &error),
         }
     } else {
         run_produce_append_batch(log, high_watermark, (datas, checks)).await
@@ -214,13 +191,10 @@ pub(super) async fn append_jobs(
         Ok(value) => value,
         Err(err) => {
             flag_storage_failure(&err, log_dir, log_dir_status);
-            for ack in acks {
-                let _ = ack.send(Err(storage_failure_error(
-                    "append task panicked",
-                    "group append panic",
-                )));
-            }
-            return None;
+            return fail_group(
+                acks,
+                &storage_failure_error("append task panicked", "group append panic"),
+            );
         }
     };
     Some(AppendedGroup {
@@ -330,6 +304,52 @@ pub(super) async fn finish_group(group: AppendedGroup) {
     }
 }
 
+/// Answers every job of a group that could not append with `error`, and
+/// returns `None`, which tells [`append_group`] the group is already answered.
+fn fail_group<T>(acks: Vec<Ack>, error: &BrokerError) -> Option<T> {
+    for ack in acks {
+        let _ = ack.send(Err(repeat_failure(error)));
+    }
+    None
+}
+
+/// One job's copy of its group's failure. `BrokerError` is not `Clone`. A
+/// group fails with a storage error or a [`RaftError::NotLeader`], and both
+/// copy exactly: the same variant, I/O kind and text.
+fn repeat_failure(error: &BrokerError) -> BrokerError {
+    match error {
+        BrokerError::Log(LogError::Io(io)) => {
+            BrokerError::Log(LogError::Io(io::Error::new(io.kind(), io.to_string())))
+        }
+        other => reservation_failure(other),
+    }
+}
+
+/// The first offset the diskless sequencer reserves for `datas`, or the error
+/// that answers every job of the group.
+async fn assign_diskless_base(
+    sequencer: Option<&Arc<dyn OffsetSequencer>>,
+    identity: WriterPartition<'_>,
+    datas: &[ProduceData],
+) -> Result<Offset, BrokerError> {
+    let Some(sequencer) = sequencer else {
+        return Err(storage_failure_error(
+            "diskless append missing offset sequencer",
+            "no sequencer configured",
+        ));
+    };
+    let Ok(count) = u32::try_from(datas.iter().map(ProduceData::record_count).sum::<i64>()) else {
+        return Err(storage_failure_error(
+            "diskless append record count out of range",
+            "record count out of range",
+        ));
+    };
+    sequencer
+        .assign(identity.topic, identity.partition, count)
+        .await
+        .map_err(|error| reservation_failure(&error))
+}
+
 /// The answer to each job of a group whose offset reservation failed.
 ///
 /// A controller quorum without an active leader refuses the reservation
@@ -348,5 +368,50 @@ fn reservation_failure(error: &BrokerError) -> BrokerError {
             })
         }
         other => storage_failure_error("offset assignment failed", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        assert2::{assert, check},
+        krabka_raft::NodeId,
+    };
+
+    /// Every job of a failed group gets the group's own failure, so the
+    /// detail of a storage error, such as the panic message of an append
+    /// task, reaches each caller.
+    #[test]
+    fn each_job_of_a_failed_group_gets_a_copy_of_its_failure() {
+        let storage = storage_failure_error("append task panicked", "task 7 panicked: boom");
+        let BrokerError::Log(LogError::Io(io)) = repeat_failure(&storage) else {
+            panic!("a storage failure copies as a storage failure");
+        };
+        check!(io.kind() == io::ErrorKind::Other);
+        check!(io.to_string() == "append task panicked: task 7 panicked: boom");
+
+        let not_leader = BrokerError::Raft(RaftError::NotLeader {
+            current_leader: Some(NodeId(3)),
+        });
+        assert!(matches!(
+            repeat_failure(&not_leader),
+            BrokerError::Raft(RaftError::NotLeader {
+                current_leader: Some(NodeId(3))
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn fail_group_answers_every_job() {
+        let (senders, receivers): (Vec<Ack>, Vec<_>) = (0..3).map(|_| oneshot::channel()).unzip();
+        let failure = storage_failure_error("append task panicked", "boom");
+
+        check!(fail_group::<()>(senders, &failure).is_none());
+
+        for receiver in receivers {
+            let error = receiver.await.expect("answered").expect_err("failed");
+            check!(error.to_string() == "log: I/O: append task panicked: boom");
+        }
     }
 }
