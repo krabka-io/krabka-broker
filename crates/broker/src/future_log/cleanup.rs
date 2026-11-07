@@ -6,9 +6,8 @@
 //! its replicator task; a redirect also removes the staged future directory.
 
 use {
-    super::{FutureLogState, MoveError},
+    super::{FutureLogRegistry, FutureLogState, MoveError},
     crate::task_util::joined_cleanly,
-    dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{
         fs,
@@ -17,76 +16,75 @@ use {
     tokio::task::JoinHandle,
 };
 
-pub(super) async fn cancel_move(
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
-    key: &(String, PartitionIndex),
-    existing: Arc<FutureLogState>,
-) -> Result<(), MoveError> {
-    existing.cancel.cancel();
-    let task = existing
-        .task
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(task) = task {
-        task.abort();
-        let _ = task.await;
+impl FutureLogRegistry {
+    /// Stop the move `existing` of `key`: cancel its token, abort and await
+    /// its replicator task, remove its entry unless a later move replaced it,
+    /// and delete its staged future directory.
+    pub(super) async fn cancel(
+        &self,
+        key: &(String, PartitionIndex),
+        existing: Arc<FutureLogState>,
+    ) -> Result<(), MoveError> {
+        existing.cancel.cancel();
+        let task = existing
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        self.remove_if_same(key, &existing);
+        let future_path = existing.future_path.clone();
+        drop(existing);
+        if future_path.exists() {
+            fs::remove_dir_all(&future_path)?;
+        }
+        Ok(())
     }
-    future_logs.remove_if(key, |_, state| Arc::ptr_eq(state, &existing));
-    let future_path = existing.future_path.clone();
-    drop(existing);
-    if future_path.exists() {
-        fs::remove_dir_all(&future_path)?;
-    }
-    Ok(())
-}
 
-fn take_move_tasks(
-    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
-) -> Vec<JoinHandle<()>> {
-    let states: Vec<_> = future_logs
-        .iter()
-        .map(|entry| Arc::clone(entry.value()))
-        .collect();
-    future_logs.clear();
-    for state in &states {
-        state.cancel.cancel();
+    /// Remove every move, cancel its token, and return the replicator tasks
+    /// that still have to be stopped.
+    fn drain_for_shutdown(&self) -> Vec<JoinHandle<()>> {
+        let states = self.take_all();
+        for state in &states {
+            state.cancel.cancel();
+        }
+        states
+            .into_iter()
+            .filter_map(|state| {
+                state
+                    .task
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+            })
+            .collect()
     }
-    states
-        .into_iter()
-        .filter_map(|state| {
-            state
-                .task
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-        })
-        .collect()
-}
 
-/// Cancel and await every in-progress log-directory move, and answer whether
-/// none of the move tasks had panicked. Broker shutdown calls this after it has
-/// stopped accepting requests and before it stops the partition writers that
-/// the move tasks use.
-pub async fn shutdown_moves(
-    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
-) -> bool {
-    let tasks = take_move_tasks(future_logs);
-    for task in &tasks {
-        task.abort();
+    /// Cancel and await every in-progress log-directory move, and answer
+    /// whether none of the move tasks had panicked. Broker shutdown calls this
+    /// after it has stopped accepting requests and before it stops the
+    /// partition writers that the move tasks use.
+    pub async fn shutdown(&self) -> bool {
+        let tasks = self.drain_for_shutdown();
+        for task in &tasks {
+            task.abort();
+        }
+        let mut clean = true;
+        for task in tasks {
+            clean &= joined_cleanly("log-directory move", task).await;
+        }
+        clean
     }
-    let mut clean = true;
-    for task in tasks {
-        clean &= joined_cleanly("log-directory move", task).await;
-    }
-    clean
-}
 
-/// Best-effort synchronous counterpart used when a
-/// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
-pub fn abort_moves(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) {
-    for task in take_move_tasks(future_logs) {
-        task.abort();
+    /// Best-effort synchronous counterpart of [`Self::shutdown`], used when a
+    /// [`crate::broker::BrokerHandle`] is dropped without an awaited shutdown.
+    pub fn abort(&self) {
+        for task in self.drain_for_shutdown() {
+            task.abort();
+        }
     }
 }
 
@@ -99,6 +97,7 @@ mod tests {
         krabka_log::{Log, LogConfig},
         std::{
             future,
+            path::Path,
             sync::{
                 Mutex,
                 atomic::{AtomicU64, Ordering},
@@ -113,8 +112,7 @@ mod tests {
     struct PendingMoveFixture {
         dir: tempfile::TempDir,
         log: Arc<Mutex<Log>>,
-        // FutureLogState's existing task registry uses topic/partition keys.
-        logs: DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
+        logs: FutureLogRegistry,
         started: Arc<AtomicU64>,
         dropped: Arc<AtomicU64>,
     }
@@ -123,7 +121,7 @@ mod tests {
         let log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open future log"),
         ));
-        let logs = DashMap::new();
+        let logs = FutureLogRegistry::default();
         let started = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
         PendingMoveFixture {
@@ -167,8 +165,84 @@ mod tests {
         })
     }
 
+    /// A move staged in a new directory `name` under `parent`, with `task` as
+    /// its replicator.
+    fn staged_move(
+        parent: &Path,
+        name: &str,
+        log: &Arc<Mutex<Log>>,
+        task: Option<JoinHandle<()>>,
+    ) -> Arc<FutureLogState> {
+        let future_path = parent.join(name);
+        fs::create_dir_all(&future_path).expect("create future dir");
+        Arc::new(FutureLogState {
+            target_log_dir: parent.to_path_buf(),
+            future_path,
+            future_log: Arc::clone(log),
+            cancel: CancellationToken::new(),
+            task: Mutex::new(task),
+        })
+    }
+
     #[tokio::test]
-    async fn shutdown_moves_cancels_and_awaits_every_task() {
+    async fn cancel_stops_the_task_and_removes_the_move() {
+        let PendingMoveFixture {
+            dir,
+            log,
+            logs,
+            started,
+            dropped,
+        } = pending_move_fixture();
+        let future_logs = Arc::new(logs);
+        let key = ("t".to_owned(), PartitionIndex(0));
+        let existing = staged_move(
+            dir.path(),
+            "t-0-future",
+            &log,
+            Some(pending_move(&started, &dropped)),
+        );
+        future_logs.insert(key.clone(), Arc::clone(&existing));
+        wait_tasks_started(|| started.load(Ordering::SeqCst) == 1, "move task starts").await;
+        let cancel = existing.cancel.clone();
+        let future_path = existing.future_path.clone();
+
+        future_logs
+            .cancel(&key, existing)
+            .await
+            .expect("cancel the move");
+
+        assert!(future_logs.is_empty());
+        assert!(cancel.is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst) == 1);
+        assert!(!future_path.exists());
+    }
+
+    #[tokio::test]
+    async fn cancel_keeps_an_entry_a_later_move_registered() {
+        let PendingMoveFixture { dir, log, logs, .. } = pending_move_fixture();
+        let future_logs = Arc::new(logs);
+        let key = ("t".to_owned(), PartitionIndex(0));
+        let existing = staged_move(dir.path(), "t-0-future", &log, None);
+        let later = staged_move(dir.path(), "later", &log, None);
+        future_logs.insert(key.clone(), Arc::clone(&later));
+        let future_path = existing.future_path.clone();
+
+        future_logs
+            .cancel(&key, existing)
+            .await
+            .expect("cancel the move");
+
+        assert!(
+            future_logs
+                .get(&key)
+                .is_some_and(|entry| Arc::ptr_eq(&entry, &later))
+        );
+        assert!(!future_path.exists());
+        assert!(later.future_path.exists());
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_and_awaits_every_task() {
         let PendingMoveFixture {
             dir,
             log: future_log,
@@ -190,7 +264,7 @@ mod tests {
 
         wait_tasks_started(|| started.load(Ordering::SeqCst) == 2, "move tasks start").await;
 
-        let clean = time::timeout(Duration::from_secs(1), shutdown_moves(&future_logs))
+        let clean = time::timeout(Duration::from_secs(1), future_logs.shutdown())
             .await
             .expect("move task shutdown completes");
 
@@ -203,7 +277,7 @@ mod tests {
     /// A move task that panicked mid-copy is reported, so broker shutdown
     /// withholds the clean-shutdown proof.
     #[tokio::test]
-    async fn shutdown_moves_reports_a_move_task_that_panicked() {
+    async fn shutdown_reports_a_move_task_that_panicked() {
         let PendingMoveFixture {
             dir,
             log: future_log,
@@ -219,11 +293,11 @@ mod tests {
             move_state(&dir, future_log, CancellationToken::new(), panicked),
         );
 
-        assert!(!shutdown_moves(&future_logs).await);
+        assert!(!future_logs.shutdown().await);
     }
 
     #[tokio::test]
-    async fn abort_moves_cancels_and_aborts_every_task() {
+    async fn abort_cancels_and_aborts_every_task() {
         let PendingMoveFixture {
             dir,
             log: future_log,
@@ -246,7 +320,7 @@ mod tests {
         .await
         .expect("move task starts");
 
-        abort_moves(&future_logs);
+        future_logs.abort();
 
         assert!(future_logs.is_empty());
         assert!(cancel.is_cancelled());

@@ -9,15 +9,9 @@ use crate::broker::Broker;
 use std::future::Future;
 use {
     crate::{
-        broker::BrokerHandle,
-        clean_shutdown::write,
-        error::BrokerError,
-        future_log::{abort_moves, shutdown_moves},
-        incarnation::own_broker_epoch,
-        partition::Partition,
-        partition_registry::PartitionRegistry,
-        task_util::joined_cleanly,
-        time_util::now_ms,
+        broker::BrokerHandle, clean_shutdown::write, error::BrokerError,
+        incarnation::own_broker_epoch, partition::Partition, partition_registry::PartitionRegistry,
+        task_util::joined_cleanly, time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
     std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
@@ -507,7 +501,7 @@ impl BrokerHandle {
             let _ = task.await;
         }
 
-        shutdown_moves(&self.broker.future_logs).await;
+        self.broker.future_logs.shutdown().await;
         shutdown_partition_writers(&self.broker.partitions).await;
         let task = self.broker.audit_writer_handle.lock().await.take();
         if let Some(task) = task {
@@ -627,7 +621,7 @@ impl BrokerHandle {
         if let Some(task) = task {
             clean &= joined_cleanly("audit writer", task).await;
         }
-        clean &= shutdown_moves(&self.broker.future_logs).await;
+        clean &= self.broker.future_logs.shutdown().await;
         clean &= shutdown_partition_writers(&self.broker.partitions).await;
         clean &= close_logs(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;
@@ -685,7 +679,7 @@ impl Drop for BrokerHandle {
         {
             task.abort();
         }
-        abort_moves(&self.broker.future_logs);
+        self.broker.future_logs.abort();
         abort_partition_writers(&self.broker.partitions);
     }
 }

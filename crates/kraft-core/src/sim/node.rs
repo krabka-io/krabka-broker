@@ -9,7 +9,7 @@
 use {
     super::log::SimLog,
     crate::{
-        core::QuorumStateMachine,
+        core::{QuorumStateMachine, whole_millis},
         event::Event,
         simulation_support::PartitionMessage,
         types::{Epoch, NodeId, SimInstant},
@@ -66,17 +66,6 @@ pub(super) fn election_timeout_of(id: NodeId) -> Time {
     BASE_ELECTION_TIMEOUT + ELECTION_TIMEOUT_STAGGER * rank
 }
 
-/// `extent` in whole milliseconds, for arithmetic on the raw-integer
-/// [`SimInstant`] clock.
-///
-/// A [`SimInstant`] is a coordinate on the simulator's logical millisecond
-/// timeline and not a magnitude, so it stays an integer. Only the extents added
-/// to it are quantities. The conversion is exact for every extent the simulator
-/// uses.
-pub(super) fn deadline_millis(extent: Time) -> u64 {
-    u64::try_from(extent.millis_i64()).unwrap_or(0)
-}
-
 pub(super) use crate::simulation_support::voter_set as make_voter_set;
 
 #[cfg(test)]
@@ -111,8 +100,8 @@ mod tests {
     #[when("its election and heartbeat deadlines are converted to scheduler milliseconds")]
     fn scheduler_deadlines(timers: &mut NodeTimers) {
         let id = timers.id.expect("a voter was given");
-        timers.election_millis = Some(deadline_millis(election_timeout_of(id)));
-        timers.heartbeat_millis = Some(deadline_millis(HEARTBEAT));
+        timers.election_millis = Some(whole_millis(election_timeout_of(id)));
+        timers.heartbeat_millis = Some(whole_millis(HEARTBEAT));
     }
 
     #[then("its election timer is {election_ms} ms and its heartbeat timer is 300 ms")]

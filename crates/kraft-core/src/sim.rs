@@ -26,10 +26,10 @@
 use {
     self::{
         log::SimLog,
-        node::{Message, Node, deadline_millis, election_timeout_of, make_voter_set},
+        node::{Message, Node, election_timeout_of, make_voter_set},
     },
     crate::{
-        core::{QuorumStateMachine, QuorumTimeouts},
+        core::{QuorumStateMachine, QuorumTimeouts, whole_millis},
         role::Role,
         simulation_support::partition_node,
         types::{Epoch, NodeId, QuorumState, SimInstant},
@@ -98,7 +98,7 @@ impl Sim {
                 machine,
                 log: SimLog::default(),
                 high_watermark: 0,
-                election_deadline: Some(SimInstant(deadline_millis(election_timeout))),
+                election_deadline: Some(SimInstant(whole_millis(election_timeout))),
                 fetch_deadline: None,
                 heartbeat_deadline: None,
                 check_quorum_deadline: None,
