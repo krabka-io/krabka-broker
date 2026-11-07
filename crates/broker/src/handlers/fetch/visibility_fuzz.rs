@@ -2,7 +2,7 @@
 //! run on random valid watermark tuples rather than on a fixed table.
 
 use {
-    super::{FetchWatermarks, Offset, compute_visibility_window},
+    super::{FetchWatermarks, Offset, compute_visibility_window, fetch_reader},
     proptest::prelude::*,
 };
 
@@ -36,7 +36,11 @@ proptest! {
             log_end: Offset(log_end),
             deliverable: Offset(deliverable),
         };
-        let w = compute_visibility_window(is_follower, read_committed, watermarks, Offset(fo));
+        let w = compute_visibility_window(
+            fetch_reader(is_follower, read_committed),
+            watermarks,
+            Offset(fo),
+        );
         // Unwrap the `Offset` window fields into this proptest's `i64` world.
         let (limit_offset, response_hw, response_lso, effective_lso) = (
             w.limit_offset.0,
@@ -88,8 +92,7 @@ proptest! {
         read_committed in any::<bool>(),
     ) {
         let w = compute_visibility_window(
-            false,
-            read_committed,
+            fetch_reader(false, read_committed),
             FetchWatermarks {
                 log_start: Offset(log_start),
                 hw: Offset(hw),
@@ -128,8 +131,7 @@ proptest! {
         // in the second window even though every other watermark advanced.
         // The reported HW and LSO must not follow it down.
         let w1 = compute_visibility_window(
-            is_follower,
-            read_committed,
+            fetch_reader(is_follower, read_committed),
             FetchWatermarks {
                 log_start: Offset(log_start),
                 hw: Offset(hw),
@@ -140,8 +142,7 @@ proptest! {
             Offset(0),
         );
         let w2 = compute_visibility_window(
-            is_follower,
-            read_committed,
+            fetch_reader(is_follower, read_committed),
             FetchWatermarks {
                 log_start: Offset(log_start),
                 hw: Offset(hw2),

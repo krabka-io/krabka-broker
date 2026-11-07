@@ -72,6 +72,7 @@ use {
         },
     },
     krabka_log::{Offset, ProducerId},
+    krabka_verified::{FetchReader, Isolation},
     stateright::{Checker, Model, Property},
     std::iter,
 };
@@ -233,8 +234,7 @@ fn effective_lso(log: &[Batch], hw: Offset) -> Offset {
     let log_end = Offset(model_offset(log.len()));
     let l = lso(log);
     let vw = compute_visibility_window(
-        false, // consumer, not follower
-        true,  // read_committed
+        FetchReader::Consumer(Isolation::ReadCommitted),
         FetchWatermarks {
             log_start: Offset(0),
             // The HW may sit below the log end: replication lag.

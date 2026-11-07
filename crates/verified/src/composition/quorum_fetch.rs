@@ -1,5 +1,8 @@
 use {
-    super::{FetchWatermarks, WalFetchSupport, fetch_visibility, wal_voter_set_valid},
+    super::{
+        FetchReader, FetchWatermarks, Isolation, WalFetchSupport, fetch_visibility,
+        wal_voter_set_valid,
+    },
     crate::consensus::{majority_size, recompute_high_watermark},
     creusot_std::prelude::*,
 };
@@ -35,8 +38,12 @@ pub(super) fn quorum_commit_bounds_fetch(
         current,
         leader_counts,
     );
-    let limit =
-        fetch_visibility(false, true, FetchWatermarks { hw, ..w }, w.log_start).limit_offset;
+    let limit = fetch_visibility(
+        FetchReader::Consumer(Isolation::ReadCommitted),
+        FetchWatermarks { hw, ..w },
+        w.log_start,
+    )
+    .limit_offset;
     #[cfg(creusot)]
     if hw > current {
         proof_assert!({

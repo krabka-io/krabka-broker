@@ -114,9 +114,10 @@ pub use {
     },
     broker::{
         DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
-        FetchVisibility, FetchWatermarks, ReplicaFetchMutation, delete_records_trim_application,
-        delete_records_trim_decision, effective_share_backlog, fetch_visibility,
-        preferred_rebalance_admission, replica_fetch_mutation, unclean_recovery_commit_admission,
+        FetchReader, FetchVisibility, FetchWatermarks, Isolation, ReplicaFetchMutation,
+        delete_records_trim_application, delete_records_trim_decision, effective_share_backlog,
+        fetch_visibility, preferred_rebalance_admission, replica_fetch_mutation,
+        unclean_recovery_commit_admission,
     },
     chain::{ChainStep, chain_step, select_chain_tip},
     checkpoint::{checkpoint_id_newer, checkpoint_id_retained, latest_checkpoint_index},

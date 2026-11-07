@@ -10,7 +10,7 @@ const SPREAD: FetchWatermarks = FetchWatermarks {
     log_end: 10,
 };
 
-/// The window every follower is given, whatever isolation it asks for.
+/// The window a follower is given: it reads to the log end.
 const FOLLOWER_WINDOW: FetchVisibility = FetchVisibility {
     out_of_range: false,
     empty: false,
@@ -22,22 +22,17 @@ const FOLLOWER_WINDOW: FetchVisibility = FetchVisibility {
 };
 
 #[yare::parameterized(
-    follower_read_uncommitted = { true, false, FOLLOWER_WINDOW },
-    follower_read_committed = { true, true, FOLLOWER_WINDOW },
-    consumer_read_uncommitted = { false, false, FetchVisibility {
+    follower = { FetchReader::Follower, FOLLOWER_WINDOW },
+    consumer_read_uncommitted = { FetchReader::Consumer(Isolation::ReadUncommitted), FetchVisibility {
         limit_offset: 6,
         ..FOLLOWER_WINDOW
     } },
-    consumer_read_committed = { false, true, FetchVisibility {
+    consumer_read_committed = { FetchReader::Consumer(Isolation::ReadCommitted), FetchVisibility {
         limit_offset: 4,
         read_committed_aborts: true,
         ..FOLLOWER_WINDOW
     } },
 )]
-fn fetch_visibility_window_for_each_reader(
-    is_follower: bool,
-    read_committed: bool,
-    expected: FetchVisibility,
-) {
-    assert2::assert!(fetch_visibility(is_follower, read_committed, SPREAD, 3) == expected);
+fn fetch_visibility_window_for_each_reader(reader: FetchReader, expected: FetchVisibility) {
+    assert2::assert!(fetch_visibility(reader, SPREAD, 3) == expected);
 }
