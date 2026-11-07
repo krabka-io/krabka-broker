@@ -35,16 +35,12 @@ use {
 mod format;
 pub mod prepare;
 mod segment;
-pub use {
-    format::{format_target_with_snapshot, seed_rlmm_snapshot_from},
-    segment::write_segment_after_skip,
-};
 #[cfg(test)]
 mod test_support;
 
 pub use self::{
-    format::{FormatTargetOutcome, format_target, seed_rlmm_snapshot},
-    segment::{SegmentOutcome, write_segment},
+    format::{FormatTargetOutcome, format_target_with_snapshot, seed_rlmm_snapshot_from},
+    segment::{SegmentOutcome, write_segment_after_skip},
 };
 
 pub fn open_partition_log(

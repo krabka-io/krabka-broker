@@ -79,7 +79,8 @@ pub use self::{
         EXIT_MATERIALIZE, EXIT_OK, RestoreError,
     },
     materialize::{
-        FormatTargetOutcome, SegmentOutcome, format_target, seed_rlmm_snapshot, write_segment,
+        FormatTargetOutcome, SegmentOutcome, format_target_with_snapshot, seed_rlmm_snapshot_from,
+        write_segment_after_skip,
     },
     report::{
         AuthenticationReport, DisklessPartitionReport, DisklessRestoreReport,

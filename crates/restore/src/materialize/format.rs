@@ -65,17 +65,11 @@ fn feature_level_records<'a>(excluded: &'a [&str]) -> impl Iterator<Item = Metad
 /// it back, so this passes an explicit `--cluster-id` and keeps it for the
 /// report. An operator who restores a cluster has to know its identity.
 ///
+/// Format from retained authenticated bytes when supplied, without reopening the source path.
+///
 /// # Errors
 ///
 /// Returns [`RestoreError::InvalidArgument`] when `--node-id` is absent: every restored partition names the target node as leader and sole replica, and defaulting that identity to node 0 could silently name a node the operator never said exists. Returns [`RestoreError::Format`] when the formatter rejects the target-side flags, and [`RestoreError::Io`] when the target cannot be written.
-pub async fn format_target(
-    args: &RestoreArgs,
-    inventory: &ArchiveInventory,
-) -> Result<FormatTargetOutcome, RestoreError> {
-    format_target_with_snapshot(args, inventory, None, &[]).await
-}
-
-/// Format from retained authenticated bytes when supplied, without reopening the source path.
 pub async fn format_target_with_snapshot(
     args: &RestoreArgs,
     inventory: &ArchiveInventory,
@@ -161,18 +155,12 @@ pub async fn format_target_with_snapshot(
 /// Seed the restored broker's local RLMM cache while resetting its Kafka
 /// cursors for the new `__remote_log_metadata` topic.
 ///
+/// Seed from the decoded authenticated snapshot when supplied, without reopening its path.
+///
 /// # Errors
 /// Returns [`RestoreError`] when the source snapshot cannot be read, its
 /// authenticated chain tips cannot be established, or the target snapshot
 /// cannot be written.
-pub fn seed_rlmm_snapshot(
-    args: &RestoreArgs,
-    authenticated: Option<&ArchiveVerifyReport>,
-) -> Result<(), RestoreError> {
-    seed_rlmm_snapshot_from(args, authenticated, None)
-}
-
-/// Seed from the decoded authenticated snapshot when supplied, without reopening its path.
 pub fn seed_rlmm_snapshot_from(
     args: &RestoreArgs,
     authenticated: Option<&ArchiveVerifyReport>,
@@ -520,7 +508,7 @@ fn offset_advance_records(
 ///
 /// Each diskless partition in `diskless_next_offsets` then gets one [`MetadataRecord::V1PartitionOffsetAdvance`] that starts its committed next offset at its materialized end. That is the record a metadata snapshot carries a diskless partition's next offset in, and the one the write path appends, so every 1.x broker reads it (#1524).
 ///
-/// Pulled out as a pure function, separate from [`format_target`]'s formatter call, so a test can check exactly what gets seeded without running the formatter at all.
+/// Pulled out as a pure function, separate from [`format_target_with_snapshot`]'s formatter call, so a test can check exactly what gets seeded without running the formatter at all.
 fn seed_metadata_records(
     inventory: &ArchiveInventory,
     node_id: NodeId,
@@ -818,7 +806,7 @@ mod tests {
             target.path(),
         );
 
-        seed_rlmm_snapshot(&args, None).expect("seed restored snapshot");
+        seed_rlmm_snapshot_from(&args, None, None).expect("seed restored snapshot");
 
         let restored = Snapshot::load(
             &target
@@ -915,7 +903,7 @@ mod tests {
             target.path(),
         );
 
-        check!(seed_rlmm_snapshot(&args, None).is_err());
+        check!(seed_rlmm_snapshot_from(&args, None, None).is_err());
         check!(!target.path().join("remote-log-metadata/snapshot").exists());
     }
 
@@ -1166,7 +1154,7 @@ mod tests {
             unrecognized: UnrecognizedKeys::default(),
         };
 
-        let result = format_target(&args, &inventory).await;
+        let result = format_target_with_snapshot(&args, &inventory, None, &[]).await;
         check!(matches!(result, Err(RestoreError::InvalidArgument(_))));
     }
 
@@ -1192,7 +1180,7 @@ mod tests {
             unrecognized: UnrecognizedKeys::default(),
         };
 
-        let outcome = format_target(&args, &inventory)
+        let outcome = format_target_with_snapshot(&args, &inventory, None, &[])
             .await
             .expect("format_target");
         check!(
@@ -1223,7 +1211,7 @@ mod tests {
             unrecognized: UnrecognizedKeys::default(),
         };
 
-        let outcome = format_target(&args, &inventory)
+        let outcome = format_target_with_snapshot(&args, &inventory, None, &[])
             .await
             .expect("format_target");
         check!(outcome.cluster_id == fixed);
