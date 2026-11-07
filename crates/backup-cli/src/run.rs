@@ -185,28 +185,6 @@ struct CaptureRequest<'a> {
     captured_at_ms: u64,
 }
 
-#[cfg(test)]
-async fn capture_secured_at(
-    log_dir: Option<&Path>,
-    bootstrap_server: Option<&str>,
-    security: Option<ClientSecurity>,
-    signing: &CaptureSigningArgs,
-    archive: &ArchiveArgs,
-    captured_at_ms: u64,
-) -> OperationReport<String> {
-    let mut events = Vec::new();
-    let request = CaptureRequest::builder()
-        .maybe_log_dir(log_dir)
-        .maybe_bootstrap_server(bootstrap_server)
-        .maybe_security(security)
-        .signing(signing)
-        .archive(archive)
-        .captured_at_ms(captured_at_ms)
-        .build();
-    let result = run_capture(request, &mut events).await;
-    OperationReport { result, events }
-}
-
 async fn run_capture(
     request: CaptureRequest<'_>,
     events: &mut Vec<BackupEvent>,
@@ -1423,12 +1401,21 @@ mod tests {
             store,
         } = archive_fixture();
         let signing = super::CaptureSigningArgs::default();
+        let request = |log_dir| {
+            super::CaptureRequest::builder()
+                .log_dir(log_dir)
+                .signing(&signing)
+                .archive(&archive)
+                .captured_at_ms(42)
+                .build()
+        };
+        let (mut left_events, mut right_events) = (Vec::new(), Vec::new());
         let (left, right) = tokio::join!(
-            super::capture_secured_at(Some(first.path()), None, None, &signing, &archive, 42),
-            super::capture_secured_at(Some(second.path()), None, None, &signing, &archive, 42),
+            super::run_capture(request(first.path()), &mut left_events),
+            super::run_capture(request(second.path()), &mut right_events),
         );
-        let left = left.result.unwrap();
-        let right = right.result.unwrap();
+        let left = left.unwrap();
+        let right = right.unwrap();
         check!(left != right);
         check!(list(&archive).await.result.unwrap().len() == 2);
         for (id, expected) in [
