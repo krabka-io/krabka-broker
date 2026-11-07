@@ -293,7 +293,7 @@ pub fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseErr
 }
 
 pub fn connect_cli_client(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [bootstrap, client_id, unreachable] = argument_array(input)?;
+    let [bootstrap, client_id, unreachable, err] = argument_array(input)?;
     Ok(moxy::template! {
         match ::krabka_client_core::Client::builder()
             .bootstrap({{ bootstrap }})
@@ -301,7 +301,12 @@ pub fn connect_cli_client(input: TokenStream) -> Result<TokenStream, ParseError>
             .build().await {
             Ok(client) => client,
             Err(error) => {
-                eprintln!("cannot reach {}: {error}", {{ bootstrap }});
+                // A stderr that refuses the line leaves the exit code as the
+                // whole report.
+                _ = ::std::io::Write::write_fmt(
+                    &mut *{{ err }},
+                    ::std::format_args!("cannot reach {}: {error}\n", {{ bootstrap }}),
+                );
                 return {{ unreachable }};
             }
         }

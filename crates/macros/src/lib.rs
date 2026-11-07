@@ -1527,7 +1527,7 @@ pub fn snapshot_node_fixture(tokens: TokenStream) -> Result<TokenStream, ParseEr
     cli_support::snapshot_node_fixture(tokens)
 }
 
-/// Connect a CLI client with the caller's identity and refusal exit code.
+/// Connect a CLI client, or write why not to the caller's stderr writer.
 ///
 /// # Errors
 ///
@@ -2683,7 +2683,7 @@ pub fn config_alter_handler(input: NativeTokenStream) -> Result<NativeTokenStrea
 
 mod fixture_expressions;
 
-/// Verify a guard response and return its typed value.
+/// Verify a guard response, or report its refusal to the caller's stderr.
 #[moxy::function]
 pub fn guard_response(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     fixture_expressions::guard_response(&input.into()).map(Into::into)

@@ -37,7 +37,11 @@
 //! JVM tools another way: `DescribeConfigs` reports a read-only `write.freeze`
 //! key for every topic, so `kafka-configs --describe` shows it.
 
-use {self::command::dispatch, clap::Parser};
+use {
+    self::command::run_command,
+    clap::Parser,
+    std::io::{self, Write},
+};
 
 mod broker_codes;
 mod cli;
@@ -104,15 +108,17 @@ krabka_macros::parsed_cli_entrypoint!({
     /// argument list is a bug in that list rather than a runtime condition.
 });
 
-/// Run one parsed command.
-pub async fn run(cli: Cli) -> i32 {
-    let client =
-        krabka_macros::connect_cli_client!(&cli.bootstrap_server, "krabka-guard", EXIT_UNREACHABLE);
-    match dispatch(&client, cli.command).await {
-        Ok(code) => code,
-        Err(failure) => {
-            eprintln!("{}", failure.message());
-            failure.exit_code()
-        }
-    }
+/// Run one parsed command against the process's stdout and stderr.
+pub async fn run(cli: Cli) -> i32 { run_with(cli, &mut io::stdout(), &mut io::stderr()).await }
+
+/// Run one parsed command, writing its report to `out` and every refusal, and
+/// every reason it could not connect, to `err`.
+async fn run_with(cli: Cli, out: &mut impl Write, err: &mut impl Write) -> i32 {
+    let client = krabka_macros::connect_cli_client!(
+        &cli.bootstrap_server,
+        "krabka-guard",
+        EXIT_UNREACHABLE,
+        err
+    );
+    run_command(&client, cli.command, out, err).await
 }
