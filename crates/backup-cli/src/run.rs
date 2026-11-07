@@ -844,39 +844,15 @@ async fn verify_inner(
     )))
 }
 
-/// Commit a capture's group offsets into a restored cluster.
+/// Load command-config security and commit one capture's group offsets into a
+/// restored cluster.
 ///
 /// # Errors
 ///
 /// The report result returns [`BackupError::Integrity`] when the captured offsets do not match
-/// their recorded digest, [`BackupError::Cluster`] when the cluster refuses a
-/// commit, and the archive's own error when the capture cannot be read.
-pub async fn restore_offsets(
-    capture: &str,
-    bootstrap_server: &str,
-    dry_run: bool,
-    archive: &ArchiveArgs,
-) -> OperationReport<usize> {
-    let mut events = Vec::new();
-    let result = restore_offsets_secured_inner(
-        capture,
-        bootstrap_server,
-        None,
-        &CaptureTrustArgs::default(),
-        dry_run,
-        archive,
-        &mut events,
-    )
-    .await;
-    OperationReport { result, events }
-}
-
-/// Load command-config security and restore one capture's group offsets.
-///
-/// # Errors
-///
-/// The report result returns the same errors as [`restore_offsets`], plus command-config read or
-/// parse failures.
+/// their recorded digest, [`BackupError::Cluster`] when the cluster refuses a commit,
+/// command-config read or parse failures, and the archive's own error when the capture cannot
+/// be read.
 pub async fn restore_offsets_configured(
     capture: &str,
     bootstrap_server: &str,
@@ -1120,7 +1096,7 @@ mod tests {
             FileEd25519Signer, GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT,
             RLMM_SNAPSHOT, RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit,
             capture_configured, check_capture_size, checkpoint_note, list,
-            newest_metadata_checkpoint, restore_offsets, upload_capped, verify,
+            newest_metadata_checkpoint, restore_offsets_configured, upload_capped, verify,
             verify_offsets_boundary,
         },
         crate::{
@@ -1159,6 +1135,24 @@ mod tests {
     }
 
     krabka_macros::snapshot_node_fixture!(node_with_rlmm);
+
+    /// An offset restore with no command config and no pinned capture trust.
+    async fn restore_offsets(
+        capture: &str,
+        bootstrap_server: &str,
+        dry_run: bool,
+        archive: &ArchiveArgs,
+    ) -> OperationReport<usize> {
+        restore_offsets_configured(
+            capture,
+            bootstrap_server,
+            &SecurityArgs::default(),
+            &CaptureTrustArgs::default(),
+            dry_run,
+            archive,
+        )
+        .await
+    }
 
     /// A capture with no command config and no signing key.
     async fn capture(
