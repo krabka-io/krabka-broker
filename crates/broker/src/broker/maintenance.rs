@@ -348,7 +348,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         assert!(let Ok(Some(_)) = jwks_refresher(&config, &shutdown));
         assert!(
-            let Err(BrokerError::Startup(message)) = jwks_refresher(&config.clone(), &shutdown)
+            let Err(BrokerError::Startup(message)) = jwks_refresher(&config, &shutdown)
         );
         assert!(message == "signed validator must park its JWKS signal receiver");
     }

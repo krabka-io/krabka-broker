@@ -1070,12 +1070,12 @@ mod tests {
     /// Valid bounds every case below breaks in one place.
     fn valid_bounds() -> GroupTimeoutBounds {
         GroupTimeoutBounds {
-            session_timeout: Duration::from_secs(45),
-            heartbeat_interval: Duration::from_secs(5),
-            min_session_timeout: Duration::from_secs(45),
-            max_session_timeout: Duration::from_mins(1),
-            min_heartbeat_interval: Duration::from_secs(5),
-            max_heartbeat_interval: Duration::from_secs(15),
+            session_timeout: Duration::from_secs(30),
+            heartbeat_interval: Duration::from_secs(4),
+            min_session_timeout: Duration::from_secs(20),
+            max_session_timeout: Duration::from_secs(40),
+            min_heartbeat_interval: Duration::from_secs(2),
+            max_heartbeat_interval: Duration::from_secs(8),
             max_size: 1,
         }
     }
@@ -1094,15 +1094,15 @@ mod tests {
                 "minimum session timeout must be positive",
             ),
             (
-                |b| b.min_session_timeout = Duration::from_mins(2),
+                |b| b.min_session_timeout = Duration::from_secs(41),
                 "minimum session timeout exceeds maximum",
             ),
             (
-                |b| b.session_timeout = Duration::from_secs(44),
+                |b| b.session_timeout = Duration::from_secs(19),
                 "session timeout is outside its bounds",
             ),
             (
-                |b| b.session_timeout = Duration::from_secs(61),
+                |b| b.session_timeout = Duration::from_secs(41),
                 "session timeout is outside its bounds",
             ),
             (
@@ -1113,11 +1113,11 @@ mod tests {
                 "minimum heartbeat interval must be positive",
             ),
             (
-                |b| b.min_heartbeat_interval = Duration::from_secs(16),
+                |b| b.min_heartbeat_interval = Duration::from_secs(9),
                 "minimum heartbeat interval exceeds maximum",
             ),
             (
-                |b| b.heartbeat_interval = Duration::from_secs(16),
+                |b| b.heartbeat_interval = Duration::from_secs(9),
                 "heartbeat interval is outside its bounds",
             ),
             (|b| b.max_size = 0, "maximum size must be positive"),

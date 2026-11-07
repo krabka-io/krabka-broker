@@ -20,7 +20,8 @@ mod fetch;
 #[cfg(not(target_family = "wasm"))]
 mod refresher;
 mod runtime;
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
 mod test_support;
 
 pub use self::runtime::{JwksRuntime, JwksSnapshotState};

@@ -575,7 +575,7 @@ unsecured_required_scope = "read write"
         }
     }
 
-    fn json_path(expr: &str) -> Option<JpQuery> { Some(parser::parse_json_path(expr).unwrap()) }
+    fn json_path(expr: &str) -> JpQuery { parser::parse_json_path(expr).unwrap() }
 
     /// The claim mapping `CLAIM_OPTIONS` sets, as each mode applies it, with
     /// the JWKS settings left at their defaults.
@@ -585,11 +585,11 @@ unsecured_required_scope = "read write"
             mode,
             principal_claim_name: "client_id".into(),
             allowable_clock_skew: millis(7000),
-            custom_claim_check: json_path("$.tenant"),
+            custom_claim_check: Some(json_path("$.tenant")),
             valid_token_type: Some("at+jwt".into()),
             fallback_user_name_claim: Some("email".into()),
             fallback_user_name_prefix: Some("user-".into()),
-            groups_claim: json_path("$.groups"),
+            groups_claim: Some(json_path("$.groups")),
             groups_claim_delimiter: Some(",".into()),
             expected_audience: None,
             valid_issuer: None,
