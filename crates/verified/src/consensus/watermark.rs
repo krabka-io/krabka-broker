@@ -96,7 +96,7 @@ pub fn recompute_high_watermark(
     let mut i = 0;
     #[invariant(i@ <= n@)]
     #[invariant(majority_offset@ <= log_end@)]
-    #[invariant(majority_offset@ == -9223372036854775807 - 1
+    #[invariant(majority_offset@ == i64::MIN@
         || count_ge(log_end@, follower_offsets@, majority_offset@, leader_counts) >= majority@)]
     #[invariant(forall<k: Int> 0 <= k && k < i@ + 1
         && count_ge(log_end@, follower_offsets@, hwm_member_at(log_end@, follower_offsets@, k), leader_counts) >= majority@
