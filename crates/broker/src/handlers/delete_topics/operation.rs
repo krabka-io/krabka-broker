@@ -117,6 +117,7 @@ async fn complete_topic_deletion(
     let controller = Arc::clone(&broker.controller);
     let reader = broker.remote_reader.clone();
     let broker_id = broker.config.broker_id;
+    let metrics = broker.metrics.clone();
     let archive = ArchiveMode::from_worm(broker.config.remote_storage_worm.as_ref());
     let applied_audit = completion_audit(
         broker,
@@ -129,7 +130,7 @@ async fn complete_topic_deletion(
         async move { controller.submit_change_if_image(records, image).await },
         move || {
             cleanup.remove();
-            spawn_remote_cascades(reader, broker_id, archive, tiered);
+            spawn_remote_cascades(reader, broker_id, archive, tiered, &metrics);
             applied_audit();
         },
     )
