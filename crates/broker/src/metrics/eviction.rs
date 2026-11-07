@@ -796,6 +796,7 @@ mod tests {
     /// type, and falls back to [`SeedOther`] for every other field.
     struct Probe<'a, T>(&'static str, &'a T);
 
+    /// Seeds a [`TopicLabel`] or [`PartitionLabel`] family.
     trait SeedOwned<'a> {
         fn seed(&self) -> Option<Seeded<'a>>;
     }
@@ -831,6 +832,7 @@ mod tests {
         }
     }
 
+    /// Leaves every other field alone.
     trait SeedOther<'a> {
         fn seed(&self) -> Option<Seeded<'a>> { None }
     }
@@ -839,7 +841,7 @@ mod tests {
 
     /// Seeds one series in each field of `$metrics` that `$field` names and
     /// whose type makes it a topic or partition family.
-    macro_rules! seed_owned_families {
+    macro_rules! seed_fields {
         ($metrics:ident; $($field:ident),+ $(,)?) => {{
             let BrokerMetrics { $($field),+ } = $metrics;
             [$((&Probe(stringify!($field), $field)).seed()),+]
@@ -854,10 +856,12 @@ mod tests {
     /// The destructure names every field of [`BrokerMetrics`] and has no
     /// `..`, so a new field fails to compile here until it is listed. Listing
     /// it is the whole job: the field's type decides whether it is seeded, so
-    /// a new topic or partition family cannot be left out of the check below
-    /// by a wrong guess about where it belongs.
+    /// a new [`TopicLabel`] or [`PartitionLabel`] family cannot be left out of
+    /// the check below by a wrong guess about where it belongs. A family keyed
+    /// by another label type that carries a topic, such as
+    /// [`SchemaRejectionLabel`], is not seen here.
     fn seed_owned_families(metrics: &BrokerMetrics) -> Vec<Seeded<'_>> {
-        seed_owned_families!(
+        seed_fields!(
             metrics;
             registry,
             streams_topology_storage_operations,
