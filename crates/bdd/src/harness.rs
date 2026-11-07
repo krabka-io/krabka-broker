@@ -24,8 +24,9 @@ use {
 /// The scenario's steps run synchronously on the test thread, inside the
 /// runtime's context but not inside `block_on`. A step can therefore call
 /// [`tokio::spawn`] directly, and drive a future to completion with
-/// [`TokioMultiThreadContext::block_on`]. Steps are synchronous functions; an
-/// `async fn` step is not supported.
+/// [`TokioMultiThreadContext::block_on`]. Write steps as synchronous
+/// functions: under any harness, rstest-bdd polls an `async fn` step once and
+/// fails it if that poll returns `Pending`.
 ///
 /// `WORKERS` sets the number of worker threads. The default, 0, keeps
 /// Tokio's default of one worker per core.

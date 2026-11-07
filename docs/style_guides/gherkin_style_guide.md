@@ -54,7 +54,7 @@ Every illustrative scenario follows the six BRIEF principles.
 
 ## Rule blocks
 
-Group the scenarios that illustrate one rule under a `Rule:` heading, and state the rule as a sentence. Scenarios that belong to no rule come before the first `Rule:`.
+Group the scenarios that illustrate one rule under a `Rule:` heading, and state the rule as a sentence. Once a file has a `Rule:`, every scenario in it sits under one, except a `@journey`. `krabka_bdd::scenarios!` rejects a scenario outside a rule in such a file (`scenario-outside-rule`).
 
 ```gherkin
 Feature: Producers are fenced by epoch
@@ -74,7 +74,7 @@ Feature: Producers are fenced by epoch
       Then the append is accepted
 ```
 
-> **Tool gap.** `rstest_bdd_macros::scenarios!` and `#[scenario]` in rstest-bdd 0.6 do not run scenarios that sit under a `Rule:`. They skip them without an error, so a red scenario under a `Rule:` reports nothing. Until Krabka's BDD macro layer supports `Rule:`, do not use `Rule:` in a feature that those macros run. State the rule in the feature description instead, and keep one rule per feature file where you can.
+> **Tool gap.** At the rstest-bdd fork revision the root `Cargo.toml` pins, `scenarios!` and `#[scenario]` do not run scenarios that sit under a `Rule:`. They skip them without an error, so a red scenario under a `Rule:` reports nothing. `krabka_bdd::scenarios!` expands to the same macro and has the same gap. A fork patch that runs them is in review. Until the pin moves past it, do not use `Rule:` in a feature that runs: state the rule in the feature description instead, and keep one rule per feature file where you can. `krabka_bdd::scenarios!` still lints `Rule:` files and its step check covers their scenarios.
 
 ## Scenario outlines and tables
 
@@ -99,6 +99,7 @@ A tag is an index entry that a reader can understand. Every tag must earn its pl
 | `@inprogress` | Automation or production code is incomplete. Excluded from the gating run. |
 
 - Do not add `@done`. The absence of a lifecycle tag means done.
+- `krabka_bdd::scenarios!` rejects every tag that is not in this table (`unknown-tag`). Its allowed set is the `ALLOWED_TAGS` constant in `crates/bdd-macros/src/lint.rs`; change both together.
 - Do not add tags that only the automation understands, such as `@use_mock_store`. Do not add ticket or story IDs.
 - Add a new tag to this table, with its meaning, in the same change that first uses it.
 
@@ -112,21 +113,70 @@ A journey scenario shows how an actor reaches a goal across many rules, for exam
 
 ## Step definitions
 
-Krabka runs scenarios with [rstest-bdd](https://docs.rs/rstest-bdd). The house shape is:
+Krabka runs scenarios with [rstest-bdd](https://docs.rs/rstest-bdd), through [krabka-bdd](#krabka-bdd) for new and migrated features. The house shape is:
 
 - Step definitions live in a `#[cfg(test)]` module of the crate that owns the behavior, or in a `tests/` support module for public behavior. The [code style guide](code_style_guide.md#tests) decides which.
-- Scenario state is a scenario-scoped `#[rstest::fixture]` struct. Do not share mutable state through statics.
+- Scenario state is a scenario-scoped `#[rstest::fixture]` struct. Do not share mutable state through statics. Hold each piece that a step fills in a `krabka_bdd::Given<T>`, not an `Option<T>` and an `expect`.
 - A step definition makes testing decisions only. Put "how to drive the system" in a small driver or helper type named in domain terms, and put setup shortcuts there too. Seed state directly instead of replaying a long flow to reach it.
-- Use the domain's types for parameters. Parse a value into its enum or newtype once, in one place, not by matching strings inside each step.
+- Use the domain's types for parameters. Parse a value into its enum or newtype once, in one place, not by matching strings inside each step. For an enum, derive `krabka_bdd::StepParam`.
 - A negative-path step says "attempts to" or "tries to". It captures the result in the scenario state instead of panicking, and a `Then` step checks it.
 - Assertions are atomic. Compare the whole expected value with `assert2::assert!`, so one failure reports every actual value. See [`CLAUDE.md`](../../CLAUDE.md).
 - Group step definitions by domain area, not by feature file, and reuse a step only when its wording fits the new scenario.
 
 ### rstest-bdd gaps to know
 
+These hold at the fork revision the root `Cargo.toml` pins. A fork patch in review closes the first three; update this list when the pin moves.
+
 - Scenarios under `Rule:` do not run. See [Rule blocks](#rule-blocks).
-- Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file, or the new scenarios do not exist. Bazel is not affected, because the `compile_data` glob is a build input.
+- A tag can only filter scenarios out (`tags = "not @formulated"`). Nothing marks them `#[ignore]`, so `@formulated` and `@inprogress` scenarios still run and must be filtered by the caller.
 - Outline rows get test names `case_1`, `case_2` and so on, not the description column. Use the description column anyway, because it is for the reader.
+- Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file, or the new scenarios do not exist. Edits to an existing file are tracked. Bazel is not affected, because the `compile_data` glob is a build input.
+- When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily. `krabka_bdd::scenarios!` turns that into a failing test.
+
+## krabka-bdd
+
+`crates/bdd` (`krabka-bdd`) is Krabka's layer over rstest-bdd. Use it for every new feature and for a feature you migrate. It is a dev-dependency; a published crate declares it with a `path` and no `version`. Its rustdoc lists every argument.
+
+### `scenarios!`
+
+```rust
+krabka_bdd::scenarios!("tests/features/log_policy", fixtures = [log_policy: LogPolicyScenario]);
+```
+
+It takes the arguments of `rstest_bdd_macros::scenarios!`. Before it expands, it lints every `.feature` file under the directory against this guide. Each finding is a compile error of the form `path:line:col: rule-id: message. Fix: hint`. A clean directory expands to rstest-bdd's `scenarios!` and to one more test, `<dir>_steps::every_step_matches_one_definition`. That test resolves every step of every scenario the call runs, with outline rows substituted, against the step definitions in the test binary. It fails on a step that matches no definition and on a step that matches more than one, and lists the `file:line` of each match. It leaves out the scenarios that `ignore_tags` names, by default `@formulated or @inprogress`.
+
+| Rule id | Flags | Fix |
+| :--- | :--- | :--- |
+| `parse` | A file that gherkin cannot parse. | Correct the syntax at the reported position. |
+| `no-background` | A `Background`. | Move each essential step into the scenarios that need it, and delete the rest. |
+| `one-when` | Zero or several `When` steps, counting `And` and `But` after a `When`. | Move the extra actions into `Given` context, or split the scenario. |
+| `max-steps` | More than five steps. | Delete the steps that do not illustrate the rule, or split the scenario. |
+| `star-step` | A `*` step outside `@journey`. | Use `Given`, `When` or `Then`. |
+| `journey-location` | A `@journey` outside a `journeys/` directory. | Move it into a feature under `journeys/`. |
+| `first-person` | "I", "me" or "my" in a step or a scenario name. | Name the actor by role. |
+| `or-in-step` | The word "or" in a step. | Write one scenario per alternative. |
+| `quote-in-step` | A `"` in step text. Doc strings and tables are fine. | Drop the quotation marks. |
+| `mechanism-word` | call, calls, invoke, invokes, instantiate, construct, mock or struct in a step. | Describe the request, the record or the state. |
+| `unknown-tag` | A tag that is not in the [tag table](#tags), `@done` included. | Use a tag from the table, or add a row to the table in the same change. |
+| `user-story-feature` | A `Feature:` name that starts with "As a" or "As an". | Name the capability. |
+| `placeholder-name` | A scenario named like "Test 3", "TC_12", "Scenario 2" or "Happy path". | Name it so it completes "The one where ...". |
+| `case-column` | An `Examples` table whose first column is not `case`. | Make the first column `case`, saying why each row exists. |
+| `duplicate-example-row` | Two identical rows across one outline's `Examples`. | Delete the repeated row. |
+| `ragged-table` | Table rows of different widths. gherkin truncates a long row without a word, so the lint counts the raw `\|` characters. | Give every row the same number of cells. |
+| `duplicate-scenario-name` | Two scenarios with one name in a file. | Rename one so each says what it illustrates. |
+| `scenario-outside-rule` | A scenario outside any `Rule:` in a file that has one, unless it is a `@journey`. | Move it under the rule it illustrates. |
+
+`one-when`, `max-steps`, `star-step` and `scenario-outside-rule` exempt `@journey` scenarios; no other rule exempts anything. A tag on the feature or the rule counts for every scenario in it.
+
+### Multi-thread runtime
+
+`runtime = "tokio-multi-thread"`, with an optional `workers = N`, runs each scenario on `krabka_bdd::TokioMultiThreadHarness`. The harness owns a multi-thread Tokio runtime for the whole scenario, so a task a `Given` spawns keeps running on a worker thread until the `Then`. rstest-bdd's own Tokio harness is current-thread, where a spawned task only moves while a step awaits. A step reaches the runtime as `#[from(rstest_bdd_harness_context)] runtime: &krabka_bdd::TokioMultiThreadContext`, and uses `runtime.spawn` and `runtime.block_on`. Write the steps as synchronous functions: under any harness, rstest-bdd polls an `async fn` step once and fails it if that poll returns `Pending`. The calling crate lists `rstest-bdd-harness` as a dev-dependency. `crates/bdd/tests/multi_thread.rs` is the example.
+
+### `StepParam` and `Given<T>`
+
+`#[derive(krabka_bdd::StepParam)]` on an enum of unit variants generates `FromStr` and `Display` over its step words. A variant's word is its name in kebab-case, or the literals of `#[step_param("word", "alias")]`, the first of which `Display` writes. An unknown word fails with every accepted word listed. On a production type that only scenarios parse, derive it under `#[cfg_attr(test, derive(krabka_bdd::StepParam))]`, as `CleanupPolicy` in `crates/log/src/config.rs` does.
+
+`krabka_bdd::Given<T>` is one slot of scenario state. `Given::new("policy", "Given a log has cleanup policy <policy>")` names the field and the step that fills it, keyword included. `get`, `get_mut`, `take` and `into_inner` on an unset slot panic with both names, so a scenario that lost its `Given` says which one.
 
 ## Review checklist
 

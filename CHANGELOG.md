@@ -25,6 +25,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka-bdd` and `krabka-bdd-macros`, a BDD layer over rstest-bdd. `krabka_bdd::scenarios!` lints features against the [Gherkin style guide](docs/style_guides/gherkin_style_guide.md#krabka-bdd) at compile time, fails a test on undefined and ambiguous steps, and can run scenarios on a multi-thread Tokio runtime. `#[derive(StepParam)]` and `Given<T>` replace hand-matched placeholders and `Option` scenario state. The `krabka-log` `log_policy` feature is the first to use it.
+
 - Native Streams topology storage callbacks expose bounded operation/result counters and duration histograms for set, get and delete. See [native storage telemetry](docs/streams-topology-description-storage.md#native-callback-telemetry).
 
 - Embedded brokers can register a native share DLQ manager factory. Shutdown cancels pending enqueue futures, retains replayable ARCHIVING ranges and stops owned workers. Oversized copied records retain their payload and fail the destination write rather than silently becoming headers-only. Recovery can duplicate a completed append; a terminal destination error can archive without a DLQ copy. See [native DLQ managers](docs/compatibility/kafka-4.4-native-dlq-manager.md).
