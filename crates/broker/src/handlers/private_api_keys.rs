@@ -52,6 +52,72 @@ pub const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
 /// `DescribeBreakGlass` (1019): lists break-glass proposals and their approvals.
 pub const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 
+/// One krabka-private RPC: its wire `api_key` and the name operators see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KrabkaPrivateApi {
+    /// The wire `api_key`.
+    pub api_key: ApiKeyCode,
+    /// The RPC name, as a metric label and in logs.
+    pub name: &'static str,
+}
+
+/// Every krabka-private RPC without a generated schema, each with its name.
+///
+/// This is the one place a key is paired with its name. A new private key
+/// takes a row here, and the request metrics then label it by name rather
+/// than as `Unknown`.
+pub const KRABKA_PRIVATE_APIS: [KrabkaPrivateApi; 10] = [
+    KrabkaPrivateApi {
+        api_key: ALTER_BARRIER_GROUPS_API_KEY,
+        name: "AlterBarrierGroups",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_BARRIER_GROUPS_API_KEY,
+        name: "DescribeBarrierGroups",
+    },
+    KrabkaPrivateApi {
+        api_key: TRIGGER_BARRIER_API_KEY,
+        name: "TriggerBarrier",
+    },
+    KrabkaPrivateApi {
+        api_key: LIST_BARRIER_CUTS_API_KEY,
+        name: "ListBarrierCuts",
+    },
+    KrabkaPrivateApi {
+        api_key: WRITE_BARRIER_MARKERS_API_KEY,
+        name: "WriteBarrierMarkers",
+    },
+    KrabkaPrivateApi {
+        api_key: SET_TOPIC_FREEZE_API_KEY,
+        name: "SetTopicFreeze",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_TOPIC_FREEZES_API_KEY,
+        name: "DescribeTopicFreezes",
+    },
+    KrabkaPrivateApi {
+        api_key: PROPOSE_BREAK_GLASS_API_KEY,
+        name: "ProposeBreakGlass",
+    },
+    KrabkaPrivateApi {
+        api_key: APPROVE_BREAK_GLASS_API_KEY,
+        name: "ApproveBreakGlass",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_BREAK_GLASS_API_KEY,
+        name: "DescribeBreakGlass",
+    },
+];
+
+/// The name of the krabka-private RPC at `api_key`, if one is registered.
+#[must_use]
+pub fn krabka_private_api_name(api_key: ApiKeyCode) -> Option<&'static str> {
+    KRABKA_PRIVATE_APIS
+        .iter()
+        .find(|api| api.api_key == api_key)
+        .map(|api| api.name)
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert};
