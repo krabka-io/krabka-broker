@@ -27,7 +27,7 @@ pub mod render;
 use {
     budget::evaluate,
     clap::{Parser, Subcommand},
-    contract::{BudgetError, Contract, contract_digest},
+    contract::{BudgetError, Contract, MINIMUM_ROUNDS, contract_digest},
     executables::{BenchExecutable, ExecutableManifest, manifest_from_cargo_messages, verify_pass},
     record::{PerformanceRecord, assemble},
     regex::Regex,
@@ -45,6 +45,11 @@ use {
     thiserror::Error,
     time::format_description::well_known::Rfc3339,
 };
+
+/// How many times the larger side's relative median absolute deviation the
+/// criterion lane allows. The budget lane reads its multiplier from the
+/// contract instead.
+const CRITERION_SPREAD_MULTIPLIER: f64 = 3.0;
 
 static BENCHER_REGEX: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
     Regex::new(
@@ -314,7 +319,7 @@ pub fn compare_summaries(
         return Err(ParseBenchesError::InvalidTolerance);
     }
     for (side, summaries) in [("reference", reference), ("candidate", candidate)] {
-        if summaries.len() < 3 {
+        if summaries.len() < MINIMUM_ROUNDS {
             return Err(ParseBenchesError::TooFewSamples {
                 side,
                 count: summaries.len(),
@@ -391,7 +396,7 @@ pub fn compare_summaries(
         let candidate_median_ns = median(candidate_values.clone());
         let tolerance = calibrated_tolerance(
             minimum_tolerance,
-            3.0,
+            CRITERION_SPREAD_MULTIPLIER,
             relative_mad(&reference_values, reference_median_ns),
             relative_mad(&candidate_values, candidate_median_ns),
         );
@@ -446,7 +451,7 @@ pub fn read_summaries(
         }
     }
     paths.sort();
-    if paths.len() < 3 {
+    if paths.len() < MINIMUM_ROUNDS {
         return Err(ParseBenchesError::TooFewSamples {
             side,
             count: paths.len(),
