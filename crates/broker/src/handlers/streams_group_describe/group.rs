@@ -22,9 +22,9 @@ use {
         handlers::{
             RequestContext, any_topic_describe_denied,
             authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
-            group_coordinator_error,
+            group_actor_error_code, group_coordinator_error,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_protocol::owned::streams_group_describe_response::DescribedGroup,
     std::slice,
@@ -86,11 +86,12 @@ pub(super) async fn describe_group(
     .await
     {
         Ok(view) => view,
-        Err(AskError::Closed) => {
-            return DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None);
-        }
-        Err(AskError::Dropped) => {
-            return DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None);
+        Err(error) => {
+            return DescribedGroup::error_row(
+                gid,
+                group_actor_error_code(broker, gid, error),
+                None,
+            );
         }
     };
 

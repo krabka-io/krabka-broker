@@ -518,13 +518,25 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// An actor that stops with the heartbeat in its mailbox drops it, as
+    /// An actor that stops with a request in its mailbox drops it, as
     /// Kafka's `CoordinatorRuntime` fails the operations of a shard that
     /// unloads. A broker that still serves the group answers the retriable
-    /// `COORDINATOR_NOT_AVAILABLE`, not `UNKNOWN_SERVER_ERROR`.
+    /// `COORDINATOR_NOT_AVAILABLE`, not `UNKNOWN_SERVER_ERROR`, to a heartbeat
+    /// and to a describe.
+    #[rstest::rstest]
+    #[case::heartbeat(false)]
+    #[case::describe(true)]
     #[tokio::test]
-    async fn a_heartbeat_the_stopped_actor_dropped_answers_coordinator_not_available() {
-        use crate::coordinator::unified::streams::actor::StreamsGroupActorHandle;
+    async fn a_request_the_stopped_actor_dropped_answers_coordinator_not_available(
+        #[case] describe: bool,
+    ) {
+        use {
+            crate::{
+                coordinator::unified::streams::actor::StreamsGroupActorHandle,
+                handlers::streams_group_describe,
+            },
+            krabka_protocol::owned::streams_group_describe_request::StreamsGroupDescribeRequest,
+        };
 
         let (
             version,
@@ -541,17 +553,26 @@ mod tests {
             Arc::new(StreamsGroupActorHandle::dropping_replies()),
         );
         let peer = peer();
-        let principal = principal("Group:Read+Topic:Describe");
+        let principal = principal("Group:Read+Group:Describe+Topic:Describe");
         let ctx = test_context(&principal, &peer);
 
-        let resp = handle(&broker, request("stopping"), version, &ctx)
-            .await
-            .expect("handle");
+        let error_code = if describe {
+            let request = StreamsGroupDescribeRequest {
+                group_ids: vec!["stopping".into()],
+                ..Default::default()
+            };
+            let resp = streams_group_describe::handle(&broker, request, 0, &ctx)
+                .await
+                .expect("handle");
+            resp.groups[0].error_code
+        } else {
+            let resp = handle(&broker, request("stopping"), version, &ctx)
+                .await
+                .expect("handle");
+            resp.error_code
+        };
 
-        assert!(
-            resp.error_code == codes::COORDINATOR_NOT_AVAILABLE,
-            "{resp:?}"
-        );
+        assert!(error_code == codes::COORDINATOR_NOT_AVAILABLE);
         broker_handle.shutdown().await;
     }
 

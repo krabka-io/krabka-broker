@@ -21,8 +21,8 @@ use {
         },
         handlers::{
             alter_share_group_offsets, consumer_group_describe, consumer_group_heartbeat,
-            delete_share_group_offsets, describe_groups, share_group_describe,
-            share_group_heartbeat,
+            delete_share_group_offsets, describe_groups, heartbeat, offset_commit, offset_fetch,
+            share_group_describe, share_group_heartbeat, test_support::create_topic,
         },
         test_support::start_share_broker,
     },
@@ -33,6 +33,11 @@ use {
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
         describe_groups_request::DescribeGroupsRequest,
+        heartbeat_request::HeartbeatRequest,
+        offset_commit_request::{
+            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+        },
+        offset_fetch_request::OffsetFetchRequest,
         share_group_describe_request::ShareGroupDescribeRequest,
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     },
@@ -52,6 +57,9 @@ enum Rpc {
     ConsumerGroupHeartbeat,
     DescribeGroups,
     ConsumerGroupDescribe,
+    Heartbeat,
+    OffsetFetch,
+    OffsetCommit,
     ShareGroupHeartbeat,
     ShareGroupDescribe,
     AlterShareGroupOffsets,
@@ -64,7 +72,9 @@ impl Rpc {
     fn install_stopping_actor(self, broker: &Broker) {
         let coordinator = &broker.group_coordinator;
         let kind = match self {
-            Self::DescribeGroups => GroupKindTag::Classic,
+            Self::DescribeGroups | Self::Heartbeat | Self::OffsetFetch | Self::OffsetCommit => {
+                GroupKindTag::Classic
+            }
             Self::ConsumerGroupHeartbeat | Self::ConsumerGroupDescribe => GroupKindTag::Consumer,
             Self::ShareGroupHeartbeat
             | Self::ShareGroupDescribe
@@ -92,6 +102,48 @@ impl Rpc {
             user ["admin"];
         };
         match self {
+            Self::Heartbeat => {
+                let request = HeartbeatRequest {
+                    group_id: GROUP.into(),
+                    generation_id: 1,
+                    member_id: "member-a".into(),
+                    ..Default::default()
+                };
+                heartbeat::handle(broker, request, 4, &ctx)
+                    .await
+                    .expect("an answer")
+                    .error_code
+            }
+            Self::OffsetFetch => {
+                let request = OffsetFetchRequest {
+                    group_id: GROUP.into(),
+                    topics: None,
+                    ..Default::default()
+                };
+                offset_fetch::handle(broker, request, 7, &ctx)
+                    .await
+                    .expect("an answer")
+                    .error_code
+            }
+            Self::OffsetCommit => {
+                let request = OffsetCommitRequest {
+                    group_id: GROUP.into(),
+                    generation_id_or_member_epoch: -1,
+                    topics: vec![OffsetCommitRequestTopic {
+                        name: "topic-a".into(),
+                        partitions: vec![OffsetCommitRequestPartition {
+                            committed_offset: 1,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                let response = offset_commit::handle(broker, request, 8, &ctx)
+                    .await
+                    .expect("an answer");
+                response.topics[0].partitions[0].error_code
+            }
             Self::ConsumerGroupHeartbeat => {
                 let request = ConsumerGroupHeartbeatRequest {
                     group_id: GROUP.into(),
@@ -177,6 +229,9 @@ impl Rpc {
 #[rstest::rstest]
 #[case::consumer_group_heartbeat(Rpc::ConsumerGroupHeartbeat)]
 #[case::describe_groups(Rpc::DescribeGroups)]
+#[case::heartbeat(Rpc::Heartbeat)]
+#[case::offset_fetch(Rpc::OffsetFetch)]
+#[case::offset_commit(Rpc::OffsetCommit)]
 #[case::consumer_group_describe(Rpc::ConsumerGroupDescribe)]
 #[case::share_group_heartbeat(Rpc::ShareGroupHeartbeat)]
 #[case::share_group_describe(Rpc::ShareGroupDescribe)]
@@ -186,6 +241,12 @@ impl Rpc {
 async fn a_request_the_stopped_actor_dropped_answers_coordinator_not_available(#[case] rpc: Rpc) {
     let started = start_share_broker()
         .authorizer(Arc::new(AllowAllAuthorizer))
+        .call()
+        .await;
+    // The topic the heartbeats subscribe to and the commit names.
+    create_topic()
+        .broker(&started.broker)
+        .name("topic-a")
         .call()
         .await;
     let broker = started.broker.broker_arc_for_test();
