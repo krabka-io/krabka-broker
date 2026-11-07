@@ -7,12 +7,14 @@
 #![cfg(test)]
 
 use {
-    krabka_broker::bootstrap,
-    krabka_format::{ClusterId, DirectoryId, FAIL_AFTER_ENV, META_PROPERTIES, MetaProperties},
+    krabka_format::{
+        BOOTSTRAP_RECORDS, ClusterId, DirectoryId, FAIL_AFTER_ENV, META_PROPERTIES, MetaProperties,
+        decode_bootstrap_records,
+    },
     krabka_metadata::MetadataRecord,
     std::{
         collections::BTreeSet,
-        fs,
+        fs, io,
         path::{Path, PathBuf},
         process::{Command, Output},
     },
@@ -206,7 +208,7 @@ fn binary_canonical_directory(format_binary: &FormatBinaryScenario) {
     );
     let directory = format_binary.root.path().join("data");
     assert2::assert!(
-        bootstrap::read_meta_properties(&directory).ok()
+        MetaProperties::read(&directory).ok().flatten()
             == Some(MetaProperties {
                 cluster_id: CLUSTER_ID.parse().expect("cluster id"),
                 node_id: NODE_ID,
@@ -459,8 +461,9 @@ fn resumed_format_artifacts(format_binary: &FormatBinaryScenario) {
     let metadata = format_binary.root.path().join("meta");
     let data = format_binary.root.path().join("data");
     for directory in [&metadata, &data] {
-        let properties = bootstrap::read_meta_properties(directory)
-            .unwrap_or_else(|error| panic!("{} does not read: {error}", directory.display()));
+        let properties = MetaProperties::read(directory)
+            .unwrap_or_else(|error| panic!("{} does not read: {error}", directory.display()))
+            .unwrap_or_else(|| panic!("{} has no {META_PROPERTIES}", directory.display()));
         assert2::assert!(
             (properties.cluster_id, properties.node_id)
                 == (
@@ -483,7 +486,7 @@ fn resumed_format_artifacts(format_binary: &FormatBinaryScenario) {
                 vec![META_PROPERTIES]
             ]
     );
-    let records = bootstrap::load_bootstrap_records(&metadata).expect("records");
+    let records = bootstrap_records(&metadata);
     assert2::assert!(
         records
             .iter()
@@ -544,14 +547,22 @@ struct Formatted {
     bootstrap_records: usize,
 }
 
+/// The records of `<dir>/bootstrap.records.bin`, none when there is no such
+/// file, as the broker reads them.
+fn bootstrap_records(dir: &Path) -> Vec<MetadataRecord> {
+    match fs::read(dir.join(BOOTSTRAP_RECORDS)) {
+        Ok(bytes) => decode_bootstrap_records(&bytes).expect("bootstrap records"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => panic!("read {}: {error}", dir.join(BOOTSTRAP_RECORDS).display()),
+    }
+}
+
 fn formatted(dir: &Path) -> Formatted {
     Formatted {
         cluster_id: written_cluster_id(dir),
         has_checkpoint: checkpoint(dir).is_file(),
         has_manifest: dir.join("bootstrap.json").is_file(),
-        bootstrap_records: bootstrap::load_bootstrap_records(dir)
-            .expect("bootstrap records")
-            .len(),
+        bootstrap_records: bootstrap_records(dir).len(),
     }
 }
 
@@ -584,9 +595,7 @@ fn standalone_seed_records(root: &Path) -> usize {
     let mut args = vec!["--log-dir", path_str(&probe), "--cluster-id", CLUSTER_ID];
     args.extend_from_slice(STANDALONE);
     assert2::assert!(krabka_format(&args, None).status.success());
-    bootstrap::load_bootstrap_records(&probe)
-        .expect("records")
-        .len()
+    bootstrap_records(&probe).len()
 }
 
 /// Every file under `dir`, as a sorted list of `/`-separated relative paths.

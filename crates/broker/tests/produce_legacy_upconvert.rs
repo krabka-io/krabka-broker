@@ -65,7 +65,7 @@ fn build_v1_message_set(values: &[&[u8]]) -> Bytes {
         })
         .collect();
     let mut buf = BytesMut::new();
-    encode_flat_message_set(recs, Magic::V1, &mut buf);
+    encode_flat_message_set(recs, Magic::V1, &mut buf).unwrap();
     buf.freeze()
 }
 

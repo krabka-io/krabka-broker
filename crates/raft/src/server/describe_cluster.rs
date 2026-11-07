@@ -487,7 +487,8 @@ mod tests {
             finalized_features_epoch: -1,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
-        });
+        })
+        .expect("the ApiVersions body encodes");
         let avr = decoded::<ApiVersionsResponse>(&av, 4);
         check!(avr.api_keys.iter().any(|k| k.api_key == 60));
     }

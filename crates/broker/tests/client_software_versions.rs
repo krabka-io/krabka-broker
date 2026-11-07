@@ -93,7 +93,7 @@ async fn send_api_versions(
 
     let resp = read_frame(&mut stream).await?;
     // ApiVersions keeps a non-flexible response header, including on flexible versions.
-    decode_response_frame(&resp, version, false, "ApiVersionsResponse decode")
+    decode_response_frame(&resp, 99, version, false, "ApiVersionsResponse decode")
 }
 
 async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }

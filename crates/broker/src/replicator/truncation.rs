@@ -168,7 +168,7 @@ fn reset_for_leader_start(replica_end: i64, leader_start: i64) -> Option<i64> {
     (leader_start > replica_end).then_some(leader_start)
 }
 
-fn warn_if_target_stale(cfg: &Config, message: &'static str) -> bool {
+pub(super) fn warn_if_target_stale(cfg: &Config, message: &'static str) -> bool {
     if !replication_target_changed(cfg) {
         return false;
     }
@@ -187,6 +187,55 @@ macro_rules! return_if_target_stale {
             return $result;
         }
     };
+}
+pub(super) use return_if_target_stale;
+
+/// How a follower moves its log back to agree with the leader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Rewind {
+    /// Drop the records at and above the offset, and keep the rest.
+    TruncateTo(Offset),
+    /// Empty the log and restart it at the offset.
+    ResetTo(Offset),
+}
+
+impl Rewind {
+    /// The offset the log ends at once the rewind is done.
+    const fn offset(self) -> Offset {
+        match self {
+            Self::TruncateTo(offset) | Self::ResetTo(offset) => offset,
+        }
+    }
+}
+
+/// Rewinds the follower log of `part`, then drops the producer state of the
+/// records the rewind removed.
+///
+/// A rewind that fails is logged with `failure` and leaves the producer state
+/// as it was. The result says whether the log was rewound.
+pub(super) async fn rewind_follower(
+    part: &Partition,
+    cfg: &Config,
+    rewind: Rewind,
+    failure: &'static str,
+) -> bool {
+    let result = match rewind {
+        Rewind::TruncateTo(offset) => part.truncate_to(offset).await,
+        Rewind::ResetTo(offset) => part.reset_to(offset).await,
+    };
+    let offset = rewind.offset().0;
+    match result {
+        Ok(()) => {
+            truncate_producer_state(cfg, offset).await;
+            true
+        }
+        Err(error) => {
+            let reset = matches!(rewind, Rewind::ResetTo(_));
+            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error, offset, reset,
+                "{}", failure);
+            false
+        }
+    }
 }
 
 /// Recovers from `OFFSET_OUT_OF_RANGE` the way Kafka's
@@ -289,11 +338,11 @@ where
     let reset = restart.is_some();
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookups were in flight.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping out_of_range recovery from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping out_of_range recovery from stale target",
+        RowAction::Drop
+    );
     let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,
@@ -308,20 +357,18 @@ where
         "replicator.out_of_range; {}",
         restart.unwrap_or("truncating to the leader's log end")
     );
-    let result = if reset {
-        partition.reset_to(Offset(target)).await
+    let rewind = if reset {
+        Rewind::ResetTo(Offset(target))
     } else {
-        partition.truncate_to(Offset(target)).await
+        Rewind::TruncateTo(Offset(target))
     };
-    match result {
-        Ok(()) => {
-            truncate_producer_state(cfg, target).await;
-        }
-        Err(error) => {
-            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                target, reset, "replicator: out_of_range recovery failed");
-        }
-    }
+    rewind_follower(
+        &partition,
+        cfg,
+        rewind,
+        "replicator: out_of_range recovery failed",
+    )
+    .await;
     RowAction::Continue
 }
 
@@ -424,30 +471,31 @@ where
     };
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookup was in flight.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping tiered-storage restart from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping tiered-storage restart from stale target",
+        RowAction::Drop
+    );
     let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping tiered-storage restart from stale local target"
     );
-    match partition.reset_to(Offset(offset)).await {
-        Ok(()) => {
-            truncate_producer_state(cfg, offset).await;
-            info!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                offset,
-                "replicator: offset moved to tiered storage; {}",
-                reason
-            );
-        }
-        Err(error) => {
-            warn!(error = %error, offset, "replicator: tiered-storage reset_to failed");
-        }
+    if rewind_follower(
+        &partition,
+        cfg,
+        Rewind::ResetTo(Offset(offset)),
+        "replicator: tiered-storage reset_to failed",
+    )
+    .await
+    {
+        info!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            offset,
+            "replicator: offset moved to tiered storage; {}",
+            reason
+        );
     }
     RowAction::Continue
 }
@@ -700,16 +748,14 @@ where
         high_watermark,
     );
 
-    if let Err(e) = part.truncate_to(target).await {
-        warn!(
-            topic = %cfg.topic,
-            partition = cfg.partition.get(),
-            target = target.0,
-            error = %e,
-            "handle_epoch_fence: truncate_to failed"
-        );
-    } else {
-        truncate_producer_state(cfg, target.0).await;
+    if rewind_follower(
+        &part,
+        cfg,
+        Rewind::TruncateTo(target),
+        "handle_epoch_fence: truncate_to failed",
+    )
+    .await
+    {
         info!(
             topic = %cfg.topic,
             partition = cfg.partition.get(),
@@ -812,7 +858,7 @@ mod tests {
         assert2::{assert, check},
         krabka_protocol::records::{Record, RecordBatch},
         krabka_raft::NodeId,
-        std::{cell::RefCell, future, net::TcpListener},
+        std::{cell::RefCell, future, net::TcpListener, sync::Arc},
     };
 
     #[test]
@@ -1337,22 +1383,16 @@ mod tests {
         log_end: i64,
     }
 
-    /// Recovers from an epoch fence on a replica whose log holds `batches`
-    /// (one single-record batch per entry, stamped with that epoch), whose
-    /// high watermark is `high_watermark` and whose metadata leader epoch is
-    /// 7, against a leader that answers `leader`.
-    async fn recover_fenced_replica(
-        batches: &[i32],
-        high_watermark: i64,
-        leader: Option<EpochEnd>,
-    ) -> FenceRecovery {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+    /// A local replica whose log holds one single-record batch per entry of
+    /// `epochs`, stamped with that epoch.
+    fn replica_with_batches(epochs: &[i32]) -> (Config, tempfile::TempDir, Arc<Partition>) {
+        let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).expect("local replica");
         let partition = cfg
             .partitions
             .get(&cfg.topic, cfg.partition)
             .expect("partition");
-        for &epoch in batches {
+        for &epoch in epochs {
             let mut batch = RecordBatch {
                 partition_leader_epoch: epoch,
                 records: vec![Record::default()],
@@ -1365,6 +1405,19 @@ mod tests {
                 .append(&mut batch)
                 .expect("replica batch");
         }
+        (cfg, log_dir, partition)
+    }
+
+    /// Recovers from an epoch fence on a replica whose log holds `batches`
+    /// (one single-record batch per entry, stamped with that epoch), whose
+    /// high watermark is `high_watermark` and whose metadata leader epoch is
+    /// 7, against a leader that answers `leader`.
+    async fn recover_fenced_replica(
+        batches: &[i32],
+        high_watermark: i64,
+        leader: Option<EpochEnd>,
+    ) -> FenceRecovery {
+        let (cfg, _log_dir, partition) = replica_with_batches(batches);
         partition.set_follower_hw(Offset(high_watermark)).await;
         partition
             .current_leader_epoch
@@ -1388,6 +1441,67 @@ mod tests {
             epoch: LeaderEpoch(epoch),
             end_offset: Offset(end_offset),
         }
+    }
+
+    /// What one rewind did: whether it reported success, this replica's log
+    /// bounds afterwards, and the producers whose state it kept.
+    #[derive(Debug, PartialEq)]
+    struct Rewound {
+        succeeded: bool,
+        log_start: i64,
+        log_end: i64,
+        producers: Vec<i64>,
+    }
+
+    /// A rewind cuts the log, then drops the producer state of every batch at
+    /// or above the offset it ends at. The log holds six single-record
+    /// batches; producer 1 last wrote at offset 1 and producer 2 at offset 4.
+    #[rstest::rstest]
+    #[case::truncate_keeps_the_head(Rewind::TruncateTo(Offset(3)), Rewound {
+        succeeded: true, log_start: 0, log_end: 3, producers: vec![1],
+    })]
+    #[case::reset_below_the_end_empties_the_log(Rewind::ResetTo(Offset(2)), Rewound {
+        succeeded: true, log_start: 2, log_end: 2, producers: vec![1],
+    })]
+    #[case::reset_past_the_end_keeps_every_producer(Rewind::ResetTo(Offset(10)), Rewound {
+        succeeded: true, log_start: 10, log_end: 10, producers: vec![1, 2],
+    })]
+    #[tokio::test]
+    async fn rewind_follower_cuts_the_log_and_its_producer_state(
+        #[case] rewind: Rewind,
+        #[case] expected: Rewound,
+    ) {
+        let (cfg, _log_dir, partition) = replica_with_batches(&[0; 6]);
+        for (producer_id, offset) in [(1, 1), (2, 4)] {
+            cfg.producer_state
+                .commit(
+                    &cfg.topic,
+                    cfg.partition,
+                    (producer_id, 0),
+                    (0, 0),
+                    (offset, 0, false),
+                )
+                .await;
+        }
+
+        let succeeded = rewind_follower(&partition, &cfg, rewind, "rewind failed").await;
+
+        let mut producers: Vec<i64> = cfg
+            .producer_state
+            .snapshot(&cfg.topic, cfg.partition)
+            .await
+            .into_iter()
+            .map(|(producer_id, _)| producer_id)
+            .collect();
+        producers.sort_unstable();
+        assert!(
+            Rewound {
+                succeeded,
+                log_start: partition.log_start_offset().0,
+                log_end: partition.log_end_offset().0,
+                producers,
+            } == expected
+        );
     }
 
     /// The fence asks where the log's latest epoch (4) ends, under the

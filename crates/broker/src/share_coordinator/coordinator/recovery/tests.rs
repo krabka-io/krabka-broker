@@ -114,8 +114,11 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
                 == unavailable
         );
         assert!(
-            coordinator.read_summary("g", topic_id, 0).await
-                == Err(codes::COORDINATOR_LOAD_IN_PROGRESS)
+            coordinator
+                .read_summary_checked(&image, "g", topic_id, 0)
+                .await
+                .err()
+                == unavailable.err()
         );
         assert!(part.log_end_offset() == Offset(0));
 
@@ -142,7 +145,10 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
             .await;
         coordinator.reload_all_partitions_for_test().await;
         assert!(
-            coordinator.read_summary("g", topic_id, 0).await == Ok(Some((2, 0, Offset(10), 0)))
+            coordinator
+                .read_summary_checked(&image, "g", topic_id, 0)
+                .await
+                == Ok(Some((2, 0, Offset(10), 0)))
         );
         let writer = part.take_writer_handle().unwrap();
         writer.abort();
@@ -248,7 +254,13 @@ async fn recover_honors_nondefault_read_bound() {
         },
     ));
     bounded.recover(&image).await.unwrap();
-    assert!(bounded.read_summary("bounded", topic_id, 0).await == Ok(Some((3, 5, Offset(7), 8))));
+    let topic_image = image_with_topic(topic_id, 1);
+    assert!(
+        bounded
+            .read_summary_checked(&topic_image, "bounded", topic_id, 0)
+            .await
+            == Ok(Some((3, 5, Offset(7), 8)))
+    );
 
     let unbounded = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
@@ -259,7 +271,12 @@ async fn recover_honors_nondefault_read_bound() {
         },
     ));
     unbounded.recover(&image).await.unwrap();
-    assert!(unbounded.read_summary("bounded", topic_id, 0).await == Ok(Some((3, 5, Offset(7), 8))));
+    assert!(
+        unbounded
+            .read_summary_checked(&topic_image, "bounded", topic_id, 0)
+            .await
+            == Ok(Some((3, 5, Offset(7), 8)))
+    );
 }
 
 #[tokio::test]
@@ -366,7 +383,9 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
 
         let recovered = ShareCoordinator::new(krabka_audit::NodeId(1), reg, config);
         recovered.reload_all_partitions_for_test().await;
-        let summary = recovered.read_summary("g", tid, 0).await;
+        let summary = recovered
+            .read_summary_checked(&image_with_topic(tid, 1), "g", tid, 0)
+            .await;
 
         actual.push((codec, stored, summary));
         expected.push((codec, vec![codec], Ok(Some((2, 0, Offset(7), 0)))));
@@ -801,7 +820,12 @@ async fn check_empty_active_partition(
 ) {
     refresh_and_wait(coordinator, image).await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
-    check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+    check!(
+        coordinator
+            .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+            .await
+            == Ok(None)
+    );
 }
 
 /// What brings the state partition log level with the image.
@@ -845,8 +869,13 @@ async fn led_partition_stays_pending_until_its_log_serves_the_image_term() {
             "{catch_up:?}"
         );
         check!(
-            coordinator.read_summary("g", topic_id, 0).await
-                == Err(codes::COORDINATOR_LOAD_IN_PROGRESS),
+            coordinator
+                .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+                .await
+                == Err(ShareStateError::Operation {
+                    code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    message: message::COORDINATOR_LOAD_IN_PROGRESS,
+                }),
             "{catch_up:?}"
         );
 
@@ -894,7 +923,15 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
         .await;
     loads.finished().await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
-    check!(coordinator.read_summary("g", topic_id, 0).await == Err(codes::NOT_COORDINATOR));
+    check!(
+        coordinator
+            .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+            .await
+            == Err(ShareStateError::Operation {
+                code: codes::NOT_COORDINATOR,
+                message: message::NOT_COORDINATOR,
+            })
+    );
 
     check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
 }

@@ -15,8 +15,7 @@
 use {
     assert2::check,
     clap::Parser as _,
-    krabka_broker::bootstrap,
-    krabka_format::MetadataRecord,
+    krabka_format::{BOOTSTRAP_RECORDS, MetadataRecord, decode_bootstrap_records},
     krabka_metadata::{
         KRaftVersionRecord, NodeId, PartitionRecord, TopicRecord, VoterSet, VotersRecord,
     },
@@ -78,7 +77,8 @@ async fn format(log_dir: &Path, flags: &[&str], extra: Vec<MetadataRecord>) {
 }
 
 fn bootstrap_records(log_dir: &Path) -> Vec<MetadataRecord> {
-    bootstrap::load_bootstrap_records(log_dir).expect("bootstrap records")
+    let bytes = fs::read(log_dir.join(BOOTSTRAP_RECORDS)).expect("read bootstrap records");
+    decode_bootstrap_records(&bytes).expect("bootstrap records")
 }
 
 fn offset_zero_checkpoint(log_dir: &Path) -> PathBuf {

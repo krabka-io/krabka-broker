@@ -337,14 +337,17 @@ pub(super) fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> 
             .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
         let length = usize::try_from(header.batch_length.get())
             .ok()
-            .map(|length| length + LOG_OVERHEAD)
+            .and_then(|length| length.checked_add(LOG_OVERHEAD))
             .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
             .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
         let base = header.base_offset.get();
+        let last = base
+            .checked_add(i64::from(header.last_offset_delta.get()))
+            .ok_or_else(|| corrupt_read("a record batch whose last offset overflows"))?;
         spans.push(BatchSpan {
             bytes: at..at + length,
             base,
-            last: base + i64::from(header.last_offset_delta.get()),
+            last,
             attributes: Attributes(header.attributes.get()),
             producer_id: header.producer_id.get(),
             max_timestamp: header.max_timestamp.get(),
@@ -1185,5 +1188,40 @@ mod tests {
                 .expect("the scan skips the evicted prefix")
                 == Vec::new()
         );
+    }
+
+    /// A v2 batch header, as an archived segment holds it, whose base offset
+    /// is `i64::MAX - 1` and whose last offset delta is 5: its last offset
+    /// does not fit in an `i64`. The batch length (49) covers the header
+    /// alone.
+    const OVERFLOWING_BATCH_HEADER: [u8; HEADER_LEN] = [
+        0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, // base offset
+        0x00, 0x00, 0x00, 0x31, // batch length
+        0x00, 0x00, 0x00, 0x00, // partition leader epoch
+        0x02, // magic
+        0x00, 0x00, 0x00, 0x00, // crc
+        0x00, 0x00, // attributes
+        0x00, 0x00, 0x00, 0x05, // last offset delta
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // base timestamp
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // max timestamp
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // producer id
+        0xff, 0xff, // producer epoch
+        0xff, 0xff, 0xff, 0xff, // base sequence
+        0x00, 0x00, 0x00, 0x00, // records count
+    ];
+
+    /// A corrupt archived header must be a corrupt read, which the partition
+    /// row answers with `CORRUPT_MESSAGE`, and not a wrapped acquisition
+    /// range, as Fetch's `deliverable_run` treats the same bytes.
+    #[test]
+    fn a_batch_whose_last_offset_overflows_is_a_corrupt_read() {
+        let bytes = Bytes::from_static(&OVERFLOWING_BATCH_HEADER);
+
+        assert!(
+            let Err(BrokerError::Log(krabka_log::LogError::Records(RecordsError::RecordParse(
+                what
+            )))) = batch_spans(&bytes)
+        );
+        assert!(what == "share-fetch read returned a record batch whose last offset overflows");
     }
 }

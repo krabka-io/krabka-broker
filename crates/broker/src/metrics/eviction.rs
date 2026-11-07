@@ -362,14 +362,14 @@ mod tests {
         super::*,
         crate::{
             metadata_source::MetadataSource as _,
-            metrics::{ConsumerGroupLabel, ReplicaLagLabel},
+            metrics::{ConsumerGroupLabel, RemoteTierPath, ReplicaLagLabel},
             test_support::FakeMetadataSource,
         },
         assert2::{assert, check},
         krabka_metadata::{
             DeleteTopicRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
         },
-        prometheus_client::encoding::text,
+        prometheus_client::{encoding::text, metrics::family::MetricConstructor},
         tokio::{task, time},
     };
 
@@ -447,8 +447,8 @@ mod tests {
         });
     }
 
-    /// Touch every family that carries a [`TopicLabel`], plus the
-    /// topic-and-reason schema-rejection family.
+    /// Touch every family that carries a [`TopicLabel`], the remote-tier
+    /// ones included, plus the topic-and-reason schema-rejection family.
     fn create_topic_series(metrics: &BrokerMetrics, topic: &Arc<str>) {
         metrics.record_produce(topic, 512);
         metrics.record_produce_messages(topic, 4);
@@ -467,6 +467,17 @@ mod tests {
         metrics.track_topic_series(&TopicLabel {
             topic: Arc::clone(topic),
         });
+        for path in [
+            RemoteTierPath::Copy,
+            RemoteTierPath::Fetch,
+            RemoteTierPath::Delete,
+        ] {
+            metrics.record_remote_request(path, topic);
+            metrics.record_remote_error(path, topic);
+            metrics.record_remote_bytes(path, topic, 1_024);
+        }
+        metrics.set_remote_copy_lag(topic, 2, 2_048);
+        metrics.set_remote_delete_lag(topic, 1, 1_024);
         for reason in RejectReason::LABELS {
             metrics.record_schema_validation_rejection(topic, reason);
         }
@@ -761,5 +772,319 @@ mod tests {
 
         metrics.evict_topic_series(TOPIC);
         check!(!scrape(&metrics).contains(TOPIC));
+    }
+
+    /// The eviction entry point that owns a family, read off its label type.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Owner {
+        Topic,
+        Partition,
+    }
+
+    /// A series [`SeedOwned::seed`] created in one family, and a way to ask
+    /// whether the family still carries it.
+    struct Seeded<'a> {
+        field: &'static str,
+        owner: Owner,
+        present: Box<dyn Fn() -> bool + 'a>,
+    }
+
+    /// One [`BrokerMetrics`] field and its name.
+    ///
+    /// Calling `seed` on a `&Probe` resolves to [`SeedOwned`] when the field
+    /// is a [`TopicLabel`] or [`PartitionLabel`] family, whatever its metric
+    /// type, and falls back to [`SeedOther`] for every other field.
+    struct Probe<'a, T>(&'static str, &'a T);
+
+    /// Seeds a [`TopicLabel`] or [`PartitionLabel`] family.
+    trait SeedOwned<'a> {
+        fn seed(&self) -> Option<Seeded<'a>>;
+    }
+
+    impl<'a, M, C: MetricConstructor<M>> SeedOwned<'a> for Probe<'a, Family<TopicLabel, M, C>> {
+        fn seed(&self) -> Option<Seeded<'a>> {
+            let &Self(field, family) = self;
+            let label = TopicLabel {
+                topic: TOPIC.into(),
+            };
+            drop(family.get_or_create(&label));
+            Some(Seeded {
+                field,
+                owner: Owner::Topic,
+                present: Box::new(move || family.get(&label).is_some()),
+            })
+        }
+    }
+
+    impl<'a, M, C: MetricConstructor<M>> SeedOwned<'a> for Probe<'a, Family<PartitionLabel, M, C>> {
+        fn seed(&self) -> Option<Seeded<'a>> {
+            let &Self(field, family) = self;
+            let label = PartitionLabel {
+                topic: TOPIC.into(),
+                partition: 0,
+            };
+            drop(family.get_or_create(&label));
+            Some(Seeded {
+                field,
+                owner: Owner::Partition,
+                present: Box::new(move || family.get(&label).is_some()),
+            })
+        }
+    }
+
+    /// Leaves every other field alone.
+    trait SeedOther<'a> {
+        fn seed(&self) -> Option<Seeded<'a>> { None }
+    }
+
+    impl<'a, T> SeedOther<'a> for &Probe<'a, T> {}
+
+    /// Seeds one series in each field of `$metrics` that `$field` names and
+    /// whose type makes it a topic or partition family.
+    macro_rules! seed_fields {
+        ($metrics:ident; $($field:ident),+ $(,)?) => {{
+            let BrokerMetrics { $($field),+ } = $metrics;
+            [$((&Probe(stringify!($field), $field)).seed()),+]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+        }};
+    }
+
+    /// Seeds one series in every topic and partition family of `metrics`.
+    ///
+    /// The destructure names every field of [`BrokerMetrics`] and has no
+    /// `..`, so a new field fails to compile here until it is listed. Listing
+    /// it is the whole job: the field's type decides whether it is seeded, so
+    /// a new [`TopicLabel`] or [`PartitionLabel`] family cannot be left out of
+    /// the check below by a wrong guess about where it belongs. A family keyed
+    /// by another label type that carries a topic, such as
+    /// [`SchemaRejectionLabel`], is not seen here.
+    fn seed_owned_families(metrics: &BrokerMetrics) -> Vec<Seeded<'_>> {
+        seed_fields!(
+            metrics;
+            registry,
+            streams_topology_storage_operations,
+            streams_topology_storage_duration_seconds,
+            topic_bytes_in,
+            topic_bytes_out,
+            topic_messages_in,
+            topic_produce_requests,
+            topic_fetch_requests,
+            topic_failed_produce_requests,
+            topic_failed_fetch_requests,
+            partitions_led,
+            partitions_total,
+            under_replicated_partitions,
+            under_min_isr_partition_count,
+            offline_partitions_count,
+            offline_audit_partitions,
+            active_controller,
+            ignored_static_voters,
+            witness_role,
+            leader_site_drift_partitions,
+            voted_directory,
+            controller_leader_changes_total,
+            controller_fencing_publications_total,
+            controller_event_queue_time_seconds,
+            controller_event_queue_processing_time_seconds,
+            controller_event_queue_operations_started_total,
+            controller_event_queue_operations_timed_out_total,
+            controller_event_queue_idle_seconds_total,
+            isr_shrinks_total,
+            isr_expands_total,
+            partition_bytes_in,
+            partition_bytes_out,
+            replication_bytes_in,
+            replication_bytes_out,
+            replica_lag,
+            replica_lag_max,
+            consumer_group_lag,
+            partition_disk_bytes,
+            share_group_backlog,
+            share_group_dlq_records,
+            share_group_dlq_produce_requests,
+            share_group_dlq_failed_produce_requests,
+            partition_cpu_micros,
+            fetch_response_drain,
+            ktls_enabled,
+            incremental_fetch_sessions,
+            incremental_fetch_session_evictions_total,
+            incremental_fetch_partitions_cached,
+            fetch_forgotten_partition_wakes_total,
+            client_software_versions,
+            successful_authentication,
+            failed_authentication,
+            authorization_denied,
+            api_requests,
+            unsupported_api_requests,
+            request_duration_seconds,
+            request_local_duration_seconds,
+            request_remote_duration_seconds,
+            request_throttle_duration_seconds,
+            quota_throttle_duration_seconds,
+            in_flight_requests,
+            active_connections,
+            connection_closes,
+            request_errors,
+            tiered_storage_rlmm_topic_backed,
+            tiered_storage_rlmm_bootstrap_attempts,
+            tiered_storage_rlmm_partition_ready,
+            tiered_storage_rlmm_partition_target_offset,
+            tiered_storage_rlmm_partition_applied_offset,
+            produce_message_conversions,
+            fetch_message_conversions,
+            unclean_leader_elections_total,
+            audit_events,
+            audit_write_failures,
+            audit_spool_depth,
+            audit_spool_bytes,
+            audit_records_spooled_total,
+            audit_records_replayed_total,
+            audit_records_dropped_total,
+            client_metrics_otlp_dropped_total,
+            client_metrics_otlp_failed_total,
+            client_metrics_series_accepted_total,
+            client_metrics_series_rejected,
+            client_metrics_series_evicted,
+            client_metrics_retained_series,
+            log_cleaner_runs_total,
+            log_cleaner_failures,
+            log_retention_runs_total,
+            log_retention_failures,
+            log_cleaner_uncleanable_partitions,
+            offline_log_dirs,
+            metadata_load_error_count,
+            log_compactions_total,
+            barrier_epochs_started_total,
+            barrier_epochs_committed_total,
+            barrier_epochs_published_partial_total,
+            barrier_injection_duration_seconds,
+            barrier_latest_epoch,
+            barrier_markers_written_total,
+            barrier_groups_coordinated,
+            delivery_watermark,
+            delivery_pending_records,
+            delivery_activation_lateness_seconds,
+            delivery_scheduler_wakeups_total,
+            schema_validation_rejections,
+            schema_validation_cache_hits,
+            schema_validation_cache_misses,
+            delivery_clock_uncertainty_seconds,
+            topic_freeze_rejections,
+            topic_freezes_active,
+            break_glass_proposals,
+            break_glass_refusals,
+            break_glass_bypassed,
+            diskless_wal_durable_watermark,
+            diskless_wal_index_projection_lag,
+            diskless_wal_trim_frontier,
+            diskless_wal_voter_lag,
+            diskless_wal_quorum_loss_events_total,
+            diskless_wal_flush_attempts_total,
+            diskless_wal_flush_bytes_total,
+            diskless_wal_flush_failures_total,
+            diskless_wal_index_decode_failures_total,
+            diskless_wal_expired_ranges_total,
+            diskless_wal_cold_read_hits_total,
+            diskless_wal_cold_read_misses_total,
+            diskless_wal_cold_read_errors_total,
+            worm_manifests_sealed_total,
+            worm_manifest_seal_failures_total,
+            raft_current_state,
+            raft_current_epoch,
+            raft_high_watermark,
+            raft_log_end_offset,
+            raft_voters,
+            raft_observers,
+            metadata_last_applied_offset,
+            metadata_last_committed_offset,
+            metadata_last_applied_timestamp_ms,
+            metadata_last_applied_lag_ms,
+            pending_record_processing_time_us_avg,
+            pending_record_processing_time_us_max,
+            metadata_lag_records,
+            broker_state,
+            active_brokers,
+            fenced_brokers,
+            global_topics,
+            global_partitions,
+            at_min_isr_partition_count,
+            reassigning_partitions,
+            preferred_replica_imbalance,
+            queued_requests,
+            queued_request_bytes,
+            remote_copy_bytes_total,
+            remote_fetch_bytes_total,
+            remote_copy_requests_total,
+            remote_fetch_requests_total,
+            remote_delete_requests_total,
+            remote_copy_errors_total,
+            remote_fetch_errors_total,
+            remote_delete_errors_total,
+            remote_copy_lag_bytes,
+            remote_copy_lag_segments,
+            remote_delete_lag_bytes,
+            remote_delete_lag_segments,
+            replication_throttled_bytes_out_total,
+            replication_throttled_bytes_in_total,
+            replication_throttle_sleeps_total,
+            quota_entity_throttle_seconds_total,
+            remote_log_reader_task_queue_size,
+            remote_log_reader_avg_idle_percent,
+            remote_log_reader_fetch_duration_seconds,
+            remote_log_reader_rejected_total,
+            remote_index_cache_hits_total,
+            remote_index_cache_misses_total,
+            remote_index_cache_evictions_total,
+            remote_index_cache_bytes,
+            remote_index_cache_entries,
+            lag_series,
+            metric_series,
+        )
+    }
+
+    /// The fields among `seeded` that `owner` names and that still carry
+    /// their series.
+    fn still_held(seeded: &[Seeded<'_>], owner: Option<Owner>) -> Vec<&'static str> {
+        seeded
+            .iter()
+            .filter(|series| owner.is_none_or(|owner| series.owner == owner))
+            .filter(|series| (series.present)())
+            .map(|series| series.field)
+            .collect()
+    }
+
+    /// Every family keyed by a [`TopicLabel`] or a [`PartitionLabel`] is
+    /// released by the entry point that owns it, including a family added
+    /// after this test was written.
+    ///
+    /// [`the_eviction_entry_points_clear_every_family_they_own`] sees only the
+    /// families its fixtures touch. This one is driven by the type of every
+    /// field, so a family left out of the lists in
+    /// [`BrokerMetrics::evict_topic_series`] or
+    /// [`BrokerMetrics::evict_partition_series`] fails it by name.
+    #[test]
+    fn every_topic_and_partition_family_is_released_by_its_entry_point() {
+        let metrics = BrokerMetrics::new();
+        let seeded = seed_owned_families(&metrics);
+        let topic_families: Vec<_> = seeded
+            .iter()
+            .filter(|series| series.owner == Owner::Topic)
+            .map(|series| series.field)
+            .collect();
+        assert!(!topic_families.is_empty());
+        assert!(seeded.iter().any(|series| series.owner == Owner::Partition));
+        assert!(still_held(&seeded, None).len() == seeded.len());
+
+        metrics.evict_partition_series(&PartitionLabel {
+            topic: TOPIC.into(),
+            partition: 0,
+        });
+        check!(still_held(&seeded, Some(Owner::Partition)) == Vec::<&str>::new());
+        check!(still_held(&seeded, Some(Owner::Topic)) == topic_families);
+
+        metrics.evict_topic_series(TOPIC);
+        check!(still_held(&seeded, None) == Vec::<&str>::new());
     }
 }

@@ -44,7 +44,10 @@ use {
         records::RecordBatch,
     },
     std::{collections::BTreeMap, sync::Arc, time::Duration},
-    tokio::{task::yield_now, time::sleep},
+    tokio::{
+        task::yield_now,
+        time::{sleep, timeout},
+    },
 };
 
 fn partition_indices(partitions: Option<Vec<i32>>) -> Option<Vec<krabka_ids::PartitionIndex>> {
@@ -386,6 +389,27 @@ async fn a_failed_write_in_the_refused_heartbeat_drain_ends_on_the_persisted_sta
                 registered: false,
             }
     );
+}
+
+/// A session tick that fences an expired member and fails to write the fence
+/// ends the actor, which closes its mailbox, as every other failed write does.
+#[tokio::test]
+async fn a_failed_session_tick_write_closes_the_actor() {
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let config = StreamsGroupConfig {
+        session_timeout: Duration::from_millis(50),
+        heartbeat_interval: Duration::from_millis(10),
+        ..undelayed()
+    };
+    let coord = coordinator_with_log(config, Arc::clone(&log));
+    let handle = coord.get_or_create_streams("g");
+    let join = heartbeat(&handle, member_request("m1", 0)).await;
+    assert!(join.error_code == codes::NONE);
+    log.fail_next_append(None);
+
+    let closed = timeout(Duration::from_secs(10), handle.tx.closed()).await;
+
+    assert!(closed.is_ok(), "the actor exits after its tick write fails");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

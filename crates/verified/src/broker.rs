@@ -73,6 +73,30 @@ pub struct FetchWatermarks {
     pub deliverable: i64,
 }
 
+/// Who reads one Fetch partition, and under which isolation.
+///
+/// This is Kafka's `FetchIsolation`: a follower reads to the log end
+/// (`LOG_END`), and a consumer reads below the high watermark
+/// (`HIGH_WATERMARK`) or, under `read_committed`, below the last stable
+/// offset too (`TXN_COMMITTED`). A follower has no isolation level, so a
+/// `read_committed` follower cannot be written down.
+#[krabka_macros::model_type]
+pub enum FetchReader {
+    /// A follower replica fetching to replicate.
+    Follower,
+    /// A consumer fetching under its `isolation.level`.
+    Consumer(Isolation),
+}
+
+/// A consumer's KIP-98 `isolation.level`.
+#[krabka_macros::model_type]
+pub enum Isolation {
+    /// `read_uncommitted`: read up to the high watermark.
+    ReadUncommitted,
+    /// `read_committed`: read up to the last stable offset as well.
+    ReadCommitted,
+}
+
 /// The only direct mutation class selected from one follower Fetch response.
 #[krabka_macros::model_type]
 pub enum ReplicaFetchMutation {

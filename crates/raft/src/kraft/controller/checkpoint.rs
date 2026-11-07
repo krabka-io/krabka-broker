@@ -171,10 +171,22 @@ fn retain_checkpoints(dir: &Path, latest: SnapshotId, previous: SnapshotId) {
 }
 
 /// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, or `None`
-/// if it is absent (the leader's `FetchSnapshot` serve path).
+/// if it is absent or cannot be read (the leader's `FetchSnapshot` serve path).
+/// [`read_checkpoint_by_id`] keeps the reason.
 #[must_use]
 pub fn load_checkpoint_by_id(dir: &Path, end_offset: i64, epoch: i32) -> Option<Vec<u8>> {
-    fs::read(dir.join(checkpoint_name(end_offset, epoch))).ok()
+    read_checkpoint_by_id(dir, end_offset, epoch).ok()
+}
+
+/// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, with the
+/// I/O error that kept it from being read.
+///
+/// # Errors
+///
+/// Whatever [`fs::read`] reports for the checkpoint's path: absent,
+/// unreadable, or not a file.
+pub fn read_checkpoint_by_id(dir: &Path, end_offset: i64, epoch: i32) -> io::Result<Vec<u8>> {
+    fs::read(dir.join(checkpoint_name(end_offset, epoch)))
 }
 
 /// An open `.checkpoint`, for serving one KIP-630 `FetchSnapshot` chunk

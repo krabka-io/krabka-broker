@@ -42,7 +42,9 @@ struct Arguments {
     /// The caller's `tags` filter, which is forwarded and also narrows the
     /// step check.
     tags: Option<LitStr>,
-    /// The caller's `ignore_tags`, in place of [`DEFAULT_IGNORE_TAGS`].
+    /// The caller's `ignore_tags`, in place of [`DEFAULT_IGNORE_TAGS`]. It
+    /// narrows the step check and is forwarded, so rstest-bdd marks the
+    /// matching scenarios `#[ignore]`.
     ignore_tags: Option<LitStr>,
     /// `workers = N` for the multi-thread runtime.
     workers: Option<u128>,
@@ -282,6 +284,12 @@ fn expansion(arguments: &Arguments, dir: &LitStr, uses: &[StepUse]) -> TokenStre
             attributes = ::krabka_bdd::MultiThreadAttributePolicy,
         }
     });
+    // rstest-bdd marks the scenarios this expression matches `#[ignore]`, so
+    // the gating run skips the same lifecycle tags the step check leaves out.
+    let ignore_tags = arguments
+        .ignore_tags
+        .clone()
+        .unwrap_or_else(|| LitStr::new(DEFAULT_IGNORE_TAGS, dir.span()));
     let module = Ident::new(format!("{}_steps", module_base(dir.value())));
     let locations: Vec<LitStr> = uses
         .iter()
@@ -298,6 +306,7 @@ fn expansion(arguments: &Arguments, dir: &LitStr, uses: &[StepUse]) -> TokenStre
     moxy::template! {
         ::rstest_bdd_macros::scenarios!(
             @for argument in &forwarded { {{ argument }}, }
+            ignore_tags = {{ ignore_tags }},
             @if let Some(harness) = &harness { {{ harness }} }
         );
 

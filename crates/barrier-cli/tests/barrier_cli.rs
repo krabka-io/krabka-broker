@@ -10,16 +10,11 @@
 //! what happened.
 #![cfg(test)]
 
+mod support;
+
 use {
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
-    krabka_client_admin::AdminClientLike as _,
-    std::{
-        collections::BTreeMap,
-        slice,
-        time::{Duration, Instant},
-    },
-    tokio::time,
+    support::Cluster,
 };
 
 /// The exit code for a request the broker refused.
@@ -30,54 +25,6 @@ const MISMATCH: i32 = 3;
 const GROUP: &str = "orders-cut";
 const TOPIC: &str = "orders";
 
-/// A running broker, its data directory, and its bootstrap address.
-struct TestBroker {
-    handle: BrokerHandle,
-    dir: tempfile::TempDir,
-    bootstrap: String,
-}
-
-/// Boot a single-node broker and return it with its bootstrap address.
-///
-/// `BrokerConfig::for_tests` asks for 50 `__barrier_state` partitions at
-/// replication factor 3, which one node cannot host, so the partition a group
-/// hashes to may never open and the coordinator answers
-/// `COORDINATOR_NOT_AVAILABLE`. One partition at factor one is led here, which
-/// makes every case below deterministic.
-async fn broker() -> TestBroker {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let config = BrokerConfig {
-        barrier_state_num_partitions: 1,
-        barrier_state_replication_factor: 1,
-        ..BrokerConfig::for_tests(dir.path().to_path_buf())
-    };
-    let handle = Broker::start(config).await.expect("broker starts");
-    let bootstrap = handle.listen_addr().to_string();
-    wait_for_coordinator(&bootstrap).await;
-    TestBroker {
-        handle,
-        dir,
-        bootstrap,
-    }
-}
-
-/// Block until the coordinator answers, so a case never races topic creation.
-///
-/// `describe` is the cheapest request that needs the state partition open.
-async fn wait_for_coordinator(bootstrap: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if cli(bootstrap, &["describe"]).await == 0 {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the barrier coordinator never became available"
-        );
-        time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 /// Run the tool, returning its exit code.
 async fn cli(bootstrap: &str, args: &[&str]) -> i32 {
     let mut line = vec!["krabka-barrier", "--bootstrap-server", bootstrap];
@@ -85,40 +32,16 @@ async fn cli(bootstrap: &str, args: &[&str]) -> i32 {
     krabka_barrier::run_from_args(line).await
 }
 
-/// Create the topic the barrier group cuts across.
-async fn create_topic(bootstrap: &str, partitions: i32) {
-    let mut admin =
-        krabka_client_admin::AdminClient::connect(slice::from_ref(&bootstrap.to_owned()))
-            .await
-            .expect("admin connect");
-    admin
-        .create_topics(
-            &[krabka_client_admin::CreateTopicSpec {
-                name: TOPIC.to_owned(),
-                partitions,
-                replicas: 1,
-                configs: BTreeMap::default(),
-                replica_assignments: BTreeMap::new(),
-            }],
-            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
-        )
-        .await
-        .expect("create topic");
-}
-
 /// The whole operator loop: define a group, cut, read the cut back, and prove
 /// the markers behind it are in the log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_operator_loop_runs_end_to_end() {
-    let TestBroker {
-        handle: _broker,
-        dir: _dir,
-        bootstrap,
-    } = broker().await;
-    create_topic(&bootstrap, 3).await;
+    let cluster = Cluster::start().await;
+    let bootstrap = cluster.bootstrap();
+    cluster.create_topic(TOPIC, 3).await;
 
     check!(
-        cli(&bootstrap, &[
+        cli(bootstrap, &[
             "define",
             "--group",
             GROUP,
@@ -132,15 +55,15 @@ async fn the_operator_loop_runs_end_to_end() {
         "define"
     );
     check!(
-        cli(&bootstrap, &["describe", "--group", GROUP]).await == 0,
+        cli(bootstrap, &["describe", "--group", GROUP]).await == 0,
         "describe"
     );
     check!(
-        cli(&bootstrap, &["trigger", "--group", GROUP]).await == 0,
+        cli(bootstrap, &["trigger", "--group", GROUP]).await == 0,
         "trigger"
     );
     check!(
-        cli(&bootstrap, &["list", "--group", GROUP]).await == 0,
+        cli(bootstrap, &["list", "--group", GROUP]).await == 0,
         "list"
     );
 
@@ -150,12 +73,12 @@ async fn the_operator_loop_runs_end_to_end() {
     // strongest statement the tool makes -- the cut is not merely published,
     // it is backed.
     check!(
-        cli(&bootstrap, &["verify", "--group", GROUP, "--epoch", "1"]).await == 0,
+        cli(bootstrap, &["verify", "--group", GROUP, "--epoch", "1"]).await == 0,
         "verify"
     );
 
     check!(
-        cli(&bootstrap, &["delete", "--group", GROUP]).await == 0,
+        cli(bootstrap, &["delete", "--group", GROUP]).await == 0,
         "delete"
     );
 }
@@ -163,22 +86,19 @@ async fn the_operator_loop_runs_end_to_end() {
 /// A group nobody defined is refused, not reported as an empty success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unknown_group_is_refused() {
-    let TestBroker {
-        handle: _broker,
-        dir: _dir,
-        bootstrap,
-    } = broker().await;
+    let cluster = Cluster::start().await;
+    let bootstrap = cluster.bootstrap();
 
     check!(
-        cli(&bootstrap, &["trigger", "--group", "nope"]).await == REFUSED,
+        cli(bootstrap, &["trigger", "--group", "nope"]).await == REFUSED,
         "trigger"
     );
     check!(
-        cli(&bootstrap, &["list", "--group", "nope"]).await == REFUSED,
+        cli(bootstrap, &["list", "--group", "nope"]).await == REFUSED,
         "list"
     );
     check!(
-        cli(&bootstrap, &["verify", "--group", "nope", "--epoch", "0"]).await == REFUSED,
+        cli(bootstrap, &["verify", "--group", "nope", "--epoch", "0"]).await == REFUSED,
         "verify"
     );
 }
@@ -188,25 +108,22 @@ async fn an_unknown_group_is_refused() {
 /// a refusal, the second a mismatch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_epoch_with_no_cut_is_refused_rather_than_mismatched() {
-    let TestBroker {
-        handle: _broker,
-        dir: _dir,
-        bootstrap,
-    } = broker().await;
-    create_topic(&bootstrap, 1).await;
-    assert!(cli(&bootstrap, &["define", "--group", GROUP, "--topic", TOPIC]).await == 0);
-    assert!(cli(&bootstrap, &["trigger", "--group", GROUP]).await == 0);
+    let cluster = Cluster::start().await;
+    let bootstrap = cluster.bootstrap();
+    cluster.create_topic(TOPIC, 1).await;
+    assert!(cli(bootstrap, &["define", "--group", GROUP, "--topic", TOPIC]).await == 0);
+    assert!(cli(bootstrap, &["trigger", "--group", GROUP]).await == 0);
 
     check!(
-        cli(&bootstrap, &["verify", "--group", GROUP, "--epoch", "1"]).await == 0,
+        cli(bootstrap, &["verify", "--group", GROUP, "--epoch", "1"]).await == 0,
         "the epoch that exists verifies"
     );
     check!(
-        cli(&bootstrap, &["verify", "--group", GROUP, "--epoch", "99"]).await == REFUSED,
+        cli(bootstrap, &["verify", "--group", GROUP, "--epoch", "99"]).await == REFUSED,
         "an epoch with no cut is a refusal, not a mismatch"
     );
     check!(
-        cli(&bootstrap, &["verify", "--group", GROUP, "--epoch", "99"]).await != MISMATCH,
+        cli(bootstrap, &["verify", "--group", GROUP, "--epoch", "99"]).await != MISMATCH,
         "an epoch with no cut must not read as a cut the log contradicts"
     );
 }
@@ -223,14 +140,11 @@ async fn an_epoch_with_no_cut_is_refused_rather_than_mismatched() {
 /// how a reader sees the difference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_group_may_name_a_topic_that_does_not_exist_yet() {
-    let TestBroker {
-        handle: _broker,
-        dir: _dir,
-        bootstrap,
-    } = broker().await;
+    let cluster = Cluster::start().await;
+    let bootstrap = cluster.bootstrap();
 
     check!(
-        cli(&bootstrap, &[
+        cli(bootstrap, &[
             "define",
             "--group",
             GROUP,
@@ -242,7 +156,7 @@ async fn a_group_may_name_a_topic_that_does_not_exist_yet() {
         "define accepts an unresolved topic name"
     );
     check!(
-        cli(&bootstrap, &["trigger", "--group", GROUP]).await == 0,
+        cli(bootstrap, &["trigger", "--group", GROUP]).await == 0,
         "a cut over it still succeeds"
     );
 }

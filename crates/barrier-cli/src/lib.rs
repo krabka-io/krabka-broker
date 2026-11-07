@@ -19,13 +19,15 @@
 
 mod broker_codes;
 mod cli;
+mod console;
 mod dispatch;
 mod report;
 mod verify;
 
 pub use self::{
     cli::{Cli, Command},
-    dispatch::{run, run_from_args},
+    console::Console,
+    dispatch::{run, run_from_args, run_with},
     verify::{Mismatch, VerifyOutcome},
 };
 

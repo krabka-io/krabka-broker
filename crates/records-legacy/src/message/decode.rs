@@ -121,7 +121,7 @@ mod tests {
     fn rejects_bad_crc() {
         let m = fixture_v1();
         let mut buf = BytesMut::new();
-        m.encode_into(&mut buf);
+        m.encode_into(&mut buf).unwrap();
         buf[0] ^= 0xFF;
         let mut cur: &[u8] = &buf[..];
         assert2::assert!(matches!(
