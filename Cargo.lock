@@ -4098,7 +4098,6 @@ dependencies = [
  "bon",
  "clap",
  "derive_more",
- "krabka-broker",
  "krabka-ids",
  "krabka-macros",
  "krabka-metadata",
