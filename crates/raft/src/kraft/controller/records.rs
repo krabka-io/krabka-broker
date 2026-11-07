@@ -5,10 +5,7 @@
 use {
     crate::{
         error::{MetadataReplayError, RaftError},
-        kraft::{
-            transport::wire::encode_message,
-            types::{Epoch, NodeId},
-        },
+        kraft::types::{Epoch, NodeId},
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, TranslateError, VoterSet, from_kraft_value},
@@ -221,31 +218,25 @@ pub fn decode_control_record(record: &Record) -> Result<ControlRecord, RaftError
 /// `is_control_batch()`; it occupies exactly one log offset
 /// (`last_offset_delta = 0`), unchanged from the prior empty batch.
 ///
-/// # Errors
-/// Returns the [`RaftError`] of the `LeaderChangeMessage` encoder, so a
-/// message that does not encode is never appended as a truncated value.
-///
 /// The message is always version 0, at every `kraft.version`. Kafka writes it
 /// at `ControlRecordUtils.LEADER_CHANGE_CURRENT_VERSION`, which is 0, and
 /// reads it at that version too, so a version 1 message, with its voter
 /// directory ids, is unreadable to `kafka-dump-log` and to a JVM replica.
-// cargo-mutants: the `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
-// deleting it yields byte-identical encoding; it is not the wire schema version
-// (that is the `0` passed to `msg.encode`). Equivalent mutant.
+///
+/// # Errors
+/// Returns the [`RaftError`] of the `LeaderChangeMessage` encoder, so a
+/// message that does not encode is never appended as a truncated value.
+// cargo-mutants: the `version: 0` field is the version the message encodes
+// at, and it equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so deleting
+// it yields byte-identical encoding. Equivalent mutant.
 #[cfg_attr(test, mutants::skip)]
 pub fn leader_change_batch(
     epoch: Epoch,
     leader_id: NodeId,
     voter_set: &VoterSet,
 ) -> Result<RecordBatch, RaftError> {
-    use krabka_protocol::{
-        owned::{
-            common::leader_change_message::voter::Voter, leader_change_message::LeaderChangeMessage,
-        },
-        records::{
-            header::Attributes,
-            metadata::control::{ControlRecordType, control_record_key},
-        },
+    use krabka_protocol::owned::{
+        common::leader_change_message::voter::Voter, leader_change_message::LeaderChangeMessage,
     };
 
     let voters: Vec<Voter> = voter_set
@@ -262,20 +253,7 @@ pub fn leader_change_batch(
         granting_voters: voters,
         ..Default::default()
     };
-    let value = encode_message(&msg, 0)?;
-    let key = control_record_key(ControlRecordType::LeaderChange);
-    Ok(RecordBatch {
-        partition_leader_epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
-        attributes: Attributes::default().with_control(true),
-        last_offset_delta: 0,
-        records: vec![Record {
-            offset_delta: 0,
-            key: Some(key),
-            value: Some(value),
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
+    typed_control_batch(epoch, &[ControlRecord::LeaderChange(msg)])
 }
 
 /// Build the batch a leader starts `epoch` with: the [`leader_change_batch`]
