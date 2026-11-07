@@ -108,7 +108,7 @@ fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowActi
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
 /// alone here.
-async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_start: i64) {
+async fn follow_leader_log_start(part: &Partition, leader_log_start: i64) {
     if part.diskless {
         return;
     }
@@ -131,8 +131,7 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
         return;
     }
     if let Err(error) = part.follow_leader_log_start(target).await {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-            leader_log_start, "replicator: following the leader's log start failed");
+        warn!(%error, leader_log_start, "replicator: following the leader's log start failed");
     }
 }
 
@@ -185,8 +184,11 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
     if !restarts {
         return;
     }
-    info!(topic = %cfg.topic, partition = cfg.partition.get(), end = end.0,
-        batch_base = base.0, "replicator: restarting the empty log at the base of the leader's batch");
+    info!(
+        end = end.0,
+        batch_base = base.0,
+        "replicator: restarting the empty log at the base of the leader's batch"
+    );
     rewind_follower(
         part,
         cfg,
@@ -206,7 +208,18 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
 /// in the request the row answers. The metadata image may advance while a
 /// request is in flight, and a batched request carries a different epoch per
 /// row, so the fence is per row and not per response.
+///
+/// Every event logged while the row is applied sits in one span that names
+/// the topic and partition. The span is at `WARN`, the most severe level any
+/// of those events uses, so a filter that lets one of them through keeps the
+/// span, and with it the partition the event is about.
 // KIP-320 in-band truncation + KIP-101 epoch fence add match arms
+#[tracing::instrument(
+    name = "replicator_row",
+    level = "warn",
+    skip_all,
+    fields(topic = %cfg.topic, partition = cfg.partition.get()),
+)]
 pub(super) async fn handle_partition_response(
     part_resp: &mut PartitionData,
     cfg: &Config,
@@ -235,8 +248,6 @@ pub(super) async fn handle_partition_response(
     match mutation {
         ReplicaFetchMutation::Reject => {
             warn!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
                 leader_node_id = cfg.leader_node_id.0,
                 leader_epoch = cfg.leader_epoch.0,
                 request_leader_epoch,
@@ -299,15 +310,9 @@ async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
         RowAction::Drop
     );
     if error_code == codes::FENCED_LEADER_EPOCH {
-        warn!(
-            topic = %cfg.topic,
-            partition = cfg.partition.get(),
-            "replicator: fenced leader epoch; calling OffsetForLeaderEpoch"
-        );
+        warn!("replicator: fenced leader epoch; calling OffsetForLeaderEpoch");
         if let Err(error) = handle_epoch_fence(cfg).await {
             warn!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
                 %error,
                 "replicator: OffsetForLeaderEpoch recovery failed"
             );
@@ -315,11 +320,7 @@ async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
     } else {
         // The leader is behind our metadata image. It cannot answer an
         // epoch lookup yet, so leave the log untouched and retry Fetch.
-        warn!(
-            topic = %cfg.topic,
-            partition = cfg.partition.get(),
-            "replicator: leader does not know current epoch; retrying Fetch"
-        );
+        warn!("replicator: leader does not know current epoch; retrying Fetch");
     }
     // Back off before re-fetching so a persistent fence (e.g. our
     // leader_epoch hasn't caught up to the new leader's yet) doesn't
@@ -360,8 +361,6 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
         .await
         {
             info!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
                 leader_epoch = diverging_epoch.epoch,
                 leader_end_offset,
                 end_offset = end_offset.0,
@@ -375,8 +374,7 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
 /// Appends the records a row carries, then records the leader's progress.
 async fn append_records(part_resp: &mut PartitionData, cfg: &Config) -> RowAction {
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: local partition vanished between fetches");
+        warn!("replicator: local partition vanished between fetches");
         return RowAction::Continue;
     };
     let _target_guard = krabka_macros::replication_target_guard!(
@@ -416,7 +414,7 @@ async fn record_leader_progress(
     // whether the follower throttle applies to this partition.
     cfg.lag
         .update(part_resp.high_watermark, part.log_end_offset().0);
-    follow_leader_log_start(part, cfg, part_resp.log_start_offset).await;
+    follow_leader_log_start(part, part_resp.log_start_offset).await;
     RowAction::Continue
 }
 
@@ -438,8 +436,7 @@ async fn replicate_v2_batches(
         // <=4% of the append and kept; see `benches/perf_deferrals.rs`.
         let batch_bytes = batch.encoded_batch_len();
         if let Err(e) = part.replicate_batch(batch).await {
-            warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: replicate_batch failed");
+            warn!(error = %e, "replicator: replicate_batch failed");
             if let Some(offline) = offline_after_failed_append(part, cfg) {
                 return offline;
             }
@@ -468,8 +465,7 @@ async fn replicate_raw_batches(
             Ok(batch) => batch,
             Err(RecordsError::HeaderTooShort { .. } | RecordsError::BodyTooShort { .. }) => break,
             Err(error) => {
-                warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: invalid raw record batch");
+                warn!(%error, "replicator: invalid raw record batch");
                 break;
             }
         };
@@ -492,8 +488,7 @@ async fn replicate_raw_batches(
         let result = match RecordBatch::decode_batch(&mut cursor) {
             Ok(batch) => part.replicate_batch(batch).await,
             Err(error) => {
-                warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
-                    "replicator: invalid control batch");
+                warn!(%error, "replicator: invalid control batch");
                 return RowAction::Continue;
             }
         };
@@ -547,8 +542,7 @@ impl ReplicatedRun {
 /// directory offline, otherwise continue, so the next round fetches again
 /// from the log end.
 fn append_failed(part: &Partition, cfg: &Config, error: &BrokerError) -> RowAction {
-    warn!(%error, topic = %cfg.topic, partition = cfg.partition.get(),
-        "replicator: append failed");
+    warn!(%error, "replicator: append failed");
     offline_after_failed_append(part, cfg).unwrap_or(RowAction::Continue)
 }
 
@@ -864,7 +858,7 @@ mod tests {
         recorded: i64,
     ) {
         let LocalPartitionFixture {
-            cfg,
+            cfg: _cfg,
             dir: _dir,
             part,
         } = local_partition_fixture();
@@ -885,7 +879,7 @@ mod tests {
         part.reported_leader_log_start
             .store(1, atomic::Ordering::Release);
 
-        follow_leader_log_start(&part, &cfg, leader_start).await;
+        follow_leader_log_start(&part, leader_start).await;
 
         assert2::assert!(
             (
