@@ -201,17 +201,19 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
             ),
         };
         let start = usize::try_from(entry.byte_start).map_err(|_| WalObjectError::BadManifest)?;
-        let end = start
-            .checked_add(usize::try_from(entry.byte_len).map_err(|_| WalObjectError::BadManifest)?)
-            .filter(|end| *end <= footer)
-            .ok_or(WalObjectError::BadManifest)?;
-        let _ = end;
-        if start < HEADER_LEN {
+        let len = usize::try_from(entry.byte_len).map_err(|_| WalObjectError::BadManifest)?;
+        if !entry_within(start, len, footer) || start < HEADER_LEN {
             return Err(WalObjectError::BadManifest);
         }
         entries.push(entry);
     }
     Ok(entries)
+}
+
+/// Whether the run `start..start + len` ends at or before `footer`, the offset
+/// where the footer begins. A run whose end overflows `usize` is not.
+fn entry_within(start: usize, len: usize, footer: usize) -> bool {
+    start.checked_add(len).is_some_and(|end| end <= footer)
 }
 
 #[cfg(test)]
