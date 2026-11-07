@@ -8,7 +8,7 @@
 
 use {
     self::walk::{
-        WalkState, check_chained, check_checkpoint, check_records_lost, header,
+        WalkState, broke, check_chained, check_checkpoint, check_records_lost, header,
         records_lost_body_has_field,
     },
     crate::{
@@ -18,11 +18,7 @@ use {
         sink::AuditError,
     },
     krabka_protocol::records::RecordBatch,
-    std::{
-        collections::HashMap,
-        fs,
-        path::{Path, PathBuf},
-    },
+    std::{collections::HashMap, fs, path::Path},
     tracing::field::Empty,
 };
 
@@ -93,6 +89,9 @@ pub struct VerifyBreak {
     pub offset: i64,
     pub seq: Option<Seq>,
     pub reason: String,
+    /// The position, in bytes from the start of its segment file, of an
+    /// undecodable remainder. `None` for a break inside a decoded record.
+    pub byte_position: Option<u64>,
 }
 
 /// A valid chain marker that declares fail-open audit loss.
@@ -140,26 +139,34 @@ pub struct VerifyReport {
 /// Returns an error if the verifier cannot read `dir`. Returns an error if the
 /// verifier cannot read one of the segment files. A detected break in the chain
 /// or in a signature is not an error: it is an `Ok` report with `ok` set to
-/// `false`.
+/// `false`. So are bytes that do not decode as a batch, such as a torn tail
+/// after a crash: the break carries their byte position in the segment.
 pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyReport, AuditError> {
-    let mut segments: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(|e| AuditError::Sink(format!("read dir {}: {e}", dir.display())))?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "log"))
-        .collect();
+    let read_dir_error = |e| AuditError::Sink(format!("read dir {}: {e}", dir.display()));
+    let mut segments = Vec::new();
+    for entry in fs::read_dir(dir).map_err(read_dir_error)? {
+        let path = entry.map_err(read_dir_error)?.path();
+        if path.extension().is_some_and(|x| x == "log") {
+            segments.push(path);
+        }
+    }
     segments.sort();
 
     let mut state = WalkState::new();
+    let mut next_offset = 0i64;
 
     for seg in segments {
         let bytes = fs::read(&seg)
             .map_err(|e| AuditError::Sink(format!("read segment {}: {e}", seg.display())))?;
         let mut cur: &[u8] = &bytes;
         while !cur.is_empty() {
+            let position = bytes.len() - cur.len();
             let Ok(batch) = RecordBatch::decode_batch(&mut cur) else {
-                break; // undecodable tail: stop this segment (visible truncation)
+                let report = undecodable_tail(&state, next_offset, &seg, position);
+                record_report(&report);
+                return Ok(report);
             };
+            next_offset = batch.base_offset + i64::from(batch.last_offset_delta) + 1;
             for rec in &batch.records {
                 let offset = batch.base_offset + i64::from(rec.offset_delta);
                 let class = header(rec, "event_class").unwrap_or_default();
@@ -174,10 +181,7 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
                     check_chained(rec, offset, &mut state)
                 };
                 if let Err(report) = result {
-                    let span = tracing::Span::current();
-                    span.record("records", report.records.0);
-                    span.record("checkpoints", report.checkpoints.0);
-                    span.record("ok", report.ok);
+                    record_report(&report);
                     return Ok(report);
                 }
             }
@@ -189,16 +193,45 @@ pub fn verify_partition_dir(dir: &Path, trusted: &TrustedKeys) -> Result<VerifyR
         None => state.records,
     };
 
-    let span = tracing::Span::current();
-    span.record("records", state.records.0);
-    span.record("checkpoints", state.checkpoints.0);
-    span.record("ok", true);
-    Ok(VerifyReport {
+    let report = VerifyReport {
         records: state.records,
         checkpoints: state.checkpoints,
         ok: true,
         first_break: None,
         losses: state.losses,
         unanchored_records,
-    })
+    };
+    record_report(&report);
+    Ok(report)
+}
+
+/// The break for bytes at `position` in `segment` that do not decode as a
+/// batch. A torn write after a crash looks the same as tampering here, so the
+/// verifier reports both rather than stop silently at the last good batch.
+fn undecodable_tail(
+    state: &WalkState,
+    next_offset: i64,
+    segment: &Path,
+    position: usize,
+) -> VerifyReport {
+    let mut report = broke(
+        state,
+        next_offset,
+        None,
+        &format!(
+            "undecodable bytes at byte {position} of segment {}",
+            segment.display()
+        ),
+    );
+    if let Some(found) = report.first_break.as_mut() {
+        found.byte_position = u64::try_from(position).ok();
+    }
+    report
+}
+
+fn record_report(report: &VerifyReport) {
+    let span = tracing::Span::current();
+    span.record("records", report.records.0);
+    span.record("checkpoints", report.checkpoints.0);
+    span.record("ok", report.ok);
 }

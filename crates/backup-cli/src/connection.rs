@@ -10,8 +10,9 @@ use {
     krabka_client_core::security::{
         ClientSecurity, KeyStore, SaslCredentials, TlsConnectorConfig, TrustStore,
     },
+    krabka_format::java_properties::{self, MalformedEscape},
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{collections::BTreeMap, io::Error, mem, path::PathBuf},
+    std::{collections::BTreeMap, io::Error, path::PathBuf},
     tokio::fs,
 };
 
@@ -34,95 +35,24 @@ impl SecurityArgs {
         let Some(path) = &self.command_config else {
             return Ok(None);
         };
-        let text = fs::read_to_string(path).await.map_err(|source| {
+        let bytes = fs::read(path).await.map_err(|source| {
             BackupError::Io(Error::new(
                 source.kind(),
                 format!("read command config {}: {source}", path.display()),
             ))
         })?;
-        let properties = parse_properties(&text)?;
+        let properties = parse_properties(&bytes)?;
         security(&properties)
     }
 }
 
-fn parse_properties(text: &str) -> Result<BTreeMap<String, String>, BackupError> {
-    let mut logical = Vec::new();
-    let mut pending = String::new();
-    for line in text.lines() {
-        let trailing = line
-            .chars()
-            .rev()
-            .take_while(|character| *character == '\\')
-            .count();
-        pending.push_str(line.trim_start());
-        if trailing % 2 == 1 {
-            pending.pop();
-        } else {
-            logical.push(mem::take(&mut pending));
-        }
-    }
-    if !pending.is_empty() {
-        logical.push(pending);
-    }
-
-    let mut properties = BTreeMap::new();
-    for line in logical {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(['#', '!']) {
-            continue;
-        }
-        let split = property_split(trimmed);
-        let (key, value) = trimmed.split_at(split);
-        let value = value.trim_start_matches(|character: char| {
-            character.is_whitespace() || character == '=' || character == ':'
-        });
-        properties.insert(unescape(key.trim_end())?, unescape(value)?);
-    }
-    Ok(properties)
-}
-
-fn property_split(line: &str) -> usize {
-    let mut escaped = false;
-    for (index, character) in line.char_indices() {
-        if escaped {
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == '=' || character == ':' || character.is_whitespace() {
-            return index;
-        }
-    }
-    line.len()
-}
-
-fn unescape(value: &str) -> Result<String, BackupError> {
-    let mut characters = value.chars();
-    let mut unescaped = String::new();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            unescaped.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some('t') => unescaped.push('\t'),
-            Some('n') => unescaped.push('\n'),
-            Some('r') => unescaped.push('\r'),
-            Some('u') => {
-                let digits: String = characters.by_ref().take(4).collect();
-                let code = u32::from_str_radix(&digits, 16).map_err(|_| {
-                    BackupError::InvalidArgument("invalid unicode escape in command config".into())
-                })?;
-                unescaped.push(char::from_u32(code).ok_or_else(|| {
-                    BackupError::InvalidArgument(
-                        "invalid unicode code point in command config".into(),
-                    )
-                })?);
-            }
-            Some(other) => unescaped.push(other),
-            None => unescaped.push('\\'),
-        }
-    }
-    Ok(unescaped)
+/// The entries of a `--command-config` file, read as Kafka's tools read it:
+/// `Utils.loadProps`, which is `Properties.load(InputStream)`.
+fn parse_properties(bytes: impl AsRef<[u8]>) -> Result<BTreeMap<String, String>, BackupError> {
+    let properties = java_properties::load(bytes.as_ref()).map_err(|MalformedEscape| {
+        BackupError::InvalidArgument("invalid unicode escape in command config".into())
+    })?;
+    Ok(properties.into_iter().collect())
 }
 
 fn security(properties: &BTreeMap<String, String>) -> Result<Option<ClientSecurity>, BackupError> {
@@ -312,9 +242,30 @@ mod tests {
 
     #[test]
     fn properties_support_comments_escapes_and_continuations() {
-        let parsed = parse_properties("! ignored\na\\:b = one\\\n  two\\u0033\n")
+        let parsed = parse_properties(b"! ignored\na\\:b = one\\\n  two\\u0033\n")
             .expect("valid Java properties");
         check!(parsed == BTreeMap::from([("a:b".into(), "onetwo3".into())]));
+    }
+
+    /// `--command-config` is read the way Kafka's tools read it, with
+    /// `Properties.load`.
+    #[yare::parameterized(
+        comment_ending_in_backslash_does_not_continue = {
+            "# note \\\nsasl.mechanism=PLAIN\n", &[("sasl.mechanism", "PLAIN")]
+        },
+        form_feed_escape = { "a=x\\fy\n", &[("a", "x\u{c}y")] },
+        form_feed_separates_key_and_value = { "a\u{c}x\n", &[("a", "x")] },
+        vertical_tab_is_part_of_the_key = { "a\u{b}b=x\n", &[("a\u{b}b", "x")] },
+        bytes_are_iso_8859_1 = { "a=\u{e9}\n", &[("a", "\u{c3}\u{a9}")] },
+        dangling_trailing_backslash_is_dropped = { "a=x\\", &[("a", "x")] },
+    )]
+    fn properties_match_java_properties_load(text: &str, expected: &[(&str, &str)]) {
+        let parsed = parse_properties(text.as_bytes()).expect("valid Java properties");
+        let expected = expected
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        check!(parsed == expected, "{text:?}");
     }
 
     #[test]
@@ -355,7 +306,7 @@ mod tests {
         false_value = { "x required username=id password=hmac tokenauth=false;", false },
     )]
     fn tokenauth_marks_a_delegation_token_login(jaas: &str, expected: bool) {
-        let properties = parse_properties(&format!(
+        let properties = parse_properties(format!(
             "security.protocol=SASL_PLAINTEXT\n\
              sasl.mechanism=SCRAM-SHA-256\n\
              sasl.jaas.config={jaas}\n"

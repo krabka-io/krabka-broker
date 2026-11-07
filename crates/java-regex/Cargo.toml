@@ -11,7 +11,7 @@ documentation = "https://docs.rs/krabka-java-regex"
 readme = "README.md"
 keywords = ["regex", "java", "kafka", "krabka", "pattern"]
 categories = ["text-processing"]
-include = ["src/**/*.rs", "README.md", "CHANGELOG.md"]
+include = ["src/**/*.rs", "README.md", "CHANGELOG.md", "tests/features/**/*.feature"]
 
 [lints]
 workspace = true
@@ -24,4 +24,10 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+# No `version`: `krabka-bdd` is not published, so cargo drops it from the
+# published manifest. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
 yare = { workspace = true }

@@ -12,12 +12,18 @@
 //! [`MetadataEventLog::subscribe`]: crate::log::MetadataEventLog::subscribe
 
 use {
+    super::{
+        LeaderFetcher,
+        range::{RangeFetcher, fetch_page},
+        resolve_bootstrap,
+    },
     crate::{
-        kafka_log::{METADATA_TOPIC_SCOPE, config::MetadataEventQueueCapacity, partition_leader},
+        error::MetadataLogError,
+        kafka_log::{METADATA_TOPIC_SCOPE, config::MetadataEventQueueCapacity},
         log::{AssignmentHandle, MetadataEventRecord, PartitionStart},
     },
     krabka_client_core::{
-        Client, ClientFrameMax, ConnectionDispatchQueueCapacity, FetchMinBytes, IsolatedFetch,
+        BrokerPool, Client, ClientFrameMax, ConnectionDispatchQueueCapacity, ConnectionOptions,
         security::ClientSecurity,
     },
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
@@ -151,6 +157,70 @@ where
     }
 }
 
+/// The leader lookup and `Fetch` of one partition's pump.
+///
+/// `client` only looks leaders up. `readers` holds the pump's own connection
+/// to the leader, so the progress-reporting `Fetch` never shares a socket.
+struct PartitionFetcher<'a> {
+    state: &'a ConsumerState,
+    client: Client,
+    readers: BrokerPool,
+}
+
+impl PartitionFetcher<'_> {
+    /// The leader lookup and `Fetch` settings of this partition's pump.
+    fn leader_fetcher(&self) -> LeaderFetcher<'_> {
+        LeaderFetcher {
+            client: &self.client,
+            readers: &self.readers,
+            topic: &self.state.topic,
+            topic_id: self.state.topic_id,
+            max_wait: self.state.fetch_max_wait,
+            partition_max: self.state.fetch_max_bytes,
+        }
+    }
+}
+
+impl ConsumerState {
+    /// The connection settings of this subscription's leader connections.
+    fn reader_options(&self) -> ConnectionOptions {
+        ConnectionOptions {
+            client_id: self.client_id.clone(),
+            dispatch_queue_capacity: self.dispatch_queue_capacity,
+            frame_max: self.frame_max,
+            security: self.security.clone().map(Box::new),
+            ..ConnectionOptions::default()
+        }
+    }
+
+    /// Build the metadata client and the leader pool of one partition's pump.
+    // cargo-mutants: connects to a live broker
+    #[cfg_attr(test, mutants::skip)]
+    async fn partition_fetcher(&self) -> Result<PartitionFetcher<'_>, MetadataLogError> {
+        let client = Client::builder()
+            .bootstrap(self.bootstrap.clone())
+            .client_id(self.client_id.clone())
+            .dispatch_queue_capacity(self.dispatch_queue_capacity.get())
+            .frame_max(self.frame_max.size())
+            .maybe_security(self.security.clone())
+            .metadata_scope(METADATA_TOPIC_SCOPE)
+            .build()
+            .await
+            .map_err(|e| MetadataLogError::Other(format!("client build failed: {e}")))?;
+        client.metadata_topics().set([self.topic.as_str()]);
+        let options = self.reader_options();
+        let readers = BrokerPool::new_with_server_names(
+            resolve_bootstrap(&self.bootstrap, &options).await?,
+            options,
+        );
+        Ok(PartitionFetcher {
+            state: self,
+            client,
+            readers,
+        })
+    }
+}
+
 /// Manual single-partition fetch loop over a dedicated connection.
 ///
 /// A dedicated connection per partition keeps the metadata consumer off any
@@ -165,106 +235,110 @@ async fn partition_fetch_loop(
     start_offset: i64,
     cancel: CancellationToken,
 ) {
-    let Some(client) = connect_with_retry(&cancel, state.fetch_retry_backoff.to_std(), || {
-        Client::builder()
-            .bootstrap(state.bootstrap.clone())
-            .client_id(state.client_id.clone())
-            .dispatch_queue_capacity(state.dispatch_queue_capacity.get())
-            .frame_max(state.frame_max.size())
-            .maybe_security(state.security.clone())
-            .metadata_scope(METADATA_TOPIC_SCOPE)
-            .build()
-    })
-    .await
+    let backoff = state.fetch_retry_backoff.to_std();
+    let Some(fetcher) = connect_with_retry(&cancel, backoff, || state.partition_fetcher()).await
     else {
         return;
     };
-    client.metadata_topics().set([state.topic.as_str()]);
+    let pump = PumpTarget {
+        topic: &state.topic,
+        partition,
+        retry_backoff: backoff,
+        tx: &state.tx,
+    };
+    pump_partition(&fetcher.leader_fetcher(), &pump, start_offset, &cancel).await;
+}
 
+/// Where one partition's pump delivers, and how it waits between retries.
+struct PumpTarget<'a> {
+    topic: &'a str,
+    partition: i32,
+    retry_backoff: Duration,
+    tx: &'a mpsc::Sender<MetadataEventRecord>,
+}
+
+/// Fetch `target.partition` from `start_offset` and send every record to
+/// `target.tx`, until `cancel` fires or the stream is dropped.
+///
+/// The cursor moves past every batch a `Fetch` decoded, including one that
+/// compaction emptied, so a compacted hole at the readable tail cannot pin the
+/// pump to one offset and spin it. A page that reports progress at or behind
+/// the cursor and carries no record waits one retry backoff, as a failed
+/// `Fetch` does.
+async fn pump_partition<F: RangeFetcher>(
+    fetcher: &F,
+    target: &PumpTarget<'_>,
+    start_offset: i64,
+    cancel: &CancellationToken,
+) {
+    let partition = target.partition;
     let mut next_offset = start_offset.max(0);
     let mut leader = None;
     loop {
-        let current_leader = if let Some(current_leader) = leader {
-            current_leader
-        } else {
-            match client.refresh_metadata().await {
-                Ok(metadata) => {
-                    leader = partition_leader(&metadata, &state.topic, partition);
-                    let Some(current_leader) = leader else {
-                        warn!(
-                            partition,
-                            "metadata consumer: partition leader is unavailable"
-                        );
-                        time::sleep(state.fetch_retry_backoff.to_std()).await;
-                        continue;
-                    };
-                    current_leader
+        let outcome = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            outcome = fetch_page(fetcher, target.topic, &mut leader, partition, next_offset) => outcome,
+        };
+        let page = match outcome {
+            Ok(page) => page,
+            Err(failure) => {
+                warn!(error = %failure, partition, "metadata consumer: fetch failed; retrying");
+                if sleep_or_cancel(cancel, target.retry_backoff).await {
+                    return;
                 }
-                Err(error) => {
-                    warn!(%error, partition, "metadata consumer: metadata refresh failed");
-                    time::sleep(state.fetch_retry_backoff.to_std()).await;
-                    continue;
-                }
+                continue;
             }
         };
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
+        let cursor_before = next_offset;
+        let batch_progress = page.next_offset;
+        let had_records = !page.records.is_empty();
+        for r in page.records {
+            // Re-check cancellation before every send: a remove() (for
+            // reassignment) that fires after the fetch resolved must not
+            // flush the rest of an already-fetched batch, or a task spawned
+            // on re-add from a new start_offset would double-deliver these
+            // same records.
+            if cancel.is_cancelled() {
                 return;
             }
-            res = client.fetch_partition_with_isolation_on(current_leader, IsolatedFetch {
-                topic: &state.topic,
-                topic_id: state.topic_id,
+            if r.offset < next_offset {
+                continue; // defensive: never go backwards
+            }
+            let tombstone = r.value.is_none();
+            let record = MetadataEventRecord {
                 partition,
-                fetch_offset: next_offset,
-                max_wait: state.fetch_max_wait,
-                max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
-                partition_max: state.fetch_max_bytes,
-                fetch_min: FetchMinBytes::default(),
-                isolation_level: 0,
-            }) => {
-                match res {
-                    Ok(records) => {
-                        for r in records {
-                            // Re-check cancellation before every send: a
-                            // remove() (for reassignment) that fires
-                            // after fetch_partition resolved must not flush
-                            // the rest of an already-fetched batch, or a
-                            // task spawned on re-add from a new start_offset
-                            // would double-deliver these same records.
-                            if cancel.is_cancelled() {
-                                return;
-                            }
-                            if r.offset < next_offset {
-                                continue; // defensive: never go backwards
-                            }
-                            let tombstone = r.value.is_none();
-                            let record = MetadataEventRecord {
-                                partition,
-                                offset: r.offset,
-                                key: r.key,
-                                payload: r.value.unwrap_or_default(),
-                                tombstone,
-                            };
-                            next_offset = r.offset + 1;
-                            let sent = tokio::select! {
-                                biased;
-                                () = cancel.cancelled() => return,
-                                result = state.tx.send(record) => result,
-                            };
-                            if sent.is_err() {
-                                return; // stream dropped
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, partition, "metadata consumer: fetch failed; retrying");
-                        leader = None;
-                        time::sleep(state.fetch_retry_backoff.to_std()).await;
-                    }
-                }
+                offset: r.offset,
+                key: r.key,
+                payload: r.value.unwrap_or_default(),
+                tombstone,
+            };
+            next_offset = r.offset + 1;
+            let sent = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                result = target.tx.send(record) => result,
+            };
+            if sent.is_err() {
+                return; // stream dropped
             }
         }
+        if let Some(progress) = batch_progress {
+            next_offset = next_offset.max(progress);
+        }
+        let stalled = next_offset == cursor_before && batch_progress.is_some() && !had_records;
+        if stalled && sleep_or_cancel(cancel, target.retry_backoff).await {
+            return;
+        }
+    }
+}
+
+/// Wait `backoff`, or less if `cancel` fires first. Returns whether it fired.
+async fn sleep_or_cancel(cancel: &CancellationToken, backoff: Duration) -> bool {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => true,
+        () = time::sleep(backoff) => false,
     }
 }
 
@@ -272,13 +346,15 @@ async fn partition_fetch_loop(
 mod tests {
     use {
         super::*,
-        crate::kafka_log::config::METADATA_TOPIC,
+        crate::kafka_log::{config::METADATA_TOPIC, partition_leader, range::RangeReadFailure},
         assert2::{assert, check},
+        bytes::Bytes,
+        krabka_client_core::{ClientError, FetchPartitionResult, FetchedRecord},
         krabka_protocol::owned::metadata_response::{
             MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
         },
         krabka_units::prelude::{mebibytes, millis},
-        std::{future, time::Duration},
+        std::{collections::VecDeque, future, time::Duration},
         tokio::{sync::Notify, task},
     };
 
@@ -541,5 +617,155 @@ mod tests {
         consumer_routing: ConsumerRoutingScenario,
     ) {
         let _ = consumer_routing;
+    }
+
+    /// A [`RangeFetcher`] that answers `Fetch` from a script, records the
+    /// offset of every `Fetch`, and parks once the script runs out.
+    struct ScriptedPages {
+        pages: StdMutex<VecDeque<FetchPartitionResult>>,
+        offsets: StdMutex<Vec<i64>>,
+        exhausted: Notify,
+    }
+
+    impl RangeFetcher for ScriptedPages {
+        type Leader = ();
+
+        fn leader(&self, _partition: i32) -> impl Future<Output = Result<(), RangeReadFailure>> {
+            future::ready(Ok(()))
+        }
+
+        async fn fetch(
+            &self,
+            _leader: &(),
+            _partition: i32,
+            offset: i64,
+        ) -> Result<FetchPartitionResult, ClientError> {
+            self.offsets.lock().unwrap().push(offset);
+            let page = self.pages.lock().unwrap().pop_front();
+            if let Some(page) = page {
+                return Ok(page);
+            }
+            self.exhausted.notify_one();
+            future::pending().await
+        }
+    }
+
+    fn fetched_record(offset: i64) -> FetchedRecord {
+        FetchedRecord {
+            offset,
+            timestamp: 0,
+            key: None,
+            value: Some(Bytes::from_static(b"v")),
+            headers: Vec::new(),
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct PumpOutcome {
+        fetch_offsets: Vec<i64>,
+        delivered: Vec<i64>,
+    }
+
+    /// Run the pump over `pages` from offset 0 until the script runs out.
+    async fn pump_pages(pages: Vec<FetchPartitionResult>) -> PumpOutcome {
+        let fetcher = ScriptedPages {
+            pages: StdMutex::new(pages.into()),
+            offsets: StdMutex::new(Vec::new()),
+            exhausted: Notify::new(),
+        };
+        let (tx, mut rx) = mpsc::channel(16);
+        let cancel = CancellationToken::new();
+        let target = PumpTarget {
+            topic: METADATA_TOPIC,
+            partition: 0,
+            retry_backoff: Duration::from_secs(1),
+            tx: &tx,
+        };
+        {
+            let pump = pump_partition(&fetcher, &target, 0, &cancel);
+            tokio::pin!(pump);
+            tokio::select! {
+                () = &mut pump => panic!("the pump stopped before its script ran out"),
+                () = fetcher.exhausted.notified() => {}
+            }
+            cancel.cancel();
+            pump.await;
+        }
+        drop(tx);
+        let mut delivered = Vec::new();
+        while let Some(record) = rx.recv().await {
+            delivered.push(record.offset);
+        }
+        PumpOutcome {
+            fetch_offsets: fetcher.offsets.into_inner().unwrap(),
+            delivered,
+        }
+    }
+
+    /// A batch that compaction emptied, kept at the readable tail for its
+    /// producer state, decodes to no record. The pump steps past it by the
+    /// batch progress, and does not fetch the same offset again.
+    #[tokio::test(start_paused = true)]
+    async fn the_pump_steps_over_a_batch_that_compaction_emptied() {
+        let outcome = pump_pages(vec![
+            FetchPartitionResult {
+                records: vec![fetched_record(0), fetched_record(1)],
+                next_offset: Some(2),
+            },
+            FetchPartitionResult {
+                records: Vec::new(),
+                next_offset: Some(5),
+            },
+            FetchPartitionResult {
+                records: vec![fetched_record(5)],
+                next_offset: Some(6),
+            },
+        ])
+        .await;
+        assert!(
+            outcome
+                == PumpOutcome {
+                    fetch_offsets: vec![0, 2, 5, 6],
+                    delivered: vec![0, 1, 5],
+                }
+        );
+    }
+
+    /// A page whose records end inside a batch the fetch skipped past still
+    /// resumes after the whole batch.
+    #[tokio::test(start_paused = true)]
+    async fn the_pump_resumes_after_the_last_batch_it_decoded() {
+        let outcome = pump_pages(vec![FetchPartitionResult {
+            records: vec![fetched_record(3)],
+            next_offset: Some(8),
+        }])
+        .await;
+        assert!(
+            outcome
+                == PumpOutcome {
+                    fetch_offsets: vec![0, 8],
+                    delivered: vec![3],
+                }
+        );
+    }
+
+    /// A page that reports no progress past the cursor waits a backoff before
+    /// it fetches again, instead of spinning.
+    #[tokio::test(start_paused = true)]
+    async fn a_page_without_progress_waits_a_backoff() {
+        let started = time::Instant::now();
+        let outcome = pump_pages(vec![FetchPartitionResult {
+            records: Vec::new(),
+            next_offset: Some(0),
+        }])
+        .await;
+        check!(started.elapsed() >= Duration::from_secs(1));
+        assert!(
+            outcome
+                == PumpOutcome {
+                    fetch_offsets: vec![0, 0],
+                    delivered: Vec::new(),
+                }
+        );
     }
 }
