@@ -22,12 +22,11 @@ use {
     },
     crate::{
         config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
-        oauth_jwks::JwksSnapshotState,
+        oauth_jwks::JwksRuntime,
     },
     jsonpath_rust::{parser, parser::model::JpQuery},
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::{Arc, PoisonError, atomic::AtomicI64},
-    tokio::sync::mpsc,
+    std::sync::Arc,
 };
 
 /// Set the principal claim and the clock skew of a JWS validator from
@@ -220,18 +219,14 @@ pub(super) fn apply_oauthbearer(
             // populated by the refresher `Broker::start` spawns.
             let jwks_uri = jwks_uri.clone();
 
-            // Create the signal channel + the shared
-            // timestamps here so the validator's `JwksHandle` and
-            // the refresher (constructed in `Broker::start`) point at
-            // the same Arc-shared state. Channel capacity 1 +
-            // `try_send` on the producer ⇒ signals coalesce.
-            let (signal_tx, signal_rx) = mpsc::channel::<()>(1);
-            let snapshot = JwksSnapshotState::default();
-            let last_on_demand = Arc::new(AtomicI64::new(0));
+            // Create the runtime state here so the validator's `JwksHandle`
+            // and the refresher (constructed in `Broker::start`) point at the
+            // same Arc-shared state.
+            let (runtime, signal_tx) = JwksRuntime::new();
 
             let handle = krabka_security::JwksHandle::new_with_refresher_handles(
                 krabka_security::Jwks::empty(),
-                Arc::clone(&snapshot.last_successful_fetch_ms),
+                Arc::clone(&runtime.snapshot.last_successful_fetch_ms),
                 signal_tx,
             );
 
@@ -267,12 +262,8 @@ pub(super) fn apply_oauthbearer(
                     Time::from_millis(i64::try_from(ms).unwrap_or(i64::MAX));
             }
 
-            // Park signal_rx + shared state for Broker::start.
-            *cfg.oauthbearer_jwks_signal_rx
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(signal_rx);
-            cfg.oauthbearer_jwks_snapshot = snapshot;
-            cfg.oauthbearer_jwks_last_on_demand_refresh_ms = last_on_demand;
+            // Park the runtime state for Broker::start.
+            cfg.oauthbearer_jwks_runtime = Some(runtime);
             cfg.oauthbearer_jwks_min_on_demand_pause = oauth
                 .jwks_min_refresh_pause_seconds
                 .map_or(DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, |s| {

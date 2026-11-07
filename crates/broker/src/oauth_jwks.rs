@@ -23,6 +23,6 @@ mod runtime;
 #[cfg(all(test, not(target_family = "wasm")))]
 mod test_support;
 
-pub use self::runtime::JwksSnapshotState;
+pub use self::runtime::{JwksRuntime, JwksSnapshotState};
 #[cfg(not(target_family = "wasm"))]
 pub use self::{fetch::fetch_jwks, refresher::JwksRefresher};

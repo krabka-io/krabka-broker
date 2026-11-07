@@ -103,14 +103,18 @@ fn jwks_refresher(
     let Some(handle) = config.oauthbearer_validator.jwks_handle() else {
         return Ok(None);
     };
-    let signal_rx = config
-        .oauthbearer_jwks_signal_rx
+    let missing_receiver =
+        || BrokerError::Startup("signed validator must park its JWKS signal receiver".to_owned());
+    let runtime = config
+        .oauthbearer_jwks_runtime
+        .as_ref()
+        .ok_or_else(missing_receiver)?;
+    let signal_rx = runtime
+        .signal_rx
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take()
-        .ok_or_else(|| {
-            BrokerError::Startup("signed validator must park its JWKS signal receiver".to_owned())
-        })?;
+        .ok_or_else(missing_receiver)?;
     Ok(Some(JwksRefresher {
         endpoint,
         handle,
@@ -120,11 +124,9 @@ fn jwks_refresher(
         signal_rx,
         min_on_demand_pause: config.oauthbearer_jwks_min_on_demand_pause,
         http_timeout: config.oauth_jwks_http_timeout,
-        last_successful_fetch_ms: Arc::clone(
-            &config.oauthbearer_jwks_snapshot.last_successful_fetch_ms,
-        ),
-        cache_generation: Arc::clone(&config.oauthbearer_jwks_snapshot.generation),
-        last_on_demand_refresh_ms: Arc::clone(&config.oauthbearer_jwks_last_on_demand_refresh_ms),
+        last_successful_fetch_ms: Arc::clone(&runtime.snapshot.last_successful_fetch_ms),
+        cache_generation: Arc::clone(&runtime.snapshot.generation),
+        last_on_demand_refresh_ms: Arc::clone(&runtime.last_on_demand_refresh_ms),
         ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
         timer: system_timer(),
     }))
@@ -321,13 +323,14 @@ mod tests {
         let refresher = jwks_refresher(&config, &CancellationToken::new())
             .unwrap()
             .expect("a signed validator gets a refresher");
+        let authenticate = config.oauthbearer_jwks_snapshot();
         assert!(Arc::ptr_eq(
             &refresher.cache_generation,
-            &config.oauthbearer_jwks_snapshot.generation
+            &authenticate.generation
         ));
         assert!(Arc::ptr_eq(
             &refresher.last_successful_fetch_ms,
-            &config.oauthbearer_jwks_snapshot.last_successful_fetch_ms
+            &authenticate.last_successful_fetch_ms
         ));
         refresher
             .last_successful_fetch_ms

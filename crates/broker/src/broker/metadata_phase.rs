@@ -80,7 +80,7 @@ fn prepare_raft_transport(
         enabled_sasl_mechanisms: config.enabled_sasl_mechanisms.clone(),
         gssapi: config.gssapi.clone(),
         oauthbearer_validator: config.oauthbearer_validator.clone(),
-        oauthbearer_jwks_snapshot: config.oauthbearer_jwks_snapshot.clone(),
+        oauthbearer_jwks_snapshot: config.oauthbearer_jwks_snapshot(),
         protocol: config.controller_listener_protocol,
         controller: Arc::clone(&controller_cell),
         delegation_token_secret_key: config.delegation_token_secret_key.clone(),

@@ -38,7 +38,6 @@ use {
             ReplicationRuntimeConfig, RlmmKind, StaticConfigOrigins, StretchProfile,
             defaults::{DEFAULT_CONTROLLER_ADDR, DEFAULT_LISTEN_ADDR},
             feature_flags::default_feature_flags,
-            shared_epoch_ms,
         },
         coordinator::unified::{
             config::NextGenConfig, share::config::ShareGroupConfig,
@@ -46,7 +45,7 @@ use {
         },
         file_config::{FileAuthorizationConfig, FileSchemaRegistryConfig},
         network::auth::{GssapiConfig, SslPrincipalMapper},
-        oauth_jwks::JwksSnapshotState,
+        oauth_jwks::JwksRuntime,
         operator_keys::OperatorKeys,
         replica_selector::ReplicaSelectorKind,
         schema_validation::SchemaValidator,
@@ -72,9 +71,8 @@ use {
         net::SocketAddr,
         num::NonZeroU64,
         path::PathBuf,
-        sync::{Arc, Mutex, atomic::AtomicI64},
+        sync::Arc,
     },
-    tokio::sync::mpsc::Receiver,
     uuid::Uuid,
 };
 
@@ -897,36 +895,12 @@ krabka_macros::broker_config! {
         /// default webpki-roots.
         pub oauthbearer_idp_tls_trust: Option<PathBuf>,
 
-        /// Receiver half of the JWKS refresher signal channel.
-        ///
-        /// `apply_to` creates the channel pair. It connects the sender to the
-        /// signed validator's `JwksHandle` and stores the receiver here.
-        /// `Broker::start` calls `take()` on the receiver and passes it to
-        /// `JwksRefresher`. This field is `None` when JWKS validation is not
-        /// configured.
-        ///
-        /// The field is an `Arc<Mutex<…>>` so that the containing `BrokerConfig`
-        /// stays `Clone`. Only `Broker::start` locks and takes the receiver, and
-        /// there is only ever one `Broker::start` for each validator
-        /// construction.
-        #[default(Arc::new(Mutex::new(None)))]
-        pub oauthbearer_jwks_signal_rx: Arc<Mutex<Option<Receiver<()>>>>,
-
-        /// JWKS publication state the authenticate paths read.
-        ///
-        /// `apply_to` creates it for the signed validator. The validator's
-        /// `JwksHandle` and the refresher share its atomics, so the
-        /// validator's expiry check and the cache guard see the refresher's
-        /// writes.
-        pub oauthbearer_jwks_snapshot: JwksSnapshotState,
-
-        /// Shared on-demand-refresh timestamp for rate-limiting.
-        ///
-        /// `apply_to` creates it, and `Broker::start` gives a clone to the
-        /// refresher. The validator never reads it. It is refresher-only
-        /// bookkeeping that `BrokerConfig` carries for symmetry.
-        #[default(shared_epoch_ms())]
-        pub oauthbearer_jwks_last_on_demand_refresh_ms: Arc<AtomicI64>,
+        /// Live JWKS state the signed validator shares with its refresher and
+        /// the authenticate paths. `apply_to` sets it only when it builds the
+        /// signed validator, and `Broker::start` hands it to `JwksRefresher`.
+        /// It is not configuration; read the authenticate paths' view of it
+        /// through [`Self::oauthbearer_jwks_snapshot`].
+        pub oauthbearer_jwks_runtime: Option<JwksRuntime>,
 
         /// Minimum pause between on-demand JWKS refreshes that validator signals
         /// trigger. `apply_to` sets it from
