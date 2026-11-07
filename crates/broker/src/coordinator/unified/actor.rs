@@ -175,7 +175,11 @@ impl GroupCoordinator {
         if !found.tx.is_closed() {
             return Some(found);
         }
-        let kind = self.respawn_kind(group_id)?;
+        let Some(kind) = self.respawn_kind(group_id) else {
+            // A racing lookup may have replaced `found` meanwhile, and its
+            // successor taken the seed. Return that actor, spawning nothing.
+            return self.find(group_id).filter(|handle| !handle.tx.is_closed());
+        };
         self.respawn_closed_group(group_id, kind, &found)
     }
 
