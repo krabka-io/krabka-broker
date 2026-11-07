@@ -14,10 +14,13 @@
 //!
 //! [Gherkin style guide]: https://github.com/krabka-io/krabka-broker/blob/main/docs/style_guides/gherkin_style_guide.md
 
+mod context;
 mod hook_attr;
+mod overrides;
 mod scenarios;
 mod step_attr;
 mod step_param;
+mod table_row;
 
 use {
     hook_attr::HookPhase,

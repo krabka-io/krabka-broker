@@ -3768,11 +3768,13 @@ dependencies = [
  "inventory",
  "krabka-bdd-macros",
  "krabka-bdd-model",
+ "qubit-clock",
  "rstest",
  "rstest-bdd",
  "rstest-bdd-macros",
  "rust-embed",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
