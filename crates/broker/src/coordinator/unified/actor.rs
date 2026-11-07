@@ -138,7 +138,21 @@ impl GroupCoordinator {
 
     /// Forget the respawn seed a stopped actor left for `group_id`, when the
     /// group has no successor on this broker.
-    pub(crate) fn drop_respawn_seed(&self, group_id: &str) { self.respawn_seeds.remove(group_id); }
+    ///
+    /// The commits still replicating that the stopped actor handed to the
+    /// seed are detached, as when an actor stops with no seed, so each client
+    /// hears how its own write ended rather than a dropped reply.
+    pub(crate) fn drop_respawn_seed(&self, group_id: &str) {
+        let Some((_, seed)) = self.respawn_seeds.remove(group_id) else {
+            return;
+        };
+        if let Some(waits) = seed.commits {
+            waits
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .detach();
+        }
+    }
 
     /// The live actor of `group_id`, respawned first when a stopped actor
     /// left it a respawn seed, or `None` when no actor serves the group.
