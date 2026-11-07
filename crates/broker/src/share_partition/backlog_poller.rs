@@ -5,6 +5,7 @@ use {
         broker::leader_listener_endpoint,
         codes,
         coordinator::{GroupCoordinator, bootstrap::OFFSETS_TOPIC, partitioner},
+        error::BrokerError,
         metadata_source::MetadataSource,
         metrics::{BrokerMetrics, ShareGroupLabel},
         network::client::InterBrokerClient,
@@ -35,6 +36,18 @@ use {
 
 pub fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
     krabka_verified::effective_share_backlog(hwm, spso, log_start)
+}
+
+/// Why one share-group partition has no backlog sample this tick.
+#[derive(Debug, thiserror::Error)]
+enum SampleError {
+    /// The share-state summary read failed, with the coordinator's code
+    /// when the state partition leader refused it.
+    #[error("share state summary read failed: {0}")]
+    StateSummary(#[from] BrokerError),
+    /// The high watermark and log start probe failed.
+    #[error("partition offsets probe failed: {0}")]
+    Offsets(String),
 }
 
 pub struct BacklogPoller {
@@ -90,7 +103,7 @@ impl BacklogPoller {
         &self,
         image: &krabka_metadata::MetadataImage,
         groups: Vec<String>,
-    ) -> HashMap<ShareGroupLabel, Result<i64, String>> {
+    ) -> HashMap<ShareGroupLabel, Result<i64, SampleError>> {
         let mut snapshot = HashMap::new();
         for group_id in groups {
             if !owns_group(image, self.node_id, &group_id) {
@@ -141,17 +154,19 @@ impl BacklogPoller {
         topic_id: uuid::Uuid,
         topic: &str,
         partition: i32,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, SampleError> {
         let spso = self
             .persister
             .read_state_summary(group_id, topic_id, partition)
-            .await
-            .map_err(|error| error.to_string())?
+            .await?
             .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
         let PartitionOffsets {
             high_watermark: hwm,
             log_start,
-        } = self.offsets(image, topic, partition).await?;
+        } = self
+            .offsets(image, topic, partition)
+            .await
+            .map_err(SampleError::Offsets)?;
         Ok(effective_backlog(hwm, spso, log_start))
     }
 
@@ -364,7 +379,7 @@ fn prune_stale(
 /// failing partition therefore does not freeze the gauges of the others.
 fn merge_sample(
     last: &HashMap<ShareGroupLabel, i64>,
-    sampled: HashMap<ShareGroupLabel, Result<i64, String>>,
+    sampled: HashMap<ShareGroupLabel, Result<i64, SampleError>>,
 ) -> HashMap<ShareGroupLabel, i64> {
     sampled
         .into_iter()
@@ -409,14 +424,15 @@ fn clear(metrics: &BrokerMetrics, last: &mut HashMap<ShareGroupLabel, i64>) {
 mod tests {
     use {
         super::{
-            BacklogPoller, PartitionOffsets, effective_backlog, fetch_offsets, latest_fetch_offset,
-            merge_sample, owns_group, prune_stale, replace,
+            BacklogPoller, PartitionOffsets, SampleError, effective_backlog, fetch_offsets,
+            latest_fetch_offset, merge_sample, owns_group, prune_stale, replace,
         },
         crate::{
             codes,
             coordinator::{
                 bootstrap::OFFSETS_TOPIC, partitioner, unified::test_support::make_coord,
             },
+            error::BrokerError,
             metadata_source::MetadataSource,
             metrics::{BrokerMetrics, ShareGroupLabel},
             partition_registry::PartitionRegistry,
@@ -640,8 +656,11 @@ mod tests {
 
         let next = merge_sample(&last, maplit::hashmap! {
             label(0) => Ok(3),
-            label(1) => Err("leader unreachable".to_owned()),
-            label(2) => Err("coordinator loading".to_owned()),
+                label(1) => Err(SampleError::Offsets("leader unreachable".to_owned())),
+                label(2) => Err(SampleError::StateSummary(BrokerError::SharePartitionState {
+                    code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    message: "coordinator loading".to_owned(),
+                })),
         });
         replace(&metrics, &mut last, next);
 
