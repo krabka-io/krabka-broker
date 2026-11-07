@@ -213,3 +213,6 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
     }
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests;
