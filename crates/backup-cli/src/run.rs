@@ -46,13 +46,59 @@ const MAX_GROUP_OFFSETS_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_DISKLESS_INDEX_BYTES: u64 = 256 * 1024 * 1024;
 
-fn artifact_byte_limit(name: &str) -> u64 {
-    match name {
-        MANIFEST => MAX_MANIFEST_BYTES,
-        GROUP_OFFSETS => MAX_GROUP_OFFSETS_BYTES,
-        METADATA_CHECKPOINT | RLMM_SNAPSHOT => MAX_SNAPSHOT_BYTES,
-        _ => MAX_DISKLESS_INDEX_BYTES,
+/// One object a capture writes, named by its file name inside the capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtifactKind {
+    Manifest,
+    GroupOffsets,
+    MetadataCheckpoint,
+    RlmmSnapshot,
+    DisklessWalIndex,
+}
+
+impl ArtifactKind {
+    const ALL: [Self; 5] = [
+        Self::Manifest,
+        Self::GroupOffsets,
+        Self::MetadataCheckpoint,
+        Self::RlmmSnapshot,
+        Self::DisklessWalIndex,
+    ];
+
+    /// The object name inside the capture, as `manifest.json` records it.
+    const fn file_name(self) -> &'static str {
+        match self {
+            Self::Manifest => MANIFEST,
+            Self::GroupOffsets => GROUP_OFFSETS,
+            Self::MetadataCheckpoint => METADATA_CHECKPOINT,
+            Self::RlmmSnapshot => RLMM_SNAPSHOT,
+            Self::DisklessWalIndex => DISKLESS_WAL_INDEX,
+        }
     }
+
+    /// The most bytes a capture writes, and a restore reads, for this object.
+    const fn byte_limit(self) -> u64 {
+        match self {
+            Self::Manifest => MAX_MANIFEST_BYTES,
+            Self::GroupOffsets => MAX_GROUP_OFFSETS_BYTES,
+            Self::MetadataCheckpoint | Self::RlmmSnapshot => MAX_SNAPSHOT_BYTES,
+            Self::DisklessWalIndex => MAX_DISKLESS_INDEX_BYTES,
+        }
+    }
+
+    /// The kind written under `name`, or `None` for a name this build does not
+    /// know.
+    fn from_file_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.file_name() == name)
+    }
+}
+
+/// The byte limit for the artifact `name`.
+///
+/// A name this build does not know, as a newer manifest can carry, deliberately
+/// keeps the diskless index's 256 MiB limit, so `verify` still reads it.
+fn artifact_byte_limit(name: &str) -> u64 {
+    ArtifactKind::from_file_name(name).map_or(MAX_DISKLESS_INDEX_BYTES, ArtifactKind::byte_limit)
 }
 
 fn check_capture_size(name: &str, size: u64, max_bytes: u64) -> Result<(), BackupError> {
@@ -1090,11 +1136,11 @@ async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupErro
 mod tests {
     use {
         super::{
-            BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture, FileEd25519Signer,
-            GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
-            RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
-            checkpoint_note, list, newest_metadata_checkpoint, restore_offsets, upload_capped,
-            verify, verify_offsets_boundary,
+            ArtifactKind, BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture,
+            FileEd25519Signer, GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT,
+            RLMM_SNAPSHOT, RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture,
+            check_capture_size, checkpoint_note, list, newest_metadata_checkpoint, restore_offsets,
+            upload_capped, verify, verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
@@ -1148,6 +1194,26 @@ mod tests {
         check!(check_capture_size(name, limit, limit).is_ok());
         check!(check_capture_size(name, limit + 1, limit).is_err());
         check!(check_capture_size(name, u64::MAX, limit).is_err());
+    }
+
+    #[yare::parameterized(
+        manifest = { ArtifactKind::Manifest, "manifest.json" },
+        group_offsets = { ArtifactKind::GroupOffsets, "group-offsets.json" },
+        metadata_checkpoint = { ArtifactKind::MetadataCheckpoint, "cluster-metadata.checkpoint" },
+        rlmm_snapshot = { ArtifactKind::RlmmSnapshot, "rlmm-snapshot" },
+        diskless_wal_index = { ArtifactKind::DisklessWalIndex, "diskless-wal-index.json" },
+    )]
+    fn an_artifact_kind_is_found_by_the_file_name_it_is_written_under(
+        kind: ArtifactKind,
+        file_name: &str,
+    ) {
+        check!(kind.file_name() == file_name);
+        check!(ArtifactKind::from_file_name(file_name) == Some(kind));
+    }
+
+    #[test]
+    fn an_unknown_file_name_is_no_artifact_kind() {
+        check!(ArtifactKind::from_file_name("a-newer-artifact.json") == None);
     }
 
     /// The exact `manifest.json` a capture that took every artifact writes.
