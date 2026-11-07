@@ -123,14 +123,14 @@ async fn join(params: AutoJoinParams) {
 
         match send_add_raft_voter(&client, protocol, &server_name, target, &req).await {
             Ok(resp) => {
-                let _ = log_join_outcome(self_id, target, &resp);
+                log_join_outcome(self_id, target, &resp);
             }
             Err(e) => {
                 tracing::debug!(
                     node_id = self_id.0,
                     server = %target,
                     error = %e,
-                    "auto-join: dial/RPC failed; trying next bootstrap server"
+                    "auto-join: dial/RPC failed; retrying the known leader, else the next bootstrap server"
                 );
             }
         }
