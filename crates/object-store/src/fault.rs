@@ -12,9 +12,9 @@
 //! A drill therefore tests the caller: how it reports a failure, and the
 //! retries and deadlines it applies itself. It does not test the retry budget,
 //! the retry deadline, or the request and connect timeouts that
-//! [`build_object_store`](crate::build_object_store) gives an S3 or GCS
-//! client. Those apply inside `object_store`'s HTTP client, below the trait,
-//! and an injected fault never passes through that client:
+//! [`build_object_store`] gives an S3 or GCS client. Those apply inside
+//! `object_store`'s HTTP client, below the trait, and an injected fault never
+//! passes through that client:
 //!
 //! - An injected error reaches the caller on the first attempt, as the final
 //!   answer. A real client would retry a `503` before it gave the caller the
