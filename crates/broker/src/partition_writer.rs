@@ -68,7 +68,7 @@ use self::{
     },
     retention::handle_retention,
     storage::{StorageStatus, lock_log},
-    swap::swap_future_log,
+    swap::{SwapRequest, run_swap},
 };
 
 /// The topic name and partition index a writer message belongs to.
@@ -424,14 +424,13 @@ pub async fn run_gated(
                 let result = if unreported_cut.is_some() {
                     Ok(SwapOutcome::NotCaughtUp)
                 } else {
-                    swap_future_log(
-                        &log,
-                        &log_dir,
+                    run_swap(&log, &log_dir, &log_dir_status, SwapRequest {
                         target_log_dir,
-                        &future_log,
-                        &future_path,
-                        &target_partition_path,
-                    )
+                        future_log,
+                        future_path,
+                        target_partition_path,
+                    })
+                    .await
                 };
                 let _ = ack.send(result);
                 // No `append_notify` — swap doesn't deliver new data,
