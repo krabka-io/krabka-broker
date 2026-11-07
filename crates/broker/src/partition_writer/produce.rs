@@ -191,10 +191,7 @@ pub(super) async fn append_jobs(
         Ok(value) => value,
         Err(err) => {
             flag_storage_failure(&err, log_dir, log_dir_status);
-            return fail_group(
-                acks,
-                &storage_failure_error("append task panicked", "group append panic"),
-            );
+            return fail_group(acks, &err);
         }
     };
     Some(AppendedGroup {
