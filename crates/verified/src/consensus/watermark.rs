@@ -1,6 +1,9 @@
 #[cfg(creusot)]
 use super::{count_ge, count_ge_prefix, hwm_member_at, lemma_hwm_member_maximal};
-use creusot_std::prelude::*;
+use {
+    super::{LeaderVote, WatermarkInputs},
+    creusot_std::prelude::*,
+};
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
@@ -50,15 +53,17 @@ pub(super) fn candidate_has_majority(
 }
 
 /// The HWM as the majority-th largest match offset across the leader's own log
-/// end, when `leader_counts`, and every follower's acknowledged fetch offset.
+/// end, when its vote [`LeaderVote::Counts`], and every follower's acknowledged
+/// fetch offset.
 ///
 /// The leader-completeness rule of Raft Fig.8 and KIP-595 gates this value: the
 /// HWM may only advance once the majority offset is strictly past
-/// `epoch_start_offset`. The HWM never regresses below `current_hwm`.
+/// [`WatermarkInputs::epoch_start_offset`]. The HWM never regresses below
+/// [`WatermarkInputs::current_hwm`].
 ///
-/// When `leader_counts` is `false` (a leader that its own `VotersRecord`
-/// removed), the followers alone must be able to reach `majority`, which is
-/// the second precondition.
+/// When the leader's vote is [`LeaderVote::Excluded`] (a leader that its own
+/// `VotersRecord` removed), the followers alone must be able to reach
+/// `majority`, which is the second precondition.
 ///
 /// The function computes the majority-th largest by its definition, and not by
 /// a sort. That definition is the greatest member m of
@@ -66,25 +71,31 @@ pub(super) fn candidate_has_majority(
 /// counts are tiny, at most about 7, and the Creusot proof quantifies over a
 /// loop that mirrors the definition.
 #[requires(1 <= majority@ && majority@ <= follower_offsets@.len() + 1)]
-#[requires(leader_counts || majority@ <= follower_offsets@.len())]
-#[requires(watermark_inputs_bounded(current_hwm@, log_end@, follower_offsets@))]
-#[ensures(result@ >= current_hwm@)]
-#[ensures(result@ <= log_end@)]
-#[ensures(forall<v: Int> v > epoch_start_offset@
-    && count_ge(log_end@, follower_offsets@, v, leader_counts) >= majority@
+#[requires(leader_vote == LeaderVote::Counts || majority@ <= follower_offsets@.len())]
+#[requires(watermark_inputs_bounded(inputs.current_hwm@, inputs.log_end@, follower_offsets@))]
+#[ensures(result@ >= inputs.current_hwm@)]
+#[ensures(result@ <= inputs.log_end@)]
+#[ensures(forall<v: Int> v > inputs.epoch_start_offset@
+    && count_ge(inputs.log_end@, follower_offsets@, v, leader_vote == LeaderVote::Counts)
+        >= majority@
     ==> v <= result@)]
-#[ensures(result@ > current_hwm@
-    ==> result@ > epoch_start_offset@
-        && count_ge(log_end@, follower_offsets@, result@, leader_counts) >= majority@)]
+#[ensures(result@ > inputs.current_hwm@
+    ==> result@ > inputs.epoch_start_offset@
+        && count_ge(inputs.log_end@, follower_offsets@, result@, leader_vote == LeaderVote::Counts)
+            >= majority@)]
 #[must_use]
 pub fn recompute_high_watermark(
-    log_end: i64,
+    inputs: WatermarkInputs,
     follower_offsets: &[i64],
     majority: usize,
-    epoch_start_offset: i64,
-    current_hwm: i64,
-    leader_counts: bool,
+    leader_vote: LeaderVote,
 ) -> i64 {
+    let WatermarkInputs {
+        log_end,
+        epoch_start_offset,
+        current_hwm,
+    } = inputs;
+    let leader_counts = matches!(leader_vote, LeaderVote::Counts);
     let n = follower_offsets.len();
     let mut majority_offset =
         if candidate_has_majority(log_end, follower_offsets, log_end, majority, leader_counts) {
@@ -96,7 +107,7 @@ pub fn recompute_high_watermark(
     let mut i = 0;
     #[invariant(i@ <= n@)]
     #[invariant(majority_offset@ <= log_end@)]
-    #[invariant(majority_offset@ == -9223372036854775807 - 1
+    #[invariant(majority_offset@ == i64::MIN@
         || count_ge(log_end@, follower_offsets@, majority_offset@, leader_counts) >= majority@)]
     #[invariant(forall<k: Int> 0 <= k && k < i@ + 1
         && count_ge(log_end@, follower_offsets@, hwm_member_at(log_end@, follower_offsets@, k), leader_counts) >= majority@
@@ -129,8 +140,8 @@ pub fn recompute_high_watermark(
 
 /// The watermark a majority has acknowledged, never below `current`.
 ///
-/// This is [`recompute_high_watermark`] with the leader's log end always
-/// counted and no leader-epoch gate. The result is the greater of `current`
+/// This is [`recompute_high_watermark`] with the leader's vote always
+/// [`LeaderVote::Counts`] and no leader-epoch gate. The result is the greater of `current`
 /// and the majority frontier: the greatest member of
 /// `{log_end} U follower_offsets` that at least `majority` members reach.
 /// Passing `current` as both the gate and the floor is what makes it that: the
@@ -153,5 +164,14 @@ pub fn majority_watermark(
     majority: usize,
     current: i64,
 ) -> i64 {
-    recompute_high_watermark(log_end, follower_offsets, majority, current, current, true)
+    recompute_high_watermark(
+        WatermarkInputs {
+            log_end,
+            epoch_start_offset: current,
+            current_hwm: current,
+        },
+        follower_offsets,
+        majority,
+        LeaderVote::Counts,
+    )
 }

@@ -7,7 +7,7 @@ use super::delivery::{
 use crate::transaction::pending_starts_bound_fetch;
 use {
     super::{
-        FetchWatermarks, committed_fetch_excludes_unstable, fetch_visibility,
+        FetchReader, FetchWatermarks, committed_fetch_excludes_unstable, fetch_visibility,
         scheduled_prefix_bounds_fetch,
     },
     crate::broker::FetchVisibility,
@@ -65,8 +65,7 @@ pub(super) fn scheduled_stable_prefix_bounds_fetch(
         ..w
     })?;
     let follower = fetch_visibility(
-        true,
-        true,
+        FetchReader::Follower,
         FetchWatermarks {
             lso,
             deliverable: delivery,
