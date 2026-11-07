@@ -1,0 +1,16 @@
+group=grpord07t0 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-true-0	PASS
+group=grpord07t1 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-true-1	PASS
+group=grpord07t2 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-true-2	PASS
+group=grpord07t3 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-true-3	PASS
+group=grpord07f0 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-false-0	PASS
+group=grpord07f1 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-false-1	PASS
+group=grpord07f2 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-false-2	PASS
+group=grpord07f3 source_start_offset=0 lag=0
+SCENARIO	dlq-recovery-false-3	PASS
