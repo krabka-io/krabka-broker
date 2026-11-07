@@ -59,6 +59,7 @@ mod tests {
                 atomic::{AtomicBool, Ordering},
             },
         },
+        tokio::task,
         tracing::{Instrument, Level, dispatcher},
     };
 
@@ -73,7 +74,7 @@ mod tests {
             let finished = Arc::clone(&finished);
             async move {
                 shutdown.cancelled().await;
-                tokio::task::yield_now().await;
+                task::yield_now().await;
                 finished.store(true, Ordering::SeqCst);
             }
         });

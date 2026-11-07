@@ -374,6 +374,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         krabka_raft::NodeId,
+        std::iter,
     };
 
     /// Every job of a failed group gets the group's own failure, so the
@@ -401,7 +402,8 @@ mod tests {
 
     #[tokio::test]
     async fn fail_group_answers_every_job() {
-        let (senders, receivers): (Vec<Ack>, Vec<_>) = (0..3).map(|_| oneshot::channel()).unzip();
+        let (senders, receivers): (Vec<Ack>, Vec<_>) =
+            iter::repeat_with(oneshot::channel).take(3).unzip();
         let failure = storage_failure_error("append task panicked", "boom");
 
         check!(fail_group::<()>(senders, &failure).is_none());
