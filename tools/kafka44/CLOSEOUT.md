@@ -31,7 +31,7 @@ a release publication, or a production deployment.
   shared across hosts; fsync/power-loss guarantees are not established.
 - Historical DLQ receipts measured a terminal-prefix persistence difference.
   The [ordering fix](../../qualification/kafka44-dlq/README.md#terminal-prefix-ordering-follow-up-2026-11-05) now persists ARCHIVED before live-cache pruning, with
-  state-machine and actual-manager regressions, not a new paired oracle run. Terminal errors can archive without a DLQ
+  state-machine and actual-manager regressions. A [fresh paired run](../../qualification/kafka44-dlq/ordering-20261107/README.md) measures eight boundary cases per broker with matching persisted state 3 then 4, startOffset 0 and deliveryCompleteCount 1 before and after clean restart; this is not a crash-window or RF3 state-parity claim. Terminal errors can archive without a DLQ
   copy; lost confirmations can create duplicates. No exactly-once archive claim.
 - RF3 destination authorization denial and every Cartesian-product fault/ACL
   permutation remain unmeasured. Bounded model/proof results do not establish
