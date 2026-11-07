@@ -72,12 +72,16 @@ async fn read_summaries(
                 },
                 // Kafka's `toErrorResponseData`: the code and the message, and
                 // the schema default for every other field.
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.row_message(ShareStateOp::ReadSummary)),
-                    ..Default::default()
-                },
+                Err(error) => {
+                    let verdict =
+                        super::OperationVerdict::refused(error, ShareStateOp::ReadSummary);
+                    PartitionResult {
+                        partition: pd.partition,
+                        error_code: verdict.code,
+                        error_message: verdict.message,
+                        ..Default::default()
+                    }
+                }
             }
         }
     );

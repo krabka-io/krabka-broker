@@ -23,7 +23,7 @@ use crate::{
     broker::Broker,
     codes::NONE,
     handlers::{RequestContext, cluster_action_denied as request_cluster_action_denied},
-    share_coordinator::coordinator::ShareStateOp,
+    share_coordinator::coordinator::{ShareStateError, ShareStateOp},
 };
 
 /// Whether a request has no topic rows or contains an empty partition row.
@@ -36,20 +36,25 @@ struct OperationVerdict {
     message: Option<String>,
 }
 
+impl OperationVerdict {
+    /// The code and Kafka message of a partition that `op` refused with
+    /// `error`.
+    fn refused(error: ShareStateError, op: ShareStateOp) -> Self {
+        Self {
+            code: error.code(),
+            message: Some(error.row_message(op)),
+        }
+    }
+}
+
 /// The code and Kafka message for a completed share-state operation.
-fn operation_result(
-    result: Result<(), super::coordinator::ShareStateError>,
-    op: ShareStateOp,
-) -> OperationVerdict {
+fn operation_result(result: Result<(), ShareStateError>, op: ShareStateOp) -> OperationVerdict {
     match result {
         Ok(()) => OperationVerdict {
             code: NONE,
             message: None,
         },
-        Err(error) => OperationVerdict {
-            code: error.code(),
-            message: Some(error.row_message(op)),
-        },
+        Err(error) => OperationVerdict::refused(error, op),
     }
 }
 

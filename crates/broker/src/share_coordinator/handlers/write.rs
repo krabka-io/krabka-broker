@@ -5,12 +5,9 @@
 //! `INVALID_REQUEST`, and epoch fencing returns the per-partition error code.
 
 use {
-    crate::{
-        codes,
-        share_coordinator::{
-            coordinator::{ShareCoordinator, ShareStateOp, ShareWrite},
-            persistence::StateBatch,
-        },
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp, ShareWrite},
+        persistence::StateBatch,
     },
     krabka_log::Offset,
     krabka_metadata::MetadataImage,
@@ -57,19 +54,12 @@ async fn write_state(
             let result = coordinator
                 .write(image, group_id, topic_id, pd.partition, request)
                 .await;
-            match result {
-                Ok(()) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: codes::NONE,
-                    error_message: None,
-                    ..Default::default()
-                },
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.row_message(ShareStateOp::Write)),
-                    ..Default::default()
-                },
+            let verdict = super::operation_result(result, ShareStateOp::Write);
+            PartitionResult {
+                partition: pd.partition,
+                error_code: verdict.code,
+                error_message: verdict.message,
+                ..Default::default()
             }
         });
 
