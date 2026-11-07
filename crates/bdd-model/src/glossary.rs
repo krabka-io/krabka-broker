@@ -57,17 +57,15 @@ impl Glossary {
     ///
     /// Returns the parse error of the embedded file, which the crate's tests
     /// keep from shipping.
-    pub fn embedded() -> Result<&'static Self, String> {
-        EMBEDDED.as_ref().map_err(Clone::clone)
-    }
+    pub fn embedded() -> Result<&'static Self, String> { EMBEDDED.as_ref().map_err(Clone::clone) }
 
     /// Reports whether the glossary defines `tag`, written without its `@`.
-    pub fn has_tag(&self, tag: &str) -> bool {
-        self.tags.contains_key(tag)
-    }
+    #[must_use]
+    pub fn has_tag(&self, tag: &str) -> bool { self.tags.contains_key(tag) }
 
     /// The tag table of the Gherkin style guide: a header row, the alignment
     /// row and one row per tag in name order, each line ending in a newline.
+    #[must_use]
     pub fn tag_table_markdown(&self) -> String {
         let mut table = String::from("| Tag | Meaning |\n| :--- | :--- |\n");
         for (tag, entry) in &self.tags {
@@ -103,12 +101,9 @@ definition = \"The position of a record.\"
         .unwrap();
         let expected = Glossary {
             tags: BTreeMap::from([("docker".to_owned(), tag("Needs a container."))]),
-            terms: BTreeMap::from([(
-                "offset".to_owned(),
-                Term {
-                    definition: "The position of a record.".to_owned(),
-                },
-            )]),
+            terms: BTreeMap::from([("offset".to_owned(), Term {
+                definition: "The position of a record.".to_owned(),
+            })]),
         };
         assert!(glossary == expected);
     }

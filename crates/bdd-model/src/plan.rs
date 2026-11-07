@@ -84,6 +84,7 @@ pub struct PlannedStep {
 }
 
 /// The tests `feature`, read from `path`, generates.
+#[must_use]
 pub fn plan(path: &str, feature: &Feature) -> Plan {
     let mut planner = Planner {
         feature,
@@ -125,6 +126,7 @@ pub fn plan(path: &str, feature: &Feature) -> Plan {
 /// one between them. An identifier that would start with a digit gets a
 /// leading `_`, and a Rust keyword gets an `r_` prefix. Text with no letter
 /// or digit becomes `unnamed`.
+#[must_use]
 pub fn ident(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut gap = false;
@@ -214,13 +216,12 @@ impl Planner<'_> {
         {
             push_unique(&mut tags, tag);
         }
-        let mut background_steps: Vec<PlannedStep> = self
+        let background: Vec<&Step> = self
             .feature
             .background
             .iter()
             .chain(rule.and_then(|rule| rule.background))
             .flat_map(|background| &background.steps)
-            .map(|step| planned_step(step, &HashMap::new()))
             .collect();
         let names = match rule {
             Some(rule) => self.rule_names.entry(rule.module.clone()).or_default(),
@@ -239,14 +240,8 @@ impl Planner<'_> {
             steps: Vec::new(),
         };
         if scenario.examples.is_empty() {
-            background_steps.extend(
-                scenario
-                    .steps
-                    .iter()
-                    .map(|step| planned_step(step, &HashMap::new())),
-            );
             self.scenarios.push(PlannedScenario {
-                steps: background_steps,
+                steps: planned_steps(&background, &scenario.steps, &HashMap::new()),
                 ..base
             });
             return;
@@ -270,8 +265,7 @@ impl Planner<'_> {
                 for tag in &examples.tags {
                     push_unique(&mut row_tags, tag);
                 }
-                let mut steps = background_steps.clone();
-                steps.extend(scenario.steps.iter().map(|step| planned_step(step, &values)));
+                let steps = planned_steps(&background, &scenario.steps, &values);
                 self.scenarios.push(PlannedScenario {
                     scenario_module: Some(name.clone()),
                     test_name,
@@ -315,12 +309,39 @@ fn push_unique(tags: &mut Vec<String>, tag: &str) {
     }
 }
 
-fn planned_step(step: &Step, values: &HashMap<&str, &str>) -> PlannedStep {
+/// The background steps, then the scenario's own steps with `values`
+/// substituted. A `*` step takes the keyword of the step before it, or
+/// `Given` when it comes first.
+fn planned_steps(
+    background: &[&Step],
+    steps: &[Step],
+    values: &HashMap<&str, &str>,
+) -> Vec<PlannedStep> {
+    let unsubstituted = HashMap::new();
+    let mut previous = Keyword::Given;
+    background
+        .iter()
+        .map(|step| (*step, &unsubstituted))
+        .chain(steps.iter().map(|step| (step, values)))
+        .map(|(step, values)| {
+            let planned = planned_step(step, values, previous);
+            previous = planned.keyword;
+            planned
+        })
+        .collect()
+}
+
+fn planned_step(step: &Step, values: &HashMap<&str, &str>, previous: Keyword) -> PlannedStep {
     let written = step.keyword.trim();
+    let star = written == "*";
     PlannedStep {
         line: step.position.line,
-        keyword: Keyword::from(step.ty),
-        star: written == "*",
+        keyword: if star {
+            previous
+        } else {
+            Keyword::from(step.ty)
+        },
+        star,
         written: written.to_owned(),
         text: substitute(&step.value, values),
         docstring: step
@@ -413,18 +434,18 @@ Feature: Log cleanup policy
     fn plan_flattens_rules_backgrounds_and_outline_rows() {
         let actual = plan(PATH, &parse(FEATURE));
         let broker = step(5, Keyword::Given, "Given", "a broker");
-        let topic = step(14, Keyword::Given, "Given", "a topic");
+        let topic = step(15, Keyword::Given, "Given", "a topic");
         let outline_steps = |policy: &str, compact: &str| {
             vec![
                 broker.clone(),
                 topic.clone(),
                 step(
-                    17,
+                    18,
                     Keyword::Given,
                     "Given",
                     &format!("a log has cleanup policy {policy}"),
                 ),
-                step(18, Keyword::When, "When", "the cleanup policy is read back"),
+                step(19, Keyword::When, "When", "the cleanup policy is read back"),
                 PlannedStep {
                     table: Some(vec![
                         strings(&["policy", "compact"]),
@@ -432,7 +453,7 @@ Feature: Log cleanup policy
                         strings(&["-", "-"]),
                     ]),
                     ..step(
-                        19,
+                        20,
                         Keyword::When,
                         "*",
                         &format!("it reports compact as {compact}"),
@@ -440,7 +461,7 @@ Feature: Log cleanup policy
                 },
                 PlannedStep {
                     docstring: Some(format!("\n{policy}\n")),
-                    ..step(23, Keyword::Then, "Then", "it says")
+                    ..step(24, Keyword::Then, "Then", "it says")
                 },
             ]
         };
@@ -450,7 +471,7 @@ Feature: Log cleanup policy
             scenario: "Each policy reports its members".to_owned(),
             scenario_module: Some("each_policy_reports_its_members".to_owned()),
             test_name: name.to_owned(),
-            line: 16,
+            line: 17,
             tags: strings(&["docker", "formulated"]),
             row: None,
             steps: Vec::new(),
@@ -477,7 +498,7 @@ Feature: Log cleanup policy
                 },
                 PlannedScenario {
                     row: Some(PlannedRow {
-                        line: 29,
+                        line: 31,
                         case: "delete only".to_owned(),
                         values: pairs(&[
                             ("case", "delete only"),
@@ -491,7 +512,7 @@ Feature: Log cleanup policy
                 PlannedScenario {
                     tags: strings(&["docker", "formulated", "inprogress"]),
                     row: Some(PlannedRow {
-                        line: 34,
+                        line: 36,
                         case: "compact and delete".to_owned(),
                         values: pairs(&[
                             ("case", "compact and delete"),

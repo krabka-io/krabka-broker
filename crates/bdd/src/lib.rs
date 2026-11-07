@@ -65,9 +65,16 @@ mod world;
 
 pub use {
     self::{
+        attempt::Attempt,
+        failure::{Failure, Location},
+        fixtures::Fixtures,
         given::Given,
         harness::{MultiThreadAttributePolicy, TokioMultiThreadContext, TokioMultiThreadHarness},
+        hooks::{Hook, HookFn, HookPhase},
+        runner::Outcome,
+        spec::{RowSpec, ScenarioSpec, StepSpec},
         step_param::StepParamError,
+        world::World,
     },
     krabka_bdd_macros::{StepParam, scenarios},
 };
@@ -76,7 +83,15 @@ pub use {
 #[doc(hidden)]
 pub mod __private {
     pub use {
-        crate::step_check::{StepUse, check_steps},
+        crate::{
+            fixtures::Fixtures,
+            hooks::{Hook, HookFn, HookPhase},
+            runner::{run, run_outcome},
+            spec::{RowSpec, ScenarioSpec, StepSpec},
+            step_check::{RegisteredScenario, StepUse, check_registry, check_steps},
+        },
+        inventory,
         rstest_bdd::StepKeyword,
+        tokio,
     };
 }

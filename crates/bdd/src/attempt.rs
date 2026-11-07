@@ -15,7 +15,8 @@
 /// ```
 /// use {assert2::assert, krabka_bdd::Attempt};
 ///
-/// let attempt: Attempt<u32, String> = Attempt::of(|| "x".parse::<u32>().map_err(|e| e.to_string()));
+/// let attempt: Attempt<u32, String> =
+///     Attempt::of(|| "x".parse::<u32>().map_err(|e| e.to_string()));
 /// attempt.assert_failed_with(|error| error.contains("invalid digit"));
 /// assert!(!attempt.is_not_executed());
 /// ```
@@ -111,7 +112,10 @@ mod tests {
     #[rstest]
     #[case::ok(Ok(3), Probe::Succeeded(3))]
     #[case::err(Err("no"), Probe::Failed("no"))]
-    fn from_result_records_the_result(#[case] result: Result<u32, &'static str>, #[case] expected: Probe) {
+    fn from_result_records_the_result(
+        #[case] result: Result<u32, &'static str>,
+        #[case] expected: Probe,
+    ) {
         assert!(Probe::from_result(result) == expected);
         assert!(Probe::of(|| result) == expected);
     }

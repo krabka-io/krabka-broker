@@ -20,6 +20,7 @@ pub enum Keyword {
 
 impl Keyword {
     /// The keyword as a feature file writes it: `Given`, `When` or `Then`.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Given => "Given",
@@ -61,6 +62,7 @@ pub fn parse_tag_expression(expression: &str) -> Result<TagOperation, String> {
 }
 
 /// Reports whether `tags`, written without their `@`, satisfy `operation`.
+#[must_use]
 pub fn tags_match(operation: &TagOperation, tags: &[String]) -> bool {
     match operation {
         TagOperation::And(left, right) => tags_match(left, tags) && tags_match(right, tags),
@@ -78,6 +80,7 @@ pub fn tags_match(operation: &TagOperation, tags: &[String]) -> bool {
 /// Its tags are those of the feature, its rule, itself and, for an outline,
 /// the Examples block. Each distinct keyword and text appears once, at its
 /// first place in file order.
+#[must_use]
 pub fn step_uses(
     path: &str,
     feature: &Feature,
@@ -396,6 +399,14 @@ Feature: Producers are fenced by epoch
         let operation = parse_tag_expression(expression).unwrap();
         let tags: Vec<String> = tags.iter().map(|tag| (*tag).to_owned()).collect();
         assert!(tags_match(&operation, &tags) == expected);
+    }
+
+    #[rstest]
+    #[case(Keyword::Given, "Given")]
+    #[case(Keyword::When, "When")]
+    #[case(Keyword::Then, "Then")]
+    fn keyword_names_itself(#[case] keyword: Keyword, #[case] expected: &str) {
+        assert!(keyword.as_str() == expected);
     }
 
     #[test]

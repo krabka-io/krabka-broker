@@ -134,12 +134,19 @@ fn feature_module(arguments: &Arguments, plan: &Plan) -> TokenStream {
             None => content,
         });
     }
-    wrap(&plan.module, &moxy::template! { @for part in &body { {{ part }} } })
+    wrap(
+        &plan.module,
+        &moxy::template! { @for part in &body { {{ part }} } },
+    )
 }
 
 /// The tests of one rule's scenarios, outline rows grouped in a module per
 /// outline.
-fn outline_modules(arguments: &Arguments, plan: &Plan, scenarios: &[&PlannedScenario]) -> TokenStream {
+fn outline_modules(
+    arguments: &Arguments,
+    plan: &Plan,
+    scenarios: &[&PlannedScenario],
+) -> TokenStream {
     let mut parts = Vec::new();
     let mut index = 0;
     while let Some(scenario) = scenarios.get(index) {
@@ -156,7 +163,10 @@ fn outline_modules(arguments: &Arguments, plan: &Plan, scenarios: &[&PlannedScen
                     .map(|row| test_fn(arguments, plan, row))
                     .collect();
                 index += rows.len();
-                parts.push(wrap(module, &moxy::template! { @for row in &rows { {{ row }} } }));
+                parts.push(wrap(
+                    module,
+                    &moxy::template! { @for row in &rows { {{ row }} } },
+                ));
             }
         }
     }

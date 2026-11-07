@@ -8,6 +8,7 @@
 
 mod codegen;
 
+pub use self::codegen::Runtime;
 use {
     gherkin::{Feature, GherkinEnv, tagexpr::TagOperation},
     krabka_bdd_model::{
@@ -25,8 +26,6 @@ use {
         path::{Path, PathBuf},
     },
 };
-
-pub use self::codegen::Runtime;
 
 /// One `name = value` argument, or the bare directory literal.
 struct Argument {
