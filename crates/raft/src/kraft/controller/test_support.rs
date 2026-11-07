@@ -154,12 +154,12 @@ pub fn build(
             election: setup.election_timeout,
             fetch: setup.fetch_timeout,
         };
-        config.snapshot_interval_records = setup.snapshot_interval_records.0;
+        config.snapshot_policy.interval_records = setup.snapshot_interval_records.0;
         config.heartbeat_interval = setup.heartbeat_interval;
         config.controller_fetch_miss_limit = setup.controller_fetch_miss_limit;
         config.metadata_raft_command_queue_capacity = setup.metadata_raft_command_queue_capacity;
         config.metadata_raft_fetch_max = setup.metadata_raft_fetch_max;
-        config.max_bytes_between_snapshots = setup.max_bytes_between_snapshots;
+        config.snapshot_policy.max_bytes = setup.max_bytes_between_snapshots;
         config.event_queue_recorder = event_queue_recorder;
     })
 }
@@ -176,9 +176,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
         metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
         peers: Arc::new(NullPeerSender),
-        snapshot_interval_records: 0,
-        max_bytes_between_snapshots: prelude::bytes(0),
-        max_snapshot_interval: prelude::millis(0),
+        snapshot_policy: SnapshotPolicy::default(),
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         metadata_log: test_metadata_log(),
         activation: Activation::default(),
@@ -360,9 +358,7 @@ pub fn build_engine_only(
             was_leader,
             held_epoch,
             registration_writes: collections::BTreeMap::new(),
-            snapshot_interval_records: 0,
-            max_bytes_between_snapshots: prelude::bytes(0),
-            max_snapshot_interval: prelude::millis(0),
+            snapshot_policy: SnapshotPolicy::default(),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             metadata_log,
             noop_at: None,

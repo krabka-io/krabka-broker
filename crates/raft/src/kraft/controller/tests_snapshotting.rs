@@ -83,12 +83,40 @@ fn snapshot_pruning_stays_at_or_below_the_committed_frontier() {
     assert2::assert!(!krabka_verified::snapshot_prune_admission(-1, 10));
 }
 
+/// A regular snapshot is due once any one trigger reaches its limit, and a
+/// trigger at zero never fires.
+#[yare::parameterized(
+    all_off = { SnapshotPolicy::default(), (u64::MAX, u64::MAX, u64::MAX), false },
+    records_short = { SnapshotPolicy::builder().interval_records(3).build(), (2, 0, 0), false },
+    records_reached = { SnapshotPolicy::builder().interval_records(3).build(), (3, 0, 0), true },
+    bytes_short = {
+        SnapshotPolicy::builder().max_bytes(prelude::bytes(200)).build(), (0, 199, 0), false,
+    },
+    bytes_reached = {
+        SnapshotPolicy::builder().max_bytes(prelude::bytes(200)).build(), (0, 200, 0), true,
+    },
+    time_short = {
+        SnapshotPolicy::builder().max_interval(prelude::millis(500)).build(), (0, 0, 499), false,
+    },
+    time_reached = {
+        SnapshotPolicy::builder().max_interval(prelude::millis(500)).build(), (0, 0, 500), true,
+    },
+)]
+fn a_snapshot_is_due_once_any_trigger_is_reached(
+    policy: SnapshotPolicy,
+    since_last: (u64, u64, u64),
+    due: bool,
+) {
+    let (records, bytes, elapsed_ms) = since_last;
+    assert2::assert!(policy.is_due(records, bytes, elapsed_ms) == due);
+}
+
 fn delayed_snapshot_engine(topic: &str) -> (Engine, tempfile::TempDir) {
     let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
     elect_single_voter_engine(&mut engine);
     let mut committed = super::test_support::submit_on_engine(&mut engine, &topic_record(topic));
     assert2::assert!(matches!(committed.try_recv(), Ok(Ok(_))));
-    engine.snapshot_interval_records = 1;
+    engine.snapshot_policy.interval_records = 1;
     engine.snapshot_write_delay = Duration::from_millis(300);
     (engine, dir)
 }

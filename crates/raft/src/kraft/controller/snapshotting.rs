@@ -23,11 +23,52 @@ use {
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
-    krabka_units::prelude::{ByteSizeExt as _, TimeExt as _},
+    krabka_units::prelude::{self, ByteSize, ByteSizeExt as _, Time, TimeExt as _},
     std::{path::Path, sync::Arc, thread, time::Duration},
     tokio::{task, task::JoinError},
     tracing::field::Empty,
 };
+
+/// When a voter writes a regular snapshot (KIP-630): once any one trigger is
+/// reached. A trigger set to zero is off, and the default turns all three off.
+#[derive(Clone, Copy, Debug, PartialEq, bon::Builder)]
+pub struct SnapshotPolicy {
+    /// Snapshot once the committed offset advances this many records past the
+    /// last snapshot. The cleaning decides when the log below a snapshot goes.
+    #[builder(default)]
+    pub interval_records: u64,
+    /// `metadata.log.max.record.bytes.between.snapshots`: snapshot once this
+    /// many log bytes were applied since the last snapshot.
+    #[builder(default = prelude::bytes(0))]
+    pub max_bytes: ByteSize,
+    /// `metadata.log.max.snapshot.interval.ms`: snapshot once this long has
+    /// passed since the last snapshot.
+    #[builder(default = prelude::millis(0))]
+    pub max_interval: Time,
+}
+
+impl Default for SnapshotPolicy {
+    fn default() -> Self { Self::builder().build() }
+}
+
+impl SnapshotPolicy {
+    /// Whether a snapshot is due `records_advanced` committed records,
+    /// `bytes_since_snapshot` applied bytes and `elapsed_ms` milliseconds
+    /// after the last one.
+    pub(super) fn is_due(
+        self,
+        records_advanced: u64,
+        bytes_since_snapshot: u64,
+        elapsed_ms: u64,
+    ) -> bool {
+        let records_due = snapshot_interval_reached(records_advanced, self.interval_records);
+        let bytes_due = snapshot_bytes_reached(bytes_since_snapshot, self.max_bytes.bytes_u64());
+        // Zero turns the time cap off, so this is not a deadline extent.
+        let max_interval_ms = u64::try_from(self.max_interval.millis_i64()).unwrap_or(0);
+        let time_due = snapshot_time_reached(elapsed_ms, max_interval_ms);
+        records_due || bytes_due || time_due
+    }
+}
 
 /// Everything a regular checkpoint completion needs. In particular, none of
 /// these values is read from the mutable engine after the worker finishes.
@@ -82,16 +123,11 @@ impl Engine {
         }
         let hwm = self.log.hwm();
         let advanced = committed_records_since_snapshot(hwm, self.last_snapshot_end_offset);
-        let records_due = snapshot_interval_reached(advanced, self.snapshot_interval_records);
-        let bytes_due = snapshot_bytes_reached(
-            self.bytes_since_snapshot,
-            self.max_bytes_between_snapshots.bytes_u64(),
-        );
         let elapsed_ms = self.now().0.saturating_sub(self.last_snapshot_at_ms);
-        let max_snapshot_interval_ms =
-            u64::try_from(self.max_snapshot_interval.millis_i64()).unwrap_or(0);
-        let time_due = snapshot_time_reached(elapsed_ms, max_snapshot_interval_ms);
-        if !(records_due || bytes_due || time_due) {
+        if !self
+            .snapshot_policy
+            .is_due(advanced, self.bytes_since_snapshot, elapsed_ms)
+        {
             return;
         }
         tracing::Span::current().record("hwm", hwm.0);
