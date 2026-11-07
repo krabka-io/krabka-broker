@@ -63,6 +63,10 @@ let _offset_index = storage.fetch_index(&metadata, IndexType::Offset)?;
 # }
 ```
 
+## Object keys and the configured prefix
+
+The S3 and GCS backends store each segment artifact at `<prefix>/<topic>-<partition>-<topic id>/<base offset>-<segment id><suffix>`, the layout Kafka's `LocalTieredStorage` uses. Before `krabka.version` 3 is finalized the prefix is used as configured, and stray spaces around it become part of the key: ` tier ` writes ` tier /orders-0-…`. From level 3 the prefix is trimmed of surrounding spaces and `/` first, so ` tier/ `, `/tier/` and `tier` all write `tier/orders-0-…`, and a prefix of only spaces means no prefix. Reads and deletes look under both spellings at every level, so segments written before the finalization stay readable after it. A prefix with no stray characters writes the same keys at every level.
+
 ## WORM archive mode
 
 WORM archive mode turns an object-store tier into a write-once compliance archive. The broker still tiers segments the way KIP-405 describes, but it never rewrites and never deletes what it wrote, and it leaves proof that an auditor can check years later without the cluster.
@@ -151,7 +155,7 @@ krabka-worm-verify verify \
   --deep
 ```
 
-Use `--local-dir PATH` in place of `--bucket` for a mounted copy, and `--endpoint URL` with `--allow-http` for an S3-compatible endpoint served without TLS. Narrow a run with `--prefix`, `--topic`, and `--partition`. `--allow-epoch-restarts` accepts a chain restart instead of grading it as a hole, and `--strict-orphans` turns an orphan object into a failure.
+Use `--local-dir PATH` in place of `--bucket` for a mounted copy, and `--endpoint URL` with `--allow-http` for an S3-compatible endpoint served without TLS. Narrow a run with `--prefix`, `--topic`, and `--partition`. Pass `--prefix` exactly as the broker was configured with it: the run reads both spellings a broker writes, the prefix trimmed of surrounding spaces and `/` and the prefix as given, so a chain that a `krabka.version` 3 finalization split across the two verifies as one. `--allow-epoch-restarts` accepts a chain restart instead of grading it as a hole, and `--strict-orphans` turns an orphan object into a failure.
 
 `--deep` downloads every object and recomputes its SHA-256. It is the only check that catches a body replaced with different bytes of the same length: a shallow run checks that each object exists with the recorded size, and a same-size substitution passes that check.
 

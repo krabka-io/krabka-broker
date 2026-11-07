@@ -1,14 +1,18 @@
 //! Remote reads: a byte range of a segment body, and a whole index object.
 //!
-//! Each read derives one key: an absent object is a miss, with no second key
-//! to try. Index reads check metadata before a capped download. Both pass the write-only archive guard
-//! first, which refuses the read before a key is derived or a request leaves
-//! the process.
+//! Each read tries the key a copy writes now, and on a miss the key under the
+//! other spelling of the prefix, when the prefix has two. A prefix with no
+//! stray characters has one key, so a miss there is one request. Index reads
+//! check metadata before a capped download. Both pass the write-only archive
+//! guard first, which refuses the read before a key is derived or a request
+//! leaves the process.
 
 use {
     super::S3RemoteStorage,
     crate::{
-        error::RemoteStorageError, metadata::RemoteLogSegmentMetadata, storage_manager::IndexType,
+        error::RemoteStorageError,
+        metadata::RemoteLogSegmentMetadata,
+        storage_manager::{IndexType, LOG_FILE_SUFFIX},
         worm::WormError,
     },
     krabka_object_store::{ObjectOps, ObjectStoreError},
@@ -50,7 +54,7 @@ impl S3RemoteStorage {
         end_position: Option<u32>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         self.refuse_read_when_write_only()?;
-        let key = self.log_key(metadata);
+        let keys = self.segment_keys(metadata, LOG_FILE_SUFFIX);
         if let Some(end) = end_position
             && end < start_position
         {
@@ -64,7 +68,10 @@ impl S3RemoteStorage {
             || GetRange::Offset(u64::from(start_position)),
             |end| GetRange::Bounded(u64::from(start_position)..u64::from(end).saturating_add(1)),
         );
-        object_bytes(Self::block_os(self.ops.get_range(&key, range)), metadata)
+        object_bytes(
+            keys.read_first(|key| Self::block_os(self.ops.get_range(key, range.clone()))),
+            metadata,
+        )
     }
 
     /// Reads one whole index object within the configured memory limit.
@@ -74,9 +81,9 @@ impl S3RemoteStorage {
         index_type: IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         self.refuse_read_when_write_only()?;
-        let key = self.index_key(metadata, index_type);
+        let keys = self.segment_keys(metadata, index_type.suffix());
         object_bytes(
-            Self::block_os(self.ops.get_capped(&key, self.max_index_bytes)),
+            keys.read_first(|key| Self::block_os(self.ops.get_capped(key, self.max_index_bytes))),
             metadata,
         )
     }
@@ -88,9 +95,12 @@ mod tests {
         super::{IndexType, RemoteStorageError, S3RemoteStorage, WormError},
         crate::{
             metadata::RemoteLogSegmentMetadata,
-            s3::test_support::{
-                CountingRsm, SeededCopySetup, WormAccess, counting_rsm, rsm, sample_metadata,
-                seeded_blocking, stamped_metadata, worm_rsm,
+            s3::{
+                KeyPrefixForm,
+                test_support::{
+                    CountingRsm, SeededCopySetup, WormAccess, counting_rsm, prefixed_counting_rsm,
+                    rsm, sample_metadata, seeded_blocking, stamped_metadata, worm_rsm,
+                },
             },
             storage_manager::RemoteStorageManager,
             test_support::{TransactionIndex, check_sample_indexes},
@@ -178,6 +188,48 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    /// Under a padded prefix a miss costs one request per spelling, and a
+    /// segment under the spelling a copy writes now is read as if there were
+    /// one: a range read is one request, an index read its `HEAD` and `GET`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn padded_prefix_reads_the_other_spelling_only_on_a_miss() {
+        let CountingRsm { store, counter } = prefixed_counting_rsm()
+            .prefix(" tier ")
+            .form(KeyPrefixForm::Normalized)
+            .call();
+        let md = sample_metadata(uuid::Uuid::from_u128(15));
+        let missing = sample_metadata(uuid::Uuid::from_u128(16));
+        seeded_blocking()
+            .store(store)
+            .metadata(md)
+            .transaction_index(TransactionIndex::Omitted)
+            .then(move |store, md| {
+                let gets = |read: &dyn Fn()| {
+                    let before = counter.attempts(StoreOp::Get);
+                    read();
+                    counter.attempts(StoreOp::Get) - before
+                };
+                check!(
+                    [
+                        gets(&|| {
+                            store.fetch_log_segment(&md, 0, None).unwrap();
+                        }),
+                        gets(&|| {
+                            store.fetch_index(&md, IndexType::Offset).unwrap();
+                        }),
+                        gets(&|| {
+                            store.fetch_log_segment(&missing, 0, None).unwrap_err();
+                        }),
+                        gets(&|| {
+                            store.fetch_index(&missing, IndexType::Offset).unwrap_err();
+                        }),
+                    ] == [1, 2, 2, 2]
+                );
+            })
+            .call()
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

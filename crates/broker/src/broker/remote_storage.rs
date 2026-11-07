@@ -8,7 +8,7 @@ use {
         config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         diskless::{read::DisklessReadHandle, wal_index::WalIndexCache},
         error::BrokerError,
-        metadata_source::MetadataSource,
+        metadata_source::{MetadataSource, watch_image_loop},
         metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals},
         partition_registry::PartitionRegistry,
         remote_log_manager::{
@@ -20,11 +20,44 @@ use {
         },
         remote_reader::{ReaderPool, RemoteReader, RemoteReaderLimits},
     },
+    krabka_metadata::{
+        KrabkaVersion, MetadataImage, krabka_version::TIERED_KEY_PREFIX_NORMALIZED_LEVEL,
+    },
+    krabka_remote_storage::{KeyPrefixForm, KeyPrefixGate},
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::sync::Arc,
-    tokio::{sync::Mutex, task::JoinHandle, time},
+    tokio::{
+        sync::{Mutex, watch},
+        task::JoinHandle,
+        time,
+    },
     tokio_util::sync::CancellationToken,
 };
+
+/// The spelling of the tiered key prefix the image's finalized
+/// `krabka.version` writes. Tiered object keys are a persisted format, so
+/// the trimmed prefix waits for the operator to finalize
+/// [`TIERED_KEY_PREFIX_NORMALIZED_LEVEL`].
+fn key_prefix_form(image: &MetadataImage) -> KeyPrefixForm {
+    if KrabkaVersion::finalized(image).level() >= TIERED_KEY_PREFIX_NORMALIZED_LEVEL {
+        KeyPrefixForm::Normalized
+    } else {
+        KeyPrefixForm::AsConfigured
+    }
+}
+
+/// Keeps `gate` on the prefix spelling each published image's finalized
+/// `krabka.version` writes, until shutdown or the image channel closes.
+async fn follow_key_prefix_form(
+    images: watch::Receiver<Arc<MetadataImage>>,
+    gate: KeyPrefixGate,
+    shutdown: CancellationToken,
+) {
+    watch_image_loop(images, "tiered key prefix form", shutdown, |image| {
+        gate.set(key_prefix_form(image));
+    })
+    .await;
+}
 
 #[derive(Default)]
 pub(super) struct RemoteStorageStartup {
@@ -87,11 +120,22 @@ pub(super) fn start_remote_storage(
     // local pairing, so the arm below only fires for a config built in code.
     let worm = config.remote_storage_worm.as_ref();
     let archive = ArchiveMode::from_worm(worm);
-    let with_worm = |store: krabka_remote_storage::S3RemoteStorage| match worm {
-        Some(worm) => store.with_worm(worm).map_err(|error| {
-            BrokerError::Startup(format!("remote_storage.worm setup failed: {error}"))
-        }),
-        None => Ok(store),
+    // An object-store backend writes its key prefix in the spelling the
+    // finalized `krabka.version` selects, and follows every later image.
+    let key_prefix_gate = KeyPrefixGate::new(key_prefix_form(&controller.current_image()));
+    let object_store_backend = |store: krabka_remote_storage::S3RemoteStorage| {
+        tokio::spawn(follow_key_prefix_form(
+            controller.watch_image(),
+            key_prefix_gate.clone(),
+            shutdown.child_token(),
+        ));
+        let store = store.with_key_prefix_gate(key_prefix_gate.clone());
+        match worm {
+            Some(worm) => store.with_worm(worm).map_err(|error| {
+                BrokerError::Startup(format!("remote_storage.worm setup failed: {error}"))
+            }),
+            None => Ok(store),
+        }
     };
     let storage: Arc<dyn krabka_remote_storage::RemoteStorageManager> = match backend {
         RemoteStorageBackend::Local { dir } => {
@@ -108,12 +152,12 @@ pub(super) fn start_remote_storage(
             }
             Arc::new(krabka_remote_storage::LocalTieredStorage::new(dir))
         }
-        RemoteStorageBackend::S3(s3) => Arc::new(with_worm(
+        RemoteStorageBackend::S3(s3) => Arc::new(object_store_backend(
             krabka_remote_storage::S3RemoteStorage::from_s3_config(&s3).map_err(|error| {
                 BrokerError::Startup(format!("remote_storage.s3 builder failed: {error}"))
             })?,
         )?),
-        RemoteStorageBackend::Gcs(gcs) => Arc::new(with_worm(
+        RemoteStorageBackend::Gcs(gcs) => Arc::new(object_store_backend(
             krabka_remote_storage::S3RemoteStorage::from_gcs_config(&gcs).map_err(|error| {
                 BrokerError::Startup(format!("remote_storage.gcs builder failed: {error}"))
             })?,
@@ -264,4 +308,92 @@ fn spawn_remote_reader_gauges(
             reported = current;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{follow_key_prefix_form, key_prefix_form},
+        assert2::check,
+        krabka_metadata::{
+            FeatureLevelRecord, MetadataImage, MetadataRecord,
+            krabka_version::KRABKA_VERSION_FEATURE,
+        },
+        krabka_remote_storage::{KeyPrefixForm, KeyPrefixGate},
+        std::sync::Arc,
+        tokio::{sync::watch, task},
+        tokio_util::sync::CancellationToken,
+        uuid::Uuid,
+    };
+
+    /// An image whose finalized `krabka.version` is `level`.
+    fn image_at_krabka_version(level: i16) -> Arc<MetadataImage> {
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: KRABKA_VERSION_FEATURE.into(),
+            level,
+        }));
+        Arc::new(image)
+    }
+
+    #[yare::parameterized(
+        never_finalized = { None, KeyPrefixForm::AsConfigured },
+        baseline = { Some(1), KeyPrefixForm::AsConfigured },
+        just_below = { Some(2), KeyPrefixForm::AsConfigured },
+        finalized = { Some(3), KeyPrefixForm::Normalized },
+    )]
+    fn the_finalized_krabka_version_picks_the_prefix_form(
+        level: Option<i16>,
+        expected: KeyPrefixForm,
+    ) {
+        let image = level.map_or_else(
+            || Arc::new(MetadataImage::new(Uuid::nil())),
+            image_at_krabka_version,
+        );
+        check!(key_prefix_form(&image) == expected);
+    }
+
+    /// The gate follows a published level change, in either direction, and
+    /// the task ends when the image channel closes.
+    #[yare::parameterized(
+        finalization = { 2, 3, KeyPrefixForm::Normalized },
+        downgrade = { 3, 2, KeyPrefixForm::AsConfigured },
+    )]
+    #[test_macro(tokio::test)]
+    async fn the_prefix_gate_follows_a_published_level_change(
+        from: i16,
+        to: i16,
+        expected: KeyPrefixForm,
+    ) {
+        let (images, receiver) = watch::channel(image_at_krabka_version(from));
+        let gate = KeyPrefixGate::new(key_prefix_form(&images.borrow()));
+        let follower = tokio::spawn(follow_key_prefix_form(
+            receiver,
+            gate.clone(),
+            CancellationToken::new(),
+        ));
+        // Let the follower apply the current image and wait for the next one,
+        // so the level below arrives as a change.
+        task::yield_now().await;
+
+        images.send(image_at_krabka_version(to)).unwrap();
+        drop(images);
+        follower.await.unwrap();
+
+        check!(gate.form() == expected);
+    }
+
+    #[tokio::test]
+    async fn the_prefix_gate_follower_stops_on_shutdown() {
+        let (_images, receiver) = watch::channel(image_at_krabka_version(2));
+        let shutdown = CancellationToken::new();
+        let follower = tokio::spawn(follow_key_prefix_form(
+            receiver,
+            KeyPrefixGate::default(),
+            shutdown.child_token(),
+        ));
+
+        shutdown.cancel();
+        follower.await.unwrap();
+    }
 }

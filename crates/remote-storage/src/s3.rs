@@ -29,13 +29,36 @@
 //! Keys mirror [`LocalTieredStorage`](crate::LocalTieredStorage)'s
 //! directory layout so the two backends are observationally equivalent.
 //!
+//! ### The two spellings of the prefix
+//!
+//! Object keys are a persisted format, and the configured prefix has two
+//! spellings. [`KeyPrefixForm::AsConfigured`] joins the prefix exactly as the
+//! operator wrote it. `object_store`'s path splits a key on `/` and drops the
+//! empty parts, so stray separators collapse, but stray whitespace stays: a
+//! prefix of ` tier/ ` writes ` tier/ /orders-0-…/…log`. Every 1.x broker
+//! writes this spelling until the operator finalizes `krabka.version` 3.
+//! [`KeyPrefixForm::Normalized`] trims the prefix with
+//! [`normalize_prefix`](krabka_object_store::normalize_prefix) first, so
+//! ` tier/ `, `/tier/` and `tier` all write `tier/orders-0-…/…log`, and a
+//! prefix of only whitespace or `/` means no prefix. That is what level 3
+//! writes.
+//!
+//! A [`KeyPrefixGate`] that the broker sets from the finalized level selects
+//! the spelling of every write, a WORM manifest included; the default is the
+//! spelling as configured. Reads and deletes do not depend on the gate. A
+//! fetch tries the key a copy writes now and, when that object is absent, the
+//! key under the other spelling. A delete removes the segment's objects under
+//! both. A prefix with no stray characters has one spelling, so for it the two
+//! keys are one key and every operation issues the requests it always did.
+//!
 //! ## Module layout
 //!
 //! This root holds the backend's state and its `Debug` rendering. Each child
 //! module holds one concern: `client` builds and configures the store and
-//! bridges its async calls, `keys` derives every object key, `copy`, `fetch`,
-//! and `delete` hold one storage operation each, and `manager` binds those
-//! three to the trait.
+//! bridges its async calls, `prefix` holds the two spellings of the key prefix
+//! and the gate between them, `keys` derives every object key, `copy`,
+//! `fetch`, and `delete` hold one storage operation each, and `manager` binds
+//! those three to the trait.
 
 use {
     krabka_object_store::{GcsConfig, ObjectStoreClient, S3Config},
@@ -48,11 +71,13 @@ mod delete;
 mod fetch;
 mod keys;
 mod manager;
+mod prefix;
 
 #[cfg(test)]
 mod test_support;
 
-use {crate::worm::WormArchiver, std::fmt};
+pub use self::prefix::{KeyPrefixForm, KeyPrefixGate};
+use {self::prefix::KeyPrefix, crate::worm::WormArchiver, std::fmt};
 
 /// A [`RemoteStorageManager`](crate::RemoteStorageManager) backed by any
 /// S3-compatible object store.
@@ -63,9 +88,10 @@ use {crate::worm::WormArchiver, std::fmt};
 /// an `AmazonS3` client from credentials, endpoint, and bucket.
 pub struct S3RemoteStorage {
     ops: ObjectStoreClient,
-    /// Optional key prefix. The store joins it to every object key with
-    /// `/`. This lets multiple Krabka clusters share a bucket safely.
-    prefix: Option<String>,
+    /// Optional key prefix, in both of its spellings. The store joins it to
+    /// every object key with `/`. This lets multiple Krabka clusters share a
+    /// bucket safely.
+    prefix: KeyPrefix,
     /// File-size threshold above which uploads switch to S3 multipart.
     multipart_threshold: ByteSize,
     /// Per-part size used by the multipart path.
@@ -103,7 +129,8 @@ pub fn size_from_usize(bytes: usize) -> ByteSize {
 impl fmt::Debug for S3RemoteStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("S3RemoteStorage")
-            .field("prefix", &self.prefix)
+            .field("prefix", &self.prefix.configured())
+            .field("prefix_form", &self.prefix.gate.form())
             // Mode only. The archiver holds live private-key material, so it
             // never reaches a formatter.
             .field("worm", &self.worm.is_some())
