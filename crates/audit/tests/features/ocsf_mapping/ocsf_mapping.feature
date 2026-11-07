@@ -9,15 +9,23 @@ Feature: Audit events are recorded as OCSF 1.3.0
 
     Scenario Outline: An event is recorded under its OCSF class
       When the broker records <event>
-      Then the record has OCSF class <class>, category <category>, activity <activity> and type <type>
+      Then the record has OCSF class <class>, category <category> and activity <activity>, with the type id they imply
 
       Examples:
-        | case                       | event                   | class | category | activity | type   |
-        | a logon attempt            | an authentication       | 3002  | 3        | 1        | 300201 |
-        | an ACL denial              | an authorization denial | 3003  | 3        | 2        | 300302 |
-        | a state-changing admin RPC | an admin operation      | 6003  | 6        | 0        | 600300 |
-        | a break-glass transition   | a privileged action     | 6003  | 6        | 0        | 600300 |
-        | a broker start             | a broker start          | 6002  | 6        | 1        | 600201 |
+        | case                       | event               | class | category | activity |
+        | a logon attempt            | an authentication   | 3002  | 3        | 1        |
+        | a state-changing admin RPC | an admin operation  | 6003  | 6        | 0        |
+        | a break-glass transition   | a privileged action | 6003  | 6        | 0        |
+        | a broker stop              | a broker stop       | 6002  | 6        | 4        |
+
+      # OCSF 1.3.0 Application Lifecycle has 1 Install and 3 Start, and
+      # Authorize Session has 1 Assign Privileges and 2 Assign Groups, with
+      # no Deny. The broker emits 1 for a start and 2 for a denial today.
+      @inprogress
+      Examples: Ids the broker does not emit yet
+        | case           | event                   | class | category | activity |
+        | a broker start | a broker start          | 6002  | 6        | 3        |
+        | an ACL denial  | an authorization denial | 3003  | 3        | 99       |
 
   Rule: The OCSF status reports the outcome of the audited operation
 
