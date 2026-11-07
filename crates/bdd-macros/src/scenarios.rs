@@ -4,23 +4,20 @@
 //! the caller's `rstest_bdd_macros::scenarios!` call with Krabka's defaults
 //! plus a module holding the step-registry check.
 
-use std::{
-    env,
-    fs,
-    io,
-    mem,
-    path::{Path, PathBuf},
-};
-
-use gherkin::{Feature, GherkinEnv, tagexpr::TagOperation};
-use moxy::{
-    ast::ParseError,
-    token::{Ident, LitStr, Span, TokenStream, TokenTree},
-};
-
-use crate::{
-    lint::{self, Finding},
-    model::{self, Keyword, StepUse},
+use {
+    crate::{
+        lint::{self, Finding},
+        model::{self, Keyword, StepUse},
+    },
+    gherkin::{Feature, GherkinEnv, tagexpr::TagOperation},
+    moxy::{
+        ast::ParseError,
+        token::{Ident, LitInt, LitStr, Span, TokenStream, TokenTree},
+    },
+    std::{
+        env, fs, io, mem,
+        path::{Path, PathBuf},
+    },
 };
 
 /// The scenarios a gating run leaves out: reviewed but not automated, or
@@ -85,7 +82,12 @@ pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
         if file_findings.is_empty()
             && let Ok(feature) = Feature::parse(&source, GherkinEnv::default())
         {
-            uses.extend(model::step_uses(&shown, &feature, include.as_ref(), ignore.as_ref()));
+            uses.extend(model::step_uses(
+                &shown,
+                &feature,
+                include.as_ref(),
+                ignore.as_ref(),
+            ));
         }
         findings.extend(file_findings);
     }
@@ -113,7 +115,9 @@ fn parse_arguments(tokens: TokenStream) -> Result<Arguments, ParseError> {
                 arguments.ignore_tags = Some(string_value(&argument, "`ignore_tags`")?);
             }
             Some("workers") => arguments.workers = Some(int_value(&argument)?),
-            Some("runtime") if string_value(&argument, "`runtime`")?.value() == MULTI_THREAD_RUNTIME => {
+            Some("runtime")
+                if string_value(&argument, "`runtime`")?.value() == MULTI_THREAD_RUNTIME =>
+            {
                 arguments.multi_thread = true;
             }
             Some(_) => arguments.forwarded.push(argument_tokens(&argument)),
@@ -181,10 +185,9 @@ fn first_span(argument: &Argument) -> Span {
 /// The string literal an argument holds.
 fn string_value(argument: &Argument, what: &str) -> Result<LitStr, ParseError> {
     match value_tokens(argument) {
-        [TokenTree::Literal(literal)] => literal
-            .as_str()
-            .cloned()
-            .ok_or_else(|| ParseError::new(literal.span(), format!("{what} must be a string literal"))),
+        [TokenTree::Literal(literal)] => literal.as_str().cloned().ok_or_else(|| {
+            ParseError::new(literal.span(), format!("{what} must be a string literal"))
+        }),
         _ => Err(ParseError::new(
             first_span(argument),
             format!("{what} must be a string literal"),
@@ -197,7 +200,7 @@ fn int_value(argument: &Argument) -> Result<u128, ParseError> {
     match value_tokens(argument) {
         [TokenTree::Literal(literal)] => literal
             .as_int()
-            .map(|int| int.value())
+            .map(LitInt::value)
             .filter(|workers| *workers > 0)
             .ok_or_else(|| ParseError::new(literal.span(), "`workers` must be a positive integer")),
         _ => Err(ParseError::new(
@@ -279,12 +282,15 @@ fn expansion(arguments: &Arguments, dir: &LitStr, uses: &[StepUse]) -> TokenStre
             attributes = ::krabka_bdd::MultiThreadAttributePolicy,
         }
     });
-    let module = Ident::new(&format!("{}_steps", module_base(dir.value())));
+    let module = Ident::new(format!("{}_steps", module_base(dir.value())));
     let locations: Vec<LitStr> = uses
         .iter()
         .map(|step| LitStr::new(&step.location, Span::call_site()))
         .collect();
-    let keywords: Vec<Ident> = uses.iter().map(|step| keyword_ident(step.keyword)).collect();
+    let keywords: Vec<Ident> = uses
+        .iter()
+        .map(|step| keyword_ident(step.keyword))
+        .collect();
     let texts: Vec<LitStr> = uses
         .iter()
         .map(|step| LitStr::new(&step.text, Span::call_site()))
@@ -346,10 +352,7 @@ fn module_base(dir: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use rstest::rstest;
-
-    use super::module_base;
+    use {super::module_base, assert2::assert, rstest::rstest};
 
     #[rstest]
     #[case("tests/features/log_policy", "log_policy")]
