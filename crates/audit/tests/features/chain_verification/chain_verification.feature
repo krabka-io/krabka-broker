@@ -15,6 +15,13 @@ Feature: An auditor verifies the hash chain of an audit partition offline
       When an auditor verifies the partition
       Then the partition is fully attested over 5 events
 
+    Scenario: A partition that spans the finalization of krabka.version 3 verifies clean
+      Given a broker has written 3 audit events at krabka.version 2
+      And it has written 2 more audit events at krabka.version 3
+      And it has written a signed checkpoint
+      When an auditor verifies the partition
+      Then the partition is fully attested over 5 events
+
   Rule: Verification stops at the first record whose chain link does not hold
 
     Scenario Outline: An altered history is reported at the first broken link

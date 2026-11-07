@@ -149,6 +149,7 @@ mod tests {
                     test_signer,
                 },
             },
+            ocsf::{OcsfVersion, OcsfVersionSwitch},
             spool::{FILE_HEADER_LEN, Spool},
             stats::AuditStats,
             test_support::TestSigner,
@@ -161,6 +162,7 @@ mod tests {
 
     struct FailingSpoolFixture {
         clock: Arc<qubit_clock::ManualMonotonicClock>,
+        ocsf_version: OcsfVersionSwitch,
         stats: Arc<AuditStats>,
         sink: Arc<FailableSink>,
         log: Arc<AuditLog>,
@@ -203,6 +205,7 @@ mod tests {
         params.signer = signer;
         params.checkpoint_every_n = checkpoint_every_n.unwrap_or(0);
         FailingSpoolFixture {
+            ocsf_version: params.ocsf_version.clone(),
             log,
             sink,
             stats,
@@ -230,7 +233,7 @@ mod tests {
     }
 
     fn first_chained_record() -> AuditRecord {
-        let mut record = AuditRecord::from_event(&life(NodeId(0)), &product());
+        let mut record = AuditRecord::from_event(&life(NodeId(0)), &product(), OcsfVersion::V1);
         record.push_chain_headers(0, &GENESIS_HEAD);
         record
     }
@@ -307,6 +310,40 @@ mod tests {
         );
     }
 
+    /// The writer fixes a record's OCSF version when it first serializes the
+    /// event. A `krabka.version` finalized while the record waits in the spool
+    /// does not change the bytes its replay writes; an event emitted after
+    /// the change takes the new version.
+    #[tokio::test]
+    async fn a_spooled_record_replays_in_the_version_it_was_serialized_in() {
+        let fixture = failing_spool().call();
+        fixture.log.emit(life(NodeId(1)));
+        await_until("1 record spooled", || fixture.stats.spooled() >= 1).await;
+
+        fixture.ocsf_version.set(OcsfVersion::V2);
+        replay_spool(&fixture.sink, &fixture.stats, &fixture.clock).await;
+        fixture.log.emit(life(NodeId(2)));
+        finish_writer(fixture.log, fixture.handle).await;
+
+        let json = |record: &AuditRecord| String::from_utf8_lossy(&record.value).into_owned();
+        let written: Vec<String> = fixture.sink.inner.records().iter().map(json).collect();
+        check!(
+            written
+                == vec![
+                    json(&AuditRecord::from_event(
+                        &life(NodeId(1)),
+                        &product(),
+                        OcsfVersion::V1
+                    )),
+                    json(&AuditRecord::from_event(
+                        &life(NodeId(2)),
+                        &product(),
+                        OcsfVersion::V2
+                    )),
+                ]
+        );
+    }
+
     #[tokio::test]
     async fn direct_writes_when_sink_healthy_do_not_spool() {
         let dir = tempfile::tempdir().unwrap();
@@ -371,7 +408,7 @@ mod tests {
         let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         let mut chain = ChainState::new();
         for event in [life(NodeId(1)), life(NodeId(2))] {
-            let mut record = AuditRecord::from_event(&event, &product());
+            let mut record = AuditRecord::from_event(&event, &product(), OcsfVersion::V1);
             let ChainLink { seq, prev_head } = chain.extend(&record.value);
             record.push_chain_headers(seq, &prev_head);
             check!(spool.append(&record).unwrap());
@@ -448,7 +485,7 @@ mod tests {
         let one = {
             let d2 = tempfile::tempdir().unwrap();
             let mut s = Spool::open(d2.path(), ROOMY_CAP).unwrap();
-            let mut rec = AuditRecord::from_event(&life(NodeId(0)), &product());
+            let mut rec = AuditRecord::from_event(&life(NodeId(0)), &product(), OcsfVersion::V1);
             rec.push_chain_headers(0, &GENESIS_HEAD);
             s.append(&rec).unwrap();
             s.size()

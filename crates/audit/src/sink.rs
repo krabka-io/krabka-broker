@@ -4,7 +4,7 @@ use {
     crate::{
         chain::to_hex,
         event::{AuditEvent, AuditEventClass},
-        ocsf::{ProductInfo, to_ocsf},
+        ocsf::{OcsfVersion, ProductInfo, to_ocsf},
     },
     async_trait::async_trait,
     std::{
@@ -56,16 +56,18 @@ impl AuditRecord {
             .push((HEADER_PREV_HASH.to_owned(), to_hex(prev_head).into_bytes()));
     }
 
-    /// Serialize an event to OCSF JSON and attach the SIEM-filterable headers.
+    /// Serialize an event to OCSF JSON in record `version` and attach the
+    /// SIEM-filterable headers.
     #[must_use]
     #[tracing::instrument(
         level = "debug",
         skip_all,
         fields(class = ?event.class(), bytes = Empty)
     )]
-    pub fn from_event(event: &AuditEvent, product: &ProductInfo) -> Self {
+    pub fn from_event(event: &AuditEvent, product: &ProductInfo, version: OcsfVersion) -> Self {
         let class = event.class();
-        let value = serde_json::to_vec(&to_ocsf(event, product)).unwrap_or_else(|_| b"{}".to_vec());
+        let value = serde_json::to_vec(&to_ocsf(event, product, version))
+            .unwrap_or_else(|_| b"{}".to_vec());
         tracing::Span::current().record("bytes", value.len());
         let mut headers = vec![(
             "event_class".to_owned(),
@@ -226,7 +228,7 @@ mod tests {
     fn from_event_sets_principal_and_status_headers() {
         use crate::{
             event::{AuditEndpoint, AuditEvent, AuditOutcome, AuditPrincipal, LifecycleKind},
-            ocsf::ProductInfo,
+            ocsf::{OcsfVersion, ProductInfo},
         };
         let product = ProductInfo {
             vendor_name: "v".into(),
@@ -234,7 +236,7 @@ mod tests {
             version: "0".into(),
         };
         let authn = authentication(1, None, 0);
-        let r = AuditRecord::from_event(&authn, &product);
+        let r = AuditRecord::from_event(&authn, &product, OcsfVersion::V1);
         check!(
             (hdr(&r, "principal"), hdr(&r, "status"))
                 == (Some("alice".into()), Some("failure".into()))
@@ -253,7 +255,7 @@ mod tests {
             resources: vec![],
             time_ms: 0,
         };
-        let r = AuditRecord::from_event(&admin, &product);
+        let r = AuditRecord::from_event(&admin, &product, OcsfVersion::V1);
         check!(
             (hdr(&r, "principal"), hdr(&r, "status"))
                 == (Some("bob".into()), Some("success".into()))
@@ -272,7 +274,7 @@ mod tests {
             operation: "Write".into(),
             time_ms: 0,
         };
-        let r = AuditRecord::from_event(&deny, &product);
+        let r = AuditRecord::from_event(&deny, &product, OcsfVersion::V1);
         check!(
             (hdr(&r, "principal"), hdr(&r, "status"))
                 == (Some("carol".into()), Some("denied".into()))
@@ -282,7 +284,7 @@ mod tests {
             node_id: 1,
             time_ms: 0,
         };
-        let r = AuditRecord::from_event(&life, &product);
+        let r = AuditRecord::from_event(&life, &product, OcsfVersion::V1);
         check!((hdr(&r, "principal"), hdr(&r, "status")) == (None, None));
     }
 }

@@ -11,18 +11,20 @@ use {
         broker::Broker,
         config::BrokerConfig,
         coordinator::bootstrap::hosted_audit_partition,
-        metadata_source::MetadataSource,
+        metadata_source::{MetadataSource, watch_image_loop},
         metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
         time_util::system_timer,
     },
+    krabka_audit::{OcsfVersion, OcsfVersionSwitch},
     krabka_ids::PartitionIndex,
+    krabka_metadata::{KrabkaVersion, MetadataImage},
     krabka_units::{
         Time,
         convert::{ByteSizeExt as _, TimeExt as _},
     },
     std::sync::Arc,
-    tokio::{task::JoinHandle, time},
+    tokio::{sync::watch, task::JoinHandle, time},
     tokio_util::sync::CancellationToken,
 };
 
@@ -54,6 +56,24 @@ fn open_audit_spool(
         config.audit_spool_max,
         config.audit_spool_sync_every_n,
     )
+}
+
+/// Sets `switch` to the OCSF record version of the finalized `krabka.version`
+/// of every metadata image `images` publishes, until `shutdown` or until the
+/// channel closes.
+///
+/// The audit writer reads `switch` each time it serializes an event, so a
+/// record written after the operator finalizes `krabka.version` 3 carries the
+/// version 2 OCSF ids, and every earlier one keeps the krabka 1.0.0 record.
+async fn follow_ocsf_version(
+    images: watch::Receiver<Arc<MetadataImage>>,
+    switch: OcsfVersionSwitch,
+    shutdown: CancellationToken,
+) {
+    watch_image_loop(images, "audit OCSF version", shutdown, |image| {
+        switch.set(OcsfVersion::at(KrabkaVersion::finalized(image)));
+    })
+    .await;
 }
 
 fn spawn_audit_metrics(
@@ -205,10 +225,21 @@ pub(super) fn start_audit_pipeline(
             krabka_audit::ChainState::new,
             |ChainResume { next_seq, head }| krabka_audit::ChainState::resume(next_seq, head),
         );
+        // Seed the switch from the current image, so an event emitted before
+        // the follower task first runs is already in the right version.
+        let ocsf_version = OcsfVersionSwitch::new(OcsfVersion::at(KrabkaVersion::finalized(
+            &controller.current_image(),
+        )));
+        tokio::spawn(follow_ocsf_version(
+            controller.watch_image(),
+            ocsf_version.clone(),
+            supervisor_shutdown.child_token(),
+        ));
         let stats = Arc::new(krabka_audit::AuditStats::new());
         let writer = krabka_audit::AuditWriter::new(receiver, krabka_audit::AuditWriterParams {
             sink,
             product: Broker::audit_product(),
+            ocsf_version,
             signer: audit_signer(config),
             checkpoint_every_n: config.audit_checkpoint_every_n,
             checkpoint_every: config.audit_checkpoint_every,
@@ -244,10 +275,75 @@ mod tests {
     use {
         super::*,
         assert2::assert,
+        krabka_metadata::{
+            FeatureLevelRecord, MetadataRecord, krabka_version::KRABKA_VERSION_FEATURE,
+        },
         krabka_units::minutes,
         std::time::Duration,
         tokio::{task, time},
+        uuid::Uuid,
     };
+
+    /// An image whose finalized `krabka.version` is `level`.
+    fn image_at_krabka_version(level: i16) -> Arc<MetadataImage> {
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: KRABKA_VERSION_FEATURE.into(),
+            level,
+        }));
+        Arc::new(image)
+    }
+
+    /// Yields until `switch` reads `expected`, or fails after a second.
+    async fn await_version(switch: &OcsfVersionSwitch, expected: OcsfVersion) {
+        time::timeout(Duration::from_secs(1), async {
+            while switch.get() != expected {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the audit OCSF version never became {expected:?}"));
+    }
+
+    #[tokio::test]
+    async fn ocsf_version_follows_each_finalized_krabka_version() {
+        let (images, receiver) = watch::channel(image_at_krabka_version(2));
+        let switch = OcsfVersionSwitch::new(OcsfVersion::V2);
+        let shutdown = CancellationToken::new();
+        let follower = tokio::spawn(follow_ocsf_version(
+            receiver,
+            switch.clone(),
+            shutdown.child_token(),
+        ));
+
+        await_version(&switch, OcsfVersion::V1).await;
+        images.send(image_at_krabka_version(3)).unwrap();
+        await_version(&switch, OcsfVersion::V2).await;
+        images.send(image_at_krabka_version(2)).unwrap();
+        await_version(&switch, OcsfVersion::V1).await;
+
+        shutdown.cancel();
+        time::timeout(Duration::from_secs(1), follower)
+            .await
+            .expect("the follower stops on shutdown")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ocsf_version_follower_stops_when_the_image_channel_closes() {
+        let (images, receiver) = watch::channel(image_at_krabka_version(0));
+        let follower = tokio::spawn(follow_ocsf_version(
+            receiver,
+            OcsfVersionSwitch::new(OcsfVersion::V1),
+            CancellationToken::new(),
+        ));
+        drop(images);
+
+        time::timeout(Duration::from_secs(1), follower)
+            .await
+            .expect("the follower stops once the channel closes")
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn audit_metrics_cancellation_releases_log_before_next_poll() {

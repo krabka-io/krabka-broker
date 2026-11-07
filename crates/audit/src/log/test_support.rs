@@ -11,7 +11,7 @@ use {
         AuditEventClass, FileEd25519Signer, NodeId,
         chain::ChainState,
         event::{AuditEvent, LifecycleKind},
-        ocsf::ProductInfo,
+        ocsf::{OcsfVersion, OcsfVersionSwitch, ProductInfo},
         sink::{AuditError, AuditRecord, AuditSink, MemorySink},
         spool::Spool,
         stats::AuditStats,
@@ -192,6 +192,7 @@ pub fn params(sink: Arc<dyn AuditSink>, spool: Spool, stats: Arc<AuditStats>) ->
     AuditWriterParams {
         sink,
         product: product(),
+        ocsf_version: OcsfVersionSwitch::new(OcsfVersion::V1),
         signer: None,
         checkpoint_every_n: 0,
         checkpoint_every: DORMANT,

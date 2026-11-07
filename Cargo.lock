@@ -3653,6 +3653,7 @@ dependencies = [
  "krabka-ids",
  "krabka-log",
  "krabka-macros",
+ "krabka-metadata",
  "krabka-protocol",
  "krabka-units 0.8.0",
  "krabka-verified",
