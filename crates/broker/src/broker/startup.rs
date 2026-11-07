@@ -14,6 +14,7 @@ use {
                 BrokerCoordinatorSet, BrokerMetadataHandles, BrokerStorageStartup,
                 finish_broker_startup,
             },
+            audit::load_audit_signer,
             listeners::bind_ephemeral_data_plane_listener,
             metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase},
             replication::CoordinatorRefs,
@@ -172,6 +173,7 @@ impl Broker {
         TailFuture: Future<Output = Result<BrokerHandle, BrokerError>>,
     {
         config.validate()?;
+        let audit_signer = load_audit_signer(&config)?;
         assemble(&mut config).map_err(|error| BrokerError::Startup(error.to_string()))?;
         // Binds the default data-plane listener now, and publishes its real
         // port into `config`, when the config asks for one and the caller
@@ -375,6 +377,7 @@ impl Broker {
                 diskless_runtime: &diskless_runtime,
                 metrics,
                 health: Some(health.clone()),
+                audit_signer,
             },
         )
         .await?;

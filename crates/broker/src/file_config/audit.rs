@@ -7,9 +7,13 @@
 //! `[audit]` block still audits to the standard internal topic.
 
 use {
-    crate::config::{
-        DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR,
-        DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N, DEFAULT_AUDIT_TOPIC,
+    crate::{
+        BrokerError,
+        config::{
+            BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY, DEFAULT_AUDIT_CHECKPOINT_EVERY_N,
+            DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX, DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N,
+            DEFAULT_AUDIT_TOPIC,
+        },
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     schemars::JsonSchema,
@@ -24,7 +28,10 @@ pub struct FileAuditConfig {
     /// Whether the audit subsystem is active.
     #[serde(default = "default_audit_enabled")]
     pub enabled: bool,
-    /// Whether privileged operations continue when audit processing fails.
+    /// Whether privileged operations continue when audit processing fails:
+    /// `fail-open` or `fail-closed`. A `fail-closed` broker needs an
+    /// `[audit.signing]` key and refuses to start without one. A `fail-open`
+    /// broker without a key starts with checkpoints disabled.
     #[serde(default = "default_audit_failure_mode")]
     #[schemars(with = "String")]
     pub failure_mode: krabka_audit::AuditMode,
@@ -35,7 +42,9 @@ pub struct FileAuditConfig {
     #[serde(default = "default_audit_topic")]
     pub topic: String,
     /// Ed25519 checkpoint signing key. An absent table keeps the current key.
-    /// The broker has none by default: chaining only, no checkpoints.
+    /// The broker has none by default: chaining only, no checkpoints. The
+    /// broker loads a configured key at startup and refuses to start, in
+    /// either failure mode, when the key does not load.
     pub signing: Option<FileAuditSigningConfig>,
     /// Checkpoint emission cadence. An absent table keeps the current
     /// cadence, which starts at the defaults.
@@ -90,11 +99,35 @@ fn default_spool_max_bytes() -> u64 { DEFAULT_AUDIT_SPOOL_MAX.bytes_u64() }
 
 fn default_spool_sync_every_n() -> NonZeroU64 { DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N }
 
+/// Refuses an audit configuration that would leave a `fail-closed` broker with
+/// no checkpoint signing key.
+///
+/// [`FileConfig::apply_to`](super::FileConfig::apply_to) runs it after it
+/// applies `[audit]`, and [`BrokerConfig::validate`] runs it on the resolved
+/// configuration. A `fail-open` broker without a key passes: it starts with
+/// checkpoints disabled. Whether a configured key loads is checked when the
+/// broker starts, because only loading it tells.
+///
+/// # Errors
+///
+/// [`BrokerError::AuditSigningKeyRequired`] when audit is enabled, the failure
+/// mode is `fail-closed`, and no signing key is configured.
+pub(crate) fn require_signing_key_when_fail_closed(cfg: &BrokerConfig) -> Result<(), BrokerError> {
+    let has_key = cfg.audit_signing_key_path.is_some() || cfg.audit_signing_key_id.is_some();
+    if cfg.audit_enabled && cfg.audit_failure_mode == krabka_audit::AuditMode::FailClosed && !has_key
+    {
+        return Err(BrokerError::AuditSigningKeyRequired);
+    }
+    Ok(())
+}
+
 /// `[audit.signing]` — Ed25519 checkpoint signing key.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileAuditSigningConfig {
     /// Path to the PKCS#8 Ed25519 private key that signs audit checkpoints.
+    /// The broker reads it at startup, so a key that does not load stops the
+    /// broker at boot whatever the audit failure mode.
     pub key_path: String,
     /// Key id recorded on each checkpoint, so a verifier can follow a key
     /// rotation.
@@ -137,7 +170,12 @@ fn default_audit_topic() -> String { DEFAULT_AUDIT_TOPIC.to_owned() }
 #[cfg(test)]
 mod tests {
     use {
-        crate::{config::BrokerConfig, file_config::FileConfig},
+        super::require_signing_key_when_fail_closed,
+        crate::{
+            BrokerError,
+            config::BrokerConfig,
+            file_config::{FileConfig, FileConfigError},
+        },
         krabka_units::{ByteSize, Time, kibibytes, secs},
         std::{num::NonZeroU64, path::PathBuf},
     };
@@ -355,6 +393,57 @@ mod tests {
         assert2::check!(cfg2.audit_spool_dir == PathBuf::from("audit-spool"));
         assert2::check!(cfg2.audit_spool_max == krabka_units::gibibytes(1));
         assert2::check!(cfg2.audit_spool_sync_every_n.get() == 1);
+    }
+
+    // A broker refuses only the combination that would leave it fail-closed
+    // with nothing to sign checkpoints with. `validate` reaches the rule on a
+    // config that no file built.
+    #[test]
+    fn only_an_enabled_fail_closed_broker_without_a_key_is_refused() {
+        use krabka_audit::AuditMode::{FailClosed, FailOpen};
+        let cases = [
+            ("fail-closed without a key", true, FailClosed, false, false),
+            ("fail-closed with a key", true, FailClosed, true, true),
+            ("fail-open without a key", true, FailOpen, false, true),
+            ("audit disabled, fail-closed without a key", false, FailClosed, false, true),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, enabled, failure_mode, has_key, starts) in cases {
+            let cfg = AuditSettings {
+                enabled,
+                failure_mode,
+                signing_key_path: has_key.then(|| PathBuf::from("/etc/krabka/audit.pk8")),
+                signing_key_id: has_key.then(|| "audit-2026".to_owned()),
+                ..AuditSettings::of(&BrokerConfig::for_tests(PathBuf::from("/tmp/x")))
+            }
+            .broker_config();
+            actual.push((
+                name,
+                require_signing_key_when_fail_closed(&cfg).map_err(|e| e.to_string()),
+                cfg.validate().map_err(|e| e.to_string()),
+            ));
+            let outcome = if starts {
+                Ok(())
+            } else {
+                Err(BrokerError::AuditSigningKeyRequired.to_string())
+            };
+            expected.push((name, outcome.clone(), outcome));
+        }
+        assert2::assert!(actual == expected);
+    }
+
+    #[test]
+    fn apply_refuses_a_fail_closed_file_without_a_signing_key() {
+        let file: FileConfig =
+            toml::from_str("[audit]\nfailure_mode = \"fail-closed\"\n").expect("parse");
+        let mut cfg = BrokerConfig::for_tests(PathBuf::from("/tmp/x"));
+        let applied = file.apply_to(&mut cfg).map_err(|e| e.to_string());
+        let expected = Err(FileConfigError::InvalidConfig(
+            BrokerError::AuditSigningKeyRequired.to_string(),
+        )
+        .to_string());
+        assert2::assert!(applied == expected);
     }
 
     #[test]
