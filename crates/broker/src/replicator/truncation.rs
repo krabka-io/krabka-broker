@@ -1447,7 +1447,7 @@ mod tests {
     /// bounds afterwards, and the producers whose state it kept.
     #[derive(Debug, PartialEq)]
     struct Rewound {
-        rewound: bool,
+        succeeded: bool,
         log_start: i64,
         log_end: i64,
         producers: Vec<i64>,
@@ -1458,13 +1458,13 @@ mod tests {
     /// batches; producer 1 last wrote at offset 1 and producer 2 at offset 4.
     #[rstest::rstest]
     #[case::truncate_keeps_the_head(Rewind::TruncateTo(Offset(3)), Rewound {
-        rewound: true, log_start: 0, log_end: 3, producers: vec![1],
+        succeeded: true, log_start: 0, log_end: 3, producers: vec![1],
     })]
     #[case::reset_below_the_end_empties_the_log(Rewind::ResetTo(Offset(2)), Rewound {
-        rewound: true, log_start: 2, log_end: 2, producers: vec![1],
+        succeeded: true, log_start: 2, log_end: 2, producers: vec![1],
     })]
     #[case::reset_past_the_end_keeps_every_producer(Rewind::ResetTo(Offset(10)), Rewound {
-        rewound: true, log_start: 10, log_end: 10, producers: vec![1, 2],
+        succeeded: true, log_start: 10, log_end: 10, producers: vec![1, 2],
     })]
     #[tokio::test]
     async fn rewind_follower_cuts_the_log_and_its_producer_state(
@@ -1484,7 +1484,7 @@ mod tests {
                 .await;
         }
 
-        let rewound = rewind_follower(&partition, &cfg, rewind, "rewind failed").await;
+        let succeeded = rewind_follower(&partition, &cfg, rewind, "rewind failed").await;
 
         let mut producers: Vec<i64> = cfg
             .producer_state
@@ -1496,7 +1496,7 @@ mod tests {
         producers.sort_unstable();
         assert!(
             Rewound {
-                rewound,
+                succeeded,
                 log_start: partition.log_start_offset().0,
                 log_end: partition.log_end_offset().0,
                 producers,
