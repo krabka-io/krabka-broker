@@ -792,18 +792,8 @@ async fn follow_unenforced_floor(
     let Some(floor) = deleted_below.filter(|floor| (0..floor.0).contains(&reported)) else {
         return;
     };
-    let segments = match current_listing(tp, rlmm).await {
-        Ok(Some(segments)) => segments,
-        Ok(None) => {
-            debug!(topic = %partition.topic, partition = tp.partition,
-                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
-            return;
-        }
-        Err(error) => {
-            debug!(topic = %partition.topic, partition = tp.partition, %error,
-                   "remote-log-manager: the archive cannot say whether it enforces the log start yet");
-            return;
-        }
+    let Some(segments) = caught_up_segments(partition, tp, rlmm).await else {
+        return;
     };
     if remote_retention::archive_enforces_floor(&segments, floor) {
         return;
@@ -856,18 +846,8 @@ async fn raise_start_over_unheld_offsets(
     if reported >= local_start {
         return;
     }
-    let segments = match current_listing(tp, rlmm).await {
-        Ok(Some(segments)) => segments,
-        Ok(None) => {
-            debug!(topic = %partition.topic, partition = tp.partition,
-                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
-            return;
-        }
-        Err(error) => {
-            debug!(topic = %partition.topic, partition = tp.partition, %error,
-                   "remote-log-manager: the archive cannot say what it holds of the log start yet");
-            return;
-        }
+    let Some(segments) = caught_up_segments(partition, tp, rlmm).await else {
+        return;
     };
     let remote_start = archived_start(&segments, reported).unwrap_or(local_start);
     let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
@@ -895,6 +875,29 @@ fn archived_start(
         .map(|segment| segment.start_offset().max(from.0))
         .min()
         .map(krabka_log::Offset)
+}
+
+/// [`current_listing`] for a step that moves the log start: the segments, or
+/// `None`, logged, while the RLMM is behind the metadata store or cannot list
+/// the partition. The start then stays for the next tick.
+async fn caught_up_segments(
+    partition: &Partition,
+    tp: &TopicIdPartition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> Option<Vec<RemoteLogSegmentMetadata>> {
+    match current_listing(tp, rlmm).await {
+        Ok(Some(segments)) => Some(segments),
+        Ok(None) => {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
+            None
+        }
+        Err(error) => {
+            debug!(topic = %partition.topic, partition = tp.partition, %error,
+                   "remote-log-manager: the archive cannot be listed yet; the log start stays");
+            None
+        }
+    }
 }
 
 /// The partition's remote segments as of now, or `None` while this broker's
