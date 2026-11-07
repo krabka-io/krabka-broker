@@ -57,15 +57,15 @@ pub const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 pub struct KrabkaPrivateApi {
     /// The wire `api_key`.
     pub api_key: ApiKeyCode,
-    /// The RPC name, used as its metric label.
+    /// The RPC name, used as its metric label and its request span name.
     pub name: &'static str,
 }
 
 /// Every krabka-private RPC without a generated schema, each with its name.
 ///
 /// This is the one place a key is paired with its name. A new private key
-/// takes a row here, and the request metrics then label it by name rather
-/// than as `Unknown`.
+/// takes a row here, and the request metrics and request spans then name it
+/// rather than calling it `Unknown`.
 pub const KRABKA_PRIVATE_APIS: [KrabkaPrivateApi; 10] = [
     KrabkaPrivateApi {
         api_key: ALTER_BARRIER_GROUPS_API_KEY,
