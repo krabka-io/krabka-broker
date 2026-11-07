@@ -152,7 +152,7 @@ struct LegacyProducer;
 impl LegacyProducer {
     fn encode(record: ParsedRecord, magic: Magic) -> Bytes {
         let mut wire = BytesMut::new();
-        encode_flat_message_set([record], magic, &mut wire);
+        assert!(let Ok(()) = encode_flat_message_set([record], magic, &mut wire));
         wire.freeze()
     }
 }

@@ -49,7 +49,7 @@ fn trigger_timeout_ms(timeout: Option<Time>) -> i32 {
     })
 }
 
-/// Run one parsed command.
+/// Run one parsed command, writing to stdout and stderr.
 pub async fn run(cli: Cli) -> i32 {
     let (mut out, mut err) = (io::stdout(), io::stderr());
     run_with(cli, &mut Console::new(&mut out, &mut err)).await
