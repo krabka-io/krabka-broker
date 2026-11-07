@@ -14,9 +14,10 @@ use {
 ///     request reaches the offline-dir refusal and the controller moves
 ///     leadership away instead of the same read failing on every retry. It
 ///     is `KAFKA_STORAGE_ERROR`;
-///   * a batch that does not check or decode is `CORRUPT_MESSAGE`, as
-///     Kafka's `FileLogInputStream.nextBatch` raises
-///     `CorruptRecordException` for a batch header that does not fit;
+///   * a batch that does not check or decode is `CORRUPT_MESSAGE`, the code
+///     of Kafka's `CorruptRecordException`, which
+///     `FileLogInputStream.nextBatch` raises for a batch whose size is
+///     smaller than a batch header;
 ///   * anything else is the generic row that `Errors.forException` gives it.
 ///
 /// It does not map an offset below the log start: Fetch answers that with
