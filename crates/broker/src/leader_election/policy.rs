@@ -29,8 +29,17 @@ pub struct FailoverPlan {
     pub unavailable: Vec<(String, i32)>,
 }
 
-/// Push the `PartitionRecord` that moves `pr` to `leader` and `isr` at the
-/// given epochs, every other field carried over from `pr`. When `recovering`,
+/// The partition epoch and leader epoch a partition change writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextEpochs {
+    /// The `PartitionRecord.partition_epoch` the change writes.
+    pub partition: i32,
+    /// The `PartitionRecord.leader_epoch` the change writes.
+    pub leader: LeaderEpoch,
+}
+
+/// Push the `PartitionRecord` that moves `pr` to `leader` and `isr` at
+/// `epochs`, every other field carried over from `pr`. When `recovering`,
 /// a `PartitionRecoveryRecord` marking the new leader `RECOVERING` follows it,
 /// which is what an unclean election writes.
 pub fn push_partition_change(
@@ -38,15 +47,14 @@ pub fn push_partition_change(
     pr: &PartitionRecord,
     leader: NodeId,
     isr: Vec<NodeId>,
-    partition_epoch: i32,
-    leader_epoch: LeaderEpoch,
+    epochs: NextEpochs,
     recovering: bool,
 ) {
     changes.push(MetadataRecord::V1Partition(PartitionRecord {
         leader,
         isr,
-        leader_epoch,
-        partition_epoch,
+        leader_epoch: epochs.leader,
+        partition_epoch: epochs.partition,
         ..pr.clone()
     }));
     if recovering {
