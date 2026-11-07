@@ -33,6 +33,7 @@ Feature: A legacy message set is a run of offset-framed messages
       Then the message set is rejected as invalid
 
       Examples:
-        | case     | size |
-        | empty    | 0    |
-        | negative | -1   |
+        | case                                 | size |
+        | empty                                | 0    |
+        | one byte below the magic 0 overhead  | 13   |
+        | negative                             | -1   |

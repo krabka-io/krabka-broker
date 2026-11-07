@@ -24,6 +24,10 @@ use {
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
 };
 
+/// The smallest legacy message: CRC, magic, attributes and two null length
+/// fields. Kafka calls it `LegacyRecord.RECORD_OVERHEAD_V0`.
+const RECORD_OVERHEAD_V0: usize = 14;
+
 /// The length of a wire slice as a byte count.
 ///
 /// This function saturates and does not wrap. A `usize` above `u64::MAX`
@@ -47,6 +51,7 @@ fn size_of_slice(slice: &[u8]) -> ByteSize {
 /// # Errors
 /// Returns `Truncated` if `buf` holds fewer than `set_size_bytes` bytes.
 /// Returns `NegativeLength` if an entry carries a negative `message_size`.
+/// Returns `Malformed` if an entry carries a `message_size` below the 14-byte magic 0 minimum.
 /// Returns `NestedCompression` if a compressed wrapper holds another compressed wrapper.
 /// Returns `InconsistentMagic` if an inner message has a different magic than its wrapper.
 /// Returns `Malformed` if a nonzero v1 wrapper offset is below its last inner offset.
@@ -108,6 +113,14 @@ fn decode_into(
                 len: size,
             });
         };
+        // Kafka rejects a size below the smallest magic 0 message as corrupt
+        // before it looks for the body, so a short size never reads as a
+        // partial message.
+        if size < RECORD_OVERHEAD_V0 {
+            return Err(LegacyRecordsError::Malformed(format!(
+                "message size {size} is below the {RECORD_OVERHEAD_V0}-byte minimum"
+            )));
+        }
         // A partial message ends the set, after the size checks have run.
         if cur.remaining() < size {
             break;
