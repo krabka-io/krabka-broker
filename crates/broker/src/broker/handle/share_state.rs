@@ -40,16 +40,39 @@ impl BrokerHandle {
             .map(raw_summary)
     }
 
-    /// Test-only: the share-state summary of `(group, topic_id, partition)`
-    /// as the active share coordinator holds it, or `None` when it holds no
-    /// state for the key.
+    /// Test-only: one read of the share-state summary of
+    /// `(group, topic_id, partition)` as the active share coordinator holds
+    /// it, or `None` when it holds no state for the key.
     ///
     /// A load of a `__share_group_state` partition drops its keys and
     /// replays them, so [`Self::share_state_summary_for_test`] can miss a key
-    /// that the partition holds. This read waits, for at most 30 seconds,
-    /// until the key's state partition is active, then reads the summary once
-    /// under its term. A key the active partition does not hold still reads
-    /// `None` at once.
+    /// that the partition holds. This read takes the term guard the
+    /// share-state operations take and does not wait. A caller that drives
+    /// the partition itself, for example with heartbeats that reach the
+    /// persister, retries it in its own loop.
+    ///
+    /// # Errors
+    ///
+    /// The share-state error code the share-state operations answer while
+    /// the key's state partition is not active.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn try_active_share_state_summary_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<(i32, i32, i64, i32)>, i16> {
+        self.broker
+            .share_coordinator
+            .active_summary_for_test(group, topic_id, partition)
+            .await
+            .map(|summary| summary.map(raw_summary))
+    }
+
+    /// Test-only: [`Self::try_active_share_state_summary_for_test`], retried
+    /// for at most 30 seconds until the key's state partition is active. A
+    /// key the active partition does not hold still reads `None` at once.
     ///
     /// # Panics
     ///
@@ -68,12 +91,10 @@ impl BrokerHandle {
             let (read, last_code) = (&read, &last_code);
             async move {
                 match self
-                    .broker
-                    .share_coordinator
-                    .active_summary_for_test(group, topic_id, partition)
+                    .try_active_share_state_summary_for_test(group, topic_id, partition)
                     .await
                 {
-                    Ok(summary) => read.set(Some(summary.map(raw_summary))),
+                    Ok(summary) => read.set(Some(summary)),
                     Err(code) => last_code.set(Some(code)),
                 }
                 read.get().is_some()

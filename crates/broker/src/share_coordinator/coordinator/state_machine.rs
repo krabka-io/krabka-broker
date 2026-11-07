@@ -596,9 +596,10 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// The codes of [`ShareCoordinator::active`]: `COORDINATOR_LOAD_IN_PROGRESS`
-    /// while the state partition loads, and `NOT_COORDINATOR` when this broker
-    /// does not lead it or its load failed.
+    /// The codes of [`ShareCoordinator::active_for_key`]:
+    /// `COORDINATOR_NOT_AVAILABLE` when the key maps to no state partition,
+    /// `COORDINATOR_LOAD_IN_PROGRESS` while the state partition loads, and
+    /// `NOT_COORDINATOR` when this broker does not lead it or its load failed.
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) async fn active_summary_for_test(
         &self,

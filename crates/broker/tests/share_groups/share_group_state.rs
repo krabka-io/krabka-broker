@@ -49,11 +49,14 @@ async fn initialize_share_partitions(
             client.send(request).await.unwrap();
             let mut all_done = true;
             for partition in 0..partitions {
-                if broker
-                    .active_share_state_summary_for_test(group, tid, partition)
-                    .await
-                    .is_none()
-                {
+                // One read per pass: the heartbeats are what reach the
+                // persister and let a failed state partition load again.
+                if !matches!(
+                    broker
+                        .try_active_share_state_summary_for_test(group, tid, partition)
+                        .await,
+                    Ok(Some(_))
+                ) {
                     all_done = false;
                     break;
                 }
@@ -111,11 +114,12 @@ async fn heartbeat_until(
             }
             let mut all = true;
             for p in partitions.clone() {
+                // One read per pass, as in `initialize_share_partitions`. A
+                // partition that is not active has not reached `present`.
                 all &= broker
-                    .active_share_state_summary_for_test(group, topic, p)
+                    .try_active_share_state_summary_for_test(group, topic, p)
                     .await
-                    .is_some()
-                    == present;
+                    .is_ok_and(|summary| summary.is_some() == present);
             }
             if all {
                 break;
