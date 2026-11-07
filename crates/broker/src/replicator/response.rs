@@ -18,8 +18,8 @@ use {
         follower_throttle::record_replicated,
         replication_target_changed,
         truncation::{
-            diverging_epoch_truncation_target, handle_epoch_fence,
-            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+            Rewind, diverging_epoch_truncation_target, handle_epoch_fence,
+            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range, rewind_follower,
         },
     },
     crate::{
@@ -186,11 +186,13 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
     }
     info!(topic = %cfg.topic, partition = cfg.partition.get(), end = end.0,
         batch_base = base.0, "replicator: restarting the empty log at the base of the leader's batch");
-    match part.reset_to(base).await {
-        Ok(()) => super::truncate_producer_state(cfg, base.0).await,
-        Err(error) => warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-            batch_base = base.0, "replicator: restarting at the leader's batch base failed"),
-    }
+    rewind_follower(
+        part,
+        cfg,
+        Rewind::ResetTo(base),
+        "replicator: restarting at the leader's batch base failed",
+    )
+    .await;
 }
 
 /// Applies one partition row of a response against the partition it names.
@@ -347,26 +349,23 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
             "replicator: skipping diverging_epoch truncation from stale local target"
         );
         let leader_end_offset = diverging_epoch.end_offset;
-        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch).0;
-        match part.truncate_to(Offset(end_offset)).await {
-            Ok(()) => {
-                super::truncate_producer_state(cfg, end_offset).await;
-                info!(
-                    topic = %cfg.topic,
-                    partition = cfg.partition.get(),
-                    leader_epoch = diverging_epoch.epoch,
-                    leader_end_offset,
-                    end_offset,
-                    "replicator: truncated to diverging_epoch (KIP-320 in-band)"
-                );
-            }
-            Err(e) => warn!(
+        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch);
+        if rewind_follower(
+            &part,
+            cfg,
+            Rewind::TruncateTo(end_offset),
+            "replicator: truncate_to(diverging_epoch) failed",
+        )
+        .await
+        {
+            info!(
                 topic = %cfg.topic,
                 partition = cfg.partition.get(),
-                end_offset,
-                error = %e,
-                "replicator: truncate_to(diverging_epoch) failed"
-            ),
+                leader_epoch = diverging_epoch.epoch,
+                leader_end_offset,
+                end_offset = end_offset.0,
+                "replicator: truncated to diverging_epoch (KIP-320 in-band)"
+            );
         }
     }
     RowAction::Continue
