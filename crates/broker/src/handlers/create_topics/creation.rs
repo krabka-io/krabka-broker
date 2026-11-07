@@ -357,7 +357,9 @@ fn submit_failure_result(
     match error {
         // Another request created the name after this one read the image. The
         // quorum decides that race, and the row is the one Kafka's existence
-        // check answers.
+        // check answers. A forwarded write that the leader refused arrives as
+        // `ForwardedChangeRejected` instead, whose reason is unknown, so it
+        // takes the failure row below.
         RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_)) => {
             topic_exists_result(name)
         }
@@ -465,6 +467,11 @@ mod tests {
         shutdown = { RaftError::Shutdown, Some(NodeId(1)), row(codes::UNKNOWN_SERVER_ERROR, None) },
         change_rejected = {
             RaftError::ChangeRejected("stale".to_owned()),
+            Some(NodeId(1)),
+            row(codes::UNKNOWN_SERVER_ERROR, None),
+        },
+        forwarded_change_rejected = {
+            RaftError::ForwardedChangeRejected,
             Some(NodeId(1)),
             row(codes::UNKNOWN_SERVER_ERROR, None),
         },

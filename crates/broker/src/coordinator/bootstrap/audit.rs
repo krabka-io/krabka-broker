@@ -66,7 +66,9 @@ mod tests;
 /// path, a cluster with isolated controllers has no node that can place the
 /// topic on a broker. The leader counts a topic that a pending batch creates
 /// as an existing topic, so two racing submits create the topic once, and the
-/// function treats the `TopicExists` refusal as a success.
+/// function treats the `TopicExists` refusal as a success. A forwarded refusal
+/// names no reason, so the function counts it as a success only once the
+/// topic reaches the local image.
 ///
 /// Only a registered broker gets a replica. Before any registration reaches
 /// the image, the local node stands in for the broker list, but only when the
@@ -152,8 +154,28 @@ async fn create_audit_topic(
     match controller.submit_change(records).await {
         // Idempotent: another node or a restart already created it.
         Ok(_) | Err(RaftError::Metadata(MetadataError::TopicExists(_))) => Ok(()),
+        // A forwarded refusal carries no reason. A racing node that created
+        // the topic first is one; any other is a real failure. The local image
+        // trails the leader, so wait for the topic before deciding.
+        Err(RaftError::ForwardedChangeRejected)
+            if audit_topic_reaches_image(config, controller).await =>
+        {
+            Ok(())
+        }
         Err(e) => Err(BrokerError::Startup(e.to_string())),
     }
+}
+
+/// Whether the audit topic reaches the local image within
+/// `audit.partition.wait.timeout`.
+async fn audit_topic_reaches_image(config: &BrokerConfig, controller: &dyn MetadataSource) -> bool {
+    let mut images = controller.watch_image();
+    time::timeout(
+        config.audit_partition_wait_timeout.to_std(),
+        images.wait_for(|image| image.topic(&config.audit_topic).is_some()),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok())
 }
 
 /// Keep the audit placement whole while this node leads the metadata quorum.
