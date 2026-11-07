@@ -83,8 +83,12 @@ async fn write_state(
 mod tests {
     use {
         super::*,
-        crate::share_coordinator::handlers::test_support::{
-            StateFixture, group_name_literal, initialized_state, retain_leadership,
+        crate::share_coordinator::{
+            coordinator::ShareStateSummary,
+            handlers::test_support::{
+                StateFixture, group_name_literal, initialized_state, retain_leadership,
+                summary_from_json,
+            },
         },
         assert2::check,
         krabka_protocol::{
@@ -160,7 +164,7 @@ mod tests {
         state: Option<StateFixture>,
         directory: Option<tempfile::TempDir>,
         observed: Option<WriteShareGroupStateResponse>,
-        summary: rstest_bdd::Slot<Option<(i32, i32, Offset, i32)>>,
+        summary: rstest_bdd::Slot<Option<ShareStateSummary>>,
     }
     #[derive(rstest_bdd_macros::DataTableRow)]
     struct WriteStateInput {
@@ -281,10 +285,7 @@ mod tests {
     }
     #[rstest_bdd_macros::then("the stored Share write summary is {summary}")]
     fn state_write_summary(write_state_story: &WriteStateStory, summary: String) {
-        let expected: Option<(i32, i32, i64, i32)> =
-            serde_json::from_str(&summary).expect("nullable summary tuple");
-        let expected = expected
-            .map(|(state, leader, offset, complete)| (state, leader, Offset(offset), complete));
+        let expected = summary_from_json(&summary);
         check!(
             write_state_story
                 .summary

@@ -101,11 +101,15 @@ pub type LeaderEpoch = i32;
 /// See [`crate::codes`].
 pub type ShareErrorCode = i16;
 
-/// Summary tuple that [`ShareCoordinator::read_summary`] returns.
-///
-/// The fields are `state_epoch`, `leader_epoch`, `start_offset`, and
-/// `delivery_complete_count`.
-pub type ShareStateSummary = (StateEpoch, LeaderEpoch, Offset, i32);
+/// The stored state of one share partition, as a `ReadShareGroupStateSummary`
+/// partition reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShareStateSummary {
+    pub(crate) state_epoch: StateEpoch,
+    pub(crate) leader_epoch: LeaderEpoch,
+    pub(crate) start_offset: Offset,
+    pub(crate) delivery_complete_count: i32,
+}
 
 /// Kafka's messages for the share-state error rows: the `Errors` default
 /// messages and the validation messages of `ShareCoordinatorShard`.

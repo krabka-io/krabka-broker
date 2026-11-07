@@ -77,7 +77,7 @@ mod tests {
             },
             handlers::test_support::{
                 StateFixture, StateResponseRow, coordinator_with, retain_leadership,
-                state_response_rows,
+                state_response_rows, summary_from_json,
             },
             persistence::{ShareSnapshotValue, StateBatch},
         },
@@ -253,10 +253,7 @@ mod tests {
     }
     #[rstest_bdd_macros::then("the initialized Share state summary is {summary}")]
     fn initialize_summary(initialize_state_story: &InitializeStateStory, summary: String) {
-        let expected: Option<(i32, i32, i64, i32)> =
-            serde_json::from_str(&summary).expect("nullable state summary tuple");
-        let expected = expected
-            .map(|(state, leader, offset, complete)| (state, leader, Offset(offset), complete));
+        let expected = summary_from_json(&summary);
         check!(
             initialize_state_story
                 .summary

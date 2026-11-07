@@ -76,7 +76,7 @@ pub mod test_support {
                 bootstrap,
                 config::ShareCoordinatorConfig,
                 coordinator::{
-                    LoadStatus, ShareCoordinator,
+                    LoadStatus, ShareCoordinator, ShareStateSummary,
                     test_support::{
                         DeliveryAttemptCount, FixtureDeliveryState, image_with_topic, manual_clock,
                         open_state_partition, share_write, state_batch,
@@ -101,6 +101,24 @@ pub mod test_support {
         std::{ops::RangeInclusive, path::Path, sync::Arc, time::Duration},
         tokio::time::{sleep, timeout},
     };
+
+    /// The stored summary that a feature step names as the nullable JSON
+    /// array `[state_epoch, leader_epoch, start_offset,
+    /// delivery_complete_count]`.
+    pub fn summary_from_json(json: &str) -> Option<ShareStateSummary> {
+        let row: Option<(i32, i32, i64, i32)> =
+            serde_json::from_str(json).expect("nullable state summary array");
+        row.map(
+            |(state_epoch, leader_epoch, start_offset, delivery_complete_count)| {
+                ShareStateSummary {
+                    state_epoch,
+                    leader_epoch,
+                    start_offset: Offset(start_offset),
+                    delivery_complete_count,
+                }
+            },
+        )
+    }
 
     pub fn batch(bounds: RangeInclusive<Offset>) -> StateBatch {
         state_batch()

@@ -594,12 +594,12 @@ impl ShareCoordinator {
     ) -> Option<ShareStateSummary> {
         let handle = self.entry(group, topic_id, partition)?;
         let st = handle.lock().await;
-        Some((
-            st.state_epoch,
-            st.leader_epoch,
-            st.start_offset,
-            st.delivery_complete_count,
-        ))
+        Some(ShareStateSummary {
+            state_epoch: st.state_epoch,
+            leader_epoch: st.leader_epoch,
+            start_offset: st.start_offset,
+            delivery_complete_count: st.delivery_complete_count,
+        })
     }
 
     /// The body of [`ShareCoordinator::delete`], under the read guard of

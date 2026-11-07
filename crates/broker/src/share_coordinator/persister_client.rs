@@ -496,12 +496,12 @@ impl SharePersister {
         if pr.state_epoch == 0 && pr.start_offset == UNINITIALIZED_START_OFFSET {
             return Ok(None);
         }
-        Ok(Some((
-            pr.state_epoch,
-            pr.leader_epoch,
-            Offset(pr.start_offset),
-            pr.delivery_complete_count,
-        )))
+        Ok(Some(ShareStateSummary {
+            state_epoch: pr.state_epoch,
+            leader_epoch: pr.leader_epoch,
+            start_offset: Offset(pr.start_offset),
+            delivery_complete_count: pr.delivery_complete_count,
+        }))
     }
 
     /// Persist a `WriteShareGroupState` delta for `(group, topic_id,

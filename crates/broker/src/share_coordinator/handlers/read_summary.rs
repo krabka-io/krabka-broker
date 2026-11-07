@@ -51,16 +51,14 @@ async fn read_summaries(
                 .read_summary_checked(image, group_id, topic_id, pd.partition)
                 .await
             {
-                Ok(Some((state_epoch, leader_epoch, start_offset, delivery_complete_count))) => {
-                    PartitionResult {
-                        partition: pd.partition,
-                        state_epoch,
-                        leader_epoch,
-                        start_offset: start_offset.0,
-                        delivery_complete_count,
-                        ..Default::default()
-                    }
-                }
+                Ok(Some(summary)) => PartitionResult {
+                    partition: pd.partition,
+                    state_epoch: summary.state_epoch,
+                    leader_epoch: summary.leader_epoch,
+                    start_offset: summary.start_offset.0,
+                    delivery_complete_count: summary.delivery_complete_count,
+                    ..Default::default()
+                },
                 // Kafka's `PartitionFactory` sentinels for a key with no state.
                 Ok(None) => PartitionResult {
                     partition: pd.partition,

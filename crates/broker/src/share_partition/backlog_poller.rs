@@ -159,7 +159,7 @@ impl BacklogPoller {
             .persister
             .read_state_summary(group_id, topic_id, partition)
             .await?
-            .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
+            .map_or(-1, |summary| summary.start_offset.0);
         let PartitionOffsets {
             high_watermark: hwm,
             log_start,

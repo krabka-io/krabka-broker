@@ -28,8 +28,13 @@ impl BrokerHandle {
             .share_coordinator
             .stored_summary_for_test(group, topic_id, partition)
             .await
-            .map(|(state_epoch, leader_epoch, start_offset, count)| {
-                (state_epoch, leader_epoch, start_offset.0, count)
+            .map(|summary| {
+                (
+                    summary.state_epoch,
+                    summary.leader_epoch,
+                    summary.start_offset.0,
+                    summary.delivery_complete_count,
+                )
             })
     }
 
