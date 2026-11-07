@@ -1,4 +1,5 @@
-//! Length-prefixed Kafka frame I/O, leaving headers and decoding to each caller.
+//! Length-prefixed Kafka frame I/O, plus the response-header check every
+//! hand-framed decoder shares.
 
 use {
     bytes::{Buf, BufMut},

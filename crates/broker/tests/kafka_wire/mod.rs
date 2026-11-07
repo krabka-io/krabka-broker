@@ -104,7 +104,8 @@ pub struct ExchangeSetup<'a> {
 /// Send one framed request and strip the chosen response header.
 ///
 /// # Errors
-/// Returns failed reads/writes or malformed response header errors.
+/// Returns failed reads/writes, a response header that is truncated or carries
+/// a non-zero tagged-fields byte, or one whose correlation id is not the request's.
 #[bon::builder]
 pub async fn round_trip<S>(
     stream: &mut S,
