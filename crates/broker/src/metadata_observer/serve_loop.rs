@@ -591,6 +591,17 @@ mod tests {
         assert!(picked == expected);
     }
 
+    /// Whether a timer is armed on `clock` within five seconds.
+    ///
+    /// The wait blocks a thread of its own, so it never stalls the
+    /// current-thread runtime that drives the observer to its park.
+    async fn one_timer_armed_on(clock: &Arc<ManualMonotonicClock>) -> bool {
+        let waiters = sync::Arc::clone(clock);
+        task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn run_loop_sleeps_after_empty_fetch() {
         let fetches = Arc::new(AtomicUsize::new(0));
@@ -635,17 +646,11 @@ mod tests {
         // The empty fetch left the observer caught up, so it must now be parked
         // on a timer armed for `poll_interval`. That park is the loop's only
         // registration on this clock, so confirming one waiter confirms the
-        // park (blocking thread — never stalls the current-thread runtime that
-        // drives the observer to its park). Parked on a manual timeline that we
+        // park. Parked on a manual timeline that we
         // never advance, the observer cannot re-fetch, so the counts are
         // deterministically frozen at their first-fetch values.
-        let waiters = sync::Arc::clone(&clock);
-        let parked =
-            task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
-                .await
-                .unwrap();
         assert!(
-            parked,
+            one_timer_armed_on(&clock).await,
             "observer should park on the poll-interval timer after an empty fetch",
         );
 
@@ -738,13 +743,8 @@ mod tests {
         let observer = MetadataObserver::start(config_on(vec![], clock.new_timer(), dir.path()));
 
         // The park is the loop's only registration on this clock.
-        let waiters = sync::Arc::clone(&clock);
-        let parked =
-            task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
-                .await
-                .unwrap();
         assert!(
-            parked,
+            one_timer_armed_on(&clock).await,
             "the observer parks when it has no voter to fetch from"
         );
 
