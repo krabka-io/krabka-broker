@@ -8,8 +8,8 @@
 
 use {
     crate::{
-        EXIT_MISMATCH, EXIT_REFUSED, broker_codes::BARRIER_INJECTION_IN_PROGRESS,
-        console::Console, verify::VerifyOutcome,
+        EXIT_MISMATCH, EXIT_REFUSED, broker_codes::BARRIER_INJECTION_IN_PROGRESS, console::Console,
+        verify::VerifyOutcome,
     },
     krabka_protocol::krabka::{
         barrier,
@@ -104,7 +104,11 @@ pub fn report_describe(response: &DescribeBarrierGroupsResponse, console: &mut C
 /// The epoch a trigger produced, and the offsets it took.
 pub fn report_trigger(response: &TriggerBarrierResponse, console: &mut Console<'_>) -> i32 {
     if response.error_code != 0 {
-        return report_refused(console, response.error_code, response.error_message.as_deref());
+        return report_refused(
+            console,
+            response.error_code,
+            response.error_message.as_deref(),
+        );
     }
     console.out(format!("epoch  {}", response.epoch));
     console.out(format!("status {}", status_name(response.status)));
@@ -120,7 +124,10 @@ pub fn report_trigger(response: &TriggerBarrierResponse, console: &mut Console<'
     // consumed and the markers that did land cannot be withdrawn. Naming the
     // gaps is what lets a reader skip the epoch deterministically.
     for missing in &response.missing {
-        console.err(format!("no marker: {}\t{}", missing.topic, missing.partition));
+        console.err(format!(
+            "no marker: {}\t{}",
+            missing.topic, missing.partition
+        ));
     }
     0
 }
@@ -128,7 +135,11 @@ pub fn report_trigger(response: &TriggerBarrierResponse, console: &mut Console<'
 /// One line per partition of each retained cut.
 pub fn report_list(response: &ListBarrierCutsResponse, console: &mut Console<'_>) -> i32 {
     if response.error_code != 0 {
-        return report_refused(console, response.error_code, response.error_message.as_deref());
+        return report_refused(
+            console,
+            response.error_code,
+            response.error_message.as_deref(),
+        );
     }
     for cut in &response.cuts {
         console.out(format!(
@@ -147,7 +158,10 @@ pub fn report_list(response: &ListBarrierCutsResponse, console: &mut Console<'_>
             }
         }
         for missing in &cut.missing {
-            console.out(format!("  {}\t{}\tno marker", missing.topic, missing.partition));
+            console.out(format!(
+                "  {}\t{}\tno marker",
+                missing.topic, missing.partition
+            ));
         }
     }
     0

@@ -88,9 +88,7 @@ fn partial_cut(operator_messages: &mut OperatorMessages, topic: String, partitio
         }],
         ..TriggerBarrierResponse::default()
     };
-    operator_messages
-        .rendered
-        .set(rendered_trigger(&response));
+    operator_messages.rendered.set(rendered_trigger(&response));
 }
 
 #[then("the tool succeeds and reports no marker in {topic} partition {partition:i32}")]
@@ -99,10 +97,7 @@ fn partial_cut_reported(operator_messages: &OperatorMessages, topic: String, par
         *operator_messages.rendered.get()
             == Rendered {
                 exit: 0,
-                stdout: format!(
-                    "epoch  4\nstatus partial\n{topic}\t{}\t10\n",
-                    partition - 1
-                ),
+                stdout: format!("epoch  4\nstatus partial\n{topic}\t{}\t10\n", partition - 1),
                 stderr: format!("no marker: {topic}\t{partition}\n"),
             }
     );
@@ -114,9 +109,7 @@ fn injection_in_flight(operator_messages: &mut OperatorMessages) {
         error_code: BARRIER_INJECTION_IN_PROGRESS,
         ..TriggerBarrierResponse::default()
     };
-    operator_messages
-        .rendered
-        .set(rendered_trigger(&response));
+    operator_messages.rendered.set(rendered_trigger(&response));
 }
 
 #[then(
@@ -140,9 +133,7 @@ fn refused_with_reason(operator_messages: &mut OperatorMessages, code: i16, reas
         error_message: Some(reason),
         ..TriggerBarrierResponse::default()
     };
-    operator_messages
-        .rendered
-        .set(rendered_trigger(&response));
+    operator_messages.rendered.set(rendered_trigger(&response));
 }
 
 #[then("the tool exits {exit:i32} and reports {message}")]
@@ -178,8 +169,7 @@ fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
         .enable_all()
         .build()
         .expect("a runtime");
-    let rendered =
-        Rendered::capture(|console| runtime.block_on(run_with(cli, console)));
+    let rendered = Rendered::capture(|console| runtime.block_on(run_with(cli, console)));
     operator_messages.rendered.set(rendered);
     operator_messages.address.set(address);
 }
