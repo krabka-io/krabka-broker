@@ -159,7 +159,8 @@ impl ObjectOps for ObjectStoreClient {
                     mode: object_store::PutMode::Create,
                     ..PutOptions::default()
                 })
-                .await?;
+                .await
+                .map_err(|error| ObjectStoreError::from_write(key, error))?;
         }
         let upload = Box::new(AbortOnDrop::new(self.inner.put_multipart(key).await?, key));
         let mut writer = WriteMultipart::new_with_chunk_size(upload, chunk_size);
@@ -247,7 +248,8 @@ impl ObjectOps for ObjectStoreClient {
                 mode: req.mode,
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(|error| ObjectStoreError::from_write(key, error))?;
         Ok(PutOutcome {
             size_bytes,
             sha256,
