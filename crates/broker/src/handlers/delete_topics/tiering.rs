@@ -9,6 +9,7 @@
 use {
     crate::{
         broker::Broker,
+        metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
         remote_log_manager::{ArchiveMode, cascade_remote_partition_delete},
         remote_reader::RemoteReader,
@@ -57,7 +58,8 @@ pub(super) fn tiered_partitions(
 /// segments through `DeletePartitionMarked` → `DeletePartitionStarted` →
 /// per-segment lifecycle → `DeletePartitionFinished`.
 ///
-/// The response returns immediately; failures inside the cascade log at WARN.
+/// The response returns immediately; failures inside the cascade log at WARN
+/// and count against `metrics`.
 /// A write-once archive keeps every archived byte: the cascade clears the
 /// broker's metadata but deletes nothing. Deleting a topic must not erase a
 /// compliance archive.
@@ -66,6 +68,7 @@ pub(super) fn spawn_remote_cascades(
     broker_id: i32,
     archive: ArchiveMode,
     tiered_to_cascade: Vec<TopicIdPartition>,
+    metrics: &BrokerMetrics,
 ) {
     if let Some(reader) = reader {
         for tp in tiered_to_cascade {
@@ -79,6 +82,7 @@ pub(super) fn spawn_remote_cascades(
                 rsm,
                 rlmm,
                 index_cache,
+                metrics.clone(),
             ));
         }
     }
