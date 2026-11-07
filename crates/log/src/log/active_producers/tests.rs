@@ -527,7 +527,9 @@ fn remove_expired_producers_keeps_open_transactions_and_recent_producers() {
         // does not fence a later marker.
         for producer_id in [1, 2, 3] {
             let kept = staying.contains(&producer_id);
-            let (_, coordinator_epoch, _) = log.transaction_marker_state(ProducerId(producer_id));
+            let coordinator_epoch = log
+                .transaction_marker_state(ProducerId(producer_id))
+                .coordinator_epoch;
             assert!(
                 (coordinator_epoch == 4) == (kept && producer_id == 2),
                 "{name}, producer {producer_id}"
@@ -616,7 +618,9 @@ fn coordinator_epoch_views(log: &Log, producer_ids: &[i64]) -> Vec<(i64, i32, i3
     producer_ids
         .iter()
         .map(|&producer_id| {
-            let fenced_on = log.transaction_marker_state(ProducerId(producer_id)).1;
+            let fenced_on = log
+                .transaction_marker_state(ProducerId(producer_id))
+                .coordinator_epoch;
             let reported = active
                 .iter()
                 .find(|producer| producer.producer_id == ProducerId(producer_id))

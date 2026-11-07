@@ -71,6 +71,7 @@ pub use self::{
     control::BARRIER_CONTROL_TYPE,
     maintenance::{DueDeletions, FailedDeletion},
     read::{RawRead, RawReadPlan, ReadOutput},
+    state::TransactionMarkerState,
     tiering::{ActiveSegmentExport, SegmentExport},
     verbatim::VerbatimBatch,
     verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},

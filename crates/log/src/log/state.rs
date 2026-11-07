@@ -31,6 +31,20 @@ use {
 #[cfg(any(test, feature = "test-helpers"))]
 use {crate::io::LogIo, std::sync::Arc};
 
+/// What [`Log::transaction_marker_state`] admits a transaction marker
+/// against, for one producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionMarkerState {
+    /// The producer epoch of the producer's entry, or Kafka's `-1` sentinel
+    /// when the log keeps none.
+    pub producer_epoch: i16,
+    /// The coordinator epoch of the producer's last commit or abort marker,
+    /// or `-1` before its first one.
+    pub coordinator_epoch: i32,
+    /// Whether the producer has an open transaction on this partition.
+    pub has_open_transaction: bool,
+}
+
 /// When [`Log::advance_log_start_offset`] writes `log-start-offset-checkpoint`.
 #[derive(Clone, Copy)]
 enum StartCheckpoint {
@@ -617,18 +631,18 @@ impl Log {
     /// marker, plus whether that producer currently has an open transaction.
     /// Missing generations use Kafka's `-1` sentinel.
     #[must_use]
-    pub fn transaction_marker_state(&self, producer_id: ProducerId) -> (i16, i32, bool) {
+    pub fn transaction_marker_state(&self, producer_id: ProducerId) -> TransactionMarkerState {
         let (producer_epoch, coordinator_epoch) = self
             .producer_state
             .get(&producer_id)
             .map_or((-1, -1), |entry| {
                 (entry.producer_epoch, entry.coordinator_epoch)
             });
-        (
+        TransactionMarkerState {
             producer_epoch,
             coordinator_epoch,
-            self.pending.contains_key(producer_id),
-        )
+            has_open_transaction: self.pending.contains_key(producer_id),
+        }
     }
 
     /// The producer state this log holds for `producer_id`, if any.
@@ -1229,7 +1243,14 @@ mod tests {
 
         let TempLog { dir: _dir, mut log } = test_log();
         let pid = ProducerId(42);
-        assert2::assert!(log.transaction_marker_state(pid) == (-1, -1, false));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: -1,
+                    coordinator_epoch: -1,
+                    has_open_transaction: false,
+                }
+        );
         assert2::assert!(log.producer_state_entry(pid).is_none());
 
         let mut batch = sample_batch(1);
@@ -1239,7 +1260,14 @@ mod tests {
         batch.attributes = batch.attributes.with_transactional(true);
         log.append(&mut batch).unwrap();
 
-        assert2::assert!(log.transaction_marker_state(pid) == (2, -1, true));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: 2,
+                    coordinator_epoch: -1,
+                    has_open_transaction: true,
+                }
+        );
         let entry = log
             .producer_state_entry(pid)
             .expect("producer state exists");
@@ -1248,7 +1276,14 @@ mod tests {
 
         let mut marker = commit_marker(42, 2);
         log.append(&mut marker).unwrap();
-        assert2::assert!(log.transaction_marker_state(pid) == (2, 17, false));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: 2,
+                    coordinator_epoch: 17,
+                    has_open_transaction: false,
+                }
+        );
 
         log.close();
     }
