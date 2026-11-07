@@ -14,6 +14,7 @@ use {
     },
     std::{fs, path::PathBuf},
     tempfile::TempDir,
+    tokio::runtime::Runtime,
 };
 
 const CONFIGURED: &str = "Given an operator has configured the <backend> backend";
@@ -394,7 +395,7 @@ fn request_credential(store_configuration_scenario: &mut StoreConfigurationScena
     )
     .build()
     .unwrap();
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = Runtime::new().unwrap();
     let credential = runtime
         .block_on(store.credentials().get_credential())
         .map(|credential| credential.key_id.clone())
