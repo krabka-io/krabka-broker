@@ -4,12 +4,13 @@
 //! this module is the boundary that decides whether an object is a manifest at
 //! all. It caps the read, refuses a body it cannot decode, and refuses a format
 //! version it does not implement, and it reports each refusal as archive
-//! content rather than as a failure to look.
+//! content rather than as a failure to look. A manifest the listing named and
+//! the store no longer holds is archive content too: the archive lost it.
 
 use {
     crate::worm::{
         error::WormError,
-        manifest::{MANIFEST_FORMAT_VERSION, SegmentManifest},
+        manifest::{MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, SegmentManifest},
     },
     krabka_object_store::{ObjectStoreError, read_capped},
     object_store::{ObjectStore, path::Path},
@@ -48,6 +49,17 @@ pub(super) async fn read_manifest(
                 "manifest object is {size} bytes, above the {max_bytes} byte cap"
             )));
         }
+        // A manifest the listing named and the store does not hold is missing
+        // from the archive. That is a finding about the archive, the same as
+        // an oversized one, and not a failure to look.
+        Err(ObjectStoreError::NotFound(_)) => {
+            return Ok(ManifestRead::Rejected(format!(
+                "manifest of segment `{}` is missing from the archive",
+                segment_name(key)
+            )));
+        }
+        // Access denied, a network fault, a throttled store: the verifier
+        // could not look, which says nothing about the archive.
         Err(e) => {
             return Err(WormError::Archive(format!(
                 "cannot read manifest `{key}`: {e}"
@@ -66,6 +78,12 @@ pub(super) async fn read_manifest(
         return Ok(ManifestRead::Rejected(reason));
     }
     Ok(ManifestRead::Decoded(Box::new(manifest)))
+}
+
+/// The segment a manifest key names: its file name without the manifest suffix.
+fn segment_name(key: &str) -> &str {
+    let file = key.rsplit_once('/').map_or(key, |(_, file)| file);
+    file.strip_suffix(MANIFEST_SUFFIX).unwrap_or(file)
 }
 
 /// Why a manifest of `version` is refused, or `None` for
@@ -94,10 +112,35 @@ pub(super) struct KeyedManifest {
 mod tests {
     use {
         super::*,
-        crate::worm::verify::test_support::{Archive, put_raw},
-        assert2::check,
+        crate::{
+            storage_manager::segment_file_name,
+            worm::verify::{
+                VerifyRequest,
+                report::VerifyBreak,
+                test_support::{Archive, put_raw},
+                verify_archive,
+            },
+        },
+        assert2::{assert, check},
         bytes::Bytes,
+        krabka_object_store::fault::{
+            FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp,
+        },
+        object_store::memory::InMemory,
     };
+
+    /// An archive whose listing still names every object while every read
+    /// fails with `kind`: the store the verifier meets when objects vanish
+    /// between the listing and the read, or when it may list but not read.
+    async fn archive_whose_reads_fail(kind: FaultKind) -> Archive {
+        let backing: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let archive = Archive::build_on(Arc::clone(&backing), &[1]).await;
+        let failing: Arc<dyn ObjectStore> = Arc::new(FaultInjectingStore::new(
+            backing,
+            FaultPolicy::none().with(StoreOp::Get, OpFault::always(kind)),
+        ));
+        archive.with_store(failing)
+    }
 
     #[yare::parameterized(
         pre_1_0 = {
@@ -156,5 +199,42 @@ mod tests {
                 check!(false, "an oversized manifest must record a break");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_missing_manifest_object_is_a_break_and_not_an_error() {
+        let archive = archive_whose_reads_fail(FaultKind::NotFound).await;
+        let segment = &archive.segments[0];
+
+        let report = archive.verify().await;
+
+        check!(!report.ok());
+        let expected = VerifyBreak {
+            manifest_key: segment.manifest_key.clone(),
+            seq: None,
+            reason: format!(
+                "manifest of segment `{}` is missing from the archive",
+                segment_file_name(&segment.metadata, "")
+            ),
+        };
+        check!(report.first_break() == Some(&expected));
+    }
+
+    #[tokio::test]
+    async fn a_manifest_read_the_store_refuses_is_an_error_and_not_a_break() {
+        let archive = archive_whose_reads_fail(FaultKind::ServerError).await;
+
+        let result = verify_archive(
+            &archive.store,
+            &VerifyRequest::default(),
+            &archive.trusted(),
+        )
+        .await;
+
+        assert!(let Err(WormError::Archive(message)) = result);
+        check!(message.starts_with(&format!(
+            "cannot read manifest `{}`",
+            archive.segments[0].manifest_key
+        )));
     }
 }

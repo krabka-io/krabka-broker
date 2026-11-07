@@ -88,7 +88,7 @@ The verdict goes to stdout and the diagnostics go to stderr, so a script reads t
 | :--- | :--- | :--- |
 | `OK: N manifests over M partition(s), …` | 0 | The chain is continuous, every signature is valid, every object is present. One line per partition follows, and it names the tip for the next `--expect-head`. |
 | `OK: empty archive` | 0 | Nothing to verify. |
-| `TAMPER DETECTED at KEY (seq N)` | 1 | A manifest was rewritten, reordered, or removed, or an object does not match what its manifest records. |
+| `TAMPER DETECTED at KEY (seq N)` | 1 | A manifest was rewritten, reordered, or removed, a manifest object the listing named is missing or oversized, or an object does not match what its manifest records. |
 | `HEAD MISMATCH: expected X, archive tip Y` | 1 | The chain is internally perfect and stops short of the head the run was given. |
 | `ORPHAN OBJECTS: N object(s) with no manifest` | 0, or 1 under `--strict-orphans` | An object that no manifest names. Reported either way. |
 | `INCOMPLETE ATTESTATION: chain restarted N time(s)` | 1 | The chain has holes between epochs. |
@@ -288,7 +288,7 @@ The pinned version is never read first. A walk that always read it would confirm
 
 A verifier reads objects that an attacker may have written, so it is built to that assumption throughout.
 
-Every manifest read goes through a capped reader that issues a `HEAD` first and refuses an oversized object before it buffers a byte. A real manifest describes one segment copy and is a few kilobytes, so a one-megabyte cap is generous and still bounds the damage. An oversized object grades as a break rather than an error, because an object in the archive is archive content and not a failure to look.
+Every manifest read goes through a capped reader that issues a `HEAD` first and refuses an oversized object before it buffers a byte. A real manifest describes one segment copy and is a few kilobytes, so a one-megabyte cap is generous and still bounds the damage. An oversized object grades as a break rather than an error, because an object in the archive is archive content and not a failure to look. A manifest the listing named and the store no longer holds grades the same way, and the break names the segment whose manifest is gone. Any other failed read, such as a denied request or a network fault, stays an error: the verifier could not look.
 
 No allocation is ever sized from a count a manifest supplies. Object bodies are hashed chunk by chunk on a stream and never buffered whole, so a deep walk's memory cost does not follow the object size. A damaged or hostile archive produces a report and never a panic.
 

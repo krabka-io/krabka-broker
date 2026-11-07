@@ -153,6 +153,9 @@ impl Archive {
         }
     }
 
+    /// The same archive, read through `store` instead of the one it was built on.
+    pub(super) fn with_store(self, store: Arc<dyn ObjectStore>) -> Self { Self { store, ..self } }
+
     pub(super) fn trusted(&self) -> TrustedManifestKeys {
         TrustedManifestKeys::single(KEY_ID.to_owned(), self.public_key.clone())
     }
