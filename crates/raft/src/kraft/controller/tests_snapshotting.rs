@@ -220,7 +220,7 @@ fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replace
     largest = { SnapshotId::new(i64::MAX, i32::MAX), "09223372036854775807-2147483647.checkpoint" },
 )]
 fn a_checkpoint_name_is_the_fixed_width_offset_and_epoch(id: SnapshotId, name: &str) {
-    assert2::assert!(checkpoint_name(id.end_offset, id.epoch) == name);
+    assert2::assert!(checkpoint_name(id) == name);
 }
 
 #[test]
@@ -390,7 +390,8 @@ fn retain_recent_checkpoints_keeps_the_two_newest_ids_and_deletes_the_rest() {
         ("older than both", 5, 1, false),
     ] {
         assert2::assert!(
-            load_checkpoint_by_id(&cp_dir, end_offset, epoch).is_some() == want_present
+            load_checkpoint_by_id(&cp_dir, SnapshotId::new(end_offset, epoch)).is_some()
+                == want_present
         );
     }
     assert2::assert!(checkpoint_entry_count(&cp_dir) == 2);
@@ -404,7 +405,9 @@ fn retain_recent_checkpoints_keeps_a_lone_checkpoint() {
 
     retain_recent_checkpoints(&cp_dir);
 
-    assert2::assert!(load_checkpoint_by_id(&cp_dir, 7, 2) == Some(b"only".to_vec()));
+    assert2::assert!(
+        load_checkpoint_by_id(&cp_dir, SnapshotId::new(7, 2)) == Some(b"only".to_vec())
+    );
 }
 
 #[test]
@@ -417,9 +420,11 @@ fn retain_latest_checkpoint_keeps_only_the_single_newest_id() {
 
     retain_latest_checkpoint(&cp_dir);
 
-    assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 1) == Some(b"newest".to_vec()));
-    assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 0).is_none());
-    assert2::assert!(load_checkpoint_by_id(&cp_dir, 5, 1).is_none());
+    assert2::assert!(
+        load_checkpoint_by_id(&cp_dir, SnapshotId::new(6, 1)) == Some(b"newest".to_vec())
+    );
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, SnapshotId::new(6, 0)).is_none());
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, SnapshotId::new(5, 1)).is_none());
     assert2::assert!(checkpoint_entry_count(&cp_dir) == 1);
 
     // Empty dir no-ops
@@ -452,17 +457,15 @@ fn a_snapshot_roll_keeps_the_checkpoint_it_replaces_until_the_next_one() {
         assert2::assert!(ids.iter().filter(|id| **id == ids[ids.len() - 1]).count() == 1);
 
         if ids.len() == 2 {
-            assert2::assert!(
-                load_checkpoint_by_id(&cp_dir, ids[0].end_offset, ids[0].epoch).is_some()
-            );
+            assert2::assert!(load_checkpoint_by_id(&cp_dir, ids[0]).is_some());
         }
     }
 
     assert2::assert!(
         (
-            load_checkpoint_by_id(&cp_dir, ids[0].end_offset, ids[0].epoch).is_some(),
-            load_checkpoint_by_id(&cp_dir, ids[1].end_offset, ids[1].epoch).is_some(),
-            load_checkpoint_by_id(&cp_dir, ids[2].end_offset, ids[2].epoch).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[0]).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[1]).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[2]).is_some(),
         ) == (false, true, true)
     );
 }
@@ -680,13 +683,13 @@ fn checkpoint_chunk_reads_only_the_requested_range(
 fn an_open_checkpoint_survives_its_deletion() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_checkpoint(dir.path(), 6, 1, b"0123456789").expect("write");
-    let mut open = open_checkpoint(dir.path(), 6, 1).expect("open");
+    let mut open = open_checkpoint(dir.path(), SnapshotId::new(6, 1)).expect("open");
 
     // Retention keeps the two newest ids, so two newer ones delete (6, 1).
     write_checkpoint(dir.path(), 7, 1, b"newer").expect("write newer");
     write_checkpoint(dir.path(), 8, 1, b"newest").expect("write newest");
     retain_recent_checkpoints(dir.path());
-    assert!(open_checkpoint(dir.path(), 6, 1).is_none());
+    assert!(open_checkpoint(dir.path(), SnapshotId::new(6, 1)).is_none());
 
     let chunks = [
         open.read_chunk(0, 6).expect("first chunk"),
@@ -708,9 +711,9 @@ fn open_checkpoint_misses_an_absent_id() {
 
     assert!(
         (
-            open_checkpoint(dir.path(), 6, 1).map(|file| file.len()),
-            open_checkpoint(dir.path(), 6, 2).is_none(),
-            open_checkpoint(&dir.path().join("absent"), 6, 1).is_none(),
+            open_checkpoint(dir.path(), SnapshotId::new(6, 1)).map(|file| file.len()),
+            open_checkpoint(dir.path(), SnapshotId::new(6, 2)).is_none(),
+            open_checkpoint(&dir.path().join("absent"), SnapshotId::new(6, 1)).is_none(),
         ) == (Some(7), true, true)
     );
 }

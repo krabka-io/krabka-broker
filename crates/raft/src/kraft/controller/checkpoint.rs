@@ -35,7 +35,7 @@ pub fn write_checkpoint(
     bytes: &[u8],
 ) -> Result<(), RaftError> {
     fs::create_dir_all(dir).map_err(krabka_log::LogError::Io)?;
-    let name = checkpoint_name(end_offset, epoch);
+    let name = checkpoint_name(SnapshotId { end_offset, epoch });
     let path = dir.join(name);
     krabka_log::write_file_atomic(&path.with_extension("tmp"), &path, bytes)
         .map_err(krabka_log::LogError::Io)?;
@@ -54,15 +54,15 @@ pub fn write_checkpoint(
 ///
 /// Returns an error when the selected checkpoint file cannot be read.
 pub fn load_latest_checkpoint(dir: &Path) -> Result<Option<Vec<u8>>, RaftError> {
-    let Some(SnapshotId { end_offset, epoch }) = latest_checkpoint_id(dir) else {
+    let Some(id) = latest_checkpoint_id(dir) else {
         return Ok(None);
     };
-    let bytes =
-        fs::read(dir.join(checkpoint_name(end_offset, epoch))).map_err(krabka_log::LogError::Io)?;
+    let bytes = fs::read(dir.join(checkpoint_name(id))).map_err(krabka_log::LogError::Io)?;
     Ok(Some(bytes))
 }
 
-pub(crate) fn checkpoint_name(end_offset: i64, epoch: i32) -> String {
+pub(crate) fn checkpoint_name(id: SnapshotId) -> String {
+    let SnapshotId { end_offset, epoch } = id;
     format!("{end_offset:020}-{epoch:010}.checkpoint")
 }
 
@@ -76,7 +76,7 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<SnapshotId> {
     if id.end_offset < 0 || id.epoch < 0 {
         return None;
     }
-    (checkpoint_name(id.end_offset, id.epoch) == name).then_some(id)
+    (checkpoint_name(id) == name).then_some(id)
 }
 
 /// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts and return the
@@ -201,8 +201,8 @@ fn retain_checkpoints(dir: &Path, latest: SnapshotId, previous: SnapshotId) {
 /// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, or `None`
 /// if it is absent (the leader's `FetchSnapshot` serve path).
 #[must_use]
-pub fn load_checkpoint_by_id(dir: &Path, end_offset: i64, epoch: i32) -> Option<Vec<u8>> {
-    fs::read(dir.join(checkpoint_name(end_offset, epoch))).ok()
+pub fn load_checkpoint_by_id(dir: &Path, id: SnapshotId) -> Option<Vec<u8>> {
+    fs::read(dir.join(checkpoint_name(id))).ok()
 }
 
 /// An open `.checkpoint`, for serving one KIP-630 `FetchSnapshot` chunk
@@ -231,12 +231,8 @@ pub(crate) enum CheckpointChunk {
 
 /// Open the checkpoint `<end_offset>-<epoch>.checkpoint`, or `None` if it is
 /// absent or cannot be opened (the leader's `FetchSnapshot` serve path).
-pub(crate) fn open_checkpoint(
-    dir: &Path,
-    end_offset: i64,
-    epoch: i32,
-) -> Option<CheckpointFile<File>> {
-    let file = File::open(dir.join(checkpoint_name(end_offset, epoch))).ok()?;
+pub(crate) fn open_checkpoint(dir: &Path, id: SnapshotId) -> Option<CheckpointFile<File>> {
+    let file = File::open(dir.join(checkpoint_name(id))).ok()?;
     let len = file.metadata().ok()?.len();
     Some(CheckpointFile::new(file, len))
 }

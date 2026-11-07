@@ -51,10 +51,9 @@ fn retained_snapshots(dir: &Path, log_start: Offset) -> Vec<RetainedSnapshot> {
     ids.sort_unstable();
     ids.into_iter()
         .filter_map(|id| {
-            let size =
-                fs::metadata(dir.join(super::checkpoint::checkpoint_name(id.end_offset, id.epoch)))
-                    .ok()?
-                    .len();
+            let size = fs::metadata(dir.join(super::checkpoint::checkpoint_name(id)))
+                .ok()?
+                .len();
             Some(RetainedSnapshot { id, size })
         })
         .collect()
@@ -126,8 +125,7 @@ impl Engine {
     /// The `last_contained_log_timestamp` in the header of snapshot `id`, or
     /// `None` when the file does not read.
     fn snapshot_timestamp(&self, id: SnapshotId) -> Option<i64> {
-        let bytes =
-            super::checkpoint::load_checkpoint_by_id(&self.data_dir, id.end_offset, id.epoch)?;
+        let bytes = super::checkpoint::load_checkpoint_by_id(&self.data_dir, id)?;
         SnapshotReader::last_contained_log_timestamp(&bytes).ok()
     }
 
@@ -176,11 +174,7 @@ fn delete_checkpoints_below(dir: &Path, id: SnapshotId) -> Vec<SnapshotId> {
     below.sort_unstable();
     below.pop();
     below.retain(|found| {
-        fs::remove_file(dir.join(super::checkpoint::checkpoint_name(
-            found.end_offset,
-            found.epoch,
-        )))
-        .is_ok()
+        fs::remove_file(dir.join(super::checkpoint::checkpoint_name(*found))).is_ok()
     });
     below
 }

@@ -539,7 +539,7 @@ fn unfinished_downgrade_prune(
     let base = checkpoint_ids(data_dir)
         .into_iter()
         .find(|id| Offset(id.end_offset) == log_start)
-        .and_then(|id| load_checkpoint_by_id(data_dir, id.end_offset, id.epoch))
+        .and_then(|id| load_checkpoint_by_id(data_dir, id))
         .map(|bytes| SnapshotReader::read(&bytes))
         .transpose()?
         .map_or_else(

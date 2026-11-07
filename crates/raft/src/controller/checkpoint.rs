@@ -54,7 +54,7 @@ impl ControllerHandle {
         };
         // Retention can delete the id between the scan and the open, which
         // reads as no checkpoint, as it did before the scan saw it.
-        let Some(mut checkpoint) = open_checkpoint(&self.data_dir, id.end_offset, id.epoch) else {
+        let Some(mut checkpoint) = open_checkpoint(&self.data_dir, id) else {
             return SnapshotRange::NoSnapshot;
         };
         match checkpoint.read_chunk(position, max_bytes) {

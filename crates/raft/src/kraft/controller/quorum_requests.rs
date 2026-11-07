@@ -480,7 +480,7 @@ impl Engine {
             epoch: partition.snapshot_id.epoch,
         };
         let checkpoint = (snapshot_id != BOOTSTRAP_SNAPSHOT_ID)
-            .then(|| open_checkpoint(&self.data_dir, snapshot_id.end_offset, snapshot_id.epoch))
+            .then(|| open_checkpoint(&self.data_dir, snapshot_id))
             .flatten();
         let Some(mut checkpoint) = checkpoint else {
             return partition_error(self, SNAPSHOT_NOT_FOUND);

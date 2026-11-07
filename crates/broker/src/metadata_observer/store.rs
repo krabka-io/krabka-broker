@@ -109,7 +109,7 @@ impl ObserverStore {
     /// has no checkpoint and must replicate the log from its start.
     pub(super) fn resume(&mut self, cluster_id: uuid::Uuid) -> Option<Resumed> {
         let SnapshotId { end_offset, epoch } = self.persisted?;
-        let bytes = load_checkpoint_by_id(&self.dir, end_offset, epoch)?;
+        let bytes = load_checkpoint_by_id(&self.dir, SnapshotId { end_offset, epoch })?;
         let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
             Ok(records) => records,
             Err(error) => {
