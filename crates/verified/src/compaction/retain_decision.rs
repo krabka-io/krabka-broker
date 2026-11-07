@@ -37,10 +37,10 @@ pub const fn compaction_decode_step(
 #[logic]
 pub fn compute_horizon_model(now_ms: i64, delete_retention_ms: i64) -> Int {
     pearlite! {
-        if now_ms@ + delete_retention_ms@ > 9223372036854775807 {
-            9223372036854775807
-        } else if now_ms@ + delete_retention_ms@ < -9223372036854775807 - 1 {
-            -9223372036854775807 - 1
+        if now_ms@ + delete_retention_ms@ > i64::MAX@ {
+            i64::MAX@
+        } else if now_ms@ + delete_retention_ms@ < i64::MIN@ {
+            i64::MIN@
         } else {
             now_ms@ + delete_retention_ms@
         }

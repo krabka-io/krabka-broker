@@ -1,7 +1,8 @@
 use {
     super::{
-        FetchWatermarks, ReplicaFetchFacts, ReplicaFetchMutation, advance_high_watermark,
-        fetch_visibility, local_append_coordinates, replica_fetch_mutation, truncation_frontier,
+        FetchReader, FetchWatermarks, Isolation, ReplicaFetchFacts, ReplicaFetchMutation,
+        advance_high_watermark, fetch_visibility, local_append_coordinates, replica_fetch_mutation,
+        truncation_frontier,
     },
     creusot_std::prelude::*,
 };
@@ -41,8 +42,7 @@ pub(super) fn fenced_replication_bounds_fetch(
         ReplicaFetchMutation::Reject | ReplicaFetchMutation::Retry => (w.log_end, w.hw),
     };
     let visibility = fetch_visibility(
-        false,
-        true,
+        FetchReader::Consumer(Isolation::ReadCommitted),
         FetchWatermarks {
             log_end: end,
             hw,

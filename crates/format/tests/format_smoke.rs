@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use {
-    krabka_broker::bootstrap,
+    krabka_format::{BOOTSTRAP_RECORDS, MetaProperties, decode_bootstrap_records},
     krabka_metadata::MetadataRecord,
     std::{
         collections::BTreeMap,
@@ -30,7 +30,8 @@ fn run_format(dir: &tempfile::TempDir, args: &[&str]) -> Output {
 }
 
 fn bootstrap_records(dir: &tempfile::TempDir) -> Vec<MetadataRecord> {
-    bootstrap::load_bootstrap_records(dir.path()).expect("bootstrap records")
+    let bytes = fs::read(dir.path().join(BOOTSTRAP_RECORDS)).expect("read bootstrap records");
+    decode_bootstrap_records(&bytes).expect("bootstrap records")
 }
 
 fn offset_zero_checkpoint(dir: &tempfile::TempDir) -> PathBuf {
@@ -61,7 +62,11 @@ fn check_refused_case(args: &[&str], expected: i32) {
 fn formatted_directory_id(dir: &tempfile::TempDir, args: &[&str]) -> uuid::Uuid {
     let out = run_format(dir, args);
     assert2::assert!(out.status.success());
-    bootstrap::read_directory_id(dir.path()).expect("formatted directory id")
+    MetaProperties::read(dir.path())
+        .expect("read meta.properties")
+        .and_then(|meta| meta.directory_id)
+        .expect("formatted directory id")
+        .into()
 }
 
 #[test]

@@ -31,7 +31,7 @@ use {
         },
         broker::{
             DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
-            FetchWatermarks, ReplicaFetchFacts, ReplicaFetchMutation,
+            FetchReader, FetchWatermarks, Isolation, ReplicaFetchFacts, ReplicaFetchMutation,
             delete_records_trim_application, delete_records_trim_decision, fetch_visibility,
             replica_fetch_mutation,
         },

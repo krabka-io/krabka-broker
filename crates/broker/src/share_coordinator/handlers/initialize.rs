@@ -231,10 +231,8 @@ mod tests {
             initialize_state_story
                 .state()
                 .coordinator
-                .read_summary(key_group, topic, input.partition)
-                .await
-                .ok()
-                .flatten(),
+                .stored_summary_for_test(key_group, topic, input.partition)
+                .await,
         );
     }
     #[rstest_bdd_macros::then(

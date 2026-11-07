@@ -15,7 +15,7 @@
 use {
     super::{
         MetadataObserver, ObserverConfig,
-        fetch::fetch_once,
+        fetch::{FetchOutcome, fetch_once},
         store::{ObserverStore, Resumed},
     },
     crate::{controller_endpoint::quorum_targets, time_util},
@@ -39,6 +39,19 @@ async fn park(config: &ObserverConfig) -> bool {
         return false;
     };
     time_util::fired(tick.await, TASK)
+}
+
+/// [`park`], cut short by `shutdown`.
+///
+/// Reports whether the loop goes on: `false` when the timer failed or the
+/// observer is shutting down. `MetadataObserver::cancel` awaits the loop, so
+/// every park has to race the shutdown, or the broker's shutdown waits out a
+/// whole poll interval.
+async fn park_or_stop(config: &ObserverConfig, shutdown: &CancellationToken) -> bool {
+    tokio::select! {
+        () = shutdown.cancelled() => false,
+        held = park(config) => held,
+    }
 }
 
 /// Which controller the loop fetches from next, and what the last answers
@@ -174,6 +187,51 @@ fn resume(config: &ObserverConfig, store: &mut ObserverStore, observer: &Metadat
     fetch_offset
 }
 
+/// Publish what an answered fetch moved: the applied offset and timestamp,
+/// the quorum's committed offset, and the leader it named.
+///
+/// `fetch_offset` is the offset the fetch asked from, so a fetch that applied
+/// nothing records no processing time.
+fn publish_progress(
+    observer: &MetadataObserver,
+    store: &mut ObserverStore,
+    outcome: &FetchOutcome,
+    fetch_offset: u64,
+) {
+    let new_offset = outcome.next_fetch_offset;
+    if let Some(timestamp_ms) = outcome.last_applied_record_timestamp_ms {
+        observer
+            .last_applied_record_timestamp_ms
+            .store(timestamp_ms, Ordering::Release);
+        store.record_applied_timestamp(timestamp_ms);
+    }
+    if new_offset > fetch_offset
+        && let Some(processing_us) = outcome.pending_record_processing_time_us
+    {
+        observer.record_pending_record_processing_time_us(processing_us);
+    }
+    observer.metadata_offset.store(
+        i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
+        Ordering::Release,
+    );
+    // The quorum's high watermark counts committed *records*; the
+    // offset convention here is one-past-the-last, so the last
+    // committed offset is one below it, matching `metadata_offset`.
+    // It is the quorum's and not the responder's: the voter this loop
+    // picked may itself be a follower that is behind.
+    observer.quorum_committed_offset.store(
+        outcome.quorum_high_watermark.saturating_sub(1),
+        Ordering::Release,
+    );
+    // The leader is the one the answer names, which a bootstrap
+    // server knows by node id even though this node knows the server
+    // only by its address. An answer that names none, from a quorum in
+    // the middle of an election, leaves the last one standing.
+    if let Some(leader) = outcome.leader_hint {
+        let _ = observer.leader.send_replace(Some(leader));
+    }
+}
+
 pub(super) async fn run_loop(
     config: ObserverConfig,
     observer: Arc<MetadataObserver>,
@@ -193,7 +251,7 @@ pub(super) async fn run_loop(
             &config.bootstrap_servers,
         );
         let Some((target, addr)) = cursor.pick(&targets).cloned() else {
-            if !park(&config).await {
+            if !park_or_stop(&config, &shutdown).await {
                 return;
             }
             continue;
@@ -216,37 +274,7 @@ pub(super) async fn run_loop(
                 return;
             }
             let new_offset = outcome.next_fetch_offset;
-            if let Some(timestamp_ms) = outcome.last_applied_record_timestamp_ms {
-                observer
-                    .last_applied_record_timestamp_ms
-                    .store(timestamp_ms, Ordering::Release);
-                store.record_applied_timestamp(timestamp_ms);
-            }
-            if new_offset > fetch_offset
-                && let Some(processing_us) = outcome.pending_record_processing_time_us
-            {
-                observer.record_pending_record_processing_time_us(processing_us);
-            }
-            observer.metadata_offset.store(
-                i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
-                Ordering::Release,
-            );
-            // The quorum's high watermark counts committed *records*; the
-            // offset convention here is one-past-the-last, so the last
-            // committed offset is one below it, matching `metadata_offset`.
-            // It is the quorum's and not the responder's: the voter this loop
-            // picked may itself be a follower that is behind.
-            observer.quorum_committed_offset.store(
-                outcome.quorum_high_watermark.saturating_sub(1),
-                Ordering::Release,
-            );
-            // The leader is the one the answer names, which a bootstrap
-            // server knows by node id even though this node knows the server
-            // only by its address. An answer that names none, from a quorum in
-            // the middle of an election, leaves the last one standing.
-            if let Some(leader) = outcome.leader_hint {
-                let _ = observer.leader.send_replace(Some(leader));
-            }
+            publish_progress(&observer, &mut store, &outcome, fetch_offset);
             cursor.answered(&targets, target, outcome.leader_hint);
             // Every poll is answered and nothing is ever applied: the stall
             // shows up as a readiness lag this node can never close, with
@@ -268,9 +296,8 @@ pub(super) async fn run_loop(
                 );
             }
             if new_offset == fetch_offset {
-                tokio::select! {
-                    () = shutdown.cancelled() => return,
-                    held = park(&config) => if !held { return; },
+                if !park_or_stop(&config, &shutdown).await {
+                    return;
                 }
             } else {
                 fetch_offset = new_offset;
@@ -278,9 +305,8 @@ pub(super) async fn run_loop(
             }
         } else {
             cursor.missed(&targets, target);
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                held = park(&config) => if !held { return; },
+            if !park_or_stop(&config, &shutdown).await {
+                return;
             }
         }
     }
@@ -565,6 +591,17 @@ mod tests {
         assert!(picked == expected);
     }
 
+    /// Whether a timer is armed on `clock` within five seconds.
+    ///
+    /// The wait blocks a thread of its own, so it never stalls the
+    /// current-thread runtime that drives the observer to its park.
+    async fn one_timer_armed_on(clock: &Arc<ManualMonotonicClock>) -> bool {
+        let waiters = sync::Arc::clone(clock);
+        task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn run_loop_sleeps_after_empty_fetch() {
         let fetches = Arc::new(AtomicUsize::new(0));
@@ -609,17 +646,11 @@ mod tests {
         // The empty fetch left the observer caught up, so it must now be parked
         // on a timer armed for `poll_interval`. That park is the loop's only
         // registration on this clock, so confirming one waiter confirms the
-        // park (blocking thread — never stalls the current-thread runtime that
-        // drives the observer to its park). Parked on a manual timeline that we
-        // never advance, the observer cannot re-fetch, so the counts are
-        // deterministically frozen at their first-fetch values.
-        let waiters = sync::Arc::clone(&clock);
-        let parked =
-            task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
-                .await
-                .unwrap();
+        // park. Parked on a manual timeline that we never advance, the
+        // observer cannot re-fetch, so the counts are deterministically frozen
+        // at their first-fetch values.
         assert!(
-            parked,
+            one_timer_armed_on(&clock).await,
             "observer should park on the poll-interval timer after an empty fetch",
         );
 
@@ -698,6 +729,28 @@ mod tests {
         // The checkpoint covers records below offset 12, so the last applied
         // one is 11 — the offset this node reports in its `BrokerHeartbeat`.
         assert!(observer.current_metadata_offset() == 11);
+    }
+
+    /// With no controller to ask, the loop parks for `poll_interval`. A
+    /// shutdown during that park ends the loop at once, as it does at the
+    /// loop's other two parks, rather than once the interval has run out:
+    /// `MetadataObserver::cancel` awaits the loop, so the broker's shutdown
+    /// would wait out the interval with it.
+    #[tokio::test]
+    async fn a_loop_parked_with_nobody_to_ask_stops_as_soon_as_it_is_cancelled() {
+        let clock = ManualMonotonicClock::new_shared();
+        let dir = tempfile::tempdir().unwrap();
+        let observer = MetadataObserver::start(config_on(vec![], clock.new_timer(), dir.path()));
+
+        // The park is the loop's only registration on this clock.
+        assert!(
+            one_timer_armed_on(&clock).await,
+            "the observer parks when it has no voter to fetch from"
+        );
+
+        // The manual clock never advances, so only the shutdown can end the park.
+        let stopped = time::timeout(Duration::from_secs(5), observer.cancel()).await;
+        assert!(stopped.is_ok(), "the parked loop ignored the shutdown");
     }
 
     fn check_unanswered_shutdown(observer: &MetadataObserver, timer: &BrokenTimer) {
