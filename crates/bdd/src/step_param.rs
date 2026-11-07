@@ -44,7 +44,11 @@ impl StepParamError {
 
 impl fmt::Display for StepParamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown {} `{}`: expected one of ", self.type_name, self.value)?;
+        write!(
+            f,
+            "unknown {} `{}`: expected one of ",
+            self.type_name, self.value
+        )?;
         for (index, word) in self.accepted.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
@@ -59,9 +63,7 @@ impl Error for StepParamError {}
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::StepParamError;
+    use {super::StepParamError, assert2::assert};
 
     #[test]
     fn message_lists_every_accepted_word() {
