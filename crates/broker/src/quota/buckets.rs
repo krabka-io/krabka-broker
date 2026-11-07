@@ -1,7 +1,7 @@
 //! Per-broker cache of `TokenBucket`s, one per (`quota_type`, `entity_key`) pair.
 
 use {
-    super::{IpNames, QuotaType},
+    super::{IpNames, QuotaType, entity_field},
     crate::{config::DEFAULT_QUOTA_WINDOW, throttle::TokenBucket},
     dashmap::DashMap,
     krabka_metadata::EntityKey,
@@ -90,12 +90,6 @@ impl QuotaBuckets {
     /// Returns the bucket for `(quota_type, entity_key)`, and creates it
     /// lazily if it does not exist. A new bucket starts at `initial_rate`
     /// tokens per second, fractional part included.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a bucket's last-accessed timestamp was poisoned by a panic
-    /// while it was held. Nothing under that lock can panic, so a poisoned
-    /// one means the process is already unwinding.
     #[must_use]
     pub fn get_or_create(
         &self,
@@ -164,13 +158,11 @@ impl QuotaBuckets {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 if now.duration_since(last) > max_age {
-                    let field = |name: &str| {
-                        entity_key
-                            .iter()
-                            .find(|(entity_type, _)| entity_type == name)
-                            .and_then(|(_, value)| value.clone())
-                    };
-                    expired.push((*quota_type, field("user"), field("client-id")));
+                    expired.push((
+                        *quota_type,
+                        entity_field(entity_key, "user"),
+                        entity_field(entity_key, "client-id"),
+                    ));
                     false
                 } else {
                     true
