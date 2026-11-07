@@ -49,6 +49,9 @@ fn time_ms(time: Time) -> String { time.millis_i64().to_string() }
 
 fn size(bytes: ByteSize) -> String { bytes.bytes_u64().to_string() }
 
+/// A `*.seconds` `INT` key: the duration in whole seconds.
+fn seconds(time: Time) -> String { time.secs_i64().to_string() }
+
 /// An `INT` key that krabka holds as a wider count: Kafka's parse refuses
 /// anything past `Integer.MAX_VALUE`, and its own unlimited is that value.
 fn int(count: usize) -> String { i32::try_from(count).unwrap_or(i32::MAX).to_string() }
@@ -478,6 +481,26 @@ pub const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
         |c| time_ms(c.replica_lag_time_max),
     ),
     KafkaStaticKey::new(
+        "replication.quota.window.num",
+        Some("replication_quota_window_num"),
+        |c| c.replication_quota_window_num.to_string(),
+    ),
+    KafkaStaticKey::new(
+        "replication.quota.window.size.seconds",
+        Some("replication_quota_window_size"),
+        |c| seconds(c.replication_quota_window_size),
+    ),
+    KafkaStaticKey::new(
+        "alter.log.dirs.replication.quota.window.num",
+        Some("alter_log_dirs_replication_quota_window_num"),
+        |c| c.alter_log_dirs_replication_quota_window_num.to_string(),
+    ),
+    KafkaStaticKey::new(
+        "alter.log.dirs.replication.quota.window.size.seconds",
+        Some("alter_log_dirs_replication_quota_window_size"),
+        |c| seconds(c.alter_log_dirs_replication_quota_window_size),
+    ),
+    KafkaStaticKey::new(
         "leader.imbalance.check.interval.seconds",
         Some("leader_imbalance_check_interval"),
         |c| (c.leader_imbalance_check_interval.millis_i64() / 1_000).to_string(),
@@ -672,7 +695,7 @@ mod tests {
         super::*,
         crate::{api_catalog::UnstableApiVersions, file_config::RuntimeFileConfig},
         assert2::check,
-        krabka_units::{bytes, millis},
+        krabka_units::{bytes, millis, secs},
         rstest_bdd::datatable::Rows,
         serde_json::Value,
         std::collections::BTreeSet,
@@ -725,6 +748,43 @@ mod tests {
             "replica.fetch.max.bytes",
             "replica.fetch.response.max.bytes",
         ];
+    }
+
+    #[rstest_bdd_macros::given("the static-config query selects the replication quota windows")]
+    fn select_replication_quota_windows(static_config: &mut StaticConfigScenario) {
+        static_config.selected = vec![
+            "replication.quota.window.num",
+            "replication.quota.window.size.seconds",
+            "alter.log.dirs.replication.quota.window.num",
+            "alter.log.dirs.replication.quota.window.size.seconds",
+        ];
+    }
+
+    #[rstest_bdd_macros::given("the replication quota windows run with these changed settings:")]
+    fn replication_quota_window_overrides(
+        static_config: &mut StaticConfigScenario,
+        #[datatable] rows: Rows<StaticSetting>,
+    ) {
+        let config = &mut static_config.config;
+        for row in rows {
+            let value = row
+                .value
+                .parse::<u32>()
+                .expect("quota window settings are u32");
+            match row.key.as_str() {
+                "replication.quota.window.num" => config.replication_quota_window_num = value,
+                "replication.quota.window.size.seconds" => {
+                    config.replication_quota_window_size = secs(value);
+                }
+                "alter.log.dirs.replication.quota.window.num" => {
+                    config.alter_log_dirs_replication_quota_window_num = value;
+                }
+                "alter.log.dirs.replication.quota.window.size.seconds" => {
+                    config.alter_log_dirs_replication_quota_window_size = secs(value);
+                }
+                key => panic!("unknown replication quota window setting {key}"),
+            }
+        }
     }
 
     #[rstest_bdd_macros::given("the static-config query selects the streams assignor list")]

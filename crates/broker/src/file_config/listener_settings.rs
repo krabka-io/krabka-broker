@@ -23,6 +23,13 @@ use {
     std::{collections::BTreeMap, str::FromStr},
 };
 
+const REPLICATION_QUOTA_WINDOW_NUM: &str = "replication.quota.window.num";
+const REPLICATION_QUOTA_WINDOW_SIZE_SECONDS: &str = "replication.quota.window.size.seconds";
+const ALTER_LOG_DIRS_REPLICATION_QUOTA_WINDOW_NUM: &str =
+    "alter.log.dirs.replication.quota.window.num";
+const ALTER_LOG_DIRS_REPLICATION_QUOTA_WINDOW_SIZE_SECONDS: &str =
+    "alter.log.dirs.replication.quota.window.size.seconds";
+
 pub(super) struct ListenerSettings {
     pub(super) listeners: Vec<FileListener>,
     pub(super) inter_broker_listener_name: Option<String>,
@@ -155,6 +162,44 @@ fn apply_log_roll_ms(
         cfg.static_config_origins
             .supplied_kafka_keys
             .insert(LOG_ROLL_MS);
+    }
+    Ok(())
+}
+
+/// Kafka's `QuotaConfig` sampling windows of the KIP-73 replication quotas:
+/// `replication.quota.window.*` for leader-out and follower-in replication
+/// and `alter.log.dirs.replication.quota.window.*` for log-directory moves.
+/// Each is a static `INT` with `atLeast(1)`, so a value under 1 refuses the
+/// configuration, as Kafka refuses it at startup. A key left unset keeps
+/// Kafka's default of 11 samples of 1 second.
+fn apply_replication_quota_windows(
+    properties: &BTreeMap<String, String>,
+    cfg: &mut BrokerConfig,
+) -> Result<(), FileConfigError> {
+    let windows = [
+        (
+            REPLICATION_QUOTA_WINDOW_NUM,
+            REPLICATION_QUOTA_WINDOW_SIZE_SECONDS,
+            &mut cfg.replication_quota_window_num,
+            &mut cfg.replication_quota_window_size,
+        ),
+        (
+            ALTER_LOG_DIRS_REPLICATION_QUOTA_WINDOW_NUM,
+            ALTER_LOG_DIRS_REPLICATION_QUOTA_WINDOW_SIZE_SECONDS,
+            &mut cfg.alter_log_dirs_replication_quota_window_num,
+            &mut cfg.alter_log_dirs_replication_quota_window_size,
+        ),
+    ];
+    let supplied = &mut cfg.static_config_origins.supplied_kafka_keys;
+    for (num_key, size_key, num, size) in windows {
+        if let Some(value) = properties.get(num_key) {
+            *num = parse_positive(num_key, value)?;
+            supplied.insert(num_key);
+        }
+        if let Some(value) = properties.get(size_key) {
+            *size = krabka_units::secs(parse_positive(size_key, value)?);
+            supplied.insert(size_key);
+        }
     }
     Ok(())
 }
@@ -302,6 +347,7 @@ pub(super) fn apply_listener_settings(
     apply_boolean_properties(&settings.server_properties, cfg)?;
     apply_cordoned_log_dirs(&settings.server_properties, cfg);
     apply_log_roll_ms(&settings.server_properties, cfg)?;
+    apply_replication_quota_windows(&settings.server_properties, cfg)?;
     apply_consumer_group_migration_policy(&settings.server_properties, cfg)?;
     apply_topology_description_plugin(&settings.server_properties, cfg)?;
     let num_val = settings
@@ -371,6 +417,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        krabka_units::{Time, secs},
         std::{
             fmt,
             path::{Path, PathBuf},
@@ -670,6 +717,114 @@ connections_max_idle = "5s"
                 .contains("log.roll.ms"),
         });
         check_config_case(label, &result, &expected);
+    }
+
+    /// The four replication-quota window fields, in the order
+    /// `replication.quota.window.num`, `replication.quota.window.size.seconds`,
+    /// `alter.log.dirs.replication.quota.window.num`,
+    /// `alter.log.dirs.replication.quota.window.size.seconds`.
+    #[derive(Debug, PartialEq)]
+    struct QuotaWindows {
+        replication_num: u32,
+        replication_size: Time,
+        alter_log_dirs_num: u32,
+        alter_log_dirs_size: Time,
+        supplied: Vec<&'static str>,
+    }
+
+    const QUOTA_WINDOW_KEYS: [&str; 4] = [
+        "replication.quota.window.num",
+        "replication.quota.window.size.seconds",
+        "alter.log.dirs.replication.quota.window.num",
+        "alter.log.dirs.replication.quota.window.size.seconds",
+    ];
+
+    fn quota_windows(config: &BrokerConfig) -> QuotaWindows {
+        QuotaWindows {
+            replication_num: config.replication_quota_window_num,
+            replication_size: config.replication_quota_window_size,
+            alter_log_dirs_num: config.alter_log_dirs_replication_quota_window_num,
+            alter_log_dirs_size: config.alter_log_dirs_replication_quota_window_size,
+            supplied: QUOTA_WINDOW_KEYS
+                .into_iter()
+                .filter(|key| {
+                    config
+                        .static_config_origins
+                        .supplied_kafka_keys
+                        .contains(key)
+                })
+                .collect(),
+        }
+    }
+
+    /// Kafka's four `QuotaConfig` replication-quota window keys set the
+    /// windows the KIP-73 throttle samples over, and record that the operator
+    /// named them. An unset key keeps Kafka's 11 samples of 1 second.
+    #[yare::parameterized(
+        not_named = {
+            "broker_id = 0\n",
+            QuotaWindows {
+                replication_num: 11,
+                replication_size: secs(1),
+                alter_log_dirs_num: 11,
+                alter_log_dirs_size: secs(1),
+                supplied: vec![],
+            },
+        },
+        all_named = {
+            "[server_properties]\n\
+             \"replication.quota.window.num\" = \"4\"\n\
+             \"replication.quota.window.size.seconds\" = \"2\"\n\
+             \"alter.log.dirs.replication.quota.window.num\" = \"7\"\n\
+             \"alter.log.dirs.replication.quota.window.size.seconds\" = \"3\"\n",
+            QuotaWindows {
+                replication_num: 4,
+                replication_size: secs(2),
+                alter_log_dirs_num: 7,
+                alter_log_dirs_size: secs(3),
+                supplied: QUOTA_WINDOW_KEYS.to_vec(),
+            },
+        },
+        one_named = {
+            "[server_properties]\n\"alter.log.dirs.replication.quota.window.size.seconds\" = \"5\"\n",
+            QuotaWindows {
+                replication_num: 11,
+                replication_size: secs(1),
+                alter_log_dirs_num: 11,
+                alter_log_dirs_size: secs(5),
+                supplied: vec!["alter.log.dirs.replication.quota.window.size.seconds"],
+            },
+        },
+    )]
+    fn replication_quota_windows_are_read_from_server_properties(
+        source: &str,
+        expected: QuotaWindows,
+    ) {
+        let actual = file_outcome(source, quota_windows);
+        assert!(actual == Ok(expected));
+    }
+
+    /// Kafka declares each window key `atLeast(1)`, so a zero, a negative or
+    /// a non-integer value refuses the configuration at startup.
+    #[yare::parameterized(
+        replication_num_zero = { "replication.quota.window.num", "0" },
+        replication_size_zero = { "replication.quota.window.size.seconds", "0" },
+        alter_log_dirs_num_zero = { "alter.log.dirs.replication.quota.window.num", "0" },
+        alter_log_dirs_size_zero = { "alter.log.dirs.replication.quota.window.size.seconds", "0" },
+        replication_num_negative = { "replication.quota.window.num", "-1" },
+        alter_log_dirs_size_word = { "alter.log.dirs.replication.quota.window.size.seconds", "soon" },
+    )]
+    fn an_invalid_replication_quota_window_refuses_startup(key: &str, value: &str) {
+        let source = format!("[server_properties]\n\"{key}\" = \"{value}\"\n");
+
+        let actual = file_outcome(&source, quota_windows);
+
+        assert!(
+            actual
+                == Err(format!(
+                    "invalid config: server_properties `{key}` must be a positive integer, got `{value}`"
+                ))
+        );
     }
 
     #[yare::parameterized(

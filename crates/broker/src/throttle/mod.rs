@@ -1,6 +1,8 @@
 //! KIP-73 throttled replication: the value types and the parser.
 
-pub use krabka_throttle::{MICROS_PER_TOKEN, ReplicationQuota, ThrottleState, TokenBucket};
+pub use krabka_throttle::{
+    MICROS_PER_TOKEN, QuotaWindow, ReplicationQuota, ThrottleState, TokenBucket,
+};
 use std::collections::BTreeSet;
 
 mod refresh;
