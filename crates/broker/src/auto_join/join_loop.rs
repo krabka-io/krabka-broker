@@ -123,7 +123,7 @@ async fn join(params: AutoJoinParams) {
 
         match send_add_raft_voter(&client, protocol, &server_name, target, &req).await {
             Ok(resp) => {
-                let _ = log_join_outcome(self_id, target, &resp);
+                log_join_outcome(self_id, target, &resp);
             }
             Err(e) => {
                 tracing::debug!(
