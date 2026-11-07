@@ -195,6 +195,8 @@ ktls = "6"
 # TTL field on the value (no built-in expiry).
 lru = "0.19"
 maplit = "1"
+# The registry `krabka-bdd` scenario hooks register in, as rstest-bdd steps do.
+inventory = "0.3"
 # mockall: generate test mocks for trait seams so engine-IO decision logic is
 # unit-testable (and mutation-killable) without a live broker/quorum/database.
 # Dev-dependency only — `#[cfg_attr(test, mockall::automock)]` keeps it out of
@@ -243,6 +245,8 @@ rstest-bdd = "0.6"
 # multi-thread Tokio harness implements.
 rstest-bdd-harness = "0.6"
 rstest-bdd-macros = "0.6"
+# The pattern compiler `krabka-bdd-macros` validates expanded step patterns with.
+rstest-bdd-patterns = "0.6"
 # rstest-bdd localizations must be embedded in debug test binaries as well;
 # filesystem-backed assets retain a sandbox path and cannot run hermetically.
 rust-embed = { version = "8", features = ["debug-embed"] }

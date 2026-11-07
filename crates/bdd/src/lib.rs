@@ -51,10 +51,17 @@
 //!
 //! [Gherkin style guide]: https://github.com/krabka-io/krabka-broker/blob/main/docs/style_guides/gherkin_style_guide.md
 
+mod attempt;
+mod failure;
+mod fixtures;
 mod given;
 mod harness;
+mod hooks;
+mod runner;
+mod spec;
 mod step_check;
 mod step_param;
+mod world;
 
 pub use {
     self::{

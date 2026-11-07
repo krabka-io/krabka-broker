@@ -5,7 +5,7 @@
 //! plus a module holding the step-registry check.
 
 use {
-    crate::{
+    krabka_bdd_model::{
         lint::{self, Finding},
         model::{self, Keyword, StepUse},
     },

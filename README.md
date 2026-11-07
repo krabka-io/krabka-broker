@@ -76,6 +76,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-docgen` | Renders the broker reference pages from the broker's own in-process data. |
 | `krabka-macros` | Derive macros for the broker: `RegisterMetrics` builds and registers `BrokerMetrics` from its field attributes. |
 | `krabka-bdd` | The BDD layer over rstest-bdd: house-style feature lint, step-registry check, multi-thread Tokio harness, `StepParam` and `Given<T>`. |
+| `krabka-bdd-model` | The Gherkin model behind `krabka-bdd`: loading, rule flattening, outline expansion, the tag glossary and the house-style lint. |
 | `krabka-bdd-macros` | The proc macros behind `krabka-bdd`: `scenarios!` and `#[derive(StepParam)]`. |
 | `krabka-bench-driver` | Load driver and report aggregator for the cluster benchmark harness under `bench/`. |
 | `krabka-log-iobench` | Bench-only crate: measures the log read path against mmap. |

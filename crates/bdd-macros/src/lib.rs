@@ -14,9 +14,9 @@
 //!
 //! [Gherkin style guide]: https://github.com/krabka-io/krabka-broker/blob/main/docs/style_guides/gherkin_style_guide.md
 
-mod lint;
-mod model;
+mod hook_attr;
 mod scenarios;
+mod step_attr;
 mod step_param;
 
 use moxy::{

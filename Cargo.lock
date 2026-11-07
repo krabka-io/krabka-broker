@@ -3737,7 +3737,10 @@ name = "krabka-bdd"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "futures-util",
+ "inventory",
  "krabka-bdd-macros",
+ "krabka-bdd-model",
  "rstest",
  "rstest-bdd",
  "rstest-bdd-harness",
@@ -3752,8 +3755,21 @@ version = "1.1.5"
 dependencies = [
  "assert2",
  "gherkin",
+ "krabka-bdd-model",
  "moxy",
  "rstest",
+ "rstest-bdd-patterns",
+]
+
+[[package]]
+name = "krabka-bdd-model"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "gherkin",
+ "rstest",
+ "serde",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]

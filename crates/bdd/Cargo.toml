@@ -14,7 +14,10 @@ publish = false
 workspace = true
 
 [dependencies]
+futures-util = { workspace = true }
+inventory = { workspace = true }
 krabka-bdd-macros = { path = "../bdd-macros" }
+krabka-bdd-model = { path = "../bdd-model" }
 rstest-bdd = { workspace = true }
 rstest-bdd-harness = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
