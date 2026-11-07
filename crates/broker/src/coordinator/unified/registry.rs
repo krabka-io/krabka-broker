@@ -641,6 +641,7 @@ mod tests {
         let epochs = (
             ask(&consumer.tx, |reply| GroupActorMessage::Describe { reply })
                 .await
+                .expect("a consumer group")
                 .group_epoch,
             ask(&share.tx, |reply| ShareGroupActorMessage::Describe {
                 reply,
