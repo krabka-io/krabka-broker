@@ -13,8 +13,8 @@
 
 use {
     super::{
-        leader_connection,
-        range::{RangeFetcher, RangeReadFailure, fetch_page},
+        LeaderFetcher,
+        range::{RangeFetcher, fetch_page},
         resolve_bootstrap,
     },
     crate::{
@@ -23,9 +23,8 @@ use {
         log::{AssignmentHandle, MetadataEventRecord, PartitionStart},
     },
     krabka_client_core::{
-        BrokerPool, Client, ClientError, ClientFrameMax, Connection,
-        ConnectionDispatchQueueCapacity, ConnectionOptions, FetchMinBytes, FetchPartitionResult,
-        IsolatedFetch, fetch_partition_with_isolation_progress, security::ClientSecurity,
+        BrokerPool, Client, ClientFrameMax, ConnectionDispatchQueueCapacity, ConnectionOptions,
+        security::ClientSecurity,
     },
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     krabka_units::prelude::{ByteSize, Time, TimeExt as _},
@@ -168,35 +167,17 @@ struct PartitionFetcher<'a> {
     readers: BrokerPool,
 }
 
-impl RangeFetcher for PartitionFetcher<'_> {
-    type Leader = Arc<Connection>;
-
-    // cargo-mutants: needs a live leader; `pump_partition` tests the loop
-    #[cfg_attr(test, mutants::skip)]
-    async fn leader(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
-        leader_connection(&self.client, &self.readers, &self.state.topic, partition).await
-    }
-
-    // cargo-mutants: needs a live leader; `pump_partition` tests the loop
-    #[cfg_attr(test, mutants::skip)]
-    async fn fetch(
-        &self,
-        leader: &Arc<Connection>,
-        partition: i32,
-        offset: i64,
-    ) -> Result<FetchPartitionResult, ClientError> {
-        fetch_partition_with_isolation_progress(leader, IsolatedFetch {
+impl PartitionFetcher<'_> {
+    /// The leader lookup and `Fetch` settings of this partition's pump.
+    fn leader_fetcher(&self) -> LeaderFetcher<'_> {
+        LeaderFetcher {
+            client: &self.client,
+            readers: &self.readers,
             topic: &self.state.topic,
             topic_id: self.state.topic_id,
-            partition,
-            fetch_offset: offset,
             max_wait: self.state.fetch_max_wait,
-            max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
             partition_max: self.state.fetch_max_bytes,
-            fetch_min: FetchMinBytes::default(),
-            isolation_level: 0,
-        })
-        .await
+        }
     }
 }
 
@@ -265,7 +246,7 @@ async fn partition_fetch_loop(
         retry_backoff: backoff,
         tx: &state.tx,
     };
-    pump_partition(&fetcher, &pump, start_offset, &cancel).await;
+    pump_partition(&fetcher.leader_fetcher(), &pump, start_offset, &cancel).await;
 }
 
 /// Where one partition's pump delivers, and how it waits between retries.
@@ -365,10 +346,10 @@ async fn sleep_or_cancel(cancel: &CancellationToken, backoff: Duration) -> bool 
 mod tests {
     use {
         super::*,
-        crate::kafka_log::{config::METADATA_TOPIC, partition_leader},
+        crate::kafka_log::{config::METADATA_TOPIC, partition_leader, range::RangeReadFailure},
         assert2::{assert, check},
         bytes::Bytes,
-        krabka_client_core::FetchedRecord,
+        krabka_client_core::{ClientError, FetchPartitionResult, FetchedRecord},
         krabka_protocol::owned::metadata_response::{
             MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
         },

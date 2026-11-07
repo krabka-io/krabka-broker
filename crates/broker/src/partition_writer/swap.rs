@@ -328,6 +328,23 @@ mod tests {
         }
     }
 
+    impl SwapPaths {
+        /// A request to swap `future_log` into the target slot.
+        fn request(&self, future_log: &Arc<Mutex<Log>>) -> SwapRequest {
+            request(
+                future_log,
+                self.target_dir.clone(),
+                &self.future_path,
+                &self.target_partition_path,
+            )
+        }
+
+        /// The partition's log-dir handle, pointing at the source dir.
+        fn source_log_dir(&self) -> Arc<ArcSwap<PathBuf>> {
+            Arc::new(ArcSwap::from_pointee(self.source_dir.clone()))
+        }
+    }
+
     #[test]
     fn swap_future_log_accepts_future_at_same_leo() {
         let dir = tempdir().expect("tempdir");
@@ -460,6 +477,35 @@ mod tests {
         }
     }
 
+    /// Run a swap that must fail and restore the source log, and observe both
+    /// logs afterwards.
+    fn swap_restoring_the_source(
+        paths: &SwapPaths,
+        log: &Arc<Mutex<Log>>,
+        future_log: &Arc<Mutex<Log>>,
+    ) -> Observed {
+        let log_dir = paths.source_log_dir();
+        let result = swap_future_log(log, &log_dir, paths.request(future_log));
+        let observed = observe(log, future_log);
+        check!(let Err(SwapFailure::Restored(_)) = result);
+        check_source_kept(&observed, paths, &log_dir);
+        observed
+    }
+
+    /// A non-empty directory in the canonical slot, which refuses the rename.
+    fn occupy_target_slot(paths: &SwapPaths) {
+        fs::create_dir_all(&paths.target_partition_path).expect("occupied slot");
+        fs::write(paths.target_partition_path.join("occupant"), b"x").expect("occupant");
+    }
+
+    /// The source log is back in place: same dir, both records, still stamped.
+    fn check_source_kept(observed: &Observed, paths: &SwapPaths, log_dir: &ArcSwap<PathBuf>) {
+        check!(log_dir.load().as_ref().clone() == paths.source_dir);
+        check!(observed.current_dir == paths.source_partition);
+        check!(observed.current_leo == 2);
+        check!(observed.current_stamped);
+    }
+
     /// Two stamped logs of two records each, at the source and future paths.
     fn stamped_logs(paths: &SwapPaths) -> (Arc<Mutex<Log>>, Arc<Mutex<Log>>) {
         let mut source_log = open_log_with_records(&paths.source_partition, 2);
@@ -481,30 +527,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let paths = swap_paths(dir.path());
         let (log, future_log) = stamped_logs(&paths);
-        // A non-empty directory in the canonical slot refuses the rename.
-        fs::create_dir_all(&paths.target_partition_path).expect("occupied slot");
-        fs::write(paths.target_partition_path.join("occupant"), b"x").expect("occupant");
-        let log_dir = Arc::new(ArcSwap::from_pointee(paths.source_dir.clone()));
+        occupy_target_slot(&paths);
 
-        let result = swap_future_log(
-            &log,
-            &log_dir,
-            request(
-                &future_log,
-                paths.target_dir.clone(),
-                &paths.future_path,
-                &paths.target_partition_path,
-            ),
-        );
-
-        let observed = observe(&log, &future_log);
-        check!(let Err(SwapFailure::Restored(_)) = result);
-        check!(observed.current_dir == paths.source_partition);
-        check!(observed.current_leo == 2);
-        check!(observed.current_stamped);
+        let observed = swap_restoring_the_source(&paths, &log, &future_log);
         check!(observed.future_dir == paths.future_path);
         check!(observed.future_leo == 2);
-        check!(log_dir.load().as_ref().clone() == paths.source_dir);
         check!(
             !paths
                 .future_path
@@ -522,25 +549,8 @@ mod tests {
         // stamp index is garbage, which the open future log never reads.
         let stamp_index = stampindex_path(&paths.future_path, 0);
         fs::write(&stamp_index, b"garbage").expect("corrupt stamp index");
-        let log_dir = Arc::new(ArcSwap::from_pointee(paths.source_dir.clone()));
 
-        let result = swap_future_log(
-            &log,
-            &log_dir,
-            request(
-                &future_log,
-                paths.target_dir.clone(),
-                &paths.future_path,
-                &paths.target_partition_path,
-            ),
-        );
-
-        let observed = observe(&log, &future_log);
-        check!(let Err(SwapFailure::Restored(_)) = result);
-        check!(observed.current_dir == paths.source_partition);
-        check!(observed.current_leo == 2);
-        check!(observed.current_stamped);
-        check!(log_dir.load().as_ref().clone() == paths.source_dir);
+        swap_restoring_the_source(&paths, &log, &future_log);
         check!(paths.source_partition.exists());
         check!(paths.future_path.exists());
         check!(!paths.target_partition_path.exists());
@@ -553,25 +563,13 @@ mod tests {
         let (log, future_log) = stamped_logs(&paths);
         // The rename fails, and the source cannot be reopened with its stamp
         // source either.
-        fs::create_dir_all(&paths.target_partition_path).expect("occupied slot");
-        fs::write(paths.target_partition_path.join("occupant"), b"x").expect("occupant");
+        occupy_target_slot(&paths);
         fs::write(stampindex_path(&paths.source_partition, 0), b"garbage")
             .expect("corrupt stamp index");
-        let log_dir = Arc::new(ArcSwap::from_pointee(paths.source_dir.clone()));
+        let log_dir = paths.source_log_dir();
         let registry = LogDirRegistry::probe(&[paths.source_dir.clone(), paths.target_dir.clone()]);
 
-        let result = run_swap(
-            &log,
-            &log_dir,
-            &registry,
-            request(
-                &future_log,
-                paths.target_dir.clone(),
-                &paths.future_path,
-                &paths.target_partition_path,
-            ),
-        )
-        .await;
+        let result = run_swap(&log, &log_dir, &registry, paths.request(&future_log)).await;
 
         check!(let Err(_) = result);
         check!(registry.is_offline(&paths.source_dir));

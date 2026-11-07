@@ -814,31 +814,24 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn indeterminate_loss_marker_on_the_replay_tick_stops_the_writer() {
-        let LostReplyWriter {
-            log,
-            sink,
-            losses,
-            clock,
-            handle,
-            _directory,
-        } = lost_reply_writer();
+    /// A running writer whose first event has landed, with one loss pending
+    /// and every later write coming back `Indeterminate`.
+    async fn writer_with_a_pending_marker_and_lost_replies() -> LostReplyWriter {
+        let writer = lost_reply_writer();
         // The first event proves the writer is running with both tickers
         // armed before the clock moves.
-        log.emit(life(NodeId(1)));
-        await_until("event reached the sink", || !sink.classes().is_empty()).await;
-        losses.add(1);
-        sink.lose_replies();
+        writer.log.emit(life(NodeId(1)));
+        await_until("event reached the sink", || {
+            !writer.sink.classes().is_empty()
+        })
+        .await;
+        writer.losses.add(1);
+        writer.sink.lose_replies();
+        writer
+    }
 
-        clock
-            .advance(REPLAY_EVERY.to_std())
-            .expect("manual time moves forward");
-        await_until("loss marker reached the sink", || sink.classes().len() == 2).await;
-        finish_writer(log, handle).await;
-
-        // The marker landed once. A writer that ran on would stamp it again
-        // at the same seq and prev_hash on shutdown or the next tick.
+    /// The marker landed exactly once and nothing was written after it.
+    fn check_marker_written_once(sink: &LostReplySink) {
         check!(
             sink.classes()
                 == vec![
@@ -849,30 +842,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indeterminate_loss_marker_at_shutdown_skips_the_closing_checkpoint() {
-        let LostReplyWriter {
-            log,
-            sink,
-            losses,
-            clock: _clock,
-            handle,
-            _directory,
-        } = lost_reply_writer();
-        log.emit(life(NodeId(1)));
-        await_until("event reached the sink", || !sink.classes().is_empty()).await;
-        losses.add(1);
-        sink.lose_replies();
+    async fn indeterminate_loss_marker_on_the_replay_tick_stops_the_writer() {
+        let writer = writer_with_a_pending_marker_and_lost_replies().await;
+        writer
+            .clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
+        await_until("loss marker reached the sink", || {
+            writer.sink.classes().len() == 2
+        })
+        .await;
+        finish_writer(writer.log, writer.handle).await;
 
-        finish_writer(log, handle).await;
+        // A writer that ran on would stamp the marker again at the same seq
+        // and prev_hash on shutdown or the next tick.
+        check_marker_written_once(&writer.sink);
+    }
+
+    #[tokio::test]
+    async fn indeterminate_loss_marker_at_shutdown_skips_the_closing_checkpoint() {
+        let writer = writer_with_a_pending_marker_and_lost_replies().await;
+        finish_writer(writer.log, writer.handle).await;
 
         // A checkpoint after a marker that may have landed would sign a head
         // that does not include it.
-        check!(
-            sink.classes()
-                == vec![
-                    AuditEventClass::ApplicationLifecycle,
-                    AuditEventClass::RecordsLost,
-                ]
-        );
+        check_marker_written_once(&writer.sink);
     }
 }
