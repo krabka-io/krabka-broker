@@ -18,7 +18,7 @@ use {
         log::{MetadataEventRecord, RangeVisitor},
     },
     krabka_client_core::{ClientError, FetchPartitionResult, FetchedRecord},
-    std::time::Duration,
+    std::{fmt, time::Duration},
     tokio::time,
     tracing::warn,
 };
@@ -46,6 +46,10 @@ pub(super) struct RangeReadFailure {
     /// Whether a fresh leader lookup and another `Fetch` can succeed.
     retriable: bool,
     error: MetadataLogError,
+}
+
+impl fmt::Display for RangeReadFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { self.error.fmt(f) }
 }
 
 impl RangeReadFailure {
@@ -205,7 +209,7 @@ pub(super) async fn visit_range_pages<F: RangeFetcher>(
 
 /// One page from the cached leader, or from a freshly looked-up one. A
 /// failure drops the cached leader, so the next attempt looks it up again.
-async fn fetch_page<F: RangeFetcher>(
+pub(super) async fn fetch_page<F: RangeFetcher>(
     fetcher: &F,
     topic: &str,
     leader: &mut Option<F::Leader>,
