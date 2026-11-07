@@ -1,4 +1,4 @@
-//! Capped buffered reads.
+//! Capped whole-object reads, buffered or hashed as they stream.
 //!
 //! The module does a `head()` on an object, rejects the object if it exceeds a
 //! byte cap, then does a conditional, streaming GET. It centralises the OOM guard that runs before
@@ -9,8 +9,18 @@ use {
     bytes::{Bytes, BytesMut},
     futures_util::TryStreamExt as _,
     object_store::{GetOptions, ObjectStoreExt as _, path::Path},
+    sha2::{Digest as _, Sha256},
     std::sync::Arc,
 };
+
+/// The size and `SHA-256` of one object, hashed as it streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CappedDigest {
+    /// Bytes the object holds.
+    pub size_bytes: u64,
+    /// Whole-object `SHA-256`.
+    pub sha256: [u8; 32],
+}
 
 /// Read a whole object, and reject it if its size exceeds `max_bytes`.
 ///
@@ -31,13 +41,55 @@ pub async fn read_capped(
     key: &Path,
     max_bytes: u64,
 ) -> Result<Bytes, ObjectStoreError> {
+    let mut bytes = BytesMut::new();
+    stream_capped(store, key, max_bytes, |chunk| {
+        bytes.extend_from_slice(chunk);
+    })
+    .await?;
+    Ok(bytes.freeze())
+}
+
+/// Hash a whole object under the same cap and checks as [`read_capped`],
+/// without buffering it.
+///
+/// The body is hashed chunk by chunk, so the memory cost does not follow the
+/// object size.
+///
+/// # Errors
+///
+/// The same as [`read_capped`].
+pub async fn digest_capped(
+    store: &Arc<dyn object_store::ObjectStore>,
+    key: &Path,
+    max_bytes: u64,
+) -> Result<CappedDigest, ObjectStoreError> {
+    let mut hasher = Sha256::new();
+    let size_bytes = stream_capped(store, key, max_bytes, |chunk| {
+        hasher.update(chunk);
+    })
+    .await?;
+    Ok(CappedDigest {
+        size_bytes,
+        sha256: hasher.finalize().into(),
+    })
+}
+
+/// Stream a whole object into `on_chunk` under the [`read_capped`] checks,
+/// and return how many bytes it held.
+async fn stream_capped(
+    store: &Arc<dyn object_store::ObjectStore>,
+    key: &Path,
+    max_bytes: u64,
+    mut on_chunk: impl FnMut(&[u8]),
+) -> Result<u64, ObjectStoreError> {
+    let too_large = |size| ObjectStoreError::TooLarge {
+        key: key.clone(),
+        size,
+        max_bytes,
+    };
     let meta = store.head(key).await?;
     if meta.size > max_bytes {
-        return Err(ObjectStoreError::TooLarge {
-            key: key.clone(),
-            size: meta.size,
-            max_bytes,
-        });
+        return Err(too_large(meta.size));
     }
     let result = store
         .get_opts(key, GetOptions {
@@ -47,28 +99,18 @@ pub async fn read_capped(
         })
         .await?;
     if result.meta.size > max_bytes {
-        return Err(ObjectStoreError::TooLarge {
-            key: key.clone(),
-            size: result.meta.size,
-            max_bytes,
-        });
+        return Err(too_large(result.meta.size));
     }
     let mut stream = result.into_stream();
-    let mut bytes = BytesMut::new();
+    let mut size = 0_u64;
     while let Some(chunk) = stream.try_next().await? {
-        let size = u64::try_from(bytes.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        size = size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
         if size > max_bytes {
-            return Err(ObjectStoreError::TooLarge {
-                key: key.clone(),
-                size,
-                max_bytes,
-            });
+            return Err(too_large(size));
         }
-        bytes.extend_from_slice(&chunk);
+        on_chunk(&chunk);
     }
-    Ok(bytes.freeze())
+    Ok(size)
 }
 
 #[cfg(test)]
@@ -101,6 +143,46 @@ mod tests {
         let store = store_with("k", b"hello").await;
         let got = read_capped(&store, &Path::from("k"), 1024).await.unwrap();
         assert!(&got[..] == b"hello");
+    }
+
+    #[tokio::test]
+    async fn digest_hashes_the_whole_object_without_returning_it() {
+        let store = store_with("k", b"hello").await;
+        let digest = digest_capped(&store, &Path::from("k"), 5).await.unwrap();
+        assert!(
+            digest
+                == CappedDigest {
+                    size_bytes: 5,
+                    sha256: Sha256::digest(b"hello").into(),
+                }
+        );
+    }
+
+    #[yare::parameterized(
+        empty = { 0, 0 },
+        one_byte = { 1, 1 },
+        at_the_cap = { 4096, 4096 },
+        one_over_the_cap = { 4097, 4096 },
+        far_over_the_cap = { 1_000_000, 10 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn digest_agrees_with_hashing_the_buffered_read(len: u32, max_bytes: u64) {
+        let body = (0..len)
+            .map(|index| index.to_le_bytes()[0] ^ index.to_le_bytes()[1])
+            .collect::<Vec<u8>>();
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
+        let key = Path::from("k");
+        store.put(&key, PutPayload::from(body)).await.unwrap();
+
+        let buffered = read_capped(&store, &key, max_bytes)
+            .await
+            .map(|bytes| CappedDigest {
+                size_bytes: u64::try_from(bytes.len()).unwrap(),
+                sha256: Sha256::digest(&bytes).into(),
+            });
+        let streamed = digest_capped(&store, &key, max_bytes).await;
+
+        assert2::assert!(format!("{streamed:?}") == format!("{buffered:?}"));
     }
 
     #[tokio::test]
@@ -208,12 +290,15 @@ mod tests {
     }
 
     #[yare::parameterized(
-        etag = { Race::Etag },
-        metadata = { Race::Metadata },
-        body = { Race::Body },
+        etag = { Race::Etag, false },
+        metadata = { Race::Metadata, false },
+        body = { Race::Body, false },
+        digest_etag = { Race::Etag, true },
+        digest_metadata = { Race::Metadata, true },
+        digest_body = { Race::Body, true },
     )]
     #[test_macro(tokio::test)]
-    async fn overwrite_between_head_and_get_cannot_bypass_the_cap(race: Race) {
+    async fn overwrite_between_head_and_get_cannot_bypass_the_cap(race: Race, digest: bool) {
         let changing = Arc::new(ChangingStore {
             inner: InMemory::new(),
             race,
@@ -225,7 +310,12 @@ mod tests {
             .await
             .unwrap();
         let store: Arc<dyn object_store::ObjectStore> = Arc::<ChangingStore>::clone(&changing);
-        let error = read_capped(&store, &key, 5).await.unwrap_err();
+        let error = if digest {
+            digest_capped(&store, &key, 5).await.map(drop)
+        } else {
+            read_capped(&store, &key, 5).await.map(drop)
+        }
+        .unwrap_err();
         match race {
             Race::Etag => assert2::assert!(matches!(error, ObjectStoreError::Precondition { .. })),
             Race::Version => unreachable!("the versioned case returns the original bytes"),

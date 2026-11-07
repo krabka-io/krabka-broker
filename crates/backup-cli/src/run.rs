@@ -548,8 +548,8 @@ async fn seal_capture(
         .collect::<BTreeSet<_>>();
     let mut claims = Vec::with_capacity(keys.len());
     for key in keys {
-        let bytes = store
-            .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
+        let digest = store
+            .digest_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
             .await?;
         claims.push(ObjectEntry {
             suffix: Path::new(&key)
@@ -558,8 +558,8 @@ async fn seal_capture(
                     format!(".{}", extension.to_string_lossy())
                 }),
             key,
-            size_bytes: bytes.len() as u64,
-            sha256: Sha256Digest::of(&bytes),
+            size_bytes: digest.size_bytes,
+            sha256: Sha256Digest(digest.sha256),
             e_tag: None,
             version_id: None,
             create_precondition: false,
