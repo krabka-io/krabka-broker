@@ -3845,6 +3845,7 @@ dependencies = [
  "jsonschema 0.60.2",
  "krabka-audit",
  "krabka-authz",
+ "krabka-bdd",
  "krabka-bench-driver",
  "krabka-broker",
  "krabka-client-admin",
