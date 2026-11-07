@@ -504,21 +504,10 @@ mod tests {
     fn check_share_actor_running(consumer_heartbeat: &ConsumerHeartbeatScenario) {
         assert!(!consumer_heartbeat.share_actor.as_ref().unwrap().tx.is_closed());
     }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/handler_consumer_group_creation/creation.feature",
-        name = "Only joins can create consumer groups and other group kinds are refused"
-    )]
-    #[tokio::test]
-    async fn handle_creates_consumer_group_only_on_join_as_kafka_does(
-        consumer_heartbeat: ConsumerHeartbeatScenario,
-        case: String,
-        epoch: i32,
-        group: String,
-        code: i16,
-        message: String,
-    ) {
-        let _ = (consumer_heartbeat, case, epoch, group, code, message);
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/handler_consumer_group_creation",
+        fixtures = [consumer_heartbeat: ConsumerHeartbeatScenario],
+    );
 
     /// Kafka's `String.trim` blank: a control character is blank and a
     /// no-break space is not.
