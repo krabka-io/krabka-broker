@@ -8,7 +8,6 @@
 use {
     super::{
         FutureLogRegistry, FutureLogState, MoveError, MovePolicy, canonicalize_or_self,
-        cleanup::cancel_move,
         configured_log_dir, future_dir_name_too_long,
         replicator::{ReplicatorTask, replicator_loop},
     },
@@ -93,7 +92,7 @@ pub async fn start_move(
         if canonicalize_or_self(&existing.target_log_dir) == canonicalize_or_self(&target_log_dir) {
             return Ok(());
         }
-        cancel_move(future_logs, &key, existing).await?;
+        future_logs.cancel(&key, existing).await?;
     }
 
     // (4) Already in the target dir? No-op success. This check must follow

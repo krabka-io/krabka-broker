@@ -15,28 +15,33 @@ use {
     tokio::task::JoinHandle,
 };
 
-pub(super) async fn cancel_move(
-    future_logs: &FutureLogRegistry,
-    key: &(String, PartitionIndex),
-    existing: Arc<FutureLogState>,
-) -> Result<(), MoveError> {
-    existing.cancel.cancel();
-    let task = existing
-        .task
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(task) = task {
-        task.abort();
-        let _ = task.await;
+impl FutureLogRegistry {
+    /// Stop the move `existing` of `key`: cancel its token, abort and await
+    /// its replicator task, remove its entry unless a later move replaced it,
+    /// and delete its staged future directory.
+    pub(super) async fn cancel(
+        &self,
+        key: &(String, PartitionIndex),
+        existing: Arc<FutureLogState>,
+    ) -> Result<(), MoveError> {
+        existing.cancel.cancel();
+        let task = existing
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        self.remove_if_same(key, &existing);
+        let future_path = existing.future_path.clone();
+        drop(existing);
+        if future_path.exists() {
+            fs::remove_dir_all(&future_path)?;
+        }
+        Ok(())
     }
-    future_logs.remove_if_same(key, &existing);
-    let future_path = existing.future_path.clone();
-    drop(existing);
-    if future_path.exists() {
-        fs::remove_dir_all(&future_path)?;
-    }
-    Ok(())
 }
 
 fn take_move_tasks(future_logs: &FutureLogRegistry) -> Vec<JoinHandle<()>> {
@@ -158,7 +163,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_move_stops_its_task_and_removes_the_move() {
+    async fn cancel_stops_the_task_and_removes_the_move() {
         let PendingMoveFixture {
             dir,
             log,
@@ -179,7 +184,8 @@ mod tests {
         let cancel = existing.cancel.clone();
         let future_path = existing.future_path.clone();
 
-        cancel_move(&future_logs, &key, existing)
+        future_logs
+            .cancel(&key, existing)
             .await
             .expect("cancel the move");
 
@@ -190,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_move_keeps_an_entry_a_later_move_registered() {
+    async fn cancel_keeps_an_entry_a_later_move_registered() {
         let PendingMoveFixture { dir, log, logs, .. } = pending_move_fixture();
         let future_logs = Arc::new(logs);
         let key = ("t".to_owned(), PartitionIndex(0));
@@ -199,7 +205,8 @@ mod tests {
         future_logs.insert(key.clone(), Arc::clone(&later));
         let future_path = existing.future_path.clone();
 
-        cancel_move(&future_logs, &key, existing)
+        future_logs
+            .cancel(&key, existing)
             .await
             .expect("cancel the move");
 
