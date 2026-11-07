@@ -134,8 +134,8 @@ pub use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        AUDIT_PLACEMENT_EPOCH_PREFIX, WRITE_FREEZE, controller_managed_topic_config_message,
-        is_controller_managed_topic_config,
+        AUDIT_PLACEMENT_EPOCH_PREFIX, ELIGIBLE_LEADER_REPLICAS, WRITE_FREEZE,
+        controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
     trunk_log::{
         RemoteCopyLag, log_max_decompressed_record, resolve_max_decompressed_record_bytes,
@@ -158,7 +158,6 @@ pub use self::{
     validation::{REMOTE_STORAGE_POLICY_MESSAGE, validate_topic_config_map},
 };
 use crate::api_catalog::UnstableApiVersions;
-pub use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 pub const RETENTION_MS: &str = "retention.ms";
 pub const RETENTION_BYTES: &str = "retention.bytes";
 pub const SEGMENT_BYTES: &str = "segment.bytes";
