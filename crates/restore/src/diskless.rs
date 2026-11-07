@@ -10,7 +10,7 @@ use {
             prepare::{PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
-        verify::fetch_capped,
+        verify::{batch_record_count, fetch_capped},
     },
     bytes::Bytes,
     krabka_ids::Offset,
@@ -372,8 +372,7 @@ async fn walk_partition(
                         range.object_key
                     )));
                 }
-                let records_in_batch =
-                    u64::try_from(header.records_count.get().max(0)).unwrap_or(0);
+                let records_in_batch = batch_record_count(header.records_count.get());
                 let (mut prepared, tally) = prepare_batch(
                     PrepareBatchSetup::builder()
                         .partition_ref(&partition_ref)

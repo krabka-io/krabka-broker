@@ -13,7 +13,7 @@ use {
         args::{PartitionRef, RestoreArgs},
         bound::Predicates,
         error::RestoreError,
-        verify::VerifiedSegment,
+        verify::{VerifiedSegment, batch_record_count},
     },
     krabka_ids::Offset,
     krabka_log::Log,
@@ -120,7 +120,7 @@ pub async fn write_segment_after_skip(
         }
 
         let batch_bytes = segment.log.slice(pos..pos + consumed);
-        let records_in_batch = nonneg_u64(header.records_count.get());
+        let records_in_batch = batch_record_count(header.records_count.get());
 
         let (mut prepared, tally) = prepare_batch(
             PrepareBatchSetup::builder()
@@ -189,9 +189,6 @@ fn align_log_to_segment(
         segment.facts.segment_id, partition.topic, partition.partition, segment.facts.base_offset,
     )))
 }
-
-/// Convert a header's `records_count` (or any small non-negative `i32` count) to `u64`, treating a corrupt-but-CRC-valid negative count as zero rather than panicking. [`crate::verify::verify_segment`] has already checked every batch's CRC by the time this module sees it.
-fn nonneg_u64(count: i32) -> u64 { u64::try_from(count.max(0)).unwrap_or(0) }
 
 /// Convert a byte length to `u64` for [`SegmentOutcome::bytes_written`].
 fn bytes_len(len: usize) -> u64 { u64::try_from(len).unwrap_or(u64::MAX) }
