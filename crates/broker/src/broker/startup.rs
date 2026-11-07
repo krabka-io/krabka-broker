@@ -9,12 +9,12 @@ use {
         barrier::scheduler::run as run_barrier_scheduler,
         broker::{
             Broker, BrokerHandle, DisklessRuntime,
+            audit::{AuditSigner, load_audit_signer},
             coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
             finish::{
                 BrokerCoordinatorSet, BrokerMetadataHandles, BrokerStorageStartup,
                 finish_broker_startup,
             },
-            audit::load_audit_signer,
             listeners::bind_ephemeral_data_plane_listener,
             metadata_phase::{MetadataControlPlane, MetadataPhase, start_metadata_phase},
             replication::CoordinatorRefs,
@@ -261,6 +261,7 @@ impl Broker {
                 controller_admin_router,
                 raft_handshake_audit,
                 auto_join,
+                audit_signer,
             })),
         )
         .await
@@ -287,6 +288,7 @@ impl Broker {
             controller_admin_router,
             raft_handshake_audit,
             auto_join,
+            audit_signer,
         } = joined;
 
         // 1b. KIP-853 controller auto-join. Spawned BEFORE the leader-wait in
@@ -563,6 +565,8 @@ struct JoinedQuorum {
     controller_admin_router: Option<Arc<BrokerControllerAdminRouter>>,
     raft_handshake_audit: AuditLogArc,
     auto_join: DropGuard,
+    /// The audit checkpoint signing key, loaded before any side effect.
+    audit_signer: Option<AuditSigner>,
 }
 
 /// Wait for the first heartbeat answer that says this broker is unfenced, as

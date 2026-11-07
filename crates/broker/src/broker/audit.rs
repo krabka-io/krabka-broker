@@ -346,7 +346,10 @@ mod tests {
     }
 
     #[rstest::fixture]
-    fn startup() -> StartupAttempt { StartupAttempt::default() }
+    fn startup() -> StartupAttempt {
+        // The When step replaces it with what the start attempt returned.
+        StartupAttempt::NotExecuted
+    }
 
     impl AuditStartupScenario {
         fn key_file(&mut self, contents: Option<&[u8]>) {
@@ -360,13 +363,16 @@ mod tests {
         /// The broker.toml the operator wrote, applied, validated, and its
         /// signing key loaded, the order `Broker::start` runs them in.
         fn start(&self) -> Result<bool, StartupRefusal> {
-            let mut toml = format!("[audit]\nfailure_mode = \"{}\"\n", self.mode.get().toml());
-            if let Some(path) = &self.key_path {
-                toml.push_str(&format!(
+            let signing = self.key_path.as_ref().map_or_else(String::new, |path| {
+                format!(
                     "[audit.signing]\nkey_path = {:?}\nkey_id = \"audit-2026\"\n",
                     path.display().to_string()
-                ));
-            }
+                )
+            });
+            let toml = format!(
+                "[audit]\nfailure_mode = \"{}\"\n{signing}",
+                self.mode.get().toml()
+            );
             let file: FileConfig = toml::from_str(&toml).expect("parse broker.toml");
             let mut config = BrokerConfig::for_tests(self.dir.path().join("log"));
             file.apply_to(&mut config).map_err(StartupRefusal::File)?;
@@ -397,7 +403,9 @@ mod tests {
     }
 
     #[krabka_bdd::when("the broker attempts to start")]
-    fn attempts_to_start(audit_startup: &AuditStartupScenario) -> StartupAttempt {
+    fn attempts_to_start(
+        audit_startup: &AuditStartupScenario,
+    ) -> krabka_bdd::Attempt<bool, StartupRefusal> {
         StartupAttempt::of(|| audit_startup.start())
     }
 

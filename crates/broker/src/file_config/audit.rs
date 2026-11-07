@@ -112,9 +112,11 @@ fn default_spool_sync_every_n() -> NonZeroU64 { DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N
 ///
 /// [`BrokerError::AuditSigningKeyRequired`] when audit is enabled, the failure
 /// mode is `fail-closed`, and no signing key is configured.
-pub(crate) fn require_signing_key_when_fail_closed(cfg: &BrokerConfig) -> Result<(), BrokerError> {
+pub fn require_signing_key_when_fail_closed(cfg: &BrokerConfig) -> Result<(), BrokerError> {
     let has_key = cfg.audit_signing_key_path.is_some() || cfg.audit_signing_key_id.is_some();
-    if cfg.audit_enabled && cfg.audit_failure_mode == krabka_audit::AuditMode::FailClosed && !has_key
+    if cfg.audit_enabled
+        && cfg.audit_failure_mode == krabka_audit::AuditMode::FailClosed
+        && !has_key
     {
         return Err(BrokerError::AuditSigningKeyRequired);
     }
@@ -376,6 +378,9 @@ mod tests {
             [audit]
             enabled = true
             failure_mode = "fail-closed"
+            [audit.signing]
+            key_path = "/etc/krabka/audit.pk8"
+            key_id = "audit-2026"
             [audit.spool]
             dir = "/var/lib/krabka/audit-spool"
             max_bytes = 2048
@@ -405,7 +410,13 @@ mod tests {
             ("fail-closed without a key", true, FailClosed, false, false),
             ("fail-closed with a key", true, FailClosed, true, true),
             ("fail-open without a key", true, FailOpen, false, true),
-            ("audit disabled, fail-closed without a key", false, FailClosed, false, true),
+            (
+                "audit disabled, fail-closed without a key",
+                false,
+                FailClosed,
+                false,
+                true,
+            ),
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();
