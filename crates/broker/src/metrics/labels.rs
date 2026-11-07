@@ -376,7 +376,7 @@ pub struct ConnectionCloseReasonLabel {
 /// operator acts on: a storage failure is a disk to replace, and a writer
 /// failure is a partition whose actor is gone.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
-#[enum_str(case = "snake_case", label_value)]
+#[enum_str(case = "snake_case", all, label_value)]
 pub enum CleanerFailureReason {
     /// The log layer returned an `io::Error`. The compaction rewrite, the
     /// swap or an fsync failed against the disk, and the writer arm has

@@ -362,7 +362,10 @@ mod tests {
         super::*,
         crate::{
             metadata_source::MetadataSource as _,
-            metrics::{ConsumerGroupLabel, RemoteTierPath, ReplicaLagLabel},
+            metrics::{
+                CleanerFailureLabel, CleanerFailureReason, ConsumerGroupLabel, RemoteTierPath,
+                ReplicaLagLabel,
+            },
             test_support::FakeMetadataSource,
         },
         assert2::{assert, check},
@@ -433,6 +436,8 @@ mod tests {
         metrics.record_replication_out(topic, partition, 64);
         metrics.record_partition_cpu_micros(topic, partition, 32);
         metrics.record_compaction(topic, partition);
+        metrics.record_cleaner_failure(topic, partition, CleanerFailureReason::Io);
+        metrics.record_retention_failure(topic, partition, CleanerFailureReason::Writer);
         metrics.record_delivery_watermark(topic, partition, 7, 3);
         metrics
             .partition_disk_bytes
@@ -564,6 +569,31 @@ mod tests {
         let before = scrape(&metrics);
         assert!(before.contains(&partition_pair(TOPIC, 0)));
         assert!(before.contains(&format!("topic=\"{TOPIC}\"")));
+
+        delete_topic(&source, live);
+
+        let after = scrape_until(&metrics, |body| !body.contains(TOPIC)).await;
+        check!(!after.contains(TOPIC));
+        shutdown.cancel();
+    }
+
+    /// A partition whose compaction and local retention only ever failed
+    /// has no series but its failure counters, and no other path records
+    /// it. Deleting its topic still takes every one of those counters, for
+    /// every reason, out of the scrape body.
+    #[tokio::test]
+    async fn deleting_a_topic_evicts_the_failure_series_of_a_partition_that_only_failed() {
+        let metrics = BrokerMetrics::new();
+        let shutdown = CancellationToken::new();
+        let live = topic_records(&[&[THIS_BROKER]]);
+        let source = evicting_source(&metrics, &live, &shutdown);
+
+        for reason in CleanerFailureReason::ALL {
+            metrics.record_cleaner_failure(TOPIC, 0, reason);
+            metrics.record_retention_failure(TOPIC, 0, reason);
+        }
+        let before = scrape(&metrics);
+        assert!(before.contains(&format!("{},reason=\"other\"", partition_pair(TOPIC, 0))));
 
         delete_topic(&source, live);
 
@@ -792,8 +822,8 @@ mod tests {
     /// One [`BrokerMetrics`] field and its name.
     ///
     /// Calling `seed` on a `&Probe` resolves to [`SeedOwned`] when the field
-    /// is a [`TopicLabel`] or [`PartitionLabel`] family, whatever its metric
-    /// type, and falls back to [`SeedOther`] for every other field.
+    /// is a [`TopicLabel`], [`PartitionLabel`] or [`CleanerFailureLabel`]
+    /// family, whatever its metric type, and falls back to [`SeedOther`] for every other field.
     struct Probe<'a, T>(&'static str, &'a T);
 
     /// Seeds a [`TopicLabel`] or [`PartitionLabel`] family.
@@ -828,6 +858,28 @@ mod tests {
                 field,
                 owner: Owner::Partition,
                 present: Box::new(move || family.get(&label).is_some()),
+            })
+        }
+    }
+
+    /// Seeds a [`CleanerFailureLabel`] family, under every reason, as a
+    /// partition family: the partition half is what a reassignment or a
+    /// delete ends.
+    impl<'a, M, C: MetricConstructor<M>> SeedOwned<'a> for Probe<'a, Family<CleanerFailureLabel, M, C>> {
+        fn seed(&self) -> Option<Seeded<'a>> {
+            let &Self(field, family) = self;
+            let labels = CleanerFailureReason::ALL.map(|reason| CleanerFailureLabel {
+                topic: TOPIC.into(),
+                partition: 0,
+                reason,
+            });
+            for label in &labels {
+                drop(family.get_or_create(label));
+            }
+            Some(Seeded {
+                field,
+                owner: Owner::Partition,
+                present: Box::new(move || labels.iter().any(|label| family.get(label).is_some())),
             })
         }
     }
