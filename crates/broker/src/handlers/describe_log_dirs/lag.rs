@@ -11,8 +11,8 @@
 //! together and away from the directory scan.
 
 use {
-    crate::{future_log::FutureLogState, partition_registry::PartitionRegistry},
-    std::sync::{Arc, PoisonError},
+    crate::{future_log::FutureLogRegistry, partition_registry::PartitionRegistry},
+    std::sync::PoisonError,
 };
 
 /// `DescribeLogDirsResponse.INVALID_OFFSET_LAG`: the lag is not available
@@ -46,7 +46,7 @@ pub(super) async fn offset_lag_for(
 /// resume task has not opened the future log yet.
 pub(super) fn future_offset_lag(
     partitions: &PartitionRegistry,
-    future_logs: &dashmap::DashMap<(String, krabka_ids::PartitionIndex), Arc<FutureLogState>>,
+    future_logs: &FutureLogRegistry,
     topic: &str,
     partition: krabka_ids::PartitionIndex,
 ) -> i64 {
@@ -57,8 +57,8 @@ pub(super) fn future_offset_lag(
     let future_leo =
         future_logs
             .get(&(topic.to_owned(), partition))
-            .map_or(krabka_log::Offset(0), |e| {
-                e.value()
+            .map_or(krabka_log::Offset(0), |state| {
+                state
                     .future_log
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -147,7 +147,7 @@ mod tests {
         dirs: Vec<tempfile::TempDir>,
         registry: PartitionRegistry,
         current: Option<Arc<Partition>>,
-        future_logs: dashmap::DashMap<(String, krabka_ids::PartitionIndex), Arc<FutureLogState>>,
+        future_logs: FutureLogRegistry,
         lag: Option<i64>,
     }
     #[rstest::fixture]
@@ -157,7 +157,7 @@ mod tests {
             dirs: Vec::new(),
             registry,
             current: None,
-            future_logs: dashmap::DashMap::new(),
+            future_logs: FutureLogRegistry::default(),
             lag: None,
         }
     }

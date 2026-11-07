@@ -572,7 +572,7 @@ mod tests {
                 (0, -1, Forwarded::Applied, 1),
                 (2, -1, Forwarded::Rejected, 1),
                 (
-                    krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                    krabka_raft::SubmitChangeCode::UncommittedTail.to_i16(),
                     -1,
                     Forwarded::UncommittedTail,
                     1,

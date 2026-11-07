@@ -72,6 +72,7 @@ mod tests {
         crate::{
             UnstableApiVersions,
             kraft::{
+                snapshot_fetch::SnapshotId,
                 transport::{api_key, wire::PeerRequest},
                 types::NodeId,
             },
@@ -304,7 +305,7 @@ mod tests {
                     cluster_id: None,
                     from: NodeId(2),
                     current_leader_epoch: 1,
-                    snapshot_id: (10, 1),
+                    snapshot_id: SnapshotId::new(10, 1),
                     position: 0,
                     max_bytes: 32,
                 },

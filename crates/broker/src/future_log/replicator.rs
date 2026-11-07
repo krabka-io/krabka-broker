@@ -9,15 +9,11 @@
 use crate::test_support::PartitionRecordsSetup;
 use {
     super::{
-        FutureLogState, MovePolicy,
+        FutureLogRegistry, FutureLogState, MovePolicy,
         catch_up::catch_up,
         truncation::{cut_future_log, truncate_to_current_epochs},
     },
-    crate::{
-        partition::{Partition, SwapOutcome, WriterMessage},
-        partition_registry::PartitionRegistry,
-    },
-    dashmap::DashMap,
+    crate::partition::{Partition, SwapOutcome, WriterMessage},
     krabka_ids::PartitionIndex,
     krabka_log::{Log, Offset},
     krabka_units::convert::TimeExt as _,
@@ -39,8 +35,7 @@ pub(super) struct ReplicatorTask {
     pub(super) target_partition_path: PathBuf,
     pub(super) target_log_dir: PathBuf,
     pub(super) cancel: CancellationToken,
-    pub(super) _partitions: Arc<PartitionRegistry>,
-    pub(super) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    pub(super) future_logs: Arc<FutureLogRegistry>,
     /// This move's own registry entry. The task removes only that entry when
     /// it ends, never one a later move put under the same key.
     pub(super) registration: Arc<FutureLogState>,
@@ -64,7 +59,6 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         target_partition_path,
         target_log_dir,
         cancel,
-        _partitions,
         future_logs,
         registration,
         topic,
@@ -203,9 +197,7 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         }
     }
     // Whatever the outcome, this move's entry is no longer useful.
-    future_logs.remove_if(&(topic, partition), |_, state| {
-        Arc::ptr_eq(state, &registration)
-    });
+    future_logs.remove_if_same(&(topic, partition), &registration);
 }
 
 #[cfg(test)]
@@ -222,6 +214,7 @@ mod tests {
                 },
             },
             log_dir,
+            partition_registry::PartitionRegistry,
         },
         assert2::assert,
         krabka_log::LogConfig,
@@ -237,7 +230,7 @@ mod tests {
     async fn resume_and_wait(
         part: &Arc<Partition>,
         partitions: &Arc<PartitionRegistry>,
-        future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        future_logs: &Arc<FutureLogRegistry>,
         target: &Path,
         wait: Duration,
         expectation: &str,
@@ -291,8 +284,7 @@ mod tests {
                 future_path,
                 target_log_dir: target.to_path_buf(),
                 cancel,
-                _partitions: Arc::new(PartitionRegistry::new()),
-                future_logs: Arc::new(DashMap::new()),
+                future_logs: Arc::new(FutureLogRegistry::default()),
                 registration,
                 topic: "t".into(),
                 partition: PartitionIndex(0),
@@ -336,7 +328,7 @@ mod tests {
 
     /// Whether the move task for `t-0` has ended: its entry is gone, or the
     /// entry left behind names a task that already finished.
-    fn move_ended(future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>) -> bool {
+    fn move_ended(future_logs: &FutureLogRegistry) -> bool {
         future_logs
             .get(&("t".to_owned(), PartitionIndex(0)))
             .is_none_or(|entry| {
@@ -395,7 +387,7 @@ mod tests {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
         for _ in 0..4 {
             append_value_batch()
