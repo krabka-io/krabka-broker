@@ -166,23 +166,24 @@ pub(super) struct SaslConnection<'a, 'b> {
 /// Counts and audits one authentication that failed before any credential was
 /// judged: a request the per-state gate refused, or a frame over
 /// `sasl.server.max.receive.size`. The row names the mechanism a handshake
-/// chose, or the `Unknown` sentinel when none did.
+/// chose, or the `Unknown` sentinel when none did, and an unidentified
+/// principal carries that mechanism's auth method, as every other failure row
+/// does.
 pub(super) fn record_refused_authentication(
     AuthenticationSinks { metrics, audit_log }: AuthenticationSinks<'_>,
     auth: &ConnectionAuth,
     peer: &SocketAddr,
     reason: &str,
 ) {
-    let mech_label = auth
-        .negotiated_mechanism()
-        .map_or(UNKNOWN_LABEL, SaslMechanism::wire_name);
+    let mechanism = auth.negotiated_mechanism();
+    let mech_label = mechanism.map_or(UNKNOWN_LABEL, SaslMechanism::wire_name);
     metrics.record_authentication(mech_label, false);
     emit_authentication(
         audit_log,
         peer,
         mech_label,
         auth.principal()
-            .map_or_else(|| unidentified_principal(None), audit_principal),
+            .map_or_else(|| unidentified_principal(mechanism), audit_principal),
         krabka_audit::AuditOutcome::Failure,
         Some(reason.to_owned()),
     );
@@ -821,7 +822,8 @@ mod tests {
 
     /// A request the per-state gate refuses after a PLAIN handshake is one
     /// failure row under the handshake's mechanism. No credential was judged,
-    /// so the row names no user.
+    /// so the row names no user, and its auth method is the mechanism's, the
+    /// same as a refused controller-listener login's.
     #[test]
     fn a_gate_refusal_after_a_plain_handshake_audits_one_unnamed_failure() {
         let mut auth = ConnectionAuth::Anonymous;
@@ -861,7 +863,7 @@ mod tests {
             "PLAIN",
             krabka_audit::AuditPrincipal {
                 name: String::new(),
-                auth_method: "Anonymous".into(),
+                auth_method: "SaslPlain".into(),
             },
             krabka_audit::AuditEndpoint {
                 ip: "192.0.2.9".into(),
