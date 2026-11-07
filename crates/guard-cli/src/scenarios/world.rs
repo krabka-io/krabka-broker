@@ -5,7 +5,7 @@ use {
         driver::{self, Cluster},
         params::{BrokerAnswer, Outcome},
     },
-    krabka_bdd::{Given, TokioMultiThreadContext},
+    krabka_bdd::Given,
     krabka_units::Time,
     std::path::PathBuf,
 };
@@ -61,10 +61,12 @@ impl GuardScenario {
     }
 
     /// The cluster, booted on first use.
-    pub fn cluster(&mut self, runtime: &TokioMultiThreadContext) -> &Cluster {
+    pub async fn cluster(&mut self) -> &Cluster {
         let proposal_ttl = self.proposal_ttl;
-        self.cluster.get_or_insert_with(|| {
-            runtime.block_on(driver::boot().maybe_proposal_ttl(proposal_ttl).call())
-        })
+        let cluster = match self.cluster.take() {
+            Some(cluster) => cluster,
+            None => driver::boot().maybe_proposal_ttl(proposal_ttl).call().await,
+        };
+        self.cluster.insert(cluster)
     }
 }
