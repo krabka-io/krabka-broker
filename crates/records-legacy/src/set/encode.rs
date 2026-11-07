@@ -124,13 +124,9 @@ pub fn encode_compressed_message_set<B: BufMut>(
     };
     let wrapper_len = wrapper.encoded_len();
 
-    // Wrapper offset: v0 = 0 (per Kafka convention pre-KIP-32),
-    // v1 = absolute offset of last inner record.
-    let wrapper_offset = match magic {
-        Magic::V0 => 0,
-        Magic::V1 => last.offset.0,
-    };
-    buf.put_i64(wrapper_offset);
+    // The wrapper carries the absolute offset of its last record in both
+    // magics, as Kafka's `MemoryRecordsBuilder` writes it.
+    buf.put_i64(last.offset.0);
     buf.put_i32(i32::try_from(wrapper_len).unwrap_or(i32::MAX));
     wrapper.encode_into(buf);
     Ok(())

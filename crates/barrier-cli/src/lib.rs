@@ -21,13 +21,15 @@ mod broker_codes;
 mod cli;
 #[cfg(test)]
 mod command_config_sasl;
+mod console;
 mod dispatch;
 mod report;
 mod verify;
 
 pub use self::{
     cli::{Cli, Command},
-    dispatch::{run, run_from_args},
+    console::Console,
+    dispatch::{run, run_from_args, run_with},
     verify::{Mismatch, VerifyOutcome},
 };
 

@@ -46,14 +46,17 @@ krabka-barrier -b broker-1:9092 define \
   --retained-cuts 200
 ```
 
-Trigger a cut now, read the cuts back, and prove that the newest one is in the
-log:
+Trigger a cut now, read it back, and prove that it is in the log. The trigger
+prints the epoch it took, 42 here:
 
 ```sh
 krabka-barrier -b broker-1:9092 trigger --group orders-cut --timeout 30s
-krabka-barrier -b broker-1:9092 list --group orders-cut --max-results 1
+krabka-barrier -b broker-1:9092 list --group orders-cut --from-epoch 42
 krabka-barrier -b broker-1:9092 verify --group orders-cut --epoch 42
 ```
+
+`list` prints cuts oldest first, so `--max-results 1` prints the oldest
+retained cut, not the newest. `--from-epoch` keeps the epoch it names.
 
 `verify` fetches the batch at every offset the cut names. It checks that each
 batch is a barrier control batch that carries this group and this epoch.
@@ -66,7 +69,7 @@ batch is a barrier control batch that carries this group and this epoch.
 | `delete` | `--group <name>` | Delete a group and its cuts. |
 | `describe` | `--group <name>` (repeat, or omit for every group) | Print a group's definition and its latest epoch. |
 | `trigger` | `--group <name>`, `--timeout <time>` | Inject a cut now and print the offsets it took. The broker clamps `--timeout` to its configured ceiling. |
-| `list` | `--group <name>`, `--from-epoch <n>` (default `0`), `--max-results <n>` (default `-1`, every retained cut) | Print a group's retained cuts. |
+| `list` | `--group <name>`, `--from-epoch <n>` (default `0`), `--max-results <n>` (default `-1`, every retained cut) | Print a group's retained cuts, oldest first. |
 | `verify` | `--group <name>`, `--epoch <n>` | Read the log at a cut's offsets and check that each one holds that cut's marker. |
 
 A `<time>` value takes any unit the broker configuration takes: `ns`, `us`,

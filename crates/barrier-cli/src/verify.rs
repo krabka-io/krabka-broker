@@ -29,6 +29,9 @@ use {
     std::collections::BTreeMap,
 };
 
+/// Kafka's `OFFSET_OUT_OF_RANGE`: the fetch offset is outside the log.
+const OFFSET_OUT_OF_RANGE: i16 = 1;
+
 /// One offset that does not hold the marker the cut claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mismatch {
@@ -232,6 +235,14 @@ async fn fetch_batch_at(
             "the leader served no response for {topic}-{partition}"
         ));
     };
+    // The log starts past the offset the cut names, so retention or a
+    // `DeleteRecords` took the marker with it. KFC-4 calls that a marker that
+    // has not survived retention, and says so rather than naming the code.
+    if part.error_code == OFFSET_OUT_OF_RANGE {
+        return Err(format!(
+            "the log no longer holds offset {offset}, so the marker has left the log"
+        ));
+    }
     if part.error_code != 0 {
         return Err(format!(
             "the leader refused the fetch of {topic}-{partition} with error {}",
