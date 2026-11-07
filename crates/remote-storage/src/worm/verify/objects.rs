@@ -232,7 +232,7 @@ mod tests {
         crate::worm::verify::{
             VerifyRequest,
             test_support::{
-                Archive, PREFIX, VersionedStore, first_break_reason, put_entry, put_raw,
+                Archive, PREFIX, Tamper, VersionedStore, first_break_reason, put_entry, put_raw,
             },
         },
         assert2::check,
@@ -327,5 +327,130 @@ mod tests {
 
         check!(note.contains("v-never-written"), "note was: {note}");
         check!(note.contains("could not be read"), "note was: {note}");
+    }
+    /// The key of the `.log` object of the fixture's one segment.
+    fn log_key(archive: &Archive) -> &str { &archive.segments[0].log_key }
+
+    /// The `SHA-256` of the fixture's `.log` body with its first byte flipped,
+    /// and of the body the manifest recorded, as the reason spells them.
+    fn flipped_and_recorded_digests(archive: &Archive) -> (String, String) {
+        let body = &archive.segments[0].log_body;
+        let mut flipped = body.clone();
+        flipped[0] ^= 0xff;
+        (
+            hex::encode(Sha256Digest::of(&flipped).0),
+            hex::encode(Sha256Digest::of(body).0),
+        )
+    }
+
+    /// The reason text for every outcome of the object-set check, each
+    /// reached through a whole verify run over a one-segment archive whose
+    /// `.log` body is the 18 bytes `segment-0-log-body`.
+    #[yare::parameterized(
+        admit_shallow = { false, Tamper::None, VerifyDepth::Shallow, |_| None },
+        admit_deep = { false, Tamper::None, VerifyDepth::Deep, |_| None },
+        empty = {
+            false,
+            Tamper::EmptyObjects(0),
+            VerifyDepth::Shallow,
+            |_| Some("manifest names no segment objects".to_owned()),
+        },
+        duplicate_key = {
+            false,
+            Tamper::DuplicateObject(0),
+            VerifyDepth::Shallow,
+            |archive| Some(format!(
+                "object `{}` is named more than once by the manifest",
+                log_key(archive)
+            )),
+        },
+        coordinate_mismatch = {
+            false,
+            Tamper::WrongObjectCoordinates(0),
+            VerifyDepth::Shallow,
+            |archive| Some(format!(
+                "object `{}` does not match the manifest segment coordinates or suffix",
+                log_key(archive)
+            )),
+        },
+        missing_object = {
+            false,
+            Tamper::DeleteLog(0),
+            VerifyDepth::Shallow,
+            |archive| Some(format!(
+                "object `{}` named by the manifest is missing from the archive",
+                log_key(archive)
+            )),
+        },
+        count_mismatch = {
+            false,
+            Tamper::DropObjectEntry(0),
+            VerifyDepth::Shallow,
+            |_| Some(
+                "manifest names 1 objects, but the archive holds 2 objects for this segment"
+                    .to_owned()
+            ),
+        },
+        size_mismatch = {
+            false,
+            Tamper::TruncateLog(0),
+            VerifyDepth::Shallow,
+            |archive| Some(format!(
+                "object `{}` is 17 bytes, the manifest records a size of 18 bytes",
+                log_key(archive)
+            )),
+        },
+        digest_mismatch = {
+            false,
+            Tamper::FlipLogByte(0),
+            VerifyDepth::Deep,
+            |archive| {
+                let (flipped, recorded) = flipped_and_recorded_digests(archive);
+                Some(format!(
+                    "object `{}` hashes to {flipped}, the manifest records {recorded}",
+                    log_key(archive)
+                ))
+            },
+        },
+        digest_mismatch_with_a_surviving_pinned_version = {
+            true,
+            Tamper::FlipLogByte(0),
+            VerifyDepth::Deep,
+            |archive| {
+                let (flipped, recorded) = flipped_and_recorded_digests(archive);
+                let version = archive.segments[0].entries[0]
+                    .version_id
+                    .clone()
+                    .expect("the versioned store records a version per object");
+                Some(format!(
+                    "object `{}` hashes to {flipped}, the manifest records {recorded}. The \
+                     pinned version `{version}` still matches, so the original bytes survive \
+                     beneath the overwrite and the segment is recoverable",
+                    log_key(archive)
+                ))
+            },
+        },
+    )]
+    #[test_macro(tokio::test)]
+    async fn every_object_set_decision_reports_its_exact_reason(
+        versioned: bool,
+        tamper: Tamper,
+        depth: VerifyDepth,
+        expected: fn(&Archive) -> Option<String>,
+    ) {
+        let archive = if versioned {
+            Archive::build_on(Arc::new(VersionedStore::new()), &[1]).await
+        } else {
+            Archive::build(&[1]).await
+        };
+        tamper.apply(&archive).await;
+
+        let request = VerifyRequest {
+            depth,
+            ..VerifyRequest::default()
+        };
+        let report = archive.verify_with(&request).await;
+
+        check!(report.first_break().map(|found| found.reason.clone()) == expected(&archive));
     }
 }
