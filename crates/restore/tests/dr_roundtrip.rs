@@ -60,10 +60,12 @@ use {
     krabka_backup::{
         archive::ArchiveArgs,
         capture::capture_key,
+        cli::{CaptureSigningArgs, CaptureTrustArgs},
         manifest::{METADATA_CHECKPOINT, RLMM_SNAPSHOT},
         run,
     },
     krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_cli_connection::SecurityArgs,
     krabka_client_admin::{AdminClient, AdminClientLike as _},
     krabka_client_core::Client,
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord},
@@ -258,10 +260,16 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     check!(committed_offset(&pre_bootstrap).await == COMMITTED_OFFSET);
 
     // 2. The capture, and the check that it is whole.
-    let capture = run::capture(Some(&node_files), Some(&pre_bootstrap), &backup)
-        .await
-        .result
-        .expect("capture the restore inputs");
+    let capture = run::capture_configured(
+        Some(&node_files),
+        Some(&pre_bootstrap),
+        &SecurityArgs::default(),
+        &CaptureSigningArgs::default(),
+        &backup,
+    )
+    .await
+    .result
+    .expect("capture the restore inputs");
     run::verify(&capture, &backup)
         .await
         .result
@@ -312,10 +320,17 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     check!(offsets_topic_error(&post_bootstrap).await == Some(UNKNOWN_TOPIC_OR_PARTITION));
 
     // 6. The offsets go back, and the group is where it was.
-    let committed = run::restore_offsets(&capture, &post_bootstrap, false, &backup)
-        .await
-        .result
-        .expect("commit the captured offsets");
+    let committed = run::restore_offsets_configured(
+        &capture,
+        &post_bootstrap,
+        &SecurityArgs::default(),
+        &CaptureTrustArgs::default(),
+        false,
+        &backup,
+    )
+    .await
+    .result
+    .expect("commit the captured offsets");
     check!(committed == 1);
     check!(committed_offset(&post_bootstrap).await == COMMITTED_OFFSET);
 

@@ -7,7 +7,6 @@ mod support;
 
 use {
     assert2::check,
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     steps::{BarrierScenario, barrier},
     support::GROUP,
@@ -26,52 +25,39 @@ fn marker_offset(barrier: &BarrierScenario, topic: &str, partition: i32) -> i64 
 }
 
 /// Delete every record of `partition` up to and including its marker.
-fn delete_through_marker(
-    barrier: &mut BarrierScenario,
-    runtime: &TokioMultiThreadContext,
-    topic: &str,
-    partition: i32,
-) {
+async fn delete_through_marker(barrier: &mut BarrierScenario, topic: &str, partition: i32) {
     let offset = marker_offset(barrier, topic, partition);
-    let cluster = barrier.cluster.get(runtime);
-    runtime.block_on(cluster.delete_records_below(topic, partition, offset + 1));
+    let cluster = barrier.cluster.get().await;
+    cluster
+        .delete_records_below(topic, partition, offset + 1)
+        .await;
 }
 
 #[given("the records of {topic} partition {partition} up to the marker have been deleted")]
-fn deleted_in_one_partition(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-    partition: i32,
-) {
-    delete_through_marker(barrier, runtime, &topic, partition);
+async fn deleted_in_one_partition(barrier: &mut BarrierScenario, topic: String, partition: i32) {
+    delete_through_marker(barrier, &topic, partition).await;
 }
 
 #[given(
     "the records of {topic} partitions {first} and {second} up to the marker have been \
      deleted"
 )]
-fn deleted_in_two_partitions(
+async fn deleted_in_two_partitions(
     barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     topic: String,
     first: i32,
     second: i32,
 ) {
-    delete_through_marker(barrier, runtime, &topic, first);
-    delete_through_marker(barrier, runtime, &topic, second);
+    delete_through_marker(barrier, &topic, first).await;
+    delete_through_marker(barrier, &topic, second).await;
 }
 
 #[given("the {topic} topic has been created again and cut since")]
-fn recreated_and_cut(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    runtime.block_on(cluster.delete_topic(&topic));
-    runtime.block_on(cluster.create_topic(&topic, 1));
-    let cut = runtime.block_on(cluster.operator().trigger(GROUP));
+async fn recreated_and_cut(barrier: &mut BarrierScenario, topic: String) {
+    let cluster = barrier.cluster.get().await;
+    cluster.delete_topic(&topic).await;
+    cluster.create_topic(&topic, 1).await;
+    let cut = cluster.operator().trigger(GROUP).await;
     assert2::assert!(cut.exit == 0, "{cut:?}");
     assert2::assert!(cut.epoch() == 2, "{cut:?}");
     let first = marker_offset(barrier, &topic, 0);
@@ -83,24 +69,14 @@ fn recreated_and_cut(
 }
 
 #[when("the operator verifies cut {epoch} of the group")]
-fn verify(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    epoch: i64,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().verify(GROUP, epoch));
+async fn verify(barrier: &mut BarrierScenario, epoch: i64) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().verify(GROUP, epoch).await;
     barrier.transcript.set(transcript);
 }
 
 #[when("the operator tries to verify cut {epoch} of the group")]
-fn try_verify(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    epoch: i64,
-) {
-    verify(barrier, runtime, epoch);
-}
+async fn try_verify(barrier: &mut BarrierScenario, epoch: i64) { verify(barrier, epoch).await; }
 
 #[then("the cut verifies with {markers} markers in the log")]
 fn verifies(barrier: &BarrierScenario, markers: usize) {

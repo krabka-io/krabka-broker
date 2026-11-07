@@ -12,6 +12,7 @@ use {
     super::{
         FetcherKey, FetcherTask, LeaderEndpoint, ReplicatorSupervisor, TopicPartition,
         desired_follower_set, resolve_leader_endpoint,
+        task_stop::{StoppingTask, TASK_STOP_TIMEOUT, stop_tasks},
     },
     crate::replicator::{self, FollowedKey},
     krabka_ids::PartitionIndex,
@@ -21,7 +22,7 @@ use {
         collections::BTreeMap,
         sync::{Arc, PoisonError},
     },
-    tracing::warn,
+    tracing::{Instrument, warn},
 };
 
 /// One leader's worth of desired follower state.
@@ -47,7 +48,11 @@ impl ReplicatorSupervisor {
 
         // 1. Retire fetchers with nothing left to follow, a moved endpoint, or
         //    a task that exited.
+        //    A retired fetcher is signalled now and joined in the background,
+        //    so a fetcher that exited by panicking is logged rather than
+        //    dropped, and this pass does not wait on one that is stopping.
         let current: Vec<FetcherKey> = self.tasks.iter().map(|entry| *entry.key()).collect();
+        let mut retired = Vec::new();
         for key in current {
             let keep = self.tasks.get(&key).is_some_and(|task| {
                 !task.handle.is_finished()
@@ -55,9 +60,13 @@ impl ReplicatorSupervisor {
                         .get(&key)
                         .is_some_and(|wanted| wanted.endpoint == task.endpoint)
             });
-            if !keep && let Some((_, task)) = self.tasks.remove(&key) {
+            if !keep && let Some((key, task)) = self.tasks.remove(&key) {
                 task.shutdown.cancel();
+                retired.push(StoppingTask::fetcher(key, task));
             }
+        }
+        if !retired.is_empty() {
+            tokio::spawn(stop_tasks(retired, TASK_STOP_TIMEOUT).in_current_span());
         }
 
         // 2. Hand each surviving fetcher its partitions, and start one for
@@ -240,15 +249,19 @@ impl ReplicatorSupervisor {
 mod tests {
     use {
         super::*,
-        crate::replicator_supervisor::test_support::{
-            await_until, broker_record, image_with, partition_record, reconciled_supervisor,
-            supervisor_fixture, topic_record,
+        crate::{
+            replicator_supervisor::test_support::{
+                await_until, broker_record, image_with, partition_record, reconciled_supervisor,
+                supervisor_fixture, topic_record,
+            },
+            test_support::LogCapture,
         },
         assert2::{assert, check},
         krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
         krabka_raft::NodeId,
         krabka_units::{bytes, millis},
         tokio_util::sync::CancellationToken,
+        tracing::{Level, dispatcher},
         uuid::Uuid,
     };
 
@@ -635,5 +648,44 @@ mod tests {
         check!(config.leader_epoch == krabka_metadata::LeaderEpoch(9));
         drop(followed);
         task.shutdown.cancel();
+    }
+
+    /// A fetcher that exited by panicking is joined when reconcile retires
+    /// it, and its panic is logged rather than dropped with its handle.
+    #[tokio::test]
+    async fn reconcile_logs_a_retired_fetcher_that_panicked() {
+        let capture = LogCapture::default();
+        let _capturing = dispatcher::set_default(&capture.dispatch());
+        let img = followed_image(1, &[0], 8);
+        let (supervisor, _partitions, _reporter, _dir) = supervisor_fixture(img.clone());
+        let key = FetcherKey {
+            leader: NodeId(1),
+            fetcher_id: 0,
+        };
+        supervisor.tasks.insert(key, FetcherTask {
+            shutdown: CancellationToken::new(),
+            handle: tokio::spawn(async { panic!("fetcher exploded") }),
+            followed: Arc::new(replicator::FollowedPartitionsState::default()),
+            endpoint: leader_endpoint(&img, NodeId(1)),
+        });
+        await_until("the old fetcher panics", || {
+            supervisor
+                .tasks
+                .get(&key)
+                .is_some_and(|task| task.handle.is_finished())
+        })
+        .await;
+
+        LogCapture::span().in_scope(|| supervisor.reconcile_fetchers(&img));
+
+        let panicked = || {
+            capture.events().into_iter().any(|event| {
+                event.level == Level::ERROR && event.message == "replica task panicked"
+            })
+        };
+        await_until("the panic is logged", panicked).await;
+        if let Some(replacement) = supervisor.tasks.get(&key) {
+            replacement.shutdown.cancel();
+        }
     }
 }

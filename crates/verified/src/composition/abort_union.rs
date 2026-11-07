@@ -5,8 +5,8 @@ use super::restored_aborts::{
 };
 use {
     super::{
-        FetchWatermarks, RestoreAbortedTxn, RestoreSegmentExtent, fetch_visibility,
-        restored_aborts_remain_bounded_when_fetch_shrinks, truncation_frontier,
+        FetchReader, FetchWatermarks, Isolation, RestoreAbortedTxn, RestoreSegmentExtent,
+        fetch_visibility, restored_aborts_remain_bounded_when_fetch_shrinks, truncation_frontier,
     },
     crate::{
         remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision},
@@ -45,7 +45,10 @@ pub(super) fn restored_abort_sources_cover_committed_fetch(
         restored_aborts_remain_bounded_when_fetch_shrinks(remote, owners.0, w, from, cut)?;
     let local_indices =
         restored_aborts_remain_bounded_when_fetch_shrinks(local, owners.1, w, from, cut)?;
-    let limit = truncation_frontier(fetch_visibility(false, true, w, from).limit_offset, cut);
+    let limit = truncation_frontier(
+        fetch_visibility(FetchReader::Consumer(Isolation::ReadCommitted), w, from).limit_offset,
+        cut,
+    );
     let query_last = if limit > from { limit - 1 } else { -1 };
     let mut rows: Vec<(i64, i64)> = Vec::new();
     let mut i = 0usize;

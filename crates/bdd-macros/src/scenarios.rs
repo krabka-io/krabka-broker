@@ -1,18 +1,25 @@
-//! `scenarios!`: lint the features under a directory, then run them.
+//! `scenarios!`: lint the features under a directory, then generate one test
+//! per scenario and per outline row.
 //!
-//! The expansion is either one `compile_error!` per house-style finding, or
-//! the caller's `rstest_bdd_macros::scenarios!` call with Krabka's defaults
-//! plus a module holding the step-registry check.
+//! The expansion is either one `compile_error!` per house-style error, or a
+//! module tree with a `#[tokio::test]` for every scenario the call runs, each
+//! handing a static `ScenarioSpec` and its fixtures to the krabka-bdd runner,
+//! plus one registry-check test.
 
+mod codegen;
+
+pub use self::codegen::Runtime;
 use {
-    crate::{
-        lint::{self, Finding},
-        model::{self, Keyword, StepUse},
-    },
     gherkin::{Feature, GherkinEnv, tagexpr::TagOperation},
+    krabka_bdd_model::{
+        glossary::Glossary,
+        lint::{self, Finding, LintContext, Severity},
+        model,
+        plan::{self, Plan},
+    },
     moxy::{
         ast::ParseError,
-        token::{Ident, LitInt, LitStr, Span, TokenStream, TokenTree},
+        token::{LitInt, LitStr, Span, TokenStream, TokenTree},
     },
     std::{
         env, fs, io, mem,
@@ -20,38 +27,33 @@ use {
     },
 };
 
-/// The scenarios a gating run leaves out: reviewed but not automated, or
-/// automated but not finished. The Gherkin style guide's tag table defines
-/// both tags.
-pub const DEFAULT_IGNORE_TAGS: &str = "@formulated or @inprogress";
-
-/// The `runtime` value that selects the multi-thread Tokio harness.
-const MULTI_THREAD_RUNTIME: &str = "tokio-multi-thread";
-
 /// One `name = value` argument, or the bare directory literal.
 struct Argument {
     name: Option<String>,
     tokens: Vec<TokenTree>,
 }
 
-/// What the expansion needs to know about the caller's arguments.
+/// One `name: Type` entry of `fixtures = [..]`.
+pub struct Fixture {
+    /// The fixture's name, which is also the rstest fixture fn it calls.
+    pub name: String,
+    /// The fixture's type, as the caller wrote it.
+    pub ty: TokenStream,
+}
+
+/// What the expansion reads from the caller's arguments.
 #[derive(Default)]
-struct Arguments {
+pub struct Arguments {
     /// The feature directory, relative to the crate's manifest.
     dir: Option<LitStr>,
-    /// The caller's `tags` filter, which is forwarded and also narrows the
-    /// step check.
+    /// `tags = "..."`: only the scenarios this expression matches run.
     tags: Option<LitStr>,
-    /// The caller's `ignore_tags`, in place of [`DEFAULT_IGNORE_TAGS`]. It
-    /// narrows the step check and is forwarded, so rstest-bdd marks the
-    /// matching scenarios `#[ignore]`.
-    ignore_tags: Option<LitStr>,
-    /// `workers = N` for the multi-thread runtime.
-    workers: Option<u128>,
-    /// `runtime = "tokio-multi-thread"` was given.
-    multi_thread: bool,
-    /// Every argument rstest-bdd takes as it is, in the caller's order.
-    forwarded: Vec<Vec<TokenTree>>,
+    /// `fixtures = [name: Type, ..]`.
+    pub fixtures: Vec<Fixture>,
+    /// `world = name`: the fixture whose `World` hooks run.
+    pub world: Option<String>,
+    /// `runtime = ".."` and `workers = N`.
+    pub runtime: Runtime,
 }
 
 /// Expands `scenarios!(...)`.
@@ -59,97 +61,117 @@ pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let arguments = parse_arguments(tokens)?;
     let dir = arguments
         .dir
-        .as_ref()
+        .clone()
         .ok_or_else(|| ParseError::new(Span::call_site(), "the feature directory is required"))?;
     let manifest = env::var("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
         .map_err(|error| ParseError::new(dir.span(), format!("CARGO_MANIFEST_DIR: {error}")))?;
     let include = tag_expression(arguments.tags.as_ref())?;
-    let ignore = match &arguments.ignore_tags {
-        Some(expression) => tag_expression(Some(expression))?,
-        None => model::parse_tag_expression(DEFAULT_IGNORE_TAGS)
-            .map(Some)
-            .map_err(|message| ParseError::new(dir.span(), message))?,
-    };
+    let glossary = Glossary::embedded()
+        .map_err(|message| ParseError::new(dir.span(), format!("glossary.toml: {message}")))?;
 
     let files = feature_files(&manifest.join(dir.value()))
         .map_err(|error| ParseError::new(dir.span(), format!("{}: {error}", dir.value())))?;
-    let mut findings = Vec::new();
-    let mut uses = Vec::new();
+    let mut errors = Vec::new();
+    let mut plans = Vec::new();
     for file in &files {
         let source = fs::read_to_string(file)
             .map_err(|error| ParseError::new(dir.span(), format!("{}: {error}", file.display())))?;
         let shown = display_path(file, &manifest);
-        let file_findings = lint::lint(&shown, &source);
-        if file_findings.is_empty()
+        // The lint resolves a `Depends on:` path against the feature's
+        // directory and asks about the manifest-relative result.
+        let exists = |relative: &str| manifest.join(relative).is_file();
+        let context = LintContext {
+            glossary,
+            file_exists: &exists,
+        };
+        let file_errors: Vec<Finding> = lint::lint(&shown, &source, &context)
+            .into_iter()
+            .filter(|finding| finding.severity == Severity::Error)
+            .collect();
+        if file_errors.is_empty()
             && let Ok(feature) = Feature::parse(&source, GherkinEnv::default())
         {
-            uses.extend(model::step_uses(
-                &shown,
-                &feature,
-                include.as_ref(),
-                ignore.as_ref(),
-            ));
+            plans.push(filtered(plan::plan(&shown, &feature), include.as_ref()));
         }
-        findings.extend(file_findings);
+        errors.extend(file_errors);
     }
-    if !findings.is_empty() {
-        return Ok(compile_errors(&findings));
+    if !errors.is_empty() {
+        return Ok(compile_errors(&errors));
     }
-    Ok(expansion(&arguments, dir, &uses))
+    if plans.iter().all(|plan| plan.scenarios.is_empty()) {
+        return Err(ParseError::new(
+            dir.span(),
+            format!("no scenarios to run under `{}`", dir.value()),
+        ));
+    }
+    if let Some(world) = &arguments.world
+        && !arguments
+            .fixtures
+            .iter()
+            .any(|fixture| &fixture.name == world)
+    {
+        return Err(ParseError::new(
+            dir.span(),
+            format!("`world = {world}` must name one of the `fixtures`"),
+        ));
+    }
+    let tracked: Vec<String> = files
+        .iter()
+        .map(|file| file.to_string_lossy().into_owned())
+        .collect();
+    Ok(codegen::expansion(
+        &arguments,
+        &module_base(dir.value()),
+        &plans,
+        &tracked,
+    ))
 }
 
-/// Splits the arguments at their top-level commas and sorts out the ones
-/// this macro reads.
+/// `plan` without the scenarios that `include` leaves out.
+fn filtered(mut plan: Plan, include: Option<&TagOperation>) -> Plan {
+    if let Some(include) = include {
+        plan.scenarios
+            .retain(|scenario| model::tags_match(include, &scenario.tags));
+    }
+    plan
+}
+
+/// Splits the arguments at their top-level commas and reads each.
 fn parse_arguments(tokens: TokenStream) -> Result<Arguments, ParseError> {
     let mut arguments = Arguments::default();
+    let mut runtime = None;
+    let mut workers = None;
     for argument in split_arguments(tokens) {
         match argument.name.as_deref() {
             None | Some("dir" | "path") => {
                 arguments.dir = Some(string_value(&argument, "the feature directory")?);
-                arguments.forwarded.push(argument_tokens(&argument));
             }
-            Some("tags") => {
-                arguments.tags = Some(string_value(&argument, "`tags`")?);
-                arguments.forwarded.push(argument_tokens(&argument));
+            Some("tags") => arguments.tags = Some(string_value(&argument, "`tags`")?),
+            Some("fixtures") => arguments.fixtures = fixtures(&argument)?,
+            Some("world") => arguments.world = Some(ident_value(&argument, "`world`")?),
+            Some("runtime") => runtime = Some(string_value(&argument, "`runtime`")?),
+            Some("workers") => workers = Some(int_value(&argument)?),
+            Some(other) => {
+                return Err(ParseError::new(
+                    first_span(&argument),
+                    format!(
+                        "unknown argument `{other}`: expected the directory, `tags`, \
+                         `fixtures`, `world`, `runtime` or `workers`"
+                    ),
+                ));
             }
-            Some("ignore_tags") => {
-                arguments.ignore_tags = Some(string_value(&argument, "`ignore_tags`")?);
-            }
-            Some("workers") => arguments.workers = Some(int_value(&argument)?),
-            Some("runtime")
-                if string_value(&argument, "`runtime`")?.value() == MULTI_THREAD_RUNTIME =>
-            {
-                arguments.multi_thread = true;
-            }
-            Some(_) => arguments.forwarded.push(argument_tokens(&argument)),
         }
     }
-    if arguments.workers.is_some() && !arguments.multi_thread {
-        return Err(ParseError::new(
-            Span::call_site(),
-            format!("`workers` needs `runtime = \"{MULTI_THREAD_RUNTIME}\"`"),
-        ));
-    }
+    arguments.runtime = Runtime::from_arguments(runtime.as_ref(), workers)?;
     Ok(arguments)
 }
 
 /// The arguments between top-level commas. Brackets and parentheses are
 /// single groups, so the commas inside `fixtures = [..]` do not split.
 fn split_arguments(tokens: TokenStream) -> Vec<Argument> {
-    let mut arguments = Vec::new();
-    let mut current = Vec::new();
-    for token in tokens {
-        if matches!(&token, TokenTree::Punct(punct) if punct.as_str() == ",") {
-            arguments.push(mem::take(&mut current));
-        } else {
-            current.push(token);
-        }
-    }
-    arguments.push(current);
-    arguments
+    split_top_level(tokens.into_iter())
         .into_iter()
-        .filter(|tokens| !tokens.is_empty())
         .map(|tokens| {
             let named = matches!(
                 (tokens.first(), tokens.get(1)),
@@ -165,8 +187,29 @@ fn split_arguments(tokens: TokenStream) -> Vec<Argument> {
         .collect()
 }
 
-/// The tokens of an argument as the caller wrote them.
-fn argument_tokens(argument: &Argument) -> Vec<TokenTree> { argument.tokens.clone() }
+/// Splits tokens at the commas outside angle brackets, dropping empty parts.
+fn split_top_level(tokens: impl Iterator<Item = TokenTree>) -> Vec<Vec<TokenTree>> {
+    let mut parts = Vec::new();
+    let mut current = Vec::new();
+    let mut depth = 0_usize;
+    for token in tokens {
+        if let TokenTree::Punct(punct) = &token {
+            match punct.as_str() {
+                "<" => depth += 1,
+                ">" => depth = depth.saturating_sub(1),
+                "," if depth == 0 => {
+                    parts.push(mem::take(&mut current));
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        current.push(token);
+    }
+    parts.push(current);
+    parts.retain(|part| !part.is_empty());
+    parts
+}
 
 /// The tokens after `name =`, or every token of a positional argument.
 fn value_tokens(argument: &Argument) -> &[TokenTree] {
@@ -197,6 +240,17 @@ fn string_value(argument: &Argument, what: &str) -> Result<LitStr, ParseError> {
     }
 }
 
+/// The identifier an argument holds.
+fn ident_value(argument: &Argument, what: &str) -> Result<String, ParseError> {
+    match value_tokens(argument) {
+        [TokenTree::Ident(ident)] => Ok(ident.text().to_owned()),
+        _ => Err(ParseError::new(
+            first_span(argument),
+            format!("{what} must be a fixture name"),
+        )),
+    }
+}
+
 /// The integer literal `workers = N` holds.
 fn int_value(argument: &Argument) -> Result<u128, ParseError> {
     match value_tokens(argument) {
@@ -212,6 +266,33 @@ fn int_value(argument: &Argument) -> Result<u128, ParseError> {
     }
 }
 
+/// The entries of `fixtures = [name: Type, ..]`.
+fn fixtures(argument: &Argument) -> Result<Vec<Fixture>, ParseError> {
+    let malformed = || {
+        ParseError::new(
+            first_span(argument),
+            "`fixtures` must be `[name: Type, ..]`",
+        )
+    };
+    let [TokenTree::Group(group)] = value_tokens(argument) else {
+        return Err(malformed());
+    };
+    split_top_level(group.tokens.clone().into_iter())
+        .into_iter()
+        .map(|entry| match entry.as_slice() {
+            [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..]
+                if colon.as_str() == ":" && !ty.is_empty() =>
+            {
+                Ok(Fixture {
+                    name: name.text().to_owned(),
+                    ty: ty.iter().cloned().collect(),
+                })
+            }
+            _ => Err(malformed()),
+        })
+        .collect()
+}
+
 fn tag_expression(expression: Option<&LitStr>) -> Result<Option<TagOperation>, ParseError> {
     expression
         .map(|literal| {
@@ -221,7 +302,7 @@ fn tag_expression(expression: Option<&LitStr>) -> Result<Option<TagOperation>, P
         .transpose()
 }
 
-/// Every `.feature` file under `dir`, in path order, as rstest-bdd finds them.
+/// Every `.feature` file under `dir`, in path order.
 fn feature_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -265,103 +346,22 @@ fn compile_errors(findings: &[Finding]) -> TokenStream {
     }
 }
 
-/// The rstest-bdd call and the step check.
-fn expansion(arguments: &Arguments, dir: &LitStr, uses: &[StepUse]) -> TokenStream {
-    let forwarded: Vec<TokenStream> = arguments
-        .forwarded
-        .iter()
-        .map(|tokens| tokens.iter().cloned().collect())
-        .collect();
-    let harness = arguments.multi_thread.then(|| {
-        let workers: TokenStream = arguments
-            .workers
-            .unwrap_or_default()
-            .to_string()
-            .parse()
-            .unwrap_or_default();
-        moxy::template! {
-            harness = ::krabka_bdd::TokioMultiThreadHarness<{{ workers }}>,
-            attributes = ::krabka_bdd::MultiThreadAttributePolicy,
-        }
-    });
-    // rstest-bdd marks the scenarios this expression matches `#[ignore]`, so
-    // the gating run skips the same lifecycle tags the step check leaves out.
-    let ignore_tags = arguments
-        .ignore_tags
-        .clone()
-        .unwrap_or_else(|| LitStr::new(DEFAULT_IGNORE_TAGS, dir.span()));
-    let module = Ident::new(format!("{}_steps", module_base(dir.value())));
-    let locations: Vec<LitStr> = uses
-        .iter()
-        .map(|step| LitStr::new(&step.location, Span::call_site()))
-        .collect();
-    let keywords: Vec<Ident> = uses
-        .iter()
-        .map(|step| keyword_ident(step.keyword))
-        .collect();
-    let texts: Vec<LitStr> = uses
-        .iter()
-        .map(|step| LitStr::new(&step.text, Span::call_site()))
-        .collect();
-    moxy::template! {
-        ::rstest_bdd_macros::scenarios!(
-            @for argument in &forwarded { {{ argument }}, }
-            ignore_tags = {{ ignore_tags }},
-            @if let Some(harness) = &harness { {{ harness }} }
-        );
-
-        /// Every step of these features matches exactly one step definition.
-        mod {{ module }} {
-            #[test]
-            fn every_step_matches_one_definition() {
-                ::krabka_bdd::__private::check_steps(&[
-                    @for ((location, keyword), text) in locations.iter().zip(&keywords).zip(&texts) {
-                        ::krabka_bdd::__private::StepUse {
-                            location: {{ location }},
-                            keyword: ::krabka_bdd::__private::StepKeyword::{{ keyword }},
-                            text: {{ text }},
-                        },
-                    }
-                ]);
-            }
-        }
-    }
-}
-
-fn keyword_ident(keyword: Keyword) -> Ident {
-    Ident::new(match keyword {
-        Keyword::Given => "Given",
-        Keyword::When => "When",
-        Keyword::Then => "Then",
-    })
-}
-
-/// The directory's last component as an identifier, as rstest-bdd names its
-/// own module after it.
+/// The directory's last component as an identifier.
 fn module_base(dir: &str) -> String {
     let base = Path::new(dir)
         .file_name()
         .map_or_else(|| "features".into(), |name| name.to_string_lossy());
-    let ident: String = base
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if ident.starts_with(|character: char| character.is_ascii_digit()) {
-        format!("_{ident}")
-    } else {
-        ident
-    }
+    plan::ident(&base)
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::module_base, assert2::assert, rstest::rstest};
+    use {
+        super::{module_base, split_top_level},
+        assert2::assert,
+        moxy::token::TokenStream,
+        rstest::rstest,
+    };
 
     #[rstest]
     #[case("tests/features/log_policy", "log_policy")]
@@ -369,5 +369,17 @@ mod tests {
     #[case("tests/features/3x", "_3x")]
     fn module_base_is_an_identifier(#[case] dir: &str, #[case] expected: &str) {
         assert!(module_base(dir) == expected);
+    }
+
+    #[rstest]
+    #[case("a: A, b: B", 2)]
+    #[case("map: HashMap<K, V>, b: B", 2)]
+    #[case("a: Vec<Vec<u8>>,", 1)]
+    fn split_top_level_keeps_generic_arguments_together(
+        #[case] source: &str,
+        #[case] parts: usize,
+    ) {
+        let tokens: TokenStream = source.parse().unwrap();
+        assert!(split_top_level(tokens.into_iter()).len() == parts);
     }
 }

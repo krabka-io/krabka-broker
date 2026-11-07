@@ -7,30 +7,18 @@
 //! about which configs a resource reports.
 
 use {
-    super::wire::{
-        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-    },
     crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
         codes,
-        handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        handlers::config_alter::ConfigResourceType,
     },
-    krabka_metadata::{AclOperation, ResourceType},
+    krabka_metadata::AclOperation,
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsResource,
         describe_configs_response::DescribeConfigsResult,
     },
     std::net::SocketAddr,
 };
-
-/// The ACL resource a described config resource is authorized on, and the
-/// code that stamps a denial.
-struct DescribeTarget<'a> {
-    resource_type: ResourceType,
-    name: &'a str,
-    failure_code: i16,
-}
 
 /// Per-resource `DescribeConfigs` ACL check.
 ///
@@ -52,38 +40,15 @@ pub(super) fn resource_authz_failure(
     resource_type: i8,
     resource_name: &str,
 ) -> Option<i16> {
-    let DescribeTarget {
-        resource_type: rt,
-        name,
-        failure_code,
-    } = match resource_type {
-        RESOURCE_TYPE_TOPIC => DescribeTarget {
-            resource_type: ResourceType::Topic,
-            name: resource_name,
-            failure_code: codes::TOPIC_AUTHORIZATION_FAILED,
-        },
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER | RESOURCE_TYPE_CLIENT_METRICS => {
-            DescribeTarget {
-                resource_type: ResourceType::Cluster,
-                name: CLUSTER_RESOURCE_NAME,
-                failure_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            }
-        }
-        RESOURCE_TYPE_GROUP => DescribeTarget {
-            resource_type: ResourceType::Group,
-            name: resource_name,
-            failure_code: codes::GROUP_AUTHORIZATION_FAILED,
-        },
-        _ => return None,
-    };
+    let acl = ConfigResourceType::from_wire(resource_type)?.acl();
     let allow = authorizer.authorize(image, &AuthorizationRequest {
         principal,
         host,
-        resource_type: rt,
-        resource_name: name,
+        resource_type: acl.resource_type,
+        resource_name: acl.resource_name(resource_name),
         operation: AclOperation::DescribeConfigs,
     });
-    (allow == AuthorizationResult::Deny).then_some(failure_code)
+    (allow == AuthorizationResult::Deny).then_some(acl.failure_code)
 }
 
 /// Kafka's `Errors.INVALID_REQUEST.message()`.
@@ -103,19 +68,9 @@ const INVALID_REQUEST_MESSAGE: &str = "This most likely occurs because of a requ
 pub(super) fn unexpected_resource_type_results(
     resources: &[DescribeConfigsResource],
 ) -> Option<Vec<DescribeConfigsResult>> {
-    let known = |resource_type| {
-        matches!(
-            resource_type,
-            RESOURCE_TYPE_TOPIC
-                | RESOURCE_TYPE_BROKER
-                | RESOURCE_TYPE_BROKER_LOGGER
-                | RESOURCE_TYPE_CLIENT_METRICS
-                | RESOURCE_TYPE_GROUP
-        )
-    };
     resources
         .iter()
-        .any(|resource| !known(resource.resource_type))
+        .any(|resource| ConfigResourceType::from_wire(resource.resource_type).is_none())
         .then(|| {
             resources
                 .iter()
@@ -168,7 +123,7 @@ mod tests {
             test_support::{allow_acl, peer, principal},
         },
         assert2::assert,
-        krabka_metadata::MetadataImage,
+        krabka_metadata::{MetadataImage, ResourceType},
         std::collections::HashSet,
         uuid::Uuid,
     };
@@ -185,17 +140,17 @@ mod tests {
 
     #[test]
     fn topic_resource_denied_yields_topic_authorization_failed() {
-        let code = empty_acl_resource_failure(super::RESOURCE_TYPE_TOPIC, "t");
+        let code = empty_acl_resource_failure(ConfigResourceType::Topic.to_wire(), "t");
         assert!(code == Some(TOPIC_AUTHORIZATION_FAILED));
         let res = super::denied_result(
-            super::RESOURCE_TYPE_TOPIC,
+            ConfigResourceType::Topic.to_wire(),
             "t".into(),
             TOPIC_AUTHORIZATION_FAILED,
         );
         let expected = krabka_macros::tagged_wire!(DescribeConfigsResult {
             error_code: TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_owned()),
-            resource_type: super::RESOURCE_TYPE_TOPIC,
+            resource_type: ConfigResourceType::Topic.to_wire(),
             resource_name: "t".to_owned(),
             configs: Vec::new(),
         });
@@ -235,13 +190,13 @@ mod tests {
                 &image,
                 &anon(),
                 &peer,
-                super::RESOURCE_TYPE_CLIENT_METRICS,
+                ConfigResourceType::ClientMetrics.to_wire(),
                 "sub-a",
             );
             assert!(code == want, "{grant:?}");
         }
         let denied = super::denied_result(
-            super::RESOURCE_TYPE_CLIENT_METRICS,
+            ConfigResourceType::ClientMetrics.to_wire(),
             "sub-a".into(),
             CLUSTER_AUTHORIZATION_FAILED,
         );
@@ -250,7 +205,7 @@ mod tests {
                 == krabka_macros::tagged_wire!(DescribeConfigsResult {
                     error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: Some("Cluster authorization failed.".to_owned()),
-                    resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
+                    resource_type: ConfigResourceType::ClientMetrics.to_wire(),
                     resource_name: "sub-a".to_owned(),
                     configs: Vec::new(),
                 })
@@ -270,12 +225,15 @@ mod tests {
             ..Default::default()
         };
         let known = [
-            resource(RESOURCE_TYPE_TOPIC, "t"),
-            resource(RESOURCE_TYPE_GROUP, "g"),
+            resource(ConfigResourceType::Topic.to_wire(), "t"),
+            resource(ConfigResourceType::Group.to_wire(), "g"),
         ];
         assert!(unexpected_resource_type_results(&known).is_none());
 
-        let mixed = [resource(RESOURCE_TYPE_TOPIC, "t"), resource(0, "x")];
+        let mixed = [
+            resource(ConfigResourceType::Topic.to_wire(), "t"),
+            resource(0, "x"),
+        ];
         let refused = |resource_type, name: &str| {
             krabka_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: INVALID_REQUEST,
@@ -292,13 +250,16 @@ mod tests {
         };
         assert!(
             unexpected_resource_type_results(&mixed)
-                == Some(vec![refused(RESOURCE_TYPE_TOPIC, "t"), refused(0, "x")])
+                == Some(vec![
+                    refused(ConfigResourceType::Topic.to_wire(), "t"),
+                    refused(0, "x")
+                ])
         );
     }
 
     #[test]
     fn broker_resource_denied_yields_cluster_authorization_failed() {
-        let code = empty_acl_resource_failure(super::RESOURCE_TYPE_BROKER, "1");
+        let code = empty_acl_resource_failure(ConfigResourceType::Broker.to_wire(), "1");
         assert!(code == Some(CLUSTER_AUTHORIZATION_FAILED));
     }
 }

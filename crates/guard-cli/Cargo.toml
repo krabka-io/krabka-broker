@@ -48,12 +48,10 @@ assert2 = { workspace = true }
 # The scenario driver's `boot` builder.
 bon = { workspace = true }
 # No `version`: `krabka-bdd` is not published. The Gherkin scenarios under
-# `tests/features` bind through its `scenarios!`, and `rstest-bdd-harness`
-# names the multi-thread Tokio harness those scenarios run on.
+# `tests/features` bind through its `scenarios!`.
 krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
-rstest-bdd-harness = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }
 # Broker integration fixtures and value checks stay out of the production graph.

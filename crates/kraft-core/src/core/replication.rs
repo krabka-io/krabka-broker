@@ -13,6 +13,7 @@ use {
         role::{ReplicaProgress, Role},
         types::{Epoch, LogOffsetMetadata, LogView, NodeId, SimInstant},
     },
+    krabka_verified::{LeaderVote, WatermarkInputs},
 };
 
 #[cfg(test)]
@@ -287,12 +288,18 @@ impl QuorumStateMachine {
         // until the record commits, but its local log cannot count toward the
         // new configuration's majority.
         let new_hwm = krabka_verified::recompute_high_watermark(
-            log_end,
+            WatermarkInputs {
+                log_end,
+                epoch_start_offset: *epoch_start_offset,
+                current_hwm: (*high_watermark).min(log_end),
+            },
             &follower_offsets,
             self.state.majority(),
-            *epoch_start_offset,
-            (*high_watermark).min(log_end),
-            self.is_voter(),
+            if self.is_voter() {
+                LeaderVote::Counts
+            } else {
+                LeaderVote::Excluded
+            },
         );
         assert2::assert!(
             new_hwm <= log_end,

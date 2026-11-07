@@ -7,6 +7,33 @@
 
 use creusot_std::prelude::*;
 
+/// The leader's own offsets that one high-watermark recomputation reads.
+///
+/// They are one struct because they are three `i64` values with three
+/// different meanings, and a transposed call site would compile.
+#[krabka_macros::model_type]
+pub struct WatermarkInputs {
+    /// The leader's log end offset: the bound of every match offset.
+    pub log_end: i64,
+    /// The first offset of the leader's own epoch. The watermark advances only
+    /// past it (Raft Fig.8, KIP-595).
+    pub epoch_start_offset: i64,
+    /// The watermark before this recomputation. The result never falls below
+    /// it.
+    pub current_hwm: i64,
+}
+
+/// Whether the leader's own log end votes toward the watermark's majority.
+#[krabka_macros::model_type]
+pub enum LeaderVote {
+    /// The leader is a voter, and its log end is one match offset.
+    Counts,
+    /// The leader's log end does not vote: a leader that its own
+    /// `VotersRecord` removed, or a host that already lists the leader's
+    /// durable offset among the members.
+    Excluded,
+}
+
 /// Offset-aware recovery mode resolved for one partition.
 #[krabka_macros::model_type]
 pub enum FailoverRecovery {

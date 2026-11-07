@@ -47,6 +47,9 @@ krabka-raft = { version = "1.1.5", path = "../raft" }
 # `--command-config`, the Kafka client properties file every operator CLI reads.
 krabka-cli-connection = { path = "../cli-connection" }
 
+# The builder for one capture's request, so a test overrides only the fields
+# it pins.
+bon = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 futures-util = { workspace = true }

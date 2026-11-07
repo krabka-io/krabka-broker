@@ -8,7 +8,7 @@ use {
         BrokerRaftHandshake,
         frame::{KafkaRequest, read_kafka_request},
     },
-    crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer},
+    crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer, oauth_jwks::JwksSnapshotState},
     krabka_protocol::{
         Encode,
         owned::{
@@ -19,14 +19,7 @@ use {
     },
     krabka_raft::RaftHandshakeError,
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{
-        collections::HashMap,
-        sync::{
-            Arc,
-            atomic::{AtomicI64, AtomicU64},
-        },
-        time,
-    },
+    std::{collections::HashMap, sync::Arc, time},
     tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt, duplex},
         sync::OnceCell,
@@ -171,8 +164,7 @@ pub(super) fn handshake_config(
         enabled_sasl_mechanisms: setup.mechanisms,
         gssapi: None,
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
-        oauthbearer_jwks_cache_generation: Arc::new(AtomicU64::new(0)),
-        oauthbearer_jwks_last_successful_fetch_ms: Arc::new(AtomicI64::new(0)),
+        oauthbearer_jwks_snapshot: JwksSnapshotState::default(),
         protocol: setup.protocol,
         controller: Arc::new(OnceCell::new()),
         delegation_token_secret_key: None,

@@ -3698,6 +3698,7 @@ version = "1.1.5"
 dependencies = [
  "assert2",
  "async-trait",
+ "bon",
  "bytes",
  "clap",
  "futures-util",
@@ -3751,7 +3752,6 @@ dependencies = [
  "krabka-units 0.8.0",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
  "rstest-bdd-macros",
  "tempfile",
  "tokio",
@@ -3765,10 +3765,12 @@ name = "krabka-bdd"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "futures-util",
+ "inventory",
  "krabka-bdd-macros",
+ "krabka-bdd-model",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
  "rstest-bdd-macros",
  "rust-embed",
  "tokio",
@@ -3780,8 +3782,21 @@ version = "1.1.5"
 dependencies = [
  "assert2",
  "gherkin",
+ "krabka-bdd-model",
  "moxy",
  "rstest",
+ "rstest-bdd-patterns",
+]
+
+[[package]]
+name = "krabka-bdd-model"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "gherkin",
+ "rstest",
+ "serde",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]
@@ -3858,6 +3873,7 @@ dependencies = [
  "jsonschema 0.60.2",
  "krabka-audit",
  "krabka-authz",
+ "krabka-bdd",
  "krabka-bench-driver",
  "krabka-broker",
  "krabka-client-admin",
@@ -4118,7 +4134,6 @@ dependencies = [
  "bon",
  "clap",
  "derive_more",
- "krabka-broker",
  "krabka-ids",
  "krabka-macros",
  "krabka-metadata",
@@ -4163,7 +4178,6 @@ dependencies = [
  "ring",
  "rstest",
  "rstest-bdd",
- "rstest-bdd-harness",
  "rstest-bdd-macros",
  "rust-embed",
  "serde",
@@ -4577,6 +4591,7 @@ dependencies = [
  "krabka-audit",
  "krabka-backup",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-consumer",
  "krabka-client-core",

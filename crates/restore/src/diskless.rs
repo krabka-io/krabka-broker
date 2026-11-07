@@ -10,7 +10,7 @@ use {
             prepare::{PrepareBatchSetup, prepare_batch},
         },
         report::{DisklessPartitionReport, DisklessRestoreReport},
-        verify::fetch_capped,
+        verify::{batch_record_count, fetch_capped},
     },
     bytes::Bytes,
     krabka_ids::Offset,
@@ -311,57 +311,24 @@ async fn walk_partition(
     authenticated: Option<&BTreeMap<String, ObjectEntry>>,
     mut log: Option<&mut Log>,
 ) -> Result<Walked, RestoreError> {
-    let mut object_names = HashSet::new();
-    let mut batches = 0u64;
-    let mut records = 0u64;
-    let mut records_dropped = 0u64;
-    let mut observed_end = partition.delete_floor;
-    let mut materialized_end = partition.delete_floor;
+    let mut walk = PartitionWalk::new(partition);
     let partition_ref = PartitionRef {
         topic: partition.topic.clone(),
         partition: partition.partition,
     };
     for range in &partition.ranges {
         let object = fetch_object(store, cached_object, &range.object_key, authenticated).await?;
-        object_names.insert(range.object_key.as_str());
+        walk.saw_object(&range.object_key);
         validate_footer_range(&object, range)?;
-        let Range { start, end } = captured_byte_range(range, object.len())?;
-        let mut cursor = start;
-        let mut first = None;
-        let mut last: Option<i64> = None;
-        while cursor < end {
-            let outside = || outside_object(range);
-            let validated = validate_one_v2_batch(object.get(cursor..end).ok_or_else(outside)?)?;
-            let header = validated.header;
-            let batch_end = cursor
-                .checked_add(validated.total_len)
-                .ok_or_else(|| wal_overflow("byte range"))?;
-            if validated.total_len == 0 || batch_end > end {
-                return Err(RestoreError::Integrity(format!(
-                    "{}: captured range disagrees with batch framing",
-                    range.object_key
-                )));
-            }
-            let batch_last = header
-                .base_offset
-                .get()
-                .checked_add(i64::from(header.last_offset_delta.get()))
-                .ok_or_else(|| wal_overflow("batch offset"))?;
-            if last
-                .is_some_and(|previous| previous.checked_add(1) != Some(header.base_offset.get()))
-            {
-                return Err(RestoreError::Integrity(format!(
-                    "{}: non-contiguous batch offsets inside captured run",
-                    range.object_key
-                )));
-            }
-            first.get_or_insert_with(|| header.base_offset.get());
-            last = Some(batch_last);
-            let base = Offset(header.base_offset.get());
-            if batch_last >= partition.delete_floor
+        let mut range_batches = RangeBatches::new(&object, range)?;
+        while let Some(framed) = range_batches.next_batch()? {
+            let base = Offset(framed.base_offset);
+            if framed.last_offset >= partition.delete_floor
                 && !predicates.batch_past_offset_bound(&partition_ref, base)
             {
-                let mut batch_cursor = object.get(cursor..batch_end).ok_or_else(outside)?;
+                let mut batch_cursor = object
+                    .get(framed.bytes.clone())
+                    .ok_or_else(|| outside_object(range))?;
                 let batch = RecordBatchBorrowed::decode_borrow_with_policy(
                     &mut batch_cursor,
                     <_>::default(),
@@ -372,18 +339,17 @@ async fn walk_partition(
                         range.object_key
                     )));
                 }
-                let records_in_batch =
-                    u64::try_from(header.records_count.get().max(0)).unwrap_or(0);
+                let records_in_batch = batch_record_count(framed.records_count);
                 let (mut prepared, tally) = prepare_batch(
                     PrepareBatchSetup::builder()
                         .partition_ref(&partition_ref)
                         .predicates(predicates)
                         .batch(&batch)
-                        .batch_bytes(object.slice(cursor..batch_end))
+                        .batch_bytes(object.slice(framed.bytes))
                         .records_in_batch(records_in_batch)
                         .build(),
                 )?;
-                materialized_end = base
+                let batch_end = base
                     .0
                     .checked_add(i64::from(prepared.last_offset_delta()))
                     .and_then(|last| last.checked_add(1))
@@ -395,39 +361,186 @@ async fn walk_partition(
                     log.reconcile_next_offset(base);
                     prepared.append_to(log, base)?;
                 }
-                batches += 1;
                 let (kept, dropped) = tally.records(records_in_batch);
-                records = records.saturating_add(kept);
-                records_dropped = records_dropped.saturating_add(dropped);
+                walk.record_batch(batch_end, kept, dropped);
             }
-            cursor = batch_end;
         }
-        if first != Some(range.entry.first_offset) || last != Some(range.entry.last_offset) {
-            return Err(RestoreError::Integrity(format!(
-                "{}: captured run disagrees with batch boundaries",
-                range.object_key
-            )));
+        range_batches.finish()?;
+        walk.finish_range(range)?;
+    }
+    walk.finish()
+}
+
+/// The running tally of a walk over one partition's captured ranges.
+struct PartitionWalk<'a> {
+    partition: &'a DisklessPartitionCapture,
+    object_names: HashSet<&'a str>,
+    batches: u64,
+    records: u64,
+    records_dropped: u64,
+    /// The exclusive end of the ranges validated so far.
+    observed_end: i64,
+    /// The exclusive end of the batches kept so far.
+    materialized_end: i64,
+}
+
+impl<'a> PartitionWalk<'a> {
+    fn new(partition: &'a DisklessPartitionCapture) -> Self {
+        Self {
+            partition,
+            object_names: HashSet::new(),
+            batches: 0,
+            records: 0,
+            records_dropped: 0,
+            observed_end: partition.delete_floor,
+            materialized_end: partition.delete_floor,
         }
-        observed_end = range
+    }
+
+    /// Count the WAL object named `key` among the objects the walk read.
+    fn saw_object(&mut self, key: &'a str) { self.object_names.insert(key); }
+
+    /// Count one kept batch that ends before `batch_end` and of whose records
+    /// the bound kept `kept` and dropped `dropped`.
+    fn record_batch(&mut self, batch_end: i64, kept: u64, dropped: u64) {
+        self.materialized_end = batch_end;
+        self.batches += 1;
+        self.records = self.records.saturating_add(kept);
+        self.records_dropped = self.records_dropped.saturating_add(dropped);
+    }
+
+    /// Advance the validated end past `range`, never below the delete floor.
+    fn finish_range(&mut self, range: &CapturedWalRange) -> Result<(), RestoreError> {
+        self.observed_end = range
             .entry
             .last_offset
             .checked_add(1)
             .ok_or_else(|| wal_overflow("batch offset"))?
-            .max(partition.delete_floor);
+            .max(self.partition.delete_floor);
+        Ok(())
     }
-    if observed_end != partition.recovery_cutoff {
-        return Err(RestoreError::Integrity(format!(
-            "{}-{} validated through {observed_end}, capture declares cutoff {}",
-            partition.topic, partition.partition, partition.recovery_cutoff
-        )));
+
+    /// Require the walk to have validated through the capture's recovery
+    /// cutoff, and report what it found.
+    fn finish(self) -> Result<Walked, RestoreError> {
+        let partition = self.partition;
+        if self.observed_end != partition.recovery_cutoff {
+            return Err(RestoreError::Integrity(format!(
+                "{}-{} validated through {}, capture declares cutoff {}",
+                partition.topic, partition.partition, self.observed_end, partition.recovery_cutoff
+            )));
+        }
+        Ok(Walked {
+            objects: self.object_names.len() as u64,
+            batches: self.batches,
+            records: self.records,
+            records_dropped: self.records_dropped,
+            materialized_end: self.materialized_end,
+        })
     }
-    Ok(Walked {
-        objects: object_names.len() as u64,
-        batches,
-        records,
-        records_dropped,
-        materialized_end,
-    })
+}
+
+/// One batch of a captured range whose framing and offset contiguity
+/// [`RangeBatches::next_batch`] checked.
+struct FramedBatch {
+    /// The batch's bytes inside its WAL object.
+    bytes: Range<usize>,
+    base_offset: i64,
+    /// The batch's last offset: its base offset plus its last offset delta.
+    last_offset: i64,
+    records_count: i32,
+}
+
+/// The batches of one captured range, in order, each checked for framing and
+/// for offset contiguity with the batch before it.
+///
+/// A batch is checked only when [`Self::next_batch`] reaches it, so a walk
+/// that fails on one batch never checks the batches after it.
+/// [`Self::finish`] then checks that the batches span exactly the offsets the
+/// capture declares for the range.
+struct RangeBatches<'a> {
+    object: &'a Bytes,
+    range: &'a CapturedWalRange,
+    cursor: usize,
+    end: usize,
+    first: Option<i64>,
+    last: Option<i64>,
+}
+
+impl<'a> RangeBatches<'a> {
+    fn new(object: &'a Bytes, range: &'a CapturedWalRange) -> Result<Self, RestoreError> {
+        let Range { start, end } = captured_byte_range(range, object.len())?;
+        Ok(Self {
+            object,
+            range,
+            cursor: start,
+            end,
+            first: None,
+            last: None,
+        })
+    }
+
+    /// The next batch of the range, or `None` once the range is exhausted.
+    fn next_batch(&mut self) -> Result<Option<FramedBatch>, RestoreError> {
+        if self.cursor >= self.end {
+            return Ok(None);
+        }
+        let range = self.range;
+        let validated = validate_one_v2_batch(
+            self.object
+                .get(self.cursor..self.end)
+                .ok_or_else(|| outside_object(range))?,
+        )?;
+        let header = validated.header;
+        let batch_end = self
+            .cursor
+            .checked_add(validated.total_len)
+            .ok_or_else(|| wal_overflow("byte range"))?;
+        if validated.total_len == 0 || batch_end > self.end {
+            return Err(RestoreError::Integrity(format!(
+                "{}: captured range disagrees with batch framing",
+                range.object_key
+            )));
+        }
+        let batch_last = header
+            .base_offset
+            .get()
+            .checked_add(i64::from(header.last_offset_delta.get()))
+            .ok_or_else(|| wal_overflow("batch offset"))?;
+        if self
+            .last
+            .is_some_and(|previous| previous.checked_add(1) != Some(header.base_offset.get()))
+        {
+            return Err(RestoreError::Integrity(format!(
+                "{}: non-contiguous batch offsets inside captured run",
+                range.object_key
+            )));
+        }
+        self.first.get_or_insert_with(|| header.base_offset.get());
+        self.last = Some(batch_last);
+        let bytes = self.cursor..batch_end;
+        self.cursor = batch_end;
+        Ok(Some(FramedBatch {
+            bytes,
+            base_offset: header.base_offset.get(),
+            last_offset: batch_last,
+            records_count: header.records_count.get(),
+        }))
+    }
+
+    /// Require the batches walked to span exactly the range's declared
+    /// offsets.
+    fn finish(self) -> Result<(), RestoreError> {
+        if self.first != Some(self.range.entry.first_offset)
+            || self.last != Some(self.range.entry.last_offset)
+        {
+            return Err(RestoreError::Integrity(format!(
+                "{}: captured run disagrees with batch boundaries",
+                self.range.object_key
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The byte range `range` captures inside its WAL object of `object_len` bytes.

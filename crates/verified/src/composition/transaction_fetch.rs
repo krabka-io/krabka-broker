@@ -2,8 +2,9 @@
 use crate::transaction::first_unstable_frontier;
 use {
     super::{
-        FetchWatermarks, LogBatchKind, aborted_transaction_interval, fetch_visibility,
-        first_unstable_offset, local_append_coordinates, log_batch_kind, transaction_marker_closes,
+        FetchReader, FetchWatermarks, Isolation, LogBatchKind, aborted_transaction_interval,
+        fetch_visibility, first_unstable_offset, local_append_coordinates, log_batch_kind,
+        transaction_marker_closes,
     },
     crate::broker::FetchVisibility,
     creusot_std::prelude::*,
@@ -36,7 +37,11 @@ pub(super) fn committed_fetch_excludes_unstable(
     w: FetchWatermarks,
 ) -> Option<(i64, FetchVisibility)> {
     let lso = first_unstable_offset(starts, w.log_end)?;
-    let visibility = fetch_visibility(false, true, FetchWatermarks { lso, ..w }, w.log_start);
+    let visibility = fetch_visibility(
+        FetchReader::Consumer(Isolation::ReadCommitted),
+        FetchWatermarks { lso, ..w },
+        w.log_start,
+    );
     Some((lso, visibility))
 }
 
@@ -91,8 +96,7 @@ pub(super) fn control_marker_bounds_committed_fetch(
         lso = lso.min(producer.2);
     }
     let visibility = fetch_visibility(
-        false,
-        true,
+        FetchReader::Consumer(Isolation::ReadCommitted),
         FetchWatermarks {
             log_start: 0,
             log_end: end,

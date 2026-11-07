@@ -8,45 +8,31 @@ use {
         world::GuardScenario,
     },
     assert2::assert,
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then},
 };
 
 #[given("{operator} has frozen {scope}")]
-fn has_frozen(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: Scope,
-) {
-    freeze_succeeds(guard, runtime, operator, &scope);
+async fn has_frozen(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
+    freeze_succeeds(guard, operator, &scope).await;
 }
 
 /// `operator` freezes `scope` unsigned, and the freeze lands.
-pub fn freeze_succeeds(
-    guard: &mut GuardScenario,
-    runtime: &TokioMultiThreadContext,
-    operator: Operator,
-    scope: &Scope,
-) {
-    let cluster = guard.cluster(runtime);
-    assert!(
-        runtime.block_on(cluster.freeze(operator, scope, Signing::Unsigned)) == Outcome::Success
-    );
+pub async fn freeze_succeeds(guard: &mut GuardScenario, operator: Operator, scope: &Scope) {
+    let cluster = guard.cluster().await;
+    assert!(cluster.freeze(operator, scope, Signing::Unsigned).await == Outcome::Success);
 }
 
 /// The proposer opens a thaw proposal and the other approvers, in order,
 /// approve it until it holds `approvals`.
 #[given("{operator} holds a proposal to thaw {target} with {approvals} approvals")]
-fn holds_thaw_proposal(
+async fn holds_thaw_proposal(
     guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     operator: Operator,
     target: String,
     approvals: usize,
 ) {
-    let cluster = guard.cluster(runtime);
-    let proposal = runtime.block_on(async {
+    let cluster = guard.cluster().await;
+    let proposal = async {
         let (outcome, proposal) = cluster
             .propose(operator, "thaw-topic-freeze", &target, &Lifetime::Default)
             .await;
@@ -59,7 +45,8 @@ fn holds_thaw_proposal(
             assert!(cluster.approve(approver, proposal, None).await == Outcome::Success);
         }
         proposal
-    });
+    }
+    .await;
     guard.proposal.set(proposal);
 }
 
@@ -69,10 +56,7 @@ fn tool_reports(guard: &GuardScenario, outcome: Outcome) {
 }
 
 #[then("the registry holds no freeze")]
-fn registry_holds_no_freeze(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = guard.cluster(runtime);
-    assert!(runtime.block_on(cluster.registry()) == Vec::new());
+async fn registry_holds_no_freeze(guard: &mut GuardScenario) {
+    let cluster = guard.cluster().await;
+    assert!(cluster.registry().await == Vec::new());
 }

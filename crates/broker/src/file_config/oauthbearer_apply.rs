@@ -20,14 +20,13 @@ use {
             FileOAuthBearerConfig,
         },
     },
-    crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
+    crate::{
+        config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
+        oauth_jwks::JwksRuntime,
+    },
     jsonpath_rust::{parser, parser::model::JpQuery},
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::{
-        Arc, PoisonError,
-        atomic::{AtomicI64, AtomicU64},
-    },
-    tokio::sync::mpsc,
+    std::sync::Arc,
 };
 
 /// Set the principal claim and the clock skew of a JWS validator from
@@ -47,12 +46,160 @@ fn apply_jws_claim_options(
         .map_or(default_skew, Time::from_millis);
 }
 
+/// The `JsonPath` expressions of `[oauthbearer]`, compiled once at load time.
+struct CompiledClaims {
+    custom_claim_check: Option<JpQuery>,
+    groups_claim: Option<JpQuery>,
+}
+
+impl CompiledClaims {
+    /// Compile `custom_claim_check`, then `groups_claim`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FileConfigError::InvalidConfig`] for the first expression
+    /// that does not parse.
+    fn compile(oauth: &FileOAuthBearerConfig) -> Result<Self, FileConfigError> {
+        let custom_claim_check = oauth
+            .custom_claim_check
+            .as_deref()
+            .map(|expr| compile_json_path("custom_claim_check", expr))
+            .transpose()?;
+        let groups_claim = oauth
+            .groups_claim
+            .as_deref()
+            .map(|expr| compile_json_path("groups_claim", expr))
+            .transpose()?;
+        Ok(Self {
+            custom_claim_check,
+            groups_claim,
+        })
+    }
+}
+
+/// Select signed-JWT validation against the JWKS at `jwks_uri`, and park the
+/// runtime state the refresher `Broker::start` spawns needs.
+fn configure_signed_validator(
+    oauth: &FileOAuthBearerConfig,
+    jwks_uri: String,
+    claims: &CompiledClaims,
+    cfg: &mut BrokerConfig,
+) {
+    // Create the runtime state here so the validator's `JwksHandle` and the
+    // refresher (constructed in `Broker::start`) point at the same Arc-shared
+    // state. The refresher populates the empty key handle.
+    let (runtime, signal_tx) = JwksRuntime::new();
+
+    let handle = krabka_security::JwksHandle::new_with_refresher_handles(
+        krabka_security::Jwks::empty(),
+        Arc::clone(&runtime.snapshot.last_successful_fetch_ms),
+        signal_tx,
+    );
+
+    let mut v = krabka_security::SignedJwsValidator::new(handle);
+    apply_jws_claim_options(
+        &mut v.principal_claim_name,
+        &mut v.allowable_clock_skew,
+        DEFAULT_ALLOWABLE_CLOCK_SKEW,
+        oauth,
+    );
+    v.valid_issuer.clone_from(&oauth.valid_issuer_uri);
+    v.expected_audience.clone_from(&oauth.expected_audience);
+    // JsonPath custom_claim_check + JWT typ check.
+    v.custom_claim_check.clone_from(&claims.custom_claim_check);
+    v.valid_token_type.clone_from(&oauth.valid_token_type);
+    // Claims mapping.
+    v.fallback_user_name_claim
+        .clone_from(&oauth.fallback_user_name_claim);
+    v.fallback_user_name_prefix
+        .clone_from(&oauth.fallback_user_name_prefix);
+    v.groups_claim.clone_from(&claims.groups_claim);
+    v.groups_claim_delimiter
+        .clone_from(&oauth.groups_claim_delimiter);
+    // Hard cache-expiry threshold.
+    v.cache_expiry = oauth
+        .jwks_expiry_seconds
+        .map(|s| Time::from_secs(i64::from(s)));
+    cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Signed(v);
+    cfg.oauthbearer_jwks_endpoint = Some(jwks_uri);
+    if let Some(ms) = oauth.jwks_refresh_interval_ms {
+        cfg.oauthbearer_jwks_refresh_interval =
+            Time::from_millis(i64::try_from(ms).unwrap_or(i64::MAX));
+    }
+
+    // Park the runtime state for Broker::start.
+    cfg.oauthbearer_jwks_runtime = Some(runtime);
+    cfg.oauthbearer_jwks_min_on_demand_pause = oauth
+        .jwks_min_refresh_pause_seconds
+        .map_or(DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, |s| {
+            Time::from_secs(i64::from(s))
+        });
+    cfg.features.oauthbearer_jwks_ignore_key_use = oauth.jwks_ignore_key_use.unwrap_or(false);
+}
+
+/// Select unsecured-JWS validation (development only), behind an explicit
+/// opt-in so a misspelled endpoint key cannot quietly downgrade a listener to
+/// trust-the-client.
+///
+/// # Errors
+///
+/// Returns [`FileConfigError::InvalidConfig`] when a listener enables
+/// OAUTHBEARER and `allow_unsecured` is not `true`.
+fn configure_unsecured_validator(
+    oauth: &FileOAuthBearerConfig,
+    claims: CompiledClaims,
+    required_scope: Vec<String>,
+    cfg: &mut BrokerConfig,
+) -> Result<(), FileConfigError> {
+    if oauth.allow_unsecured.unwrap_or(false) {
+        tracing::warn!(concat!(
+            "[oauthbearer]: allow_unsecured = true - SASL/OAUTHBEARER tokens ",
+            "are accepted without signature verification (alg:none). ",
+            "Development only."
+        ));
+    } else if oauthbearer_listener_enabled(cfg) {
+        return Err(FileConfigError::InvalidConfig(
+            concat!(
+                "[oauthbearer]: a listener enables OAUTHBEARER but neither ",
+                "jwks_endpoint_uri nor introspection_endpoint_uri is set; that ",
+                "falls back to the unsecured-JWS (alg:none) validator. Configure ",
+                "an endpoint, or set allow_unsecured = true for development."
+            )
+            .to_owned(),
+        ));
+    }
+    let mut v = krabka_security::UnsecuredJwsValidator::default();
+    apply_jws_claim_options(
+        &mut v.principal_claim_name,
+        &mut v.allowable_clock_skew,
+        DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
+        oauth,
+    );
+    // JsonPath custom_claim_check + JWT typ check.
+    v.custom_claim_check = claims.custom_claim_check;
+    v.valid_token_type.clone_from(&oauth.valid_token_type);
+    // Claims mapping.
+    v.fallback_user_name_claim
+        .clone_from(&oauth.fallback_user_name_claim);
+    v.fallback_user_name_prefix
+        .clone_from(&oauth.fallback_user_name_prefix);
+    v.groups_claim = claims.groups_claim;
+    v.groups_claim_delimiter
+        .clone_from(&oauth.groups_claim_delimiter);
+    // Kafka's scope options.
+    if let Some(name) = &oauth.unsecured_scope_claim_name {
+        v.scope_claim_name.clone_from(name);
+    }
+    v.required_scope = required_scope;
+    cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
+    Ok(())
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn configure_introspection_validator(
     oauth: &FileOAuthBearerConfig,
     endpoint: &str,
-    custom_claim_check: Option<JpQuery>,
-    groups_claim: Option<JpQuery>,
+    claims: CompiledClaims,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let client_id = oauth.introspection_client_id.clone().ok_or_else(|| {
@@ -103,7 +250,7 @@ fn configure_introspection_validator(
                 .principal_claim_name
                 .clone()
                 .unwrap_or_else(|| "sub".into()),
-            custom_claim_check,
+            custom_claim_check: claims.custom_claim_check,
             call_userinfo: oauth.userinfo_endpoint_uri.is_some(),
             allowable_clock_skew: oauth
                 .allowable_clock_skew_ms
@@ -111,7 +258,7 @@ fn configure_introspection_validator(
             expected_audience: oauth.expected_audience.clone(),
             fallback_user_name_claim: oauth.fallback_user_name_claim.clone(),
             fallback_user_name_prefix: oauth.fallback_user_name_prefix.clone(),
-            groups_claim,
+            groups_claim: claims.groups_claim,
             groups_claim_delimiter: oauth.groups_claim_delimiter.clone(),
         },
     );
@@ -124,13 +271,27 @@ fn configure_introspection_validator(
 fn configure_introspection_validator(
     _oauth: &FileOAuthBearerConfig,
     _endpoint: &str,
-    _custom_claim_check: Option<JpQuery>,
-    _groups_claim: Option<JpQuery>,
+    _claims: CompiledClaims,
     _cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     Err(FileConfigError::InvalidConfig(
         "[oauthbearer]: token introspection is unavailable on this platform".into(),
     ))
+}
+
+/// Compile the `JsonPath` expression `expr` that the `[oauthbearer]` option
+/// `option` sets.
+///
+/// # Errors
+///
+/// Returns [`FileConfigError::InvalidConfig`] naming the option and the
+/// expression when `expr` does not parse.
+fn compile_json_path(option: &str, expr: &str) -> Result<JpQuery, FileConfigError> {
+    parser::parse_json_path(expr).map_err(|error| {
+        FileConfigError::InvalidConfig(format!(
+            "[oauthbearer]: invalid {option} JsonPath expression {expr:?}: {error}"
+        ))
+    })
 }
 
 /// Whether any resolved listener offers SASL/OAUTHBEARER. A listener's own
@@ -168,29 +329,7 @@ pub(super) fn apply_oauthbearer(
     cfg.oauthbearer_idp_tls_trust
         .clone_from(&oauth.idp_tls_trust);
     // Compile the JsonPath expressions once at load time.
-    let custom_claim_check_compiled = oauth
-        .custom_claim_check
-        .as_deref()
-        .map(|expr| {
-            parser::parse_json_path(expr).map_err(|error| {
-                FileConfigError::InvalidConfig(format!(
-                    "[oauthbearer]: invalid custom_claim_check JsonPath expression {expr:?}: {error}"
-                ))
-            })
-        })
-        .transpose()?;
-
-    let groups_claim_compiled = oauth
-        .groups_claim
-        .as_deref()
-        .map(|expr| {
-            parser::parse_json_path(expr).map_err(|error| {
-                FileConfigError::InvalidConfig(format!(
-                    "[oauthbearer]: invalid groups_claim JsonPath expression {expr:?}: {error}"
-                ))
-            })
-        })
-        .transpose()?;
+    let claims = CompiledClaims::compile(&oauth)?;
 
     let unsecured_required_scope = oauth
         .unsecured_required_scope
@@ -209,134 +348,21 @@ pub(super) fn apply_oauthbearer(
         oauth.jwks_endpoint_uri.as_ref(),
         oauth.introspection_endpoint_uri.as_ref(),
     ) {
-        (Some(_), Some(_)) => {
-            return Err(FileConfigError::InvalidConfig(
-                "[oauthbearer]: jwks_endpoint_uri and introspection_endpoint_uri are mutually exclusive; configure exactly one"
-                    .into(),
-            ));
-        }
+        (Some(_), Some(_)) => Err(FileConfigError::InvalidConfig(
+            "[oauthbearer]: jwks_endpoint_uri and introspection_endpoint_uri are mutually exclusive; configure exactly one"
+                .into(),
+        )),
         (Some(jwks_uri), None) => {
-            // Signed-JWT validation. The empty key handle is
-            // populated by the refresher `Broker::start` spawns.
-            let jwks_uri = jwks_uri.clone();
-
-            // Create the signal channel + the shared
-            // timestamps here so the validator's `JwksHandle` and
-            // the refresher (constructed in `Broker::start`) point at
-            // the same Arc-shared state. Channel capacity 1 +
-            // `try_send` on the producer ⇒ signals coalesce.
-            let (signal_tx, signal_rx) = mpsc::channel::<()>(1);
-            let last_successful = Arc::new(AtomicI64::new(0));
-            let cache_generation = Arc::new(AtomicU64::new(0));
-            let last_on_demand = Arc::new(AtomicI64::new(0));
-
-            let handle = krabka_security::JwksHandle::new_with_refresher_handles(
-                krabka_security::Jwks::empty(),
-                Arc::clone(&last_successful),
-                signal_tx,
-            );
-
-            let mut v = krabka_security::SignedJwsValidator::new(handle);
-            apply_jws_claim_options(
-                &mut v.principal_claim_name,
-                &mut v.allowable_clock_skew,
-                DEFAULT_ALLOWABLE_CLOCK_SKEW,
-                &oauth,
-            );
-            v.valid_issuer = oauth.valid_issuer_uri;
-            v.expected_audience = oauth.expected_audience;
-            // JsonPath custom_claim_check + JWT typ check.
-            v.custom_claim_check
-                .clone_from(&custom_claim_check_compiled);
-            v.valid_token_type.clone_from(&oauth.valid_token_type);
-            // Claims mapping.
-            v.fallback_user_name_claim
-                .clone_from(&oauth.fallback_user_name_claim);
-            v.fallback_user_name_prefix
-                .clone_from(&oauth.fallback_user_name_prefix);
-            v.groups_claim.clone_from(&groups_claim_compiled);
-            v.groups_claim_delimiter
-                .clone_from(&oauth.groups_claim_delimiter);
-            // Hard cache-expiry threshold.
-            v.cache_expiry = oauth
-                .jwks_expiry_seconds
-                .map(|s| Time::from_secs(i64::from(s)));
-            cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Signed(v);
-            cfg.oauthbearer_jwks_endpoint = Some(jwks_uri);
-            if let Some(ms) = oauth.jwks_refresh_interval_ms {
-                cfg.oauthbearer_jwks_refresh_interval =
-                    Time::from_millis(i64::try_from(ms).unwrap_or(i64::MAX));
-            }
-
-            // Park signal_rx + shared state for Broker::start.
-            *cfg.oauthbearer_jwks_signal_rx
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(signal_rx);
-            cfg.oauthbearer_jwks_last_successful_fetch_ms = last_successful;
-            cfg.oauthbearer_jwks_cache_generation = cache_generation;
-            cfg.oauthbearer_jwks_last_on_demand_refresh_ms = last_on_demand;
-            cfg.oauthbearer_jwks_min_on_demand_pause = oauth
-                .jwks_min_refresh_pause_seconds
-                .map_or(DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE, |s| {
-                    Time::from_secs(i64::from(s))
-                });
-            cfg.features.oauthbearer_jwks_ignore_key_use =
-                oauth.jwks_ignore_key_use.unwrap_or(false);
+            configure_signed_validator(&oauth, jwks_uri.clone(), &claims, cfg);
+            Ok(())
         }
         (None, Some(introspect_uri)) => {
-            configure_introspection_validator(
-                &oauth,
-                introspect_uri,
-                custom_claim_check_compiled.clone(),
-                groups_claim_compiled.clone(),
-                cfg,
-            )?;
+            configure_introspection_validator(&oauth, introspect_uri, claims, cfg)
         }
         (None, None) => {
-            // Unsecured-JWS validation (development only), behind an
-            // explicit opt-in so a misspelled endpoint key cannot quietly
-            // downgrade a listener to trust-the-client.
-            if oauth.allow_unsecured.unwrap_or(false) {
-                tracing::warn!(concat!(
-                    "[oauthbearer]: allow_unsecured = true - SASL/OAUTHBEARER tokens ",
-                    "are accepted without signature verification (alg:none). ",
-                    "Development only."
-                ));
-            } else if oauthbearer_listener_enabled(cfg) {
-                return Err(FileConfigError::InvalidConfig(
-                    concat!(
-                        "[oauthbearer]: a listener enables OAUTHBEARER but neither ",
-                        "jwks_endpoint_uri nor introspection_endpoint_uri is set; that ",
-                        "falls back to the unsecured-JWS (alg:none) validator. Configure ",
-                        "an endpoint, or set allow_unsecured = true for development."
-                    )
-                    .to_owned(),
-                ));
-            }
-            let mut v = krabka_security::UnsecuredJwsValidator::default();
-            apply_jws_claim_options(
-                &mut v.principal_claim_name,
-                &mut v.allowable_clock_skew,
-                DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
-                &oauth,
-            );
-            // JsonPath custom_claim_check + JWT typ check.
-            v.custom_claim_check = custom_claim_check_compiled;
-            v.valid_token_type.clone_from(&oauth.valid_token_type);
-            // Claims mapping.
-            v.fallback_user_name_claim = oauth.fallback_user_name_claim;
-            v.fallback_user_name_prefix = oauth.fallback_user_name_prefix;
-            v.groups_claim = groups_claim_compiled;
-            v.groups_claim_delimiter = oauth.groups_claim_delimiter;
-            // Kafka's scope options.
-            if let Some(name) = oauth.unsecured_scope_claim_name {
-                v.scope_claim_name = name;
-            }
-            v.required_scope = unsecured_required_scope;
-            cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
+            configure_unsecured_validator(&oauth, claims, unsecured_required_scope, cfg)
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -352,8 +378,9 @@ mod tests {
         },
         assert2::{assert, check},
         base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
+        jsonpath_rust::{parser, parser::model::JpQuery},
         krabka_security::OAuthBearerValidator,
-        krabka_units::{minutes, secs},
+        krabka_units::{millis, minutes, secs},
         std::{
             fs,
             path::{Path, PathBuf},
@@ -377,6 +404,261 @@ mod tests {
         let key = Es256SigningKey::generate("skew");
         validator.key_handle().store(key.jwks());
         key.sign(&serde_json::json!({"sub": "alice", "exp": exp_s}))
+    }
+
+    /// Every claim-mapping and skew option `[oauthbearer]` sets, shared by the
+    /// three validator modes below.
+    const CLAIM_OPTIONS: &str = r#"
+principal_claim_name = "client_id"
+custom_claim_check = "$.tenant"
+valid_token_type = "at+jwt"
+allowable_clock_skew_ms = 7000
+valid_issuer_uri = "https://idp.example"
+expected_audience = "kafka"
+fallback_user_name_claim = "email"
+fallback_user_name_prefix = "user-"
+groups_claim = "$.groups"
+groups_claim_delimiter = ","
+jwks_expiry_seconds = 360
+jwks_refresh_interval_ms = 90000
+jwks_min_refresh_pause_seconds = 4
+jwks_ignore_key_use = true
+unsecured_scope_claim_name = "scp"
+unsecured_required_scope = "read write"
+"#;
+
+    /// What `apply_oauthbearer` leaves on the broker configuration: the
+    /// public fields of whichever validator it built, plus the JWKS settings.
+    #[derive(Debug, PartialEq)]
+    struct AppliedOAuth {
+        mode: &'static str,
+        principal_claim_name: String,
+        allowable_clock_skew: krabka_units::Time,
+        custom_claim_check: Option<JpQuery>,
+        valid_token_type: Option<String>,
+        fallback_user_name_claim: Option<String>,
+        fallback_user_name_prefix: Option<String>,
+        groups_claim: Option<JpQuery>,
+        groups_claim_delimiter: Option<String>,
+        expected_audience: Option<String>,
+        /// Signed only.
+        valid_issuer: Option<String>,
+        /// Signed only.
+        cache_expiry: Option<krabka_units::Time>,
+        /// Introspection only.
+        call_userinfo: bool,
+        /// Introspection only: the client's redacted `Debug` form.
+        client: Option<String>,
+        /// Unsecured only.
+        scope: Option<(String, Vec<String>)>,
+        jwks_endpoint: Option<String>,
+        jwks_refresh_interval: krabka_units::Time,
+        jwks_min_on_demand_pause: krabka_units::Time,
+        jwks_ignore_key_use: bool,
+    }
+
+    impl AppliedOAuth {
+        fn of(cfg: &BrokerConfig) -> Self {
+            let jwks_endpoint = cfg.oauthbearer_jwks_endpoint.clone();
+            let jwks_refresh_interval = cfg.oauthbearer_jwks_refresh_interval;
+            let jwks_min_on_demand_pause = cfg.oauthbearer_jwks_min_on_demand_pause;
+            let jwks_ignore_key_use = cfg.features.oauthbearer_jwks_ignore_key_use;
+            match cfg.oauthbearer_validator.clone() {
+                OAuthBearerValidator::Signed(v) => {
+                    let krabka_security::SignedJwsValidator {
+                        principal_claim_name,
+                        allowable_clock_skew,
+                        valid_issuer,
+                        expected_audience,
+                        custom_claim_check,
+                        valid_token_type,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                        cache_expiry,
+                        ..
+                    } = v;
+                    Self {
+                        mode: "signed",
+                        principal_claim_name,
+                        allowable_clock_skew,
+                        custom_claim_check,
+                        valid_token_type,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                        expected_audience,
+                        valid_issuer,
+                        cache_expiry,
+                        call_userinfo: false,
+                        client: None,
+                        scope: None,
+                        jwks_endpoint,
+                        jwks_refresh_interval,
+                        jwks_min_on_demand_pause,
+                        jwks_ignore_key_use,
+                    }
+                }
+                OAuthBearerValidator::Introspection(v) => {
+                    let krabka_security::IntrospectionValidator {
+                        client,
+                        principal_claim_name,
+                        custom_claim_check,
+                        call_userinfo,
+                        allowable_clock_skew,
+                        expected_audience,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                    } = v;
+                    Self {
+                        mode: "introspection",
+                        principal_claim_name,
+                        allowable_clock_skew,
+                        custom_claim_check,
+                        valid_token_type: None,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                        expected_audience,
+                        valid_issuer: None,
+                        cache_expiry: None,
+                        call_userinfo,
+                        client: Some(format!("{client:?}")),
+                        scope: None,
+                        jwks_endpoint,
+                        jwks_refresh_interval,
+                        jwks_min_on_demand_pause,
+                        jwks_ignore_key_use,
+                    }
+                }
+                OAuthBearerValidator::Unsecured(v) => {
+                    let krabka_security::UnsecuredJwsValidator {
+                        principal_claim_name,
+                        allowable_clock_skew,
+                        custom_claim_check,
+                        valid_token_type,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                        scope_claim_name,
+                        required_scope,
+                    } = v;
+                    Self {
+                        mode: "unsecured",
+                        principal_claim_name,
+                        allowable_clock_skew,
+                        custom_claim_check,
+                        valid_token_type,
+                        fallback_user_name_claim,
+                        fallback_user_name_prefix,
+                        groups_claim,
+                        groups_claim_delimiter,
+                        expected_audience: None,
+                        valid_issuer: None,
+                        cache_expiry: None,
+                        call_userinfo: false,
+                        client: None,
+                        scope: Some((scope_claim_name, required_scope)),
+                        jwks_endpoint,
+                        jwks_refresh_interval,
+                        jwks_min_on_demand_pause,
+                        jwks_ignore_key_use,
+                    }
+                }
+            }
+        }
+    }
+
+    fn json_path(expr: &str) -> JpQuery { parser::parse_json_path(expr).unwrap() }
+
+    /// The claim mapping `CLAIM_OPTIONS` sets, as each mode applies it, with
+    /// the JWKS settings left at their defaults.
+    fn claims_applied(mode: &'static str) -> AppliedOAuth {
+        let defaults = BrokerConfig::default();
+        AppliedOAuth {
+            mode,
+            principal_claim_name: "client_id".into(),
+            allowable_clock_skew: millis(7000),
+            custom_claim_check: Some(json_path("$.tenant")),
+            valid_token_type: Some("at+jwt".into()),
+            fallback_user_name_claim: Some("email".into()),
+            fallback_user_name_prefix: Some("user-".into()),
+            groups_claim: Some(json_path("$.groups")),
+            groups_claim_delimiter: Some(",".into()),
+            expected_audience: None,
+            valid_issuer: None,
+            cache_expiry: None,
+            call_userinfo: false,
+            client: None,
+            scope: None,
+            jwks_endpoint: None,
+            jwks_refresh_interval: defaults.oauthbearer_jwks_refresh_interval,
+            jwks_min_on_demand_pause: defaults.oauthbearer_jwks_min_on_demand_pause,
+            jwks_ignore_key_use: false,
+        }
+    }
+
+    /// Characterizes the whole validator each endpoint choice builds from one
+    /// fully populated `[oauthbearer]` table. Introspection takes no
+    /// `valid_token_type`, valid issuer or JWKS expiry.
+    #[test]
+    fn each_mode_applies_the_whole_claim_mapping() {
+        let ClientSecret {
+            dir: _dir,
+            path: secret_path,
+        } = client_secret("the-secret\n");
+        let cases = [
+            (
+                "jwks_endpoint_uri = \"https://idp.example/jwks\"\n".to_owned(),
+                AppliedOAuth {
+                    expected_audience: Some("kafka".into()),
+                    valid_issuer: Some("https://idp.example".into()),
+                    cache_expiry: Some(secs(360)),
+                    jwks_endpoint: Some("https://idp.example/jwks".into()),
+                    jwks_refresh_interval: millis(90_000),
+                    jwks_min_on_demand_pause: secs(4),
+                    jwks_ignore_key_use: true,
+                    ..claims_applied("signed")
+                },
+            ),
+            (
+                format!(
+                    "introspection_endpoint_uri = \"https://idp.example/introspect\"\n\
+                     userinfo_endpoint_uri = \"https://idp.example/userinfo\"\n\
+                     introspection_client_id = \"kafka-broker\"\n\
+                     introspection_client_secret_path = '{}'\n",
+                    secret_path.display()
+                ),
+                AppliedOAuth {
+                    valid_token_type: None,
+                    expected_audience: Some("kafka".into()),
+                    call_userinfo: true,
+                    client: Some(
+                        "ReqwestIntrospectionClient { introspection_endpoint: \
+                         \"https://idp.example/introspect\", userinfo_endpoint: \
+                         Some(\"https://idp.example/userinfo\"), client_id: \"kafka-broker\", \
+                         client_secret: \"<redacted>\", .. }"
+                            .into(),
+                    ),
+                    ..claims_applied("introspection")
+                },
+            ),
+            ("allow_unsecured = true\n".to_owned(), AppliedOAuth {
+                scope: Some(("scp".into(), vec!["read".into(), "write".into()])),
+                ..claims_applied("unsecured")
+            }),
+        ];
+        for (endpoint, expected) in cases {
+            let cfg = configured_unwrap_parse(&format!("[oauthbearer]\n{CLAIM_OPTIONS}{endpoint}"))
+                .unwrap();
+            check!(AppliedOAuth::of(&cfg) == expected);
+        }
     }
 
     /// Kafka fails the unsecured validator's configuration on a required-scope
@@ -646,6 +928,16 @@ introspection_client_id = "kafka-broker"
             .expect_err("invalid JsonPath must be a configuration error");
         assert2::assert!(error.to_string().contains(field));
         assert2::assert!(error.to_string().contains("JsonPath expression"));
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        let parse_error = parser::parse_json_path("$[").unwrap_err();
+        assert2::assert!(
+            *message
+                == format!(
+                    "[oauthbearer]: invalid {field} JsonPath expression \"$[\": {parse_error}"
+                )
+        );
     }
 
     #[test]
