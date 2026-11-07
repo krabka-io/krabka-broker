@@ -15,7 +15,7 @@
 use {
     super::{
         MetadataObserver, ObserverConfig,
-        fetch::fetch_once,
+        fetch::{FetchOutcome, fetch_once},
         store::{ObserverStore, Resumed},
     },
     crate::{controller_endpoint::quorum_targets, time_util},
@@ -187,6 +187,51 @@ fn resume(config: &ObserverConfig, store: &mut ObserverStore, observer: &Metadat
     fetch_offset
 }
 
+/// Publish what an answered fetch moved: the applied offset and timestamp,
+/// the quorum's committed offset, and the leader it named.
+///
+/// `fetch_offset` is the offset the fetch asked from, so a fetch that applied
+/// nothing records no processing time.
+fn publish_progress(
+    observer: &MetadataObserver,
+    store: &mut ObserverStore,
+    outcome: &FetchOutcome,
+    fetch_offset: u64,
+) {
+    let new_offset = outcome.next_fetch_offset;
+    if let Some(timestamp_ms) = outcome.last_applied_record_timestamp_ms {
+        observer
+            .last_applied_record_timestamp_ms
+            .store(timestamp_ms, Ordering::Release);
+        store.record_applied_timestamp(timestamp_ms);
+    }
+    if new_offset > fetch_offset
+        && let Some(processing_us) = outcome.pending_record_processing_time_us
+    {
+        observer.record_pending_record_processing_time_us(processing_us);
+    }
+    observer.metadata_offset.store(
+        i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
+        Ordering::Release,
+    );
+    // The quorum's high watermark counts committed *records*; the
+    // offset convention here is one-past-the-last, so the last
+    // committed offset is one below it, matching `metadata_offset`.
+    // It is the quorum's and not the responder's: the voter this loop
+    // picked may itself be a follower that is behind.
+    observer.quorum_committed_offset.store(
+        outcome.quorum_high_watermark.saturating_sub(1),
+        Ordering::Release,
+    );
+    // The leader is the one the answer names, which a bootstrap
+    // server knows by node id even though this node knows the server
+    // only by its address. An answer that names none, from a quorum in
+    // the middle of an election, leaves the last one standing.
+    if let Some(leader) = outcome.leader_hint {
+        let _ = observer.leader.send_replace(Some(leader));
+    }
+}
+
 pub(super) async fn run_loop(
     config: ObserverConfig,
     observer: Arc<MetadataObserver>,
@@ -229,37 +274,7 @@ pub(super) async fn run_loop(
                 return;
             }
             let new_offset = outcome.next_fetch_offset;
-            if let Some(timestamp_ms) = outcome.last_applied_record_timestamp_ms {
-                observer
-                    .last_applied_record_timestamp_ms
-                    .store(timestamp_ms, Ordering::Release);
-                store.record_applied_timestamp(timestamp_ms);
-            }
-            if new_offset > fetch_offset
-                && let Some(processing_us) = outcome.pending_record_processing_time_us
-            {
-                observer.record_pending_record_processing_time_us(processing_us);
-            }
-            observer.metadata_offset.store(
-                i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
-                Ordering::Release,
-            );
-            // The quorum's high watermark counts committed *records*; the
-            // offset convention here is one-past-the-last, so the last
-            // committed offset is one below it, matching `metadata_offset`.
-            // It is the quorum's and not the responder's: the voter this loop
-            // picked may itself be a follower that is behind.
-            observer.quorum_committed_offset.store(
-                outcome.quorum_high_watermark.saturating_sub(1),
-                Ordering::Release,
-            );
-            // The leader is the one the answer names, which a bootstrap
-            // server knows by node id even though this node knows the server
-            // only by its address. An answer that names none, from a quorum in
-            // the middle of an election, leaves the last one standing.
-            if let Some(leader) = outcome.leader_hint {
-                let _ = observer.leader.send_replace(Some(leader));
-            }
+            publish_progress(&observer, &mut store, &outcome, fetch_offset);
             cursor.answered(&targets, target, outcome.leader_hint);
             // Every poll is answered and nothing is ever applied: the stall
             // shows up as a readiness lag this node can never close, with
