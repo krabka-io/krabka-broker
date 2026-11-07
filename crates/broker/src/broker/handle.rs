@@ -16,7 +16,7 @@ use {
         incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
-        task_join::joined_cleanly,
+        task_util::joined_cleanly,
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,

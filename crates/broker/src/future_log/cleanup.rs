@@ -7,7 +7,7 @@
 
 use {
     super::{FutureLogState, MoveError},
-    crate::task_join::joined_cleanly,
+    crate::task_util::joined_cleanly,
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{
