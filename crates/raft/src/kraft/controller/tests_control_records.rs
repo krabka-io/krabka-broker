@@ -279,8 +279,7 @@ fn leader_change_batch_value_matches_the_persisted_bytes() {
         0x00, // no tagged fields
     ];
     let voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let batch = leader_change_batch(7, NodeId(2), &voters)
-        .expect("the LeaderChange batch encodes");
+    let batch = leader_change_batch(7, NodeId(2), &voters).expect("the LeaderChange batch encodes");
     check!(batch.records[0].value.as_deref() == Some(GOLDEN));
 }
 
