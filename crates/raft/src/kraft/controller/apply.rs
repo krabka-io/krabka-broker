@@ -231,14 +231,7 @@ impl Engine {
         if cursor >= applied_hwm {
             let elapsed_us =
                 u64::try_from(processing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-            self.pending_record_processing_time_us_total = self
-                .pending_record_processing_time_us_total
-                .saturating_add(u128::from(elapsed_us));
-            self.pending_record_processing_time_samples = self
-                .pending_record_processing_time_samples
-                .saturating_add(1);
-            self.pending_record_processing_time_us_max =
-                self.pending_record_processing_time_us_max.max(elapsed_us);
+            self.record_processing.record(elapsed_us);
         }
         // KIP-1155: every quorum member that replays a metadata.version
         // downgrade immediately checkpoints the lower-version image and

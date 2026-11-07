@@ -7,8 +7,7 @@
 
 use {
     super::{
-        FutureLogState, MoveError, MoveGuard, MovePolicy, canonicalize_or_self,
-        cleanup::cancel_move,
+        FutureLogRegistry, FutureLogState, MoveError, MoveGuard, MovePolicy, canonicalize_or_self,
         configured_log_dir, future_dir_name_too_long,
         replicator::{ReplicatorTask, replicator_loop},
     },
@@ -16,7 +15,6 @@ use {
         error::BrokerError, log_dir, log_dir_status::LogDirRegistry, partition::Partition,
         partition_registry::PartitionRegistry,
     },
-    dashmap::DashMap,
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig},
     std::{
@@ -42,7 +40,7 @@ use {
 pub async fn start_move(
     _move_guard: &MoveGuard<'_>,
     partitions: &Arc<PartitionRegistry>,
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: &Arc<FutureLogRegistry>,
     all_log_dirs: &[PathBuf],
     log_dir_status: &LogDirRegistry,
     log_config: &LogConfig,
@@ -95,11 +93,11 @@ pub async fn start_move(
     // (3) Already moving? Keep a same-target request idempotent. Kafka stops
     //     and removes a future replica when a later request changes its
     //     destination, including when the new destination is the current dir.
-    if let Some(existing) = future_logs.get(&key).map(|e| Arc::clone(e.value())) {
+    if let Some(existing) = future_logs.get(&key) {
         if canonicalize_or_self(&existing.target_log_dir) == canonicalize_or_self(&target_log_dir) {
             return Ok(());
         }
-        cancel_move(future_logs, &key, existing).await?;
+        future_logs.cancel(&key, existing).await?;
     }
 
     // (4) Already in the target dir? No-op success. This check must follow
@@ -115,7 +113,6 @@ pub async fn start_move(
     let future_log = open_future_log(partitions, &future_path, log_config)?;
 
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir,
         future_path,
@@ -135,7 +132,7 @@ pub async fn start_move(
 /// future log already holds.
 pub fn resume_move(
     partitions: &Arc<PartitionRegistry>,
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: &Arc<FutureLogRegistry>,
     target_log_dir: &Path,
     log_config: &LogConfig,
     topic: &str,
@@ -148,7 +145,6 @@ pub fn resume_move(
     let future_path = log_dir::future_partition_dir(target_log_dir, topic, partition.get());
     let future_log = open_future_log(partitions, &future_path, log_config)?;
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir: target_log_dir.to_path_buf(),
         future_path,
@@ -177,8 +173,7 @@ fn open_future_log(
 /// `FutureLogState`, inserts it into the registry, and spawns the
 /// per-move replicator task.
 struct MoveTask {
-    partitions: Arc<PartitionRegistry>,
-    future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: Arc<FutureLogRegistry>,
     target_log_dir: PathBuf,
     future_path: PathBuf,
     future_log: Arc<Mutex<Log>>,
@@ -213,7 +208,6 @@ fn spawn_move(task: MoveTask) {
         target_partition_path,
         target_log_dir: task.target_log_dir,
         cancel,
-        _partitions: task.partitions,
         future_logs: task.future_logs,
         registration: Arc::clone(&state),
         topic: task.topic,
@@ -227,7 +221,7 @@ mod tests {
     use {
         super::*,
         crate::future_log::{
-            MoveLock, shutdown_moves,
+            MoveLock,
             test_support::{
                 PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
                 test_policy,
@@ -243,7 +237,7 @@ mod tests {
 
     async fn move_with_defaults(
         partitions: &Arc<PartitionRegistry>,
-        future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        future_logs: &Arc<FutureLogRegistry>,
         dirs: &[PathBuf],
         status: &LogDirRegistry,
         topic_id: Option<uuid::Uuid>,
@@ -278,14 +272,14 @@ mod tests {
     struct MoveRegistries {
         log_dirs: Vec<PathBuf>,
         partitions: Arc<PartitionRegistry>,
-        future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        future_logs: Arc<FutureLogRegistry>,
     }
 
     fn empty_move_registries(log_dirs: Vec<PathBuf>) -> MoveRegistries {
         MoveRegistries {
             log_dirs,
             partitions: Arc::new(PartitionRegistry::new()),
-            future_logs: Arc::new(DashMap::new()),
+            future_logs: Arc::new(FutureLogRegistry::default()),
         }
     }
 
@@ -299,7 +293,7 @@ mod tests {
         MoveRegistries {
             log_dirs: vec![primary.to_path_buf(), target.to_path_buf()],
             partitions,
-            future_logs: Arc::new(DashMap::new()),
+            future_logs: Arc::new(FutureLogRegistry::default()),
         }
     }
 
@@ -309,7 +303,7 @@ mod tests {
         // returns LogDirNotFound before it ever looks at the
         // partition map.
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let log_dirs: Vec<PathBuf> = vec![];
         let bogus = tempdir().unwrap();
         let err = move_with_defaults(
@@ -328,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn move_error_replica_not_available_when_partition_missing() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let dir = tempdir().unwrap();
         let err = move_with_defaults(
             &partitions,
@@ -347,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_target_does_not_replace_precreation_preference() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let valid = tempdir().unwrap();
         let invalid = tempdir().unwrap();
         partitions.set_preferred_log_dir(
@@ -466,7 +460,7 @@ mod tests {
     #[test]
     fn resume_move_errors_when_partition_missing() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let target = tempdir().unwrap();
 
         let err = resume_move(
@@ -563,7 +557,7 @@ mod tests {
                 request.await.unwrap().expect("both requests succeed");
             }
 
-            shutdown_moves(&source.future_logs).await;
+            source.future_logs.shutdown().await;
 
             // Every move task holds the partition registry. Once shutdown
             // has stopped the registered moves, no task may still hold it.

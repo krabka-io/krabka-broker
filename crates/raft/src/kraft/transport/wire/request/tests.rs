@@ -269,7 +269,7 @@ fn sample_fetch_snapshot_request() -> PeerRequest {
         cluster_id: Some(uuid::Uuid::from_u128(9)),
         from: NodeId(2),
         current_leader_epoch: 7,
-        snapshot_id: (42, 3),
+        snapshot_id: SnapshotId::new(42, 3),
         position: 128,
         max_bytes: 4096,
     }

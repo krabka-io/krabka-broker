@@ -20,7 +20,7 @@ pub mod transport;
 
 pub use {
     action::Action,
-    controller::{Activation, KraftConfig, KraftController, KraftOpenConfig},
+    controller::{Activation, KraftConfig, KraftController, KraftOpenConfig, SnapshotPolicy},
     core::{QuorumStateMachine, QuorumTimeouts},
     event::Event,
     log::KraftLog,
