@@ -25,6 +25,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka_bdd::scenarios!` generates its own tests and runs them with a krabka-bdd runner: `Rule:` scenarios run, rows are named after their `case` cell, `async` steps await on one runtime per scenario, `World` and `#[before]` / `#[after]` hooks always run, and lifecycle tags take effect (`@formulated` and `@manual` are ignored, `@inprogress` is an expected failure). `#[krabka_bdd::given/when/then/step]` add Cucumber expressions and expansion-time checks, `Attempt<T, E>` holds a negative-path result, and `krabka-bdd-model` holds the tag glossary and a lint with 13 more house-style rules. The multi-thread harness is gone: `runtime = "tokio-multi-thread"` now picks the generated test's runtime.
+
 - `krabka-bdd` and `krabka-bdd-macros`, a BDD layer over rstest-bdd. `krabka_bdd::scenarios!` lints features against the [Gherkin style guide](docs/style_guides/gherkin_style_guide.md#krabka-bdd) at compile time, fails a test on undefined and ambiguous steps, and can run scenarios on a multi-thread Tokio runtime. `#[derive(StepParam)]` and `Given<T>` replace hand-matched placeholders and `Option` scenario state. The `krabka-log` `log_policy` feature is the first to use it.
 
 - Native Streams topology storage callbacks expose bounded operation/result counters and duration histograms for set, get and delete. See [native storage telemetry](docs/streams-topology-description-storage.md#native-callback-telemetry).

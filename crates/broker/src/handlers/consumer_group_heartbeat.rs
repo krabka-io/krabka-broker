@@ -502,7 +502,14 @@ mod tests {
     /// the scenario's runtime, which lives until the last step.
     #[rstest_bdd_macros::then("the live share actor is still running")]
     fn check_share_actor_running(consumer_heartbeat: &ConsumerHeartbeatScenario) {
-        assert!(!consumer_heartbeat.share_actor.as_ref().unwrap().tx.is_closed());
+        assert!(
+            !consumer_heartbeat
+                .share_actor
+                .as_ref()
+                .unwrap()
+                .tx
+                .is_closed()
+        );
     }
     krabka_bdd::scenarios!(
         "tests/features/handler_consumer_group_creation",
