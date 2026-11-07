@@ -262,3 +262,14 @@ pub enum LocalKeys {
     #[step_param("a trust file with no operator keys")]
     NoOperatorKeys,
 }
+
+/// Whether a step expects its action to land (`signs`) or may see it refused
+/// (`tries to sign`). Both record the outcome; only the reader's expectation
+/// differs, so the steps share one definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+pub enum Attempt {
+    #[step_param("signs")]
+    Signs,
+    #[step_param("tries to sign")]
+    TriesToSign,
+}

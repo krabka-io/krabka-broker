@@ -117,9 +117,7 @@ fn has_approved(
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     operator: Operator,
 ) {
-    let proposal = *guard.proposal.get();
-    let cluster = guard.cluster(runtime);
-    assert!(runtime.block_on(cluster.approve(operator, proposal, None)) == Outcome::Success);
+    assert!(act_on_proposal(guard, runtime, operator, ProposalAct::Approve) == Outcome::Success);
 }
 
 #[given("{operator} has withdrawn the proposal")]
@@ -128,9 +126,31 @@ fn has_withdrawn(
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     operator: Operator,
 ) {
+    assert!(act_on_proposal(guard, runtime, operator, ProposalAct::Withdraw) == Outcome::Success);
+}
+
+/// What an operator does to the scenario's proposal in a Given.
+#[derive(Clone, Copy)]
+enum ProposalAct {
+    Approve,
+    Withdraw,
+}
+
+/// `operator` approves or withdraws the scenario's proposal, unsigned.
+fn act_on_proposal(
+    guard: &mut GuardScenario,
+    runtime: &TokioMultiThreadContext,
+    operator: Operator,
+    act: ProposalAct,
+) -> Outcome {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster(runtime);
-    assert!(runtime.block_on(cluster.withdraw(operator, proposal)) == Outcome::Success);
+    runtime.block_on(async {
+        match act {
+            ProposalAct::Approve => cluster.approve(operator, proposal, None).await,
+            ProposalAct::Withdraw => cluster.withdraw(operator, proposal).await,
+        }
+    })
 }
 
 #[given("the cluster caps a proposal's lifetime at {cap}")]

@@ -3,8 +3,9 @@
 
 use {
     super::{
+        common_steps::freeze_succeeds,
         driver::{self, Signing},
-        params::{KeySource, Lifetime, Operator, Outcome, Scope},
+        params::{Attempt, KeySource, Lifetime, Operator, Outcome, Scope},
         world::GuardScenario,
     },
     crate::signing::{freeze_signing_bytes, freeze_signing_input},
@@ -107,22 +108,14 @@ fn tries_to_freeze(
     }
 }
 
-#[when("{operator} signs a freeze of {scope} with {key}")]
+/// A signed freeze, whether the scenario expects it to land or to be refused:
+/// `signs` and `tries to sign` record the outcome the same way.
+#[when("{operator} {attempt} a freeze of {scope} with {key}")]
 fn signs_freeze(
     guard: &mut GuardScenario,
     #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     operator: Operator,
-    scope: Scope,
-    key: KeySource,
-) {
-    record_freeze(guard, runtime, operator, &scope, Signing::With(key));
-}
-
-#[when("{operator} tries to sign a freeze of {scope} with {key}")]
-fn tries_to_sign_freeze(
-    guard: &mut GuardScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    operator: Operator,
+    _attempt: Attempt,
     scope: Scope,
     key: KeySource,
 ) {
@@ -213,10 +206,7 @@ fn has_refrozen(
     operator: Operator,
     scope: Scope,
 ) {
-    let cluster = guard.cluster(runtime);
-    assert!(
-        runtime.block_on(cluster.freeze(operator, &scope, Signing::Unsigned)) == Outcome::Success
-    );
+    freeze_succeeds(guard, runtime, operator, &scope);
 }
 
 /// The time an entry was set is not knowable, so it is zeroed before the

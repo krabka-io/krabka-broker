@@ -19,9 +19,19 @@ fn has_frozen(
     operator: Operator,
     scope: Scope,
 ) {
+    freeze_succeeds(guard, runtime, operator, &scope);
+}
+
+/// `operator` freezes `scope` unsigned, and the freeze lands.
+pub fn freeze_succeeds(
+    guard: &mut GuardScenario,
+    runtime: &TokioMultiThreadContext,
+    operator: Operator,
+    scope: &Scope,
+) {
     let cluster = guard.cluster(runtime);
     assert!(
-        runtime.block_on(cluster.freeze(operator, &scope, Signing::Unsigned)) == Outcome::Success
+        runtime.block_on(cluster.freeze(operator, scope, Signing::Unsigned)) == Outcome::Success
     );
 }
 
