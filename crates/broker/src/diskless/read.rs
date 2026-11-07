@@ -8,7 +8,7 @@ use {
         broker::Broker,
         codes,
         error::BrokerError,
-        handlers::fetch::{LiveOffsets, PendingRead},
+        handlers::fetch::{FetchReaderExt as _, LiveOffsets, PendingRead},
         partition::Partition,
     },
     bytes::Bytes,
@@ -269,7 +269,7 @@ pub async fn try_diskless_read(
     // reports the partition's live bounds, as a local read does.
     LiveOffsets::of(part).await.report(&mut p.out);
     p.out.error_code = codes::NONE;
-    if p.read_committed && !p.is_follower_fetch {
+    if p.reader.is_read_committed() {
         p.out.aborted_transactions = Some(Vec::new());
     }
     p.out.records = Some(RecordsPayload::Raw(records));
@@ -343,6 +343,7 @@ mod tests {
             primitives::uuid::Uuid as WireUuid,
             records::{Record, RecordBatch, TimestampType},
         },
+        krabka_verified::{FetchReader, Isolation},
         object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
         std::{fs, slice, time::Duration},
         tokio::sync::Notify,
@@ -864,8 +865,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset: 0,
             max_bytes: PARTITION_MAX_BYTES,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: Some(Arc::clone(&part)),

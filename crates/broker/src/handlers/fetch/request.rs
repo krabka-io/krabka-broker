@@ -4,6 +4,7 @@
 //! any partition is read.
 
 use {
+    super::fetch_reader,
     crate::{
         broker::Broker,
         fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
@@ -11,6 +12,7 @@ use {
     },
     krabka_metadata::AclOperation,
     krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid},
+    krabka_verified::FetchReader,
     std::{collections::HashSet, mem, sync::Arc},
 };
 
@@ -78,8 +80,7 @@ pub(super) struct FetchPreparation {
     pub(super) image: Arc<krabka_metadata::MetadataImage>,
     pub(super) authorization: FetchAuthorization,
     pub(super) effective_replica_id: i32,
-    pub(super) is_follower_fetch: bool,
-    pub(super) read_committed: bool,
+    pub(super) reader: FetchReader,
     /// The partitions the fetch's session forgot lately and has not named
     /// again; see [`crate::fetch_session::ForgottenPartition`]. Empty for a
     /// sessionless or a full fetch.
@@ -159,8 +160,7 @@ pub(super) fn prepare_fetch(
         image,
         authorization,
         effective_replica_id,
-        is_follower_fetch,
-        read_committed: !is_follower_fetch && request.isolation_level == 1,
+        reader: fetch_reader(is_follower_fetch, request.isolation_level == 1),
         forgotten,
     })
 }

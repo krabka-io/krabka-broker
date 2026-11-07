@@ -67,7 +67,7 @@ pub use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fe
 use {
     self::{
         node_endpoints::fetch_node_endpoints,
-        plan::{FetchMode, PendingPlanContext, build_pending_reads},
+        plan::{PendingPlanContext, build_pending_reads},
         read_loop::{ReadBudget, execute_pending_reads},
         request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
@@ -235,10 +235,10 @@ pub async fn handle(
         image,
         authorization,
         effective_replica_id,
-        is_follower_fetch,
-        read_committed,
+        reader,
         forgotten,
     } = preparation;
+    let is_follower_fetch = reader.is_follower();
 
     if version >= KIP_595_FETCH_VERSION && decode_fetch_request(&req).is_some() {
         // A KIP-595 fetch always names a replica, so `prepare_fetch` has
@@ -277,10 +277,7 @@ pub async fn handle(
         authorization: &authorization,
         rack_id: &req.rack_id,
         version,
-        mode: FetchMode {
-            read_committed,
-            is_follower_fetch,
-        },
+        reader,
         follower_id: effective_replica_id,
         follower_broker_epoch: req.replica_state.replica_epoch,
     };

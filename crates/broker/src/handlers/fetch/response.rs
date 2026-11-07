@@ -253,6 +253,7 @@ mod tests {
             owned::fetch_response::{FetchableTopicResponse, LeaderIdAndEpoch, PartitionData},
             primitives::uuid::Uuid as WireUuid,
         },
+        krabka_verified::{FetchReader, Isolation},
     };
 
     fn row(topic: &str, topic_id: u8, out: PartitionData) -> PendingRead {
@@ -264,8 +265,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset: 0,
             max_bytes: 1024,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: None,

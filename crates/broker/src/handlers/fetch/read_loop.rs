@@ -5,7 +5,7 @@
 
 use {
     super::{
-        fetch_reader,
+        FetchReaderExt as _,
         plan::{
             PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
             required_leader,
@@ -48,7 +48,7 @@ fn planned_read_request(
         hot_tail: Some(Arc::clone(&broker.hot_tail)),
         fetch_offset: Offset(read.fetch_offset),
         max_bytes,
-        reader: fetch_reader(read.is_follower_fetch, read.read_committed),
+        reader: read.reader,
         sendfile_capable,
         sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
     }
@@ -208,14 +208,14 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
     let capacity = pending
         .iter()
         .filter(|read| read.partition.is_some())
-        .map(|read| if read.is_follower_fetch { 1 } else { 2 })
+        .map(|read| if read.reader.is_follower() { 1 } else { 2 })
         .sum();
     let mut waits = Vec::with_capacity(capacity);
     for (index, read) in pending.iter().enumerate() {
         let Some(part) = read.partition.as_ref() else {
             continue;
         };
-        if read.is_follower_fetch {
+        if read.reader.is_follower() {
             // A follower reads up to the log end, so an append is what it
             // waits for.
             waits.push(Wait::new(index, Arc::clone(&part.append_notify)));
@@ -299,7 +299,7 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
     pending
         .iter()
         .enumerate()
-        .filter(|(_, read)| read.is_follower_fetch && read.fetch_only_leader)
+        .filter(|(_, read)| read.reader.is_follower() && read.fetch_only_leader)
         .filter_map(|(index, read)| {
             let part = read.partition.as_ref()?;
             Some(Wait::new(index, Arc::clone(&part.leadership_notify)))
@@ -320,7 +320,9 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
 /// overwritten here, and cost a lock per partition of the session.
 async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
     for (index, read) in pending.iter_mut().enumerate() {
-        if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served(index)
+        if !read.reader.is_follower()
+            || read.out.error_code != codes::NONE
+            || state.cold_served(index)
         {
             continue;
         }
@@ -813,7 +815,7 @@ fn withheld_by_leader_throttle(broker: &Broker, read: &PendingRead) -> bool {
 /// a `read_committed` consumer, and `None` otherwise.
 fn discard_to_metadata_only(read: &mut PendingRead) {
     read.out.records = None;
-    read.out.aborted_transactions = (read.read_committed && !read.is_follower_fetch).then(Vec::new);
+    read.out.aborted_transactions = read.reader.is_read_committed().then(Vec::new);
 }
 
 /// Serve `read`'s offset out of the cold tier when the local log no longer
@@ -866,7 +868,7 @@ async fn serve_from_cold_tier(
 #[cfg(test)]
 mod tests {
     use {
-        super::super::{plan::FetchMode, response::GroupedResponses},
+        super::super::response::GroupedResponses,
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
             codes::{self, NONE, OFFSET_OUT_OF_RANGE},
@@ -889,6 +891,7 @@ mod tests {
             primitives::uuid::Uuid as WireUuid,
             records::{Record, RecordBatch, RecordsPayload},
         },
+        krabka_verified::{FetchReader, Isolation},
         object_store::{ObjectStoreExt as _, PutPayload, path::Path},
         std::{fs, iter, path::Path as FsPath, sync::Arc, time::Duration},
         tempfile::TempDir,
@@ -1406,7 +1409,7 @@ mod tests {
     fn consumer_read(
         topic: &str,
         part: &Arc<Partition>,
-        read_committed: bool,
+        isolation: Isolation,
     ) -> super::PendingRead {
         super::PendingRead {
             topic_name: topic.into(),
@@ -1416,8 +1419,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset: 0,
             max_bytes: 1 << 20,
-            read_committed,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(isolation),
             fetch_only_leader: false,
             follower_position: None,
             partition: Some(Arc::clone(part)),
@@ -1468,7 +1470,7 @@ mod tests {
     /// Independent null-versus-empty aborted-transaction expectations for both isolation modes.
     struct AbortedIsolationCase {
         name: &'static str,
-        read_committed: bool,
+        isolation: Isolation,
         want_aborted: Option<Vec<AbortedTransaction>>,
     }
 
@@ -1476,12 +1478,12 @@ mod tests {
         [
             AbortedIsolationCase {
                 name: "read_uncommitted",
-                read_committed: false,
+                isolation: Isolation::ReadUncommitted,
                 want_aborted: None,
             },
             AbortedIsolationCase {
                 name: "read_committed",
-                read_committed: true,
+                isolation: Isolation::ReadCommitted,
                 want_aborted: Some(Vec::new()),
             },
         ]
@@ -1517,7 +1519,7 @@ mod tests {
 
         for AbortedIsolationCase {
             name,
-            read_committed,
+            isolation,
             want_aborted,
         } in cases
         {
@@ -1532,8 +1534,8 @@ mod tests {
                 dir: _aborted_dir,
             } = consumer_partition(aborted_transaction()).await;
             let pending = vec![
-                consumer_read("spender", &spender, read_committed),
-                consumer_read("aborted", &aborted, read_committed),
+                consumer_read("spender", &spender, isolation),
+                consumer_read("aborted", &aborted, isolation),
             ];
 
             let topics = read_with_tiny_budget(&broker, pending).await;
@@ -1695,8 +1697,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset: 0,
             max_bytes: 1 << 20,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: None,
@@ -1813,8 +1814,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset: 0,
             max_bytes: i32::try_from(flushed.len()).expect("small run"),
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: Some(Arc::clone(&part)),
@@ -1956,7 +1956,7 @@ mod tests {
         forgotten
             .install_replication_target(None, broker.config.node_id.0, 0)
             .await;
-        let mut pending = [consumer_read(ASKED, &asked, false)];
+        let mut pending = [consumer_read(ASKED, &asked, Isolation::ReadUncommitted)];
 
         // The partition the fetch asked for never appends. Only the one it
         // left out does, 50 ms in.
@@ -2058,7 +2058,7 @@ mod tests {
 
         for AbortedIsolationCase {
             name,
-            read_committed,
+            isolation,
             want_aborted,
         } in aborted_isolation_cases()
         {
@@ -2066,7 +2066,7 @@ mod tests {
                 partition: part,
                 dir: _part_dir,
             } = consumer_partition(Vec::new()).await;
-            let mut pending = [consumer_read("reread", &part, read_committed)];
+            let mut pending = [consumer_read("reread", &part, isolation)];
             let phases = RequestPhases::default();
             let mut state = state_for().pending(&pending).call();
             super::reread_woken(&broker, &mut pending, 0, &mut state, &phases).await;
@@ -2109,7 +2109,7 @@ mod tests {
         let mut pending = [super::PendingRead {
             last_fetched_epoch: 2,
             fetch_offset: 6,
-            ..consumer_read(TOPIC, &part, false)
+            ..consumer_read(TOPIC, &part, Isolation::ReadUncommitted)
         }];
 
         assert!(super::revalidate_epochs(&broker, &mut pending, &mut None).await);
@@ -2422,10 +2422,7 @@ mod tests {
             &topic.into(),
             WireUuid::ZERO,
             request,
-            FetchMode {
-                read_committed: false,
-                is_follower_fetch: true,
-            },
+            FetchReader::Follower,
             Some(Arc::clone(part)),
             super::PartitionData {
                 partition_index: 0,
