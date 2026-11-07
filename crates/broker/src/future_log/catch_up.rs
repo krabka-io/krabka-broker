@@ -283,9 +283,14 @@ mod tests {
         // fetch goes through and only the bytes it records close the quota.
         throttle.set_bound(Some(bytes_per_sec(0)));
 
-        let first = catch_up(&part, &future, bytes(1), &throttle).expect("first pass");
+        let first = catch_up(&part, &future, mebibytes(1), &throttle).expect("first pass");
         let after_first = future_leo(&future);
-        let second = catch_up(&part, &future, bytes(1), &throttle).expect("second pass");
+        // Give the second pass something to copy, so only the quota can stop it.
+        append_records(&part, PartitionRecordsSetup {
+            count: 1.into(),
+            ..Default::default()
+        });
+        let second = catch_up(&part, &future, mebibytes(1), &throttle).expect("second pass");
 
         assert!(
             (
@@ -293,7 +298,7 @@ mod tests {
                 after_first,
                 progress_flags(&second),
                 future_leo(&future),
-            ) == ((false, false), Offset(1), (false, true), Offset(1))
+            ) == ((false, false), Offset(2), (false, true), Offset(2))
         );
     }
 }

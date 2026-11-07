@@ -60,7 +60,7 @@ fn update_bound(quota: &ReplicationQuota, bound: Option<ByteRate>, node_id: Node
     debug!(
         node_id = node_id.0,
         quota = name,
-        bytes_per_sec = bound.map(|rate| rate.bytes_per_sec_i64()),
+        bytes_per_sec = bound.map(ByteRateExt::bytes_per_sec_i64),
         "throttle: replication quota bound update"
     );
     quota.set_bound(bound);
