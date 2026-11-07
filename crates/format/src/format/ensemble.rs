@@ -19,6 +19,7 @@
 use {
     super::output::ZERO_CHECKPOINT_NAME,
     crate::{
+        bootstrap_records::BOOTSTRAP_RECORDS,
         ids::ClusterId,
         meta_properties::{META_PROPERTIES, META_PROPERTIES_TMP, MetaProperties, verify_ensemble},
     },
@@ -33,11 +34,7 @@ use {
 pub(super) const CLUSTER_METADATA: &str = krabka_raft::METADATA_PARTITION_DIR;
 
 /// The top-level files that a run writes before `meta.properties`.
-const PARTIAL_FILES: [&str; 3] = [
-    "bootstrap.json",
-    "bootstrap.records.bin",
-    META_PROPERTIES_TMP,
-];
+const PARTIAL_FILES: [&str; 3] = ["bootstrap.json", BOOTSTRAP_RECORDS, META_PROPERTIES_TMP];
 
 /// A directory whose `meta.properties` reads, with what it holds.
 #[derive(Debug)]
