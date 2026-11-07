@@ -2071,13 +2071,13 @@ mod tests {
         ongoing.state = TxnState::Ongoing;
         seed(&coordinator, ongoing).await;
         let before = coordinator.get(TID).expect("entry").lock().await.clone();
-        let log_end = part.log_end_offset();
+        let log_end = part.log_end_offset().unwrap();
 
         check!(recover_verified(&coordinator, TID).await.is_err());
 
         let after = coordinator.get(TID).expect("entry").lock().await.clone();
         check!(after == before);
-        check!(part.log_end_offset() == log_end);
+        check!(part.log_end_offset().unwrap() == log_end);
     }
 
     /// A KIP-939 recovery that races a fence of the same ongoing transaction
