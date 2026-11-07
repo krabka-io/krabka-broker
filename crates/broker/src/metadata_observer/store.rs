@@ -48,6 +48,7 @@ use {
         snapshot_fetch::SnapshotId,
     },
     std::{
+        fmt::Display,
         fs,
         path::{Path, PathBuf},
     },
@@ -117,38 +118,22 @@ impl ObserverStore {
         // would delete the replacement in its favour, `maybe_checkpoint` would
         // measure its interval from it, and every restart would repeat the
         // whole transfer.
+        let id = (end_offset, epoch);
         let Ok(fetch_offset) = u64::try_from(end_offset) else {
-            warn!(
-                end_offset,
-                epoch, "discarding an observer checkpoint with a negative end offset"
-            );
-            self.discard();
-            return None;
+            return self.discard_unreadable(&"its end offset is negative", id);
         };
         let bytes = match read_checkpoint_by_id(&self.dir, end_offset, epoch) {
             Ok(bytes) => bytes,
-            Err(error) => {
-                warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
-                self.discard();
-                return None;
-            }
+            Err(error) => return self.discard_unreadable(&error, id),
         };
         let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
             Ok(records) => records,
-            Err(error) => {
-                warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
-                self.discard();
-                return None;
-            }
+            Err(error) => return self.discard_unreadable(&error, id),
         };
         let timestamp_ms = match krabka_raft::metadata_snapshot_last_contained_log_timestamp(&bytes)
         {
             Ok(timestamp_ms) => timestamp_ms,
-            Err(error) => {
-                warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
-                self.discard();
-                return None;
-            }
+            Err(error) => return self.discard_unreadable(&error, id),
         };
         self.last_applied_record_timestamp_ms = timestamp_ms;
         info!(
@@ -161,6 +146,15 @@ impl ObserverStore {
             image: MetadataImage::from_records(cluster_id, &records),
             fetch_offset,
         })
+    }
+
+    /// Log why the checkpoint at `id` cannot be restored, empty the store, and
+    /// report that there is nothing to resume from.
+    fn discard_unreadable(&mut self, error: &dyn Display, id: SnapshotId) -> Option<Resumed> {
+        let (end_offset, epoch) = id;
+        warn!(%error, end_offset, epoch, "discarding an unreadable observer checkpoint");
+        self.discard();
+        None
     }
 
     /// Persist the exact checkpoint bytes fetched from a controller under the
