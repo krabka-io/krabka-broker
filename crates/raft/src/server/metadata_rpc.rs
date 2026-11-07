@@ -42,23 +42,33 @@ pub(super) async fn dispatch_submit_change(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "submit-change body decode failed");
-            let resp = KrabkaSubmitChangeResponse {
-                error_code: SubmitChangeCode::Rejected.to_i16(),
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            };
-            let mut out = Vec::with_capacity(16);
-            resp.encode_v0(&mut out)?;
-            return Ok(Bytes::from(out));
+            return encode_submit_change_response(&undecodable_body());
         }
     };
     let resp = match engine.submit_change(records).await {
         Ok(result) => applied_change(&result)?,
         Err(e) => submit_change_failure(&e),
     };
+    encode_submit_change_response(&resp)
+}
+
+/// The v0 bytes of a `SubmitChange` or delegation-token mutation `response`.
+fn encode_submit_change_response(
+    response: &KrabkaSubmitChangeResponse,
+) -> Result<Bytes, RaftError> {
     let mut out = Vec::with_capacity(16);
-    resp.encode_v0(&mut out)?;
+    response.encode_v0(&mut out)?;
     Ok(Bytes::from(out))
+}
+
+/// The response to a forwarded body that does not decode: the leader rejects
+/// it, as it rejects records that fail metadata validation.
+fn undecodable_body() -> KrabkaSubmitChangeResponse {
+    KrabkaSubmitChangeResponse {
+        error_code: SubmitChangeCode::Rejected.to_i16(),
+        leader_hint: LEADER_HINT_UNKNOWN,
+        result: Bytes::new(),
+    }
 }
 
 fn applied_change(result: &SubmitChangeResult) -> Result<KrabkaSubmitChangeResponse, RaftError> {
@@ -128,14 +138,7 @@ where
         Ok(mutations) => mutations,
         Err(error) => {
             tracing::warn!(%error, "delegation-token mutation body decode failed");
-            let response = KrabkaSubmitChangeResponse {
-                error_code: SubmitChangeCode::Rejected.to_i16(),
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            };
-            let mut out = Vec::with_capacity(16);
-            response.encode_v0(&mut out)?;
-            return Ok(Bytes::from(out));
+            return encode_submit_change_response(&undecodable_body());
         }
     };
     // The same error codes as a forwarded `SubmitChange`, so the forwarding
@@ -144,9 +147,7 @@ where
         Ok(result) => applied_change(&result)?,
         Err(error) => submit_change_failure(&error),
     };
-    let mut out = Vec::with_capacity(16);
-    response.encode_v0(&mut out)?;
-    Ok(Bytes::from(out))
+    encode_submit_change_response(&response)
 }
 
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
