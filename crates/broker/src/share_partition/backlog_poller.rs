@@ -76,13 +76,9 @@ impl BacklogPoller {
                             groups = groups.len(),
                             "sampling share-group backlog",
                         );
-                        match self.snapshot(&image, groups).await {
-                            Ok(next) => {
-                                tracing::debug!(samples = next.len(), "share-group backlog sample complete");
-                                replace(&self.metrics, &mut last, next);
-                            }
-                            Err(error) => tracing::warn!(%error, "share-group backlog sample failed"),
-                        }
+                        let next = merge_sample(&last, self.snapshot(&image, groups).await);
+                        tracing::debug!(samples = next.len(), "share-group backlog sample complete");
+                        replace(&self.metrics, &mut last, next);
                     }
                 }
             }
@@ -94,7 +90,7 @@ impl BacklogPoller {
         &self,
         image: &krabka_metadata::MetadataImage,
         groups: Vec<String>,
-    ) -> Result<HashMap<ShareGroupLabel, i64>, String> {
+    ) -> HashMap<ShareGroupLabel, Result<i64, String>> {
         let mut snapshot = HashMap::new();
         for group_id in groups {
             if !owns_group(image, self.node_id, &group_id) {
@@ -120,7 +116,7 @@ impl BacklogPoller {
                 for partition in partitions {
                     let backlog = self
                         .sample_partition(image, &group_id, topic_id, &topic, partition)
-                        .await?;
+                        .await;
                     snapshot.insert(
                         ShareGroupLabel {
                             group_id: group_id.clone(),
@@ -132,7 +128,7 @@ impl BacklogPoller {
                 }
             }
         }
-        Ok(snapshot)
+        snapshot
     }
 
     /// The effective backlog of one share-group partition, from its
@@ -360,6 +356,34 @@ fn prune_stale(
     });
 }
 
+/// The next backlog map from one tick's per-partition samples.
+///
+/// A partition that sampled takes its new backlog. A partition whose sample
+/// failed keeps its value from `last`, so its gauge holds the last good
+/// sample instead of being cleared, and is left out when it has none. One
+/// failing partition therefore does not freeze the gauges of the others.
+fn merge_sample(
+    last: &HashMap<ShareGroupLabel, i64>,
+    sampled: HashMap<ShareGroupLabel, Result<i64, String>>,
+) -> HashMap<ShareGroupLabel, i64> {
+    sampled
+        .into_iter()
+        .filter_map(|(label, sample)| match sample {
+            Ok(backlog) => Some((label, backlog)),
+            Err(error) => {
+                tracing::warn!(
+                    group_id = %label.group_id,
+                    topic = %label.topic,
+                    partition = label.partition,
+                    %error,
+                    "share-group backlog sample failed for partition; keeping its last sample",
+                );
+                last.get(&label).map(|&backlog| (label, backlog))
+            }
+        })
+        .collect()
+}
+
 fn replace(
     metrics: &BrokerMetrics,
     last: &mut HashMap<ShareGroupLabel, i64>,
@@ -386,7 +410,7 @@ mod tests {
     use {
         super::{
             BacklogPoller, PartitionOffsets, effective_backlog, fetch_offsets, latest_fetch_offset,
-            owns_group, prune_stale, replace,
+            merge_sample, owns_group, prune_stale, replace,
         },
         crate::{
             codes,
@@ -593,6 +617,44 @@ mod tests {
         replace(&metrics, &mut last, HashMap::new());
         assert2::assert!(metrics.share_group_backlog.get(&label).is_none());
         assert2::assert!(last.is_empty());
+    }
+
+    /// One failing partition does not freeze the others. A healthy
+    /// partition publishes its new backlog, a failing one keeps the gauge
+    /// value of its last good sample, and a failing one with no earlier sample
+    /// publishes nothing.
+    #[test]
+    fn a_failing_partition_keeps_its_last_sample_and_spares_the_others() {
+        let label = |partition| ShareGroupLabel {
+            group_id: "workers".into(),
+            topic: "work".into(),
+            partition,
+        };
+        let metrics = BrokerMetrics::new();
+        let mut last = HashMap::new();
+        replace(
+            &metrics,
+            &mut last,
+            maplit::hashmap! {label(0) => 5, label(1) => 7},
+        );
+
+        let next = merge_sample(&last, maplit::hashmap! {
+            label(0) => Ok(3),
+            label(1) => Err("leader unreachable".to_owned()),
+            label(2) => Err("coordinator loading".to_owned()),
+        });
+        replace(&metrics, &mut last, next);
+
+        let gauges: Vec<_> = (0..3)
+            .map(|partition| {
+                metrics
+                    .share_group_backlog
+                    .get(&label(partition))
+                    .map(|gauge| gauge.get())
+            })
+            .collect();
+        assert2::assert!(gauges == [Some(3), Some(7), None]);
+        assert2::assert!(last == maplit::hashmap! {label(0) => 3, label(1) => 7});
     }
 
     #[test]
