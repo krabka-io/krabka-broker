@@ -675,6 +675,11 @@ mod tests {
     /// [`owned_labels_still_render_the_captured_bytes`] against the previous
     /// definitions, which [`OwnedTopicLabel`] and [`OwnedPartitionLabel`]
     /// preserve.
+    ///
+    /// The last sample was captured again on prometheus-client 0.25.2, which
+    /// escapes `"`, `\` and a newline inside a label value as the text
+    /// exposition format requires. Earlier releases wrote them raw. A Kafka
+    /// topic name cannot contain any of the three, so no broker scrape moves.
     const CAPTURED: [&str; 4] = [
         "# HELP topic_produce_requests Produce requests per topic.\n\
          # TYPE topic_produce_requests counter\n\
@@ -699,10 +704,10 @@ mod tests {
          # EOF\n",
         "# HELP topic_produce_requests Produce requests per topic.\n\
          # TYPE topic_produce_requests counter\n\
-         topic_produce_requests_total{topic=\"quote\"back\\slash\nnewline\"} 1\n\
+         topic_produce_requests_total{topic=\"quote\\\"back\\\\slash\\nnewline\"} 1\n\
          # HELP partition_bytes_in Bytes appended per partition.\n\
          # TYPE partition_bytes_in counter\n\
-         partition_bytes_in_total{topic=\"quote\"back\\slash\nnewline\",partition=\"1\"} 1\n\
+         partition_bytes_in_total{topic=\"quote\\\"back\\\\slash\\nnewline\",partition=\"1\"} 1\n\
          # EOF\n",
     ];
 

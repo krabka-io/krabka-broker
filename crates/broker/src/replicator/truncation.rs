@@ -3,10 +3,10 @@
 //!
 //! `OFFSET_OUT_OF_RANGE` asks the leader for its log end and log start with
 //! `ListOffsets` and truncates to the one this replica has overrun.
-//! `FENCED_LEADER_EPOCH` runs the KIP-101 `OffsetForLeaderEpoch` lookup and
-//! truncates to the epoch boundary the leader reports.
-//! A KIP-320 `diverging_epoch` row intersects the leader's `(epoch, end
-//! offset)` with this replica's own epoch history before it truncates.
+//! `FENCED_LEADER_EPOCH` runs the KIP-101 `OffsetForLeaderEpoch` lookup for
+//! the latest epoch of the local log. A KIP-320 `diverging_epoch` row carries
+//! the same answer in band. Both intersect the leader's `(epoch, end offset)`
+//! with this replica's own epoch history before they truncate.
 //! `OFFSET_MOVED_TO_TIERED_STORAGE` runs the KIP-405
 //! `ListOffsets(EARLIEST_LOCAL_TIMESTAMP)` lookup and restarts the log at the
 //! leader's local log start.
@@ -26,7 +26,7 @@ use {
     crate::{codes, network::client::InterBrokerError, partition::Partition},
     krabka_client_core::Connection,
     krabka_ids::LeaderEpoch,
-    krabka_log::Offset,
+    krabka_log::{Log, Offset},
     krabka_protocol::owned::{
         fetch_response::EpochEndOffset,
         list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
@@ -87,7 +87,7 @@ fn diverging_truncation_offset(
 
 /// An epoch and the offset at which it ends in a log, or `(-1, -1)` when the
 /// log cannot place the epoch.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EpochEnd {
     epoch: LeaderEpoch,
     end_offset: Offset,
@@ -585,22 +585,45 @@ fn leader_offset_from(
     Ok(row.offset)
 }
 
+/// Where this follower truncates after an `OffsetForLeaderEpoch` answer, as
+/// Kafka 3.9 `AbstractFetcherThread.getOffsetTruncationState` computes it.
+///
+/// An undefined leader end offset truncates to the high watermark, capped at
+/// the log end: the records above it may never have been committed.
+/// Every other answer follows the KIP-320 rule of
+/// [`diverging_truncation_offset`], so the fence and the in-band
+/// `diverging_epoch` row share one truncation rule.
+fn epoch_fence_truncation_offset(
+    follower: EpochEnd,
+    leader: EpochEnd,
+    log_end: Offset,
+    high_watermark: Offset,
+) -> Offset {
+    if leader.end_offset < Offset(0) {
+        high_watermark.min(log_end)
+    } else {
+        diverging_truncation_offset(follower, leader.epoch, leader.end_offset, log_end)
+    }
+}
+
+/// The epochs one `OffsetForLeaderEpoch` row asks under: the fetch state's
+/// `current_leader_epoch` (the epoch fence the leader checks) and the latest
+/// epoch in this replica's log (the epoch whose end the leader reports).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EpochFenceQuery {
+    current_leader_epoch: i32,
+    leader_epoch: LeaderEpoch,
+}
+
 /// Aligns the local log with the epoch history of the leader after an epoch
 /// fence.
 ///
-/// On `FENCED_LEADER_EPOCH`, this function calls `OffsetForLeaderEpoch`
-/// against the leader to find the truncation point. It then truncates the local
-/// log to that point.
-///
-/// KIP-101: the follower sends its current `leader_epoch`. The leader replies
-/// with `end_offset`, the first offset of the next epoch, which is the safe
-/// truncation point.
-// cargo-mutants: an I/O-only wrapper with no in-process signal. Every step is
-// inter-broker IO -- connect, send `OffsetForLeaderEpoch`, then `part.truncate_to`
-// / `part.reset_to` -- and the `end_offset >= 0` truncate-vs-reset branch is only
-// reachable once a live leader connection has answered, so no in-process seam
-// distinguishes a mutant. The truncation point itself is computed by
-// `truncation_offset`, which is mutation-tested.
+/// On `FENCED_LEADER_EPOCH`, this function asks the leader with
+/// `OffsetForLeaderEpoch` where the latest epoch of the local log ends, and
+/// truncates the local log there (KIP-101). See [`recover_epoch_fence`].
+// cargo-mutants: an IO-only wrapper. It connects to the leader and hands the
+// `OffsetForLeaderEpoch` round trip to `recover_epoch_fence`, which the tests
+// below drive with a scripted leader.
 #[cfg_attr(test, mutants::skip)]
 #[tracing::instrument(
     name = "replicator_handle_epoch_fence",
@@ -610,45 +633,53 @@ fn leader_offset_from(
     err,
 )]
 pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
+    recover_epoch_fence(cfg, |query| leader_epoch_end(cfg, query)).await
+}
+
+/// [`handle_epoch_fence`] over an injectable `OffsetForLeaderEpoch` lookup,
+/// which answers the leader's `(epoch, end offset)` for a query, or `None`
+/// when the leader answered no row for this partition.
+///
+/// As Kafka 3.9 `AbstractFetcherThread.maybeTruncate` does, a log with no
+/// epoch history asks nothing and truncates to its high watermark. Otherwise
+/// the answer goes through [`epoch_fence_truncation_offset`]: the log is only
+/// ever truncated, never reset, and never past its own end.
+async fn recover_epoch_fence<F, Fut>(cfg: &Config, leader_epoch_end: F) -> Result<(), String>
+where
+    F: FnOnce(EpochFenceQuery) -> Fut,
+    Fut: Future<Output = Result<Option<EpochEnd>, String>>,
+{
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return Ok(());
     };
-    let our_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let current_leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let latest_epoch = part
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .epoch_checkpoint()
+        .latest_epoch();
     drop(part);
 
-    let client = leader_connection(cfg)
-        .await
-        .map_err(|e| format!("handle_epoch_fence: connect: {e}"))?;
-
-    let req = build_offset_for_leader_epoch_request(cfg, our_epoch);
-
-    let resp = client
-        .send(req)
-        .await
-        .map_err(|e| format!("handle_epoch_fence: send: {e}"))?;
-
-    // Find our (topic, partition) in the response.
-    let Some(epoch_result) = resp
-        .topics
-        .iter()
-        .find(|t| t.topic.as_str() == &*cfg.topic)
-        .and_then(|t| t.partitions.iter().find(|p| p.partition == cfg.partition))
-    else {
-        return Ok(());
+    let leader = match latest_epoch {
+        Some(leader_epoch) => {
+            let query = EpochFenceQuery {
+                current_leader_epoch,
+                leader_epoch,
+            };
+            let Some(leader) = leader_epoch_end(query).await? else {
+                return Ok(());
+            };
+            Some(leader)
+        }
+        None => None,
     };
-    if epoch_result.error_code != codes::NONE {
-        return Err(format!(
-            "handle_epoch_fence: OffsetForLeaderEpoch error {}",
-            epoch_result.error_code
-        ));
-    }
-    let end_offset = epoch_result.end_offset;
 
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return Ok(());
     };
 
-    // Stale-response guard: never truncate/reset from an OffsetForLeaderEpoch
+    // Stale-response guard: never truncate from an OffsetForLeaderEpoch
     // response if metadata has since selected another target (see
     // `replication_target_changed`).
     return_if_target_stale!(
@@ -662,51 +693,95 @@ pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
         .await
         .map_err(|error| format!("handle_epoch_fence: stale local target: {error}"))?;
 
-    if end_offset >= 0 {
-        // Truncate to the epoch boundary. Wrap the wire `i64` into `Offset`.
-        if let Err(e) = part.truncate_to(Offset(end_offset)).await {
-            warn!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                end_offset,
-                error = %e,
-                "handle_epoch_fence: truncate_to failed"
-            );
-        } else {
-            truncate_producer_state(cfg, end_offset).await;
-            info!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                end_offset,
-                "handle_epoch_fence: truncated to epoch boundary"
-            );
-        }
+    let high_watermark = part.high_watermark().await;
+    let target = epoch_fence_target(
+        &part.log.lock().unwrap_or_else(PoisonError::into_inner),
+        leader,
+        high_watermark,
+    );
+
+    if let Err(e) = part.truncate_to(target).await {
+        warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            target = target.0,
+            error = %e,
+            "handle_epoch_fence: truncate_to failed"
+        );
     } else {
-        // end_offset == -1 (UNDEFINED_OFFSET): no epoch info available;
-        // reset to 0 as a safe fallback.
-        if let Err(e) = part.reset_to(Offset(0)).await {
-            warn!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                error = %e,
-                "handle_epoch_fence: reset_to(0) failed"
-            );
-        } else {
-            truncate_producer_state(cfg, 0).await;
-            info!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                "handle_epoch_fence: reset to 0 (undefined epoch boundary)"
-            );
-        }
+        truncate_producer_state(cfg, target.0).await;
+        info!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
+            target = target.0,
+            leader_epoch = leader.map(|leader| leader.epoch.0),
+            leader_end_offset = leader.map(|leader| leader.end_offset.0),
+            "handle_epoch_fence: truncated to the epoch boundary"
+        );
     }
 
     Ok(())
 }
 
+/// Where `log` truncates after an epoch fence the leader answered with
+/// `leader`, or that asked nothing (`None`) because `log` has no epoch
+/// history.
+fn epoch_fence_target(log: &Log, leader: Option<EpochEnd>, high_watermark: Offset) -> Offset {
+    let log_end = log.log_end_offset();
+    leader.map_or_else(
+        || high_watermark.min(log_end),
+        |leader| {
+            let (epoch, end_offset) = log
+                .epoch_checkpoint()
+                .epoch_and_offset_for(leader.epoch, log_end);
+            epoch_fence_truncation_offset(
+                EpochEnd { epoch, end_offset },
+                leader,
+                log_end,
+                high_watermark,
+            )
+        },
+    )
+}
+
+/// Asks the leader where `query.leader_epoch` ends, Kafka's
+/// `RemoteLeaderEndPoint.fetchEpochEndOffsets`.
+async fn leader_epoch_end(
+    cfg: &Config,
+    query: EpochFenceQuery,
+) -> Result<Option<EpochEnd>, String> {
+    let client = leader_connection(cfg)
+        .await
+        .map_err(|e| format!("handle_epoch_fence: connect: {e}"))?;
+
+    let resp = client
+        .send(build_offset_for_leader_epoch_request(cfg, query))
+        .await
+        .map_err(|e| format!("handle_epoch_fence: send: {e}"))?;
+
+    let Some(epoch_result) = resp
+        .topics
+        .iter()
+        .find(|t| t.topic.as_str() == &*cfg.topic)
+        .and_then(|t| t.partitions.iter().find(|p| p.partition == cfg.partition))
+    else {
+        return Ok(None);
+    };
+    if epoch_result.error_code != codes::NONE {
+        return Err(format!(
+            "handle_epoch_fence: OffsetForLeaderEpoch error {}",
+            epoch_result.error_code
+        ));
+    }
+    Ok(Some(EpochEnd {
+        epoch: LeaderEpoch(epoch_result.leader_epoch),
+        end_offset: Offset(epoch_result.end_offset),
+    }))
+}
+
 fn build_offset_for_leader_epoch_request(
     cfg: &Config,
-    our_epoch: i32,
+    query: EpochFenceQuery,
 ) -> OffsetForLeaderEpochRequest {
     OffsetForLeaderEpochRequest {
         replica_id: i32::try_from(cfg.node_id.0).unwrap_or(-1),
@@ -714,8 +789,8 @@ fn build_offset_for_leader_epoch_request(
             topic: cfg.topic.to_string(),
             partitions: vec![OffsetForLeaderPartition {
                 partition: cfg.partition.get(),
-                current_leader_epoch: our_epoch,
-                leader_epoch: our_epoch,
+                current_leader_epoch: query.current_leader_epoch,
+                leader_epoch: query.leader_epoch.0,
                 ..OffsetForLeaderPartition::default()
             }],
             ..OffsetForLeaderTopic::default()
@@ -746,7 +821,10 @@ mod tests {
         let opts = connection_options(&cfg.client_id);
         assert!(opts.client_id == "replica-test");
 
-        let req = build_offset_for_leader_epoch_request(&cfg, 7);
+        let req = build_offset_for_leader_epoch_request(&cfg, EpochFenceQuery {
+            current_leader_epoch: 7,
+            leader_epoch: LeaderEpoch(5),
+        });
         let expected = OffsetForLeaderEpochRequest {
             replica_id: i32::try_from(NODE_ID.0).unwrap(),
             topics: vec![OffsetForLeaderTopic {
@@ -754,7 +832,7 @@ mod tests {
                 partitions: vec![OffsetForLeaderPartition {
                     partition: PARTITION,
                     current_leader_epoch: 7,
-                    leader_epoch: 7,
+                    leader_epoch: 5,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 }],
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
@@ -769,7 +847,10 @@ mod tests {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         cfg.node_id = NodeId(i32::MAX as u64 + 1);
 
-        let req = build_offset_for_leader_epoch_request(&cfg, 7);
+        let req = build_offset_for_leader_epoch_request(&cfg, EpochFenceQuery {
+            current_leader_epoch: 7,
+            leader_epoch: LeaderEpoch(5),
+        });
 
         assert!(req.replica_id == -1);
     }
@@ -1217,15 +1298,161 @@ mod tests {
         assert!(asked.is_empty());
     }
 
+    /// A replica with an epoch history asks the leader, so an unreachable
+    /// leader is an error rather than a truncation.
     #[tokio::test]
     async fn handle_epoch_fence_surfaces_connection_failure_for_local_partition() {
         let ConfigWithDir { cfg, dir: _log_dir } = unreachable_local_config();
+        let partition = cfg
+            .partitions
+            .get(&cfg.topic, cfg.partition)
+            .expect("local partition");
+        let mut batch = RecordBatch {
+            partition_leader_epoch: 4,
+            records: vec![Record::default()],
+            ..Default::default()
+        };
+        partition
+            .log
+            .lock()
+            .expect("replica log")
+            .append(&mut batch)
+            .expect("replica batch");
+        drop(partition);
 
         let err = handle_epoch_fence(&cfg).await.unwrap_err();
 
         assert!(
             err.contains("handle_epoch_fence: connect"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// What one epoch-fence recovery did: the `OffsetForLeaderEpoch` query it
+    /// sent, if any, and this replica's log bounds afterwards.
+    #[derive(Debug, PartialEq)]
+    struct FenceRecovery {
+        asked: Option<EpochFenceQuery>,
+        log_start: i64,
+        log_end: i64,
+    }
+
+    /// Recovers from an epoch fence on a replica whose log holds `batches`
+    /// (one single-record batch per entry, stamped with that epoch), whose
+    /// high watermark is `high_watermark` and whose metadata leader epoch is
+    /// 7, against a leader that answers `leader`.
+    async fn recover_fenced_replica(
+        batches: &[i32],
+        high_watermark: i64,
+        leader: Option<EpochEnd>,
+    ) -> FenceRecovery {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        ensure_local_partition(&cfg).expect("local replica");
+        let partition = cfg
+            .partitions
+            .get(&cfg.topic, cfg.partition)
+            .expect("partition");
+        for &epoch in batches {
+            let mut batch = RecordBatch {
+                partition_leader_epoch: epoch,
+                records: vec![Record::default()],
+                ..Default::default()
+            };
+            partition
+                .log
+                .lock()
+                .expect("replica log")
+                .append(&mut batch)
+                .expect("replica batch");
+        }
+        partition.set_follower_hw(Offset(high_watermark)).await;
+        partition
+            .current_leader_epoch
+            .store(7, atomic::Ordering::Release);
+        let asked = RefCell::new(None);
+        recover_epoch_fence(&cfg, |query| {
+            *asked.borrow_mut() = Some(query);
+            future::ready(Ok(leader))
+        })
+        .await
+        .expect("epoch fence recovery");
+        FenceRecovery {
+            asked: asked.into_inner(),
+            log_start: partition.log_start_offset().0,
+            log_end: partition.log_end_offset().0,
+        }
+    }
+
+    fn epoch_end(epoch: i32, end_offset: i64) -> EpochEnd {
+        EpochEnd {
+            epoch: LeaderEpoch(epoch),
+            end_offset: Offset(end_offset),
+        }
+    }
+
+    /// The fence asks where the log's latest epoch (4) ends, under the
+    /// metadata epoch (7), and truncates as Kafka 3.9
+    /// `getOffsetTruncationState` does. The log holds epoch 1 at offsets
+    /// 0..3 and epoch 4 at 3..6, with its high watermark at 4.
+    #[rstest::rstest]
+    #[case::leader_agrees(epoch_end(4, 6), 6)]
+    #[case::leader_ends_the_epoch_earlier(epoch_end(4, 5), 5)]
+    #[case::leader_end_past_the_log_end_keeps_the_log(epoch_end(4, 100), 6)]
+    #[case::undefined_end_truncates_to_the_high_watermark(epoch_end(-1, -1), 4)]
+    #[case::epoch_unknown_to_the_follower_truncates_to_its_floor_epoch_end(epoch_end(3, 5), 3)]
+    #[case::undefined_leader_epoch_uses_the_leader_end(epoch_end(-1, 5), 5)]
+    #[tokio::test]
+    async fn epoch_fence_truncates_where_kafka_does(
+        #[case] leader: EpochEnd,
+        #[case] log_end: i64,
+    ) {
+        let recovery = recover_fenced_replica(&[1, 1, 1, 4, 4, 4], 4, Some(leader)).await;
+
+        assert!(
+            recovery
+                == FenceRecovery {
+                    asked: Some(EpochFenceQuery {
+                        current_leader_epoch: 7,
+                        leader_epoch: LeaderEpoch(4),
+                    }),
+                    log_start: 0,
+                    log_end,
+                }
+        );
+    }
+
+    /// A log with no epoch history asks the leader nothing and truncates to
+    /// its high watermark, Kafka 3.9 `maybeTruncate`'s
+    /// `truncateToHighWatermark` branch.
+    #[tokio::test]
+    async fn epoch_fence_without_epoch_history_truncates_to_the_high_watermark() {
+        let recovery = recover_fenced_replica(&[-1, -1, -1], 2, Some(epoch_end(4, 0))).await;
+
+        assert!(
+            recovery
+                == FenceRecovery {
+                    asked: None,
+                    log_start: 0,
+                    log_end: 2,
+                }
+        );
+    }
+
+    /// A leader that answers no row for this partition leaves the log alone.
+    #[tokio::test]
+    async fn epoch_fence_without_a_leader_row_keeps_the_log() {
+        let recovery = recover_fenced_replica(&[4, 4, 4], 1, None).await;
+
+        assert!(
+            recovery
+                == FenceRecovery {
+                    asked: Some(EpochFenceQuery {
+                        current_leader_epoch: 7,
+                        leader_epoch: LeaderEpoch(4),
+                    }),
+                    log_start: 0,
+                    log_end: 3,
+                }
         );
     }
     #[derive(Default)]

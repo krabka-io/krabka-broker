@@ -491,20 +491,41 @@ impl MetadataEventLog for KafkaMetadataEventLog {
             partition_count: self.partition_count,
             retry_backoff: self.fetch_retry_backoff.to_std(),
         };
-        visit_range_pages(self, &topic, partition, start, end, visit).await
+        let fetcher = LeaderFetcher {
+            client: &self.client,
+            readers: &self.readers,
+            topic: &self.topic,
+            topic_id: self.topic_id,
+            max_wait: self.fetch_max_wait,
+            partition_max: self.fetch_max_bytes,
+        };
+        visit_range_pages(&fetcher, &topic, partition, start, end, visit).await
     }
 }
 
-impl RangeFetcher for KafkaMetadataEventLog {
+/// The leader lookup and `Fetch` settings that a range read and a
+/// subscription pump share.
+struct LeaderFetcher<'a> {
+    client: &'a Client,
+    readers: &'a BrokerPool,
+    topic: &'a str,
+    topic_id: WireUuid,
+    max_wait: Time,
+    partition_max: ByteSize,
+}
+
+impl RangeFetcher for LeaderFetcher<'_> {
     type Leader = Arc<Connection>;
 
-    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    // cargo-mutants: needs a live leader; `range` and `pump_partition` test
+    // the loops around it
     #[cfg_attr(test, mutants::skip)]
     async fn leader(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
-        self.leader_connection(partition).await
+        leader_connection(self.client, self.readers, self.topic, partition).await
     }
 
-    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    // cargo-mutants: needs a live leader; `range` and `pump_partition` test
+    // the loops around it
     #[cfg_attr(test, mutants::skip)]
     async fn fetch(
         &self,
@@ -513,13 +534,13 @@ impl RangeFetcher for KafkaMetadataEventLog {
         offset: i64,
     ) -> Result<FetchPartitionResult, ClientError> {
         fetch_partition_with_isolation_progress(leader, IsolatedFetch {
-            topic: &self.topic,
+            topic: self.topic,
             topic_id: self.topic_id,
             partition,
             fetch_offset: offset,
-            max_wait: self.fetch_max_wait,
+            max_wait: self.max_wait,
             max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
-            partition_max: self.fetch_max_bytes,
+            partition_max: self.partition_max,
             fetch_min: FetchMinBytes::default(),
             isolation_level: 0,
         })
@@ -613,35 +634,39 @@ impl KafkaMetadataEventLog {
         }
         failure.map_or(Ok(offsets), Err)
     }
+}
 
-    /// A connection to the current leader of `partition`.
-    ///
-    /// A single-broker cluster that advertises port `0` leaves its broker out
-    /// of the pool's registry. On such a cluster the bootstrap broker is the
-    /// leader, so the read falls back to the bootstrap connection.
-    async fn leader_connection(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
-        let metadata = self
-            .client
-            .refresh_metadata()
-            .await
-            .map_err(|error| RangeReadFailure::client("Metadata failed", &error))?;
-        let leader = partition_leader(&metadata, &self.topic, partition).ok_or_else(|| {
-            RangeReadFailure::retriable(format!(
-                "{} partition {partition} has no available leader",
-                self.topic
-            ))
-        })?;
-        self.readers.refresh_brokers(&brokers_of(&metadata)).await;
-        match self.readers.get(leader).await {
-            Err(ClientError::Disconnected) if !self.readers.knows_broker(leader) => {
-                self.readers.bootstrap_connection().await
-            }
-            connection => connection,
+/// A connection to the current leader of `partition` of `topic`.
+///
+/// `client` looks the leader up and `readers` holds the connection. A
+/// single-broker cluster that advertises port `0` leaves its broker out of the
+/// pool's registry. On such a cluster the bootstrap broker is the leader, so
+/// the lookup falls back to the bootstrap connection.
+async fn leader_connection(
+    client: &Client,
+    readers: &BrokerPool,
+    topic: &str,
+    partition: i32,
+) -> Result<Arc<Connection>, RangeReadFailure> {
+    let metadata = client
+        .refresh_metadata()
+        .await
+        .map_err(|error| RangeReadFailure::client("Metadata failed", &error))?;
+    let leader = partition_leader(&metadata, topic, partition).ok_or_else(|| {
+        RangeReadFailure::retriable(format!(
+            "{topic} partition {partition} has no available leader"
+        ))
+    })?;
+    readers.refresh_brokers(&brokers_of(&metadata)).await;
+    match readers.get(leader).await {
+        Err(ClientError::Disconnected) if !readers.knows_broker(leader) => {
+            readers.bootstrap_connection().await
         }
-        .map_err(|error| {
-            RangeReadFailure::client(&format!("connect to broker {leader} failed"), &error)
-        })
+        connection => connection,
     }
+    .map_err(|error| {
+        RangeReadFailure::client(&format!("connect to broker {leader} failed"), &error)
+    })
 }
 
 fn producer_record(
