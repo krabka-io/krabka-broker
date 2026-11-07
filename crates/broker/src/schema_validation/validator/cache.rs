@@ -491,22 +491,26 @@ mod tests {
         }
     }
 
-    /// A registry whose every read takes a set time on tokio's clock, and which
-    /// records which reads started, and when.
+    /// A registry whose three reads each take a set time on tokio's clock, and
+    /// which records which reads started, and when.
     ///
     /// Its latency is a tokio sleep and not a socket, so under paused time the
     /// whole lookup runs in virtual time and finishes the same way on any
     /// runner, however loaded.
     struct TimedRegistry {
-        latency: Duration,
+        versions_latency: Duration,
+        schema_latency: Duration,
+        reference_latency: Duration,
         epoch: time::Instant,
         reads: Mutex<Vec<(&'static str, Duration)>>,
     }
 
     impl TimedRegistry {
-        fn new(latency: Duration) -> Self {
+        fn new(versions: Duration, schema: Duration, reference: Duration) -> Self {
             Self {
-                latency,
+                versions_latency: versions,
+                schema_latency: schema,
+                reference_latency: reference,
                 epoch: time::Instant::now(),
                 reads: Mutex::new(Vec::new()),
             }
@@ -533,7 +537,8 @@ mod tests {
             &self,
             _id: u32,
         ) -> Result<Vec<SubjectVersion>, SchemaSerdeError> {
-            self.read("subject_versions_for_id", self.latency).await;
+            self.read("subject_versions_for_id", self.versions_latency)
+                .await;
             Ok(vec![SubjectVersion {
                 subject: "orders-value".into(),
                 version: 1,
@@ -541,9 +546,7 @@ mod tests {
         }
 
         async fn schema_by_id(&self, _id: u32) -> Result<FetchedSchema, SchemaSerdeError> {
-            // Instant, so the third read starts while the deadline still has
-            // time left on it.
-            self.read("schema_by_id", Duration::ZERO).await;
+            self.read("schema_by_id", self.schema_latency).await;
             Ok(FetchedSchema {
                 schema: r#""string""#.into(),
                 kind: SchemaKind::Avro,
@@ -561,7 +564,8 @@ mod tests {
             _subject: &str,
             _version: i32,
         ) -> Result<FetchedSchema, SchemaSerdeError> {
-            self.read("schema_by_subject_version", self.latency).await;
+            self.read("schema_by_subject_version", self.reference_latency)
+                .await;
             Ok(FetchedSchema {
                 schema: r#""string""#.into(),
                 kind: SchemaKind::Avro,
@@ -574,9 +578,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn one_deadline_bounds_the_whole_registry_operation() {
         // Three reads of 50 ms, 0 ms and 50 ms against an 80 ms deadline. Each
-        // read fits inside the deadline and the three together do not, so only
-        // a deadline over the whole operation, not one per read, rejects it.
-        let registry = TimedRegistry::new(Duration::from_millis(50));
+        // read fits inside the deadline, and so does each adjacent pair, but
+        // the three together do not. Only a deadline over the whole operation
+        // rejects it: not one per read, nor one per stage of the lookup.
+        let registry = TimedRegistry::new(
+            Duration::from_millis(50),
+            Duration::ZERO,
+            Duration::from_millis(50),
+        );
         let v = SchemaValidator::new(
             "http://registry.invalid".into(),
             false,
@@ -614,5 +623,28 @@ mod tests {
                 ]
         );
         check!(registry.epoch.elapsed() == Duration::from_millis(80));
+    }
+
+    #[tokio::test]
+    async fn a_registry_slower_than_the_deadline_is_unavailable() {
+        // The same deadline over the real HTTP client. The registry answers
+        // long after the 80 ms deadline, so either the operation deadline or
+        // the request timeout ends the read, and both mean the registry could
+        // not answer. No call count and no tight margin: nothing here races.
+        let server = MockServer::start().await;
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}/versions"),
+            ResponseTemplate::new(200).set_delay(Duration::from_secs(30)),
+            None,
+        )
+        .await;
+        let v = SchemaValidator::new(server.uri(), false, 100, minutes(1), millis(80))
+            .expect("validator");
+
+        let result = value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"a")).await;
+
+        assert!(let Err(reason) = result);
+        check!(reason.label() == "registry_unavailable", "{reason}");
     }
 }
