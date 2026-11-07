@@ -3944,6 +3944,7 @@ dependencies = [
  "krabka-client-core",
  "krabka-format",
  "krabka-security",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "yare",

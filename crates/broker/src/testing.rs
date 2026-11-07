@@ -2,15 +2,80 @@
 
 use {
     crate::{
+        BrokerConfig, SslPrincipalMapper,
         barrier::marker::{BarrierMarker, build_barrier_batch},
+        config::{InterBrokerCredentials, ListenerSpec},
         error::BrokerError,
     },
+    krabka_authz::SimpleAclAuthorizer,
     krabka_protocol::{
         owned::{list_offsets_request, produce_request},
         primitives::uuid::Uuid,
         records,
     },
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::{
+        iter,
+        net::{Ipv4Addr, SocketAddr},
+        path::PathBuf,
+        sync::Arc,
+    },
 };
+
+/// A test broker config with one SASL/PLAINTEXT loopback listener that takes
+/// PLAIN logins, for a client that has to authenticate.
+///
+/// The listener also carries inter-broker traffic, which logs in as the first
+/// of `users`. With no `super_users` every principal is allowed everything.
+/// With some, the broker enforces ACLs and only they bypass them, so a request
+/// shows which principal the broker authenticated.
+#[bon::builder]
+pub fn sasl_plain_broker_config(
+    log_dir: PathBuf,
+    /// The `(username, password)` pairs the listener accepts.
+    users: &[(&str, &str)],
+    /// The principal names, such as `alice`, that bypass ACLs.
+    #[builder(default)]
+    super_users: &[&str],
+) -> BrokerConfig {
+    let mut config = BrokerConfig::for_tests(log_dir);
+    config.listeners = vec![ListenerSpec {
+        name: "SASL_PLAINTEXT".to_owned(),
+        bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        advertised: "127.0.0.1:0".to_owned(),
+        protocol: ListenerProtocol::SaslPlaintext,
+        tls_config: None,
+        sasl_mechanisms: Some(vec![SaslMechanism::Plain]),
+        principal_mapper: SslPrincipalMapper::default(),
+    }];
+    "SASL_PLAINTEXT".clone_into(&mut config.inter_broker_listener_name);
+    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    config.plain_credentials = users
+        .iter()
+        .map(|&(user, password)| (user.to_owned(), password.to_owned()))
+        .collect();
+    config.inter_broker_credentials =
+        users
+            .first()
+            .map(|&(username, password)| InterBrokerCredentials::Plain {
+                username: username.to_owned(),
+                password: password.to_owned(),
+            });
+    if !super_users.is_empty() {
+        config.super_users = super_users.iter().map(|&name| name.to_owned()).collect();
+        // The broker's own heartbeat reaches its PLAINTEXT controller listener
+        // as `ANONYMOUS`, and it needs `ClusterAction` to unfence.
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+            config
+                .super_users
+                .iter()
+                .cloned()
+                .chain(iter::once("ANONYMOUS".to_owned()))
+                .collect(),
+        ));
+    }
+    config
+}
 
 /// Build a barrier marker batch using the broker's production wire encoder.
 ///

@@ -118,7 +118,12 @@ fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| 
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_units::convert::TimeExt as _};
+    use {
+        super::*,
+        assert2::{assert, check},
+        krabka_units::convert::TimeExt as _,
+        std::path::PathBuf,
+    };
 
     krabka_macros::duration_parser_fixture!(
         {
@@ -148,6 +153,40 @@ mod tests {
         "localhost:9092",
         "describe"
     ]);
+
+    /// `--command-config` reaches a TLS or SASL listener the way
+    /// `kafka-topics --command-config` does, and it is refused after the
+    /// subcommand, where no connection flag goes.
+    #[test]
+    fn the_command_config_comes_before_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "krabka-barrier",
+            "-b",
+            "broker-1:9093",
+            "--command-config",
+            "/etc/krabka/barrier.properties",
+            "describe",
+        ])
+        .expect("parses");
+        check!(
+            cli.connection.security.command_config
+                == Some(PathBuf::from("/etc/krabka/barrier.properties"))
+        );
+        let plaintext = Cli::try_parse_from(["krabka-barrier", "-b", "broker-1:9093", "describe"])
+            .expect("parses");
+        check!(plaintext.connection.security.command_config == None);
+        assert!(
+            Cli::try_parse_from([
+                "krabka-barrier",
+                "-b",
+                "broker-1:9093",
+                "describe",
+                "--command-config",
+                "/etc/krabka/barrier.properties",
+            ])
+            .is_err()
+        );
+    }
 
     /// A group with no periodic injection is the default, and it reaches the
     /// wire as the -1 the broker reads as "on demand only".

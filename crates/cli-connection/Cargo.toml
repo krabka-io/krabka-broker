@@ -26,3 +26,5 @@ tokio = { workspace = true, features = ["fs"] }
 [dev-dependencies]
 assert2 = { workspace = true }
 yare = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

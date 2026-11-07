@@ -200,8 +200,12 @@ pub struct ScopeArgs {
 /// The three flags travel together. The broker binds the signature to the
 /// principal on the connection and to the principal that `[[operator_keys]]`
 /// binds the key to, and both of those have to be the name the signed bytes
-/// carry. Only the operator knows what their listener authenticates them as, so
-/// the tool asks rather than guesses.
+/// carry. The connection's principal comes from `--command-config`: a SASL
+/// login as `alice` is `User:alice`, an mTLS login is the listener's mapped
+/// certificate name, and a PLAINTEXT connection is `User:ANONYMOUS`. Only the
+/// operator knows what their listener authenticates them as, so the tool asks
+/// rather than guesses, and the broker refuses a `--principal` that is not the
+/// one it authenticated.
 #[derive(Args, Debug, Clone)]
 pub struct FreezeSigningArgs {
     /// The PKCS#8 Ed25519 key file. It is read here, used here, and never
@@ -212,8 +216,9 @@ pub struct FreezeSigningArgs {
     /// it.
     #[arg(long, requires = "sign_with")]
     pub key_id: Option<String>,
-    /// The principal the broker authenticates on this connection, which is the
-    /// author the record carries.
+    /// The principal the broker authenticates on this connection, such as
+    /// `User:alice` for a SASL login as `alice` through `--command-config`.
+    /// It is the author the record carries, and the broker refuses any other.
     #[arg(long, requires = "sign_with")]
     pub principal: Option<String>,
 }

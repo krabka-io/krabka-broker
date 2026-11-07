@@ -19,6 +19,8 @@
 
 mod broker_codes;
 mod cli;
+#[cfg(test)]
+mod command_config_sasl;
 mod dispatch;
 mod report;
 mod verify;

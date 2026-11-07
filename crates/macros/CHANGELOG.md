@@ -8,4 +8,4 @@ release that contains `krabka-macros`.
 
 ### Removed
 
-- The `#[bootstrap_cli_fields]` attribute and the `connect_cli_client!` macro. The operator CLIs now flatten the `ConnectionArgs` flag group of the workspace-private `krabka-cli-connection` crate, which adds `--command-config` and builds the client with its TLS and SASL policy. Removing public macros breaks the crate's API, so the release that carries this needs a minor version bump, to 1.2.0 at least.
+- The `#[bootstrap_cli_fields]` attribute and the `connect_cli_client!` macro. The operator CLIs, their only users, now flatten the `ConnectionArgs` flag group of the workspace-private `krabka-cli-connection` crate. Removing public macros breaks the crate's API, so the release that carries this is at least a minor version, 1.2.0.

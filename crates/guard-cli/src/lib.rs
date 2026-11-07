@@ -42,6 +42,8 @@ use {self::command::dispatch, clap::Parser};
 mod broker_codes;
 mod cli;
 mod command;
+#[cfg(test)]
+mod command_config_sasl;
 mod failure;
 mod report;
 #[cfg(test)]
@@ -91,9 +93,10 @@ krabka_macros::parsed_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
-    /// reason is on stderr. `2` means the broker could not be reached, so nothing
-    /// is known about the outcome. `3` means the registry names an operator key
-    /// this machine does not hold. `4` means the action needs a break-glass
+    /// reason is on stderr. `2` means no request completed, because the broker
+    /// could not be reached or refused the login, or `--command-config` was
+    /// unusable. `3` means the registry names an operator key this machine
+    /// does not hold. `4` means the action needs a break-glass
     /// approval that does not exist. `5` means a signature did not verify.
     ///
     /// # Panics
