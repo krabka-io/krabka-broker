@@ -220,7 +220,7 @@ impl BrokerMetrics {
 /// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
 /// krabka-private key with a generated schema. Any other krabka-private api
 /// key resolves to its name in
-/// [`KRABKA_PRIVATE_APIS`][crate::handlers::KRABKA_PRIVATE_APIS]. Anything
+/// [`KRABKA_PRIVATE_APIS`][crate::handlers::private_api_keys::KRABKA_PRIVATE_APIS]. Anything
 /// else folds under [`UNKNOWN_LABEL`].
 ///
 /// Without the krabka-private arm every krabka-private request shares one
@@ -244,9 +244,10 @@ mod tests {
         crate::handlers::{
             ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY,
             DESCRIBE_BARRIER_GROUPS_API_KEY, DESCRIBE_BREAK_GLASS_API_KEY,
-            DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR, KRABKA_PRIVATE_APIS,
+            DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,
             LIST_BARRIER_CUTS_API_KEY, PROPOSE_BREAK_GLASS_API_KEY, SET_TOPIC_FREEZE_API_KEY,
             TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
+            private_api_keys::KRABKA_PRIVATE_APIS,
         },
         assert2::assert,
         krabka_units::{micros, millis},
