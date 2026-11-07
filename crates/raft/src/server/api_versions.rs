@@ -10,11 +10,11 @@ use {
     self::table::CONTROLLER_LISTENER_APIS,
     crate::{
         ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-        error::RaftError, kafka_4_4_max,
+        error::RaftError, kafka_4_4_max, kraft::transport::wire::encode_message,
     },
-    bytes::{Bytes, BytesMut},
+    bytes::Bytes,
     krabka_protocol::{
-        Decode, Encode,
+        Decode,
         owned::{
             api_versions_request::{self, ApiVersionsRequest},
             api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
@@ -101,7 +101,8 @@ pub struct ApiVersionsView<'a> {
 /// # Errors
 /// Returns the decode error for a supported version whose body does not
 /// decode. Kafka's `RequestContext.parseRequest` also fails such a request,
-/// and the connection closes.
+/// and the connection closes. Returns the encoder's error for a response that
+/// does not encode, rather than a truncated body.
 pub fn api_versions_response(
     req_version: i16,
     body: &[u8],
@@ -109,19 +110,22 @@ pub fn api_versions_response(
 ) -> Result<Bytes, RaftError> {
     if !(API_VERSIONS_MIN_VERSION..=api_versions_max_version(view.unstable)).contains(&req_version)
     {
-        return Ok(encode_body(&unsupported_version_response(view.unstable), 0));
+        return Ok(encode_message(
+            &unsupported_version_response(view.unstable),
+            0,
+        )?);
     }
     let request = ApiVersionsRequest::decode(&mut &body[..], req_version)?;
     if !is_valid_api_versions_request(&request, req_version) {
-        return Ok(encode_body(
+        return Ok(encode_message(
             &ApiVersionsResponse {
                 error_code: API_VERSIONS_INVALID_REQUEST,
                 ..Default::default()
             },
             req_version,
-        ));
+        )?);
     }
-    Ok(api_versions_response_body(req_version, view))
+    api_versions_response_body(req_version, view)
 }
 
 /// Kafka's `ApiVersionsRequest.getErrorResponse` for `UNSUPPORTED_VERSION`
@@ -162,14 +166,6 @@ pub fn is_valid_api_versions_request(request: &ApiVersionsRequest, version: i16)
         // deliberately never compare a complete identity against this node.
         comparison: IdentityComparison::Skip,
     }) == 0
-}
-
-fn encode_body(response: &ApiVersionsResponse, version: i16) -> Bytes {
-    let mut body = BytesMut::with_capacity(response.encoded_len(version));
-    // The version is in the generated range, and the fields are defaults or
-    // table entries, so the encoder has nothing to refuse.
-    let _ = response.encode(&mut body, version);
-    body.freeze()
 }
 
 /// The controller listener's advertised table under `unstable`, sorted by API
@@ -245,7 +241,13 @@ pub(super) fn is_disabled_version(
 /// `throttle_time_ms(i32)`, response-level `tagged(0)`. Per the documented Kafka
 /// asymmetry, the *response header* stays v0 (no leading tagged-fields byte) —
 /// so this is written via [`super::framing::write_response`].
-pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView<'_>) -> Bytes {
+///
+/// # Errors
+/// Returns the encoder's error.
+pub(super) fn api_versions_response_body(
+    req_version: i16,
+    view: ApiVersionsView<'_>,
+) -> Result<Bytes, RaftError> {
     let resp = ApiVersionsResponse {
         api_keys: advertised_api_keys(view.admin_router, view.unstable),
         supported_features: supported_feature_keys(
@@ -261,10 +263,10 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
     // v0-shaped body, req v>=3 → flexible (compact) body. The v0 ApiVersions
     // response HEADER asymmetry lives in the framing (`write_response` with tagged fields disabled),
     // not here.
-    encode_body(
+    Ok(encode_message(
         &resp,
         req_version.clamp(0, api_versions_max_version(view.unstable)),
-    )
+    )?)
 }
 
 /// What a test Admin router that answers only `BrokerHeartbeat` advertises.
@@ -328,7 +330,8 @@ mod tests {
             name: METADATA_VERSION_FEATURE.into(),
             level: 24,
         }));
-        let body = super::api_versions_response_body(req_v, view(&image, 41));
+        let body = super::api_versions_response_body(req_v, view(&image, 41))
+            .expect("the ApiVersions body encodes");
         let v = req_v.clamp(0, 4);
         let mut cur = &body[..];
         let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
@@ -385,7 +388,8 @@ mod tests {
         let body = super::api_versions_response_body(4, ApiVersionsView {
             admin_router: Some(&HeartbeatRouter),
             ..view(&image, -1)
-        });
+        })
+        .expect("the ApiVersions body encodes");
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
 
         let heartbeat = resp
@@ -510,7 +514,8 @@ mod tests {
             unstable,
             ..view(&image, 0)
         };
-        let body = super::api_versions_response_body(4, view);
+        let body =
+            super::api_versions_response_body(4, view).expect("the ApiVersions body encodes");
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
         let metadata_version = resp
             .supported_features
@@ -674,11 +679,7 @@ mod tests {
                     node_id: *node_id,
                     ..Default::default()
                 };
-                let mut body = BytesMut::new();
-                request
-                    .encode(&mut body, input.version)
-                    .expect("encode request");
-                body.freeze()
+                encode_message(&request, input.version).expect("encode request")
             },
         );
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
@@ -752,7 +753,8 @@ mod tests {
             .as_ref()
             .expect("controller image prepared");
         let body =
-            super::api_versions_response_body(version, view(image, feature_advertisement.epoch));
+            super::api_versions_response_body(version, view(image, feature_advertisement.epoch))
+                .expect("the ApiVersions body encodes");
         feature_advertisement.response = Some(
             ApiVersionsResponse::decode(&mut &body[..], version).expect("decode feature response"),
         );

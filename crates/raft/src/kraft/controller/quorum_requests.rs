@@ -222,17 +222,12 @@ impl Engine {
         }
     }
 
-    /// Answers a `Vote` request. `None` means the body did not decode.
+    /// Answers a `Vote` request. `None` means the body did not decode or the
+    /// answer did not encode.
     pub(super) fn answer_vote(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
         let request = wire::decode_request::<VoteRequest>(body, version)?;
         let refuse = |engine: &Self, top: i16, partition: i16| {
-            Some(wire::encode_vote_response(
-                top,
-                partition,
-                false,
-                &engine.quorum_leader(),
-                version,
-            ))
+            wire::encode_vote_response(top, partition, false, &engine.quorum_leader(), version)
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
             return refuse(self, INCONSISTENT_CLUSTER_ID, 0);
@@ -313,13 +308,7 @@ impl Engine {
             pre_vote: partition.pre_vote,
         };
         let granted = self.run_vote_request(event);
-        Some(wire::encode_vote_response(
-            0,
-            0,
-            granted,
-            &self.quorum_leader(),
-            version,
-        ))
+        wire::encode_vote_response(0, 0, granted, &self.quorum_leader(), version)
     }
 
     fn quorum_epoch_request_leader(
@@ -362,7 +351,7 @@ impl Engine {
     }
 
     /// Answers a `BeginQuorumEpoch` request. `None` means the body did not
-    /// decode.
+    /// decode or the answer did not encode.
     pub(super) fn answer_begin_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
         self.answer_epoch_request(
             body,
@@ -393,7 +382,7 @@ impl Engine {
     }
 
     /// Answers an `EndQuorumEpoch` request. `None` means the body did not
-    /// decode.
+    /// decode or the answer did not encode.
     pub(super) fn answer_end_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
         self.answer_epoch_request(
             body,
@@ -421,7 +410,7 @@ impl Engine {
         &mut self,
         body: &[u8],
         version: i16,
-        encode: fn(i16, i16, &wire::QuorumLeader, i16) -> Bytes,
+        encode: fn(i16, i16, &wire::QuorumLeader, i16) -> Option<Bytes>,
         transition: impl FnOnce(&mut Self, &Request, NodeId, Epoch) -> i16,
     ) -> Option<Bytes>
     where
@@ -435,23 +424,18 @@ impl Engine {
                 partition,
             }) => (top_level, partition),
         };
-        Some(encode(top, partition, &self.quorum_leader(), version))
+        encode(top, partition, &self.quorum_leader(), version)
     }
 
     /// Answers a `FetchSnapshot` request. `None` means the body did not
-    /// decode.
+    /// decode or the answer did not encode.
     pub(super) fn answer_fetch_snapshot(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
         let request = wire::decode_request::<FetchSnapshotRequest>(body, version)?;
         let top_level = |engine: &Self, error_code: i16| {
-            Some(wire::encode_fetch_snapshot_answer(
-                error_code,
-                None,
-                &engine.quorum_leader(),
-                version,
-            ))
+            wire::encode_fetch_snapshot_answer(error_code, None, &engine.quorum_leader(), version)
         };
         let partition_error = |engine: &Self, error_code: i16| {
-            Some(wire::encode_fetch_snapshot_answer(
+            wire::encode_fetch_snapshot_answer(
                 0,
                 Some(wire::FetchSnapshotPartition {
                     topic: wire::METADATA_TOPIC.into(),
@@ -462,7 +446,7 @@ impl Engine {
                 }),
                 &engine.quorum_leader(),
                 version,
-            ))
+            )
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
             return top_level(self, INCONSISTENT_CLUSTER_ID);
@@ -474,7 +458,7 @@ impl Engine {
             return top_level(self, INVALID_REQUEST);
         };
         if topic.name != wire::METADATA_TOPIC || partition.partition != wire::METADATA_PARTITION {
-            return Some(wire::encode_fetch_snapshot_answer(
+            return wire::encode_fetch_snapshot_answer(
                 0,
                 Some(wire::FetchSnapshotPartition {
                     topic: topic.name.clone(),
@@ -485,7 +469,7 @@ impl Engine {
                 }),
                 &self.quorum_leader(),
                 version,
-            ));
+            );
         }
         if let Some(error) = self.leader_only_request_error(partition.current_leader_epoch) {
             return partition_error(self, error);
@@ -516,7 +500,7 @@ impl Engine {
         if let Ok(from) = u64::try_from(request.replica_id) {
             self.on_event(Event::ReceiveFetchSnapshot { from: NodeId(from) });
         }
-        Some(wire::encode_fetch_snapshot_answer(
+        wire::encode_fetch_snapshot_answer(
             0,
             Some(wire::FetchSnapshotPartition {
                 topic: wire::METADATA_TOPIC.into(),
@@ -532,6 +516,6 @@ impl Engine {
             }),
             &self.quorum_leader(),
             version,
-        ))
+        )
     }
 }

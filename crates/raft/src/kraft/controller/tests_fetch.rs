@@ -408,6 +408,7 @@ fn refusal_from_node_one(error_code: i16, epoch: Epoch, leader_id: Option<NodeId
         ..leader_answer(NodeId(1), epoch)
     })
     .encode()
+    .expect("the body encodes")
 }
 
 /// Node 1's answer to a Fetch after it lost epoch 1: epoch 7, with `leader_id`
@@ -659,7 +660,12 @@ struct BroadcastFixture {
 
 fn broadcast_fixture() -> BroadcastFixture {
     let (mut engine, dir) = build_engine_only().call();
-    let sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+    let sends = record_peer_sends(
+        &mut engine,
+        wire::PeerResponse::Ack { epoch: 4 }
+            .encode()
+            .expect("the body encodes"),
+    );
     BroadcastFixture { engine, dir, sends }
 }
 
@@ -864,7 +870,7 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         ..leader_answer(NodeId(2), 7)
     })
     .encode();
-    let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
+    let mut sends = record_peer_sends(&mut engine, fetch_response.expect("the body encodes"));
 
     check_sent_fetch(&engine, &mut sends, SentFetch {
         fetch_epoch: 7,
@@ -928,7 +934,10 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
         error_code: 0,
     }
     .encode();
-    let mut sends = record_peer_sends(&mut engine, fetch_snapshot_response);
+    let mut sends = record_peer_sends(
+        &mut engine,
+        fetch_snapshot_response.expect("the body encodes"),
+    );
     become_follower(&mut engine, NodeId(2), 3);
 
     let body = wire::PeerResponse::Fetch(wire::FetchAnswer {
@@ -938,7 +947,8 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     engine.on_fetch_response(NodeId(2), &body);
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH_SNAPSHOT).await;
     match wire::decode_fetch_snapshot(&send.body) {
@@ -1017,7 +1027,8 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         hwm: -1,
         ..leader_answer(NodeId(2), epoch)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     observer.on_fetch_response(NodeId(1), &redirect);
     assert2::assert!(matches!(observer.core.role(), Role::Observer {
         leader_id: Some(NodeId(2)),
@@ -1041,7 +1052,8 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         )]),
         ..leader_answer(NodeId(2), epoch)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     // The follower's answer carried no content, and one from it would not be
     // applied: only the attached leader's answers pass the fence.
     observer.on_fetch_response(NodeId(1), &served);
@@ -1071,7 +1083,8 @@ async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged(
         records: encode_batches(&[one_offset_batch(0, 3, b"foreign")]),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
 
     let (mut engine, _dir) = build_engine_only().call();
     become_follower(&mut engine, NodeId(2), if setup == 0 { 4 } else { 3 });
@@ -1113,7 +1126,8 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         records: encode_batches(&[one_offset_batch(2, 3, b"must-not-append")]),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     truncating.on_fetch_response(NodeId(2), &truncate);
     assert2::assert!(truncating.log.log_end_offset() == Offset(1));
     assert2::assert!(truncating.log.hwm() == Offset(0));
@@ -1128,7 +1142,8 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         records: encode_batches(&[one_offset_batch(0, 3, b"replicated")]),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     appending.on_fetch_response(NodeId(2), &append);
     assert2::assert!(appending.log.log_end_offset() == Offset(1));
     assert2::assert!(appending.log.hwm() == Offset(1));
@@ -1148,7 +1163,8 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     advancing.on_fetch_response(NodeId(2), &watermark);
     assert2::assert!(advancing.log.log_end_offset() == Offset(1));
     assert2::assert!(advancing.log.hwm() == Offset(1));
@@ -1179,7 +1195,8 @@ async fn a_failed_follower_truncation_fails_the_log_and_stops() {
         hwm: 2,
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
 
     engine.on_fetch_response(NodeId(2), &truncate);
 
@@ -1203,7 +1220,8 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
     let mut sends = record_peer_sends(&mut engine, fetch_response);
 
     engine.snapshot_fetch = Some(SnapshotFetchState::new((12, 3), NodeId(2)));
@@ -1214,7 +1232,8 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
         bytes: bytes::Bytes::new(),
         error_code: 99,
     }
-    .encode();
+    .encode()
+    .expect("the body encodes");
     engine.on_fetch_snapshot_response(NodeId(2), &error_body);
     assert2::assert!(engine.snapshot_fetch.is_none());
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
@@ -1228,7 +1247,8 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
         bytes: bytes::Bytes::new(),
         error_code: 0,
     }
-    .encode();
+    .encode()
+    .expect("the body encodes");
     engine.on_fetch_snapshot_response(NodeId(3), &ok_body);
     assert2::assert!(engine.snapshot_fetch.is_none());
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
@@ -1259,6 +1279,7 @@ async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp
             ..leader_answer(NodeId(2), 3)
         })
         .encode()
+        .expect("the body encodes")
     };
 
     // The leader has committed 10 000 records and this node has none of them.
@@ -1292,7 +1313,8 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)
     })
-    .encode();
+    .encode()
+    .expect("the body encodes");
 
     engine.on_fetch_response(NodeId(2), &redirect);
     let snapshot = engine.quorum_state_snapshot();
@@ -1321,7 +1343,8 @@ async fn a_lagging_follower_serves_the_quorums_committed_offset() {
             records: bytes::Bytes::new(),
             ..leader_answer(NodeId(2), 3)
         })
-        .encode(),
+        .encode()
+        .expect("the body encodes"),
     );
 
     let slice = engine.metadata_fetch_slice(0, DEFAULT_METADATA_RAFT_FETCH_MAX);
