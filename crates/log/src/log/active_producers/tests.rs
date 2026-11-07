@@ -610,7 +610,7 @@ fn remove_expired_producers_drops_old_verification_state() {
     }
 }
 
-/// For each producer id: the coordinator epoch that WriteTxnMarkers fences on,
+/// For each producer id: the coordinator epoch that `WriteTxnMarkers` fences on,
 /// [`Log::transaction_marker_state`], and the one that `ActiveProducers` and
 /// the producer snapshot report, `-1` when the log keeps no entry.
 fn coordinator_epoch_views(log: &Log, producer_ids: &[i64]) -> Vec<(i64, i32, i32)> {
@@ -726,7 +726,7 @@ fn truncation_and_expiry_keep_the_coordinator_epoch_views_in_agreement() {
 }
 
 /// A marker below Kafka's `-1` coordinator-epoch sentinel, which no broker
-/// write path produces: WriteTxnMarkers rejects it as malformed. The snapshot
+/// write path produces: `WriteTxnMarkers` rejects it as malformed. The snapshot
 /// reader rejects an entry that holds one, so a reopen falls back to the
 /// snapshot before the marker and replays the marker. Both views agree live
 /// and after that reopen.

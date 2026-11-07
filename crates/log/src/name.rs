@@ -83,7 +83,8 @@ impl SegmentFile {
     /// The files of a compaction swap set, the `.log` first. A swap carries
     /// no `.stampindex`, so the survivor takes no stamp ranges over.
     pub const SWAP_SET: [Self; 4] = [Self::Log, Self::Index, Self::TimeIndex, Self::TxnIndex];
-    /// The sidecars of a compaction swap set.
+    /// The sidecars of a compaction swap set. The `.txnindex` is optional:
+    /// the rewrite writes one only when an aborted transaction survives.
     pub const SWAP_SIDECARS: [Self; 3] = [Self::Index, Self::TimeIndex, Self::TxnIndex];
 
     /// The file's extension, without the dot.
@@ -97,18 +98,6 @@ impl SegmentFile {
             Self::StampIndex => "stampindex",
             Self::Snapshot => "snapshot",
         }
-    }
-
-    /// The extensions of `files`, in order.
-    #[must_use]
-    pub const fn extensions<const N: usize>(files: [Self; N]) -> [&'static str; N] {
-        let mut extensions = [""; N];
-        let mut index = 0;
-        while index < N {
-            extensions[index] = files[index].extension();
-            index += 1;
-        }
-        extensions
     }
 
     /// The path of this file for the stem `base_offset` in `dir`.
@@ -275,17 +264,19 @@ mod tests {
         let sets: [(&str, Vec<&str>, &[&str]); 5] = [
             (
                 "sidecars",
-                SegmentFile::extensions(SegmentFile::SIDECARS).to_vec(),
+                SegmentFile::SIDECARS.map(SegmentFile::extension).to_vec(),
                 &["index", "timeindex", "txnindex", "stampindex"],
             ),
             (
                 "segment",
-                SegmentFile::extensions(SegmentFile::SEGMENT).to_vec(),
+                SegmentFile::SEGMENT.map(SegmentFile::extension).to_vec(),
                 &["log", "index", "timeindex", "txnindex", "stampindex"],
             ),
             (
                 "retired with a segment",
-                SegmentFile::extensions(SegmentFile::RETIRED_WITH_SEGMENT).to_vec(),
+                SegmentFile::RETIRED_WITH_SEGMENT
+                    .map(SegmentFile::extension)
+                    .to_vec(),
                 &[
                     "log",
                     "index",
@@ -297,12 +288,14 @@ mod tests {
             ),
             (
                 "swap set",
-                SegmentFile::extensions(SegmentFile::SWAP_SET).to_vec(),
+                SegmentFile::SWAP_SET.map(SegmentFile::extension).to_vec(),
                 &["log", "index", "timeindex", "txnindex"],
             ),
             (
                 "swap sidecars",
-                SegmentFile::extensions(SegmentFile::SWAP_SIDECARS).to_vec(),
+                SegmentFile::SWAP_SIDECARS
+                    .map(SegmentFile::extension)
+                    .to_vec(),
                 &["index", "timeindex", "txnindex"],
             ),
         ];

@@ -22,9 +22,6 @@ use {
 
 pub mod swap;
 
-/// The sidecar extensions a segment carries beside its `.log`.
-const SIDECAR_EXTENSIONS: [&str; 4] = SegmentFile::extensions(SegmentFile::SIDECARS);
-
 /// Reclaim what an interrupted segment deletion left in `dir`.
 ///
 /// [`crate::retention::delete_segment_files`] renames every file of a segment
@@ -95,15 +92,17 @@ fn is_deleted_tombstone(value: &str) -> bool {
     // A retired producer-state snapshot is a tombstone too: retention and
     // compaction retire it with its segment. It is not a stranded sidecar,
     // because a live snapshot may sit at an offset with no `.log`.
-    SegmentFile::extensions([SegmentFile::Log, SegmentFile::Snapshot])
+    [SegmentFile::Log, SegmentFile::Snapshot]
+        .map(SegmentFile::extension)
         .into_iter()
-        .chain(SIDECAR_EXTENSIONS)
+        .chain(SegmentFile::SIDECARS.map(SegmentFile::extension))
         .any(|ext| canonical_base(rest, ext).is_some())
 }
 
 /// `true` for a canonical sidecar name whose segment `.log` is not present.
 fn is_stranded_sidecar(value: &str, log_bases: &HashSet<i64>) -> bool {
-    SIDECAR_EXTENSIONS
+    SegmentFile::SIDECARS
+        .map(SegmentFile::extension)
         .into_iter()
         .filter_map(|ext| canonical_base(value, ext))
         .any(|base| !log_bases.contains(&base))

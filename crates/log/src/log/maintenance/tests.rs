@@ -498,7 +498,7 @@ fn saturating_duration_reads_whole_milliseconds_and_clamps_negative_times() {
         (-1, Duration::ZERO),
         (0, Duration::ZERO),
         (1_500, Duration::from_millis(1_500)),
-        (86_400_000, Duration::from_secs(86_400)),
+        (86_400_000, Duration::from_hours(24)),
     ] {
         assert!(saturating_duration(Time::from_millis(ms)) == want, "{ms}");
     }

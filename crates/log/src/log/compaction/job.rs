@@ -41,9 +41,6 @@ use {
     },
 };
 
-/// The `.cleaned` sidecars a group's rewrite can leave, by extension.
-const CLEANED_EXTENSIONS: [&str; 4] = SegmentFile::extensions(SegmentFile::SWAP_SET);
-
 /// What a log knows about its compaction job, shared with the job.
 ///
 /// It allows one job at a time, and it lets [`Log::fence`] stop a job's build
@@ -250,7 +247,8 @@ impl CompactionJob {
             let Some(base) = self.inputs.get(start).map(SealedInput::base_offset) else {
                 break;
             };
-            for extension in CLEANED_EXTENSIONS {
+            // The `.cleaned` files a group's rewrite can leave: its swap set.
+            for extension in SegmentFile::SWAP_SET.map(SegmentFile::extension) {
                 let path = cleaned_path(&self.dir, base.0, extension);
                 if let Err(error) = remove_if_present(&*self.io, &path) {
                     tracing::warn!(path = %path.display(), %error,
