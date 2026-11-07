@@ -38,6 +38,12 @@
 //! than from the partition's replica set, so this broker can still vote on --
 //! and still report lag for -- a shard whose replicas no longer name it.
 //!
+//! The two failure families of `metrics::log_cleaner`, `log_cleaner_failures`
+//! and `log_retention_failures`, pair a partition with a closed failure
+//! reason. They are released here under every reason, because the cleaner and
+//! the retention loop forget a partition without telling anyone, and a failure
+//! tracks its partition so a partition that only ever failed is released too.
+//!
 //! The two lag families of `metrics::lag` are keyed that way too, and they
 //! join in here rather than being left to a narrower owner. Their samplers
 //! already release what a pass stops naming, but a reassignment or a topic
@@ -163,6 +169,7 @@ impl BrokerMetrics {
         ] {
             family.remove(label);
         }
+        self.evict_failure_series(label);
         self.evict_partition_lag_series(label);
         self.metric_series.partitions.remove(label);
     }
@@ -865,7 +872,9 @@ mod tests {
     /// Seeds a [`CleanerFailureLabel`] family, under every reason, as a
     /// partition family: the partition half is what a reassignment or a
     /// delete ends.
-    impl<'a, M, C: MetricConstructor<M>> SeedOwned<'a> for Probe<'a, Family<CleanerFailureLabel, M, C>> {
+    impl<'a, M, C: MetricConstructor<M>> SeedOwned<'a>
+        for Probe<'a, Family<CleanerFailureLabel, M, C>>
+    {
         fn seed(&self) -> Option<Seeded<'a>> {
             let &Self(field, family) = self;
             let labels = CleanerFailureReason::ALL.map(|reason| CleanerFailureLabel {
