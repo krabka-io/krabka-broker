@@ -13,7 +13,7 @@ use crate::BrokerConfig;
 use {
     super::{
         AutoJoinParams,
-        outcome::{log_join_outcome, next_attempt},
+        outcome::log_join_outcome,
         request::{advertised_controller_listener, build_add_raft_voter_request, join_target},
         rpc::{send_add_raft_voter, send_remove_raft_voter},
     },
@@ -98,7 +98,6 @@ async fn join(params: AutoJoinParams) {
         if target.from_bootstrap {
             next_server = next_server.wrapping_add(1);
         }
-        let next = next_attempt(target.from_bootstrap);
         let target = target.server.as_str();
 
         if let Some(existing) = controller.current_image().voters().get(self_id)
@@ -124,15 +123,14 @@ async fn join(params: AutoJoinParams) {
 
         match send_add_raft_voter(&client, protocol, &server_name, target, &req).await {
             Ok(resp) => {
-                log_join_outcome(self_id, target, next, &resp);
+                log_join_outcome(self_id, target, &resp);
             }
             Err(e) => {
                 tracing::debug!(
                     node_id = self_id.0,
                     server = %target,
                     error = %e,
-                    next,
-                    "auto-join: dial/RPC failed; retrying"
+                    "auto-join: dial/RPC failed; retrying the known leader, else the next bootstrap server"
                 );
             }
         }
