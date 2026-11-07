@@ -15,7 +15,10 @@ use {
 /// checkpoint that a dynamic format writes. No replica replicates it, and no
 /// replica applies its metadata records to its image. The leader writes those
 /// records to the log instead.
-pub(crate) const BOOTSTRAP_SNAPSHOT_ID: SnapshotId = (0, 0);
+pub(crate) const BOOTSTRAP_SNAPSHOT_ID: SnapshotId = SnapshotId {
+    end_offset: 0,
+    epoch: 0,
+};
 
 /// Write a KIP-630 `.checkpoint` artifact (bytes only) atomically and
 /// durably: the temporary file is synced before the rename and the directory
@@ -51,7 +54,7 @@ pub fn write_checkpoint(
 ///
 /// Returns an error when the selected checkpoint file cannot be read.
 pub fn load_latest_checkpoint(dir: &Path) -> Result<Option<Vec<u8>>, RaftError> {
-    let Some((end_offset, epoch)) = latest_checkpoint_id(dir) else {
+    let Some(SnapshotId { end_offset, epoch }) = latest_checkpoint_id(dir) else {
         return Ok(None);
     };
     let bytes =
@@ -66,11 +69,14 @@ pub(crate) fn checkpoint_name(end_offset: i64, epoch: i32) -> String {
 pub(crate) fn parse_checkpoint_name(name: &str) -> Option<SnapshotId> {
     let stem = name.strip_suffix(".checkpoint")?;
     let (off, ep) = stem.split_once('-')?;
-    let id = (off.parse().ok()?, ep.parse().ok()?);
-    if id.0 < 0 || id.1 < 0 {
+    let id = SnapshotId {
+        end_offset: off.parse().ok()?,
+        epoch: ep.parse().ok()?,
+    };
+    if id.end_offset < 0 || id.epoch < 0 {
         return None;
     }
-    (checkpoint_name(id.0, id.1) == name).then_some(id)
+    (checkpoint_name(id.end_offset, id.epoch) == name).then_some(id)
 }
 
 /// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts and return the
@@ -79,7 +85,7 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<SnapshotId> {
 #[must_use]
 pub fn latest_checkpoint_id(dir: &Path) -> Option<SnapshotId> {
     let ids = checkpoint_ids(dir);
-    let index = krabka_verified::latest_checkpoint_index(&ids)?;
+    let index = latest_checkpoint_index(&ids)?;
     ids.get(index).copied()
 }
 
@@ -95,6 +101,14 @@ pub(crate) fn checkpoint_ids(dir: &Path) -> Vec<SnapshotId> {
         .collect()
 }
 
+/// The index of the newest of `ids`, by the verified kernel's ordering, or
+/// `None` when `ids` is empty. The kernel reads each id as its
+/// `(end_offset, epoch)` pair.
+fn latest_checkpoint_index(ids: &[SnapshotId]) -> Option<usize> {
+    let pairs: Vec<(i64, i32)> = ids.iter().map(|id| (id.end_offset, id.epoch)).collect();
+    krabka_verified::latest_checkpoint_index(&pairs)
+}
+
 /// The two newest checkpoint ids in a directory.
 struct RecentCheckpointIds {
     latest: SnapshotId,
@@ -107,8 +121,8 @@ struct RecentCheckpointIds {
 /// runner-up".
 fn recent_checkpoint_ids(dir: &Path) -> Option<RecentCheckpointIds> {
     let mut ids = checkpoint_ids(dir);
-    let latest = ids.swap_remove(krabka_verified::latest_checkpoint_index(&ids)?);
-    let previous = krabka_verified::latest_checkpoint_index(&ids)
+    let latest = ids.swap_remove(latest_checkpoint_index(&ids)?);
+    let previous = latest_checkpoint_index(&ids)
         .and_then(|index| ids.get(index).copied())
         .unwrap_or(latest);
     Some(RecentCheckpointIds { latest, previous })
@@ -116,7 +130,12 @@ fn recent_checkpoint_ids(dir: &Path) -> Option<RecentCheckpointIds> {
 
 #[must_use]
 pub fn checkpoint_id_is_newer(candidate: SnapshotId, current: SnapshotId) -> bool {
-    krabka_verified::checkpoint_id_newer(candidate.0, candidate.1, current.0, current.1)
+    krabka_verified::checkpoint_id_newer(
+        candidate.end_offset,
+        candidate.epoch,
+        current.end_offset,
+        current.epoch,
+    )
 }
 
 /// Delete every `.checkpoint` in `dir` except the two newest
@@ -159,11 +178,20 @@ fn retain_checkpoints(dir: &Path, latest: SnapshotId, previous: SnapshotId) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some((off, ep)) = parse_checkpoint_name(name) else {
+        let Some(SnapshotId {
+            end_offset: off,
+            epoch: ep,
+        }) = parse_checkpoint_name(name)
+        else {
             continue;
         };
         if !krabka_verified::checkpoint_id_retained(
-            off, ep, latest.0, latest.1, previous.0, previous.1,
+            off,
+            ep,
+            latest.end_offset,
+            latest.epoch,
+            previous.end_offset,
+            previous.epoch,
         ) {
             let _ = fs::remove_file(entry.path());
         }

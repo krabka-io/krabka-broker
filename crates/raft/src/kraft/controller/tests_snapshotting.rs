@@ -171,7 +171,7 @@ async fn delayed_regular_checkpoint_keeps_engine_commands_moving() {
 async fn regular_worker_excludes_other_checkpoint_writers_until_completion() {
     let (mut engine, _dir) = delayed_snapshot_engine("snapshot-writer");
     let bytes = SnapshotWriter::serialize(&engine.image, 0).unwrap();
-    let id = (engine.log.hwm().0, 1);
+    let id = SnapshotId::new(engine.log.hwm().0, 1);
     engine.maybe_snapshot();
     assert2::assert!(engine.snapshot_job.is_some());
     assert2::assert!(engine.do_trigger_snapshot().is_err());
@@ -198,10 +198,10 @@ async fn halting_joins_regular_checkpoint_before_releasing_the_directory() {
 }
 
 #[yare::parameterized(
-    higher_offset = { (11, 1), (10, 9), true },
-    same_offset_higher_epoch = { (10, 9), (10, 2), true },
-    same_offset_lower_epoch = { (10, 2), (10, 9), false },
-    equal_checkpoint = { (10, 9), (10, 9), false },
+    higher_offset = { SnapshotId::new(11, 1), SnapshotId::new(10, 9), true },
+    same_offset_higher_epoch = { SnapshotId::new(10, 9), SnapshotId::new(10, 2), true },
+    same_offset_lower_epoch = { SnapshotId::new(10, 2), SnapshotId::new(10, 9), false },
+    equal_checkpoint = { SnapshotId::new(10, 9), SnapshotId::new(10, 9), false },
 )]
 fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replacement(
     candidate: SnapshotId,
@@ -215,21 +215,23 @@ fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replace
 /// the epoch in ten, so a 1.x broker finds every checkpoint an earlier one
 /// wrote.
 #[yare::parameterized(
-    zero = { (0, 0), "00000000000000000000-0000000000.checkpoint" },
-    small = { (10, 2), "00000000000000000010-0000000002.checkpoint" },
-    largest = { (i64::MAX, i32::MAX), "09223372036854775807-2147483647.checkpoint" },
+    zero = { SnapshotId::new(0, 0), "00000000000000000000-0000000000.checkpoint" },
+    small = { SnapshotId::new(10, 2), "00000000000000000010-0000000002.checkpoint" },
+    largest = { SnapshotId::new(i64::MAX, i32::MAX), "09223372036854775807-2147483647.checkpoint" },
 )]
 fn a_checkpoint_name_is_the_fixed_width_offset_and_epoch(id: SnapshotId, name: &str) {
-    assert2::assert!(checkpoint_name(id.0, id.1) == name);
+    assert2::assert!(checkpoint_name(id.end_offset, id.epoch) == name);
 }
 
 #[test]
 fn checkpoint_names_use_canonical_fixed_width_encoding() {
     assert2::assert!(
-        parse_checkpoint_name("00000000000000000010-0000000002.checkpoint") == Some((10, 2))
+        parse_checkpoint_name("00000000000000000010-0000000002.checkpoint")
+            == Some(SnapshotId::new(10, 2))
     );
     assert2::assert!(
-        parse_checkpoint_name("00000000000000000000-0000000000.checkpoint") == Some((0, 0))
+        parse_checkpoint_name("00000000000000000000-0000000000.checkpoint")
+            == Some(SnapshotId::new(0, 0))
     );
 }
 
@@ -357,7 +359,7 @@ fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
     write_checkpoint(&cp_dir, 10, 9, b"ten-nine").expect("write checkpoint 10/9");
     write_checkpoint(&cp_dir, 11, 1, b"eleven-one").expect("write checkpoint 11/1");
 
-    assert2::assert!(latest_checkpoint_id(&cp_dir) == Some((11, 1)));
+    assert2::assert!(latest_checkpoint_id(&cp_dir) == Some(SnapshotId::new(11, 1)));
     let latest = load_latest_checkpoint(&cp_dir)
         .expect("load latest")
         .expect("latest exists");
@@ -450,15 +452,17 @@ fn a_snapshot_roll_keeps_the_checkpoint_it_replaces_until_the_next_one() {
         assert2::assert!(ids.iter().filter(|id| **id == ids[ids.len() - 1]).count() == 1);
 
         if ids.len() == 2 {
-            assert2::assert!(load_checkpoint_by_id(&cp_dir, ids[0].0, ids[0].1).is_some());
+            assert2::assert!(
+                load_checkpoint_by_id(&cp_dir, ids[0].end_offset, ids[0].epoch).is_some()
+            );
         }
     }
 
     assert2::assert!(
         (
-            load_checkpoint_by_id(&cp_dir, ids[0].0, ids[0].1).is_some(),
-            load_checkpoint_by_id(&cp_dir, ids[1].0, ids[1].1).is_some(),
-            load_checkpoint_by_id(&cp_dir, ids[2].0, ids[2].1).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[0].end_offset, ids[0].epoch).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[1].end_offset, ids[1].epoch).is_some(),
+            load_checkpoint_by_id(&cp_dir, ids[2].end_offset, ids[2].epoch).is_some(),
         ) == (false, true, true)
     );
 }
@@ -539,7 +543,7 @@ fn an_installed_snapshot_hands_its_header_timestamp_to_the_next_checkpoint() {
     let bytes = SnapshotWriter::serialize(&image, stamp).expect("serialize");
 
     engine
-        .install_fetched_snapshot((7, 0), &bytes)
+        .install_fetched_snapshot(SnapshotId::new(7, 0), &bytes)
         .expect("install the fetched snapshot");
     engine
         .do_trigger_snapshot()

@@ -103,7 +103,7 @@ pub fn should_start_snapshot_fetch(
     log_end: Offset,
     active_snapshot_id: Option<SnapshotId>,
 ) -> bool {
-    snapshot_id.0.cmp(&log_end.0).is_gt()
+    snapshot_id.end_offset.cmp(&log_end.0).is_gt()
         && !matches!(active_snapshot_id, Some(id) if id == snapshot_id)
 }
 
@@ -416,7 +416,7 @@ impl Engine {
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(node = self.me.0, end_offset = id.0, snapshot_epoch = id.1, bytes = bytes.len()),
+        fields(node = self.me.0, end_offset = id.end_offset, snapshot_epoch = id.epoch, bytes = bytes.len()),
         err
     )]
     pub fn install_fetched_snapshot(
@@ -431,7 +431,7 @@ impl Engine {
         }
         // `end_offset` is the snapshot id's raw offset (wire / checkpoint-filename
         // boundary); wrap into the log offset domain where it addresses the log.
-        let (end_offset, epoch) = id;
+        let SnapshotId { end_offset, epoch } = id;
         let end_offset_pos = Offset(end_offset);
         let install = snapshot_install_decision(
             self.downgrade_snapshot_pending.is_some(),

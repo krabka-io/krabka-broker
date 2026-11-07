@@ -415,9 +415,12 @@ impl KrabkaMetadataFetchResponse {
         out.put_i64(self.log_start_offset);
         out.put_i64(self.high_watermark);
         out.put_i64(self.quorum_high_watermark);
-        let (snapshot_end_offset, snapshot_epoch) = self.snapshot_id.unwrap_or((NO_SNAPSHOT, -1));
-        out.put_i64(snapshot_end_offset);
-        out.put_i32(snapshot_epoch);
+        let SnapshotId { end_offset, epoch } = self.snapshot_id.unwrap_or(SnapshotId {
+            end_offset: NO_SNAPSHOT,
+            epoch: -1,
+        });
+        out.put_i64(end_offset);
+        out.put_i32(epoch);
         put_i32_len_prefixed_bytes(out, &self.records, "records length exceeds i32::MAX")
     }
 
@@ -441,8 +444,10 @@ impl KrabkaMetadataFetchResponse {
             log_start_offset,
             high_watermark,
             quorum_high_watermark,
-            snapshot_id: (snapshot_end_offset != NO_SNAPSHOT)
-                .then_some((snapshot_end_offset, snapshot_epoch)),
+            snapshot_id: (snapshot_end_offset != NO_SNAPSHOT).then_some(SnapshotId {
+                end_offset: snapshot_end_offset,
+                epoch: snapshot_epoch,
+            }),
             records,
         })
     }
@@ -535,7 +540,7 @@ mod tests {
             log_start_offset: 1,
             high_watermark: 99,
             quorum_high_watermark: 512,
-            snapshot_id: Some((64, 2)),
+            snapshot_id: Some(SnapshotId::new(64, 2)),
             records: Bytes::from_static(b"\xaa"),
         }
     }
@@ -929,11 +934,11 @@ mod tests {
     /// records, so the id has to survive the round trip as a `Some` and the
     /// `-1` sentinel has to decode back to `None` rather than to `(-1, -1)`.
     #[yare::parameterized(
-        nonzero_snapshot = { Some((4_096_i64, 7_i32)) },
-        zero_snapshot = { Some((0, 0)) },
+        nonzero_snapshot = { Some(SnapshotId::new(4_096_i64, 7_i32)) },
+        zero_snapshot = { Some(SnapshotId::new(0, 0)) },
         no_snapshot = { None },
     )]
-    fn metadata_fetch_response_round_trips_a_snapshot_id(want: Option<(i64, i32)>) {
+    fn metadata_fetch_response_round_trips_a_snapshot_id(want: Option<SnapshotId>) {
         let resp = KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 1,

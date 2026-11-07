@@ -12,7 +12,10 @@ use {
         },
         PeerRequest, PreferredCandidate, decode_request, parse_cluster_id,
     },
-    crate::{kraft::types::NodeId, voter_wire::endpoint as voter_endpoint},
+    crate::{
+        kraft::{snapshot_fetch::SnapshotId, types::NodeId},
+        voter_wire::endpoint as voter_endpoint,
+    },
     krabka_protocol::{
         Decode,
         owned::{
@@ -139,7 +142,7 @@ pub fn decode_fetch_snapshot(buf: &[u8]) -> Option<PeerRequest> {
         cluster_id: request_cluster_id(req.cluster_id.as_deref()).ok()?,
         from: node_from_wire(req.replica_id),
         current_leader_epoch: p.current_leader_epoch,
-        snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
+        snapshot_id: SnapshotId::new(p.snapshot_id.end_offset, p.snapshot_id.epoch),
         position: p.position,
         max_bytes: req.max_bytes,
     })

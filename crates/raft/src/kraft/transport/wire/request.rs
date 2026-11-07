@@ -376,7 +376,7 @@ fn encode_fetch_snapshot_request(
         max_bytes,
     }: ChunkWindow,
 ) -> Option<Bytes> {
-    let (end_offset, epoch) = snapshot_id;
+    let SnapshotId { end_offset, epoch } = snapshot_id;
     let req = FetchSnapshotRequest {
         cluster_id: cluster_id_to_wire(cluster_id),
         replica_id: node_to_wire(from),

@@ -108,7 +108,7 @@ impl ObserverStore {
     /// The image and next fetch offset to resume from, or `None` when this node
     /// has no checkpoint and must replicate the log from its start.
     pub(super) fn resume(&mut self, cluster_id: uuid::Uuid) -> Option<Resumed> {
-        let (end_offset, epoch) = self.persisted?;
+        let SnapshotId { end_offset, epoch } = self.persisted?;
         let bytes = load_checkpoint_by_id(&self.dir, end_offset, epoch)?;
         let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
             Ok(records) => records,
@@ -180,13 +180,13 @@ impl ObserverStore {
         let Ok(end_offset) = i64::try_from(next_fetch_offset) else {
             return;
         };
-        let advanced = end_offset.saturating_sub(self.persisted.map_or(0, |(offset, _)| offset));
+        let advanced = end_offset.saturating_sub(self.persisted.map_or(0, |id| id.end_offset));
         if u64::try_from(advanced).unwrap_or(0) < self.interval {
             return;
         }
         match krabka_raft::serialize_metadata_snapshot(image, self.last_applied_record_timestamp_ms)
         {
-            Ok(bytes) => self.write((end_offset, OBSERVER_EPOCH), &bytes),
+            Ok(bytes) => self.write(SnapshotId::new(end_offset, OBSERVER_EPOCH), &bytes),
             Err(error) => warn!(%error, end_offset, "observer failed to serialize its checkpoint"),
         }
     }
@@ -216,7 +216,7 @@ impl ObserverStore {
     /// the observer keeps serving from memory and resumes from the previous
     /// checkpoint, or from the log start, after a restart.
     fn write(&mut self, id: SnapshotId, bytes: &[u8]) {
-        let (end_offset, epoch) = id;
+        let SnapshotId { end_offset, epoch } = id;
         if let Err(error) = write_checkpoint(&self.dir, end_offset, epoch, bytes) {
             warn!(%error, end_offset, epoch, "observer checkpoint write failed");
             return;
@@ -347,7 +347,7 @@ mod tests {
     fn an_unreadable_checkpoint_is_discarded_so_a_replacement_can_stick() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = ObserverStore::open(dir.path(), 1);
-        store.save_fetched_snapshot((12, 3), b"not a checkpoint");
+        store.save_fetched_snapshot(SnapshotId::new(12, 3), b"not a checkpoint");
 
         let mut reopened = ObserverStore::open(dir.path(), 1);
         assert!(reopened.resume(Uuid::nil()).is_none());
@@ -356,7 +356,7 @@ mod tests {
         let replacement =
             krabka_raft::serialize_metadata_snapshot(&image_with(&["replacement"]), 0)
                 .expect("serialize");
-        reopened.save_fetched_snapshot((4, 1), &replacement);
+        reopened.save_fetched_snapshot(SnapshotId::new(4, 1), &replacement);
 
         let Resumed {
             image: restored,
@@ -379,7 +379,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = ObserverStore::open(dir.path(), 1);
 
-        store.save_fetched_snapshot((7, 2), b"fetched");
+        store.save_fetched_snapshot(SnapshotId::new(7, 2), b"fetched");
         store.maybe_checkpoint(&image_with(&["own"]), 12);
 
         let controller_checkpoints = fs::read_dir(dir.path())
