@@ -222,20 +222,21 @@ pub fn decode_control_record(record: &Record) -> Result<ControlRecord, RaftError
 /// at `ControlRecordUtils.LEADER_CHANGE_CURRENT_VERSION`, which is 0, and
 /// reads it at that version too, so a version 1 message, with its voter
 /// directory ids, is unreadable to `kafka-dump-log` and to a JVM replica.
-// cargo-mutants: the `version: 0` field equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so
-// deleting it yields byte-identical encoding; it is not the wire schema version
-// (that is the `0` passed to `msg.encode`). Equivalent mutant.
+///
+/// # Errors
+/// Returns the [`RaftError`] of the `LeaderChangeMessage` encoder, so a
+/// message that does not encode is never appended as a truncated value.
+// cargo-mutants: the `version: 0` field is the version the message encodes
+// at, and it equals `LeaderChangeMessage`'s `Default` (i16 -> 0), so deleting
+// it yields byte-identical encoding. Equivalent mutant.
 #[cfg_attr(test, mutants::skip)]
-pub fn leader_change_batch(epoch: Epoch, leader_id: NodeId, voter_set: &VoterSet) -> RecordBatch {
-    use krabka_protocol::{
-        Encode,
-        owned::{
-            common::leader_change_message::voter::Voter, leader_change_message::LeaderChangeMessage,
-        },
-        records::{
-            header::Attributes,
-            metadata::control::{ControlRecordType, control_record_key},
-        },
+pub fn leader_change_batch(
+    epoch: Epoch,
+    leader_id: NodeId,
+    voter_set: &VoterSet,
+) -> Result<RecordBatch, RaftError> {
+    use krabka_protocol::owned::{
+        common::leader_change_message::voter::Voter, leader_change_message::LeaderChangeMessage,
     };
 
     let voters: Vec<Voter> = voter_set
@@ -252,36 +253,22 @@ pub fn leader_change_batch(epoch: Epoch, leader_id: NodeId, voter_set: &VoterSet
         granting_voters: voters,
         ..Default::default()
     };
-    let mut value = bytes::BytesMut::new();
-    // LeaderChangeMessage v0; encode is infallible for a well-formed message.
-    let _ = msg.encode(&mut value, 0);
-    let key = control_record_key(ControlRecordType::LeaderChange);
-    RecordBatch {
-        partition_leader_epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
-        attributes: Attributes::default().with_control(true),
-        last_offset_delta: 0,
-        records: vec![Record {
-            offset_delta: 0,
-            key: Some(key),
-            value: Some(value.freeze()),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    typed_control_batch(epoch, &[ControlRecord::LeaderChange(msg)])
 }
 
 /// Build the batch a leader starts `epoch` with: the [`leader_change_batch`]
 /// marker, then each of `controls` at the offsets that follow it.
 ///
 /// # Errors
-/// Returns the [`RaftError`] of the control-record encoder.
+/// Returns the [`RaftError`] of the `LeaderChangeMessage` or control-record
+/// encoder.
 pub fn start_of_epoch_batch(
     epoch: Epoch,
     leader_id: NodeId,
     voter_set: &VoterSet,
     controls: &[ControlRecord],
 ) -> Result<RecordBatch, RaftError> {
-    let mut batch = leader_change_batch(epoch, leader_id, voter_set);
+    let mut batch = leader_change_batch(epoch, leader_id, voter_set)?;
     for (offset_delta, control) in (1_i32..).zip(controls) {
         let (key, value) = control.encode_key_value()?;
         batch.records.push(Record {

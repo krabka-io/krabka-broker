@@ -214,6 +214,6 @@ pub use wire::{
     API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
     KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
     KrabkaSubmitChangeResponse, PRIVATE_BASELINE_VERSION, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-    PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL, private_api_highest_version,
+    PRIVATE_UNSUPPORTED_VERSION, SubmitChangeCode, private_api_highest_version,
     private_request_version,
 };

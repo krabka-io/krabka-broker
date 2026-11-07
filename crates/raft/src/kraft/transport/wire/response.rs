@@ -87,7 +87,7 @@ impl FetchAnswer {
     /// Encodes the answer as a Fetch response body (api 1) at `version`, the
     /// version of the request it answers.
     #[must_use]
-    pub fn encode(&self, version: i16) -> Bytes {
+    pub fn encode(&self, version: i16) -> Option<Bytes> {
         // Kafka always sets `Records`, to `MemoryRecords.EMPTY` when
         // there are none, and leaves `AbortedTransactions` at its
         // generated default, an empty list: neither is null on the
@@ -113,7 +113,7 @@ impl FetchAnswer {
                 ..Default::default()
             };
         }
-        if let Some((end_offset, epoch)) = self.snapshot_id {
+        if let Some(SnapshotId { end_offset, epoch }) = self.snapshot_id {
             partition.snapshot_id = fetch_resp::SnapshotId {
                 end_offset,
                 epoch,
@@ -156,7 +156,7 @@ impl FetchAnswer {
 /// Encodes Kafka's bare top-level Fetch error response at `version`:
 /// `new FetchResponseData().setErrorCode(error)`, with no topic.
 #[must_use]
-pub fn encode_fetch_top_level_error(error_code: i16, version: i16) -> Bytes {
+pub fn encode_fetch_top_level_error(error_code: i16, version: i16) -> Option<Bytes> {
     let resp = FetchResponse {
         error_code,
         ..Default::default()
@@ -249,7 +249,7 @@ pub fn encode_vote_response(
     vote_granted: bool,
     leader: &QuorumLeader,
     version: i16,
-) -> Bytes {
+) -> Option<Bytes> {
     let resp = if top_level_error == 0 {
         VoteResponse {
             topics: vec![vote_resp::TopicData {
@@ -301,7 +301,7 @@ krabka_macros::quorum_epoch_encoder! {
         partition_error: i16,
         leader: &QuorumLeader,
         version: i16,
-    ) -> Bytes
+    ) -> Option<Bytes>
     [response = BeginQuorumEpochResponse, wire = bqe_resp]
     {}
 }
@@ -314,7 +314,7 @@ krabka_macros::quorum_epoch_encoder! {
         partition_error: i16,
         leader: &QuorumLeader,
         version: i16,
-    ) -> Bytes
+    ) -> Option<Bytes>
     [response = EndQuorumEpochResponse, wire = eqe_resp]
     {}
 }
@@ -361,7 +361,7 @@ pub fn encode_fetch_snapshot_answer(
     partition: Option<FetchSnapshotPartition>,
     leader: &QuorumLeader,
     version: i16,
-) -> Bytes {
+) -> Option<Bytes> {
     let Some(partition) = partition else {
         let resp = FetchSnapshotResponse {
             error_code: top_level_error,
@@ -382,7 +382,7 @@ pub fn encode_fetch_snapshot_answer(
         };
     }
     if let Some(SnapshotChunk {
-        snapshot_id: (end_offset, epoch),
+        snapshot_id: SnapshotId { end_offset, epoch },
         size,
         position,
         bytes,
@@ -432,8 +432,8 @@ fn encode_fetch_snapshot_response(
     position: i64,
     bytes: &Bytes,
     error_code: i16,
-) -> Bytes {
-    let (end_offset, epoch) = snapshot_id;
+) -> Option<Bytes> {
+    let SnapshotId { end_offset, epoch } = snapshot_id;
     let resp = FetchSnapshotResponse {
         topics: vec![fs_resp::TopicSnapshot {
             name: METADATA_TOPIC.to_owned(),
@@ -459,7 +459,7 @@ fn encode_fetch_snapshot_response(
 
 impl PeerResponse {
     #[must_use]
-    pub fn encode(&self) -> Bytes {
+    pub fn encode(&self) -> Option<Bytes> {
         match self {
             Self::Vote {
                 error_code,
@@ -555,12 +555,14 @@ impl PeerResponse {
             offset: p.diverging_epoch.end_offset,
             epoch: epoch_from_wire(p.diverging_epoch.epoch),
         });
-        let snapshot_id = (p.snapshot_id.end_offset >= 0)
-            .then_some((p.snapshot_id.end_offset, p.snapshot_id.epoch));
-        let records = p
-            .records
-            .as_ref()
-            .map_or_else(Bytes::new, records_payload_to_bytes);
+        let snapshot_id = (p.snapshot_id.end_offset >= 0).then_some(SnapshotId {
+            end_offset: p.snapshot_id.end_offset,
+            epoch: p.snapshot_id.epoch,
+        });
+        let records = match &p.records {
+            Some(records) => records_payload_to_bytes(records)?,
+            None => Bytes::new(),
+        };
         Some(Self::Fetch(FetchAnswer {
             error_code: p.error_code,
             leader,
@@ -578,9 +580,12 @@ impl PeerResponse {
         let mut cur = buf;
         let resp = FetchSnapshotResponse::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
         let p = resp.topics.first()?.partitions.first()?;
-        let bytes = records_payload_to_bytes(&p.unaligned_records);
+        let bytes = records_payload_to_bytes(&p.unaligned_records)?;
         Some(Self::FetchSnapshot {
-            snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
+            snapshot_id: SnapshotId {
+                end_offset: p.snapshot_id.end_offset,
+                epoch: p.snapshot_id.epoch,
+            },
             size: p.size,
             position: p.position,
             bytes,

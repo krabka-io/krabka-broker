@@ -13,9 +13,7 @@
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
 use {
-    crate::share_coordinator::coordinator::{
-        ShareCoordinator, ShareStateError, UNINITIALIZED_START_OFFSET,
-    },
+    crate::share_coordinator::coordinator::{ShareCoordinator, UNINITIALIZED_START_OFFSET},
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_summary_request::ReadShareGroupStateSummaryRequest,
@@ -77,7 +75,7 @@ async fn read_summaries(
                 Err(error) => PartitionResult {
                     partition: pd.partition,
                     error_code: error.code(),
-                    error_message: Some(error_message(error)),
+                    error_message: Some(error.summary_row_message()),
                     ..Default::default()
                 },
             }
@@ -92,17 +90,6 @@ async fn read_summaries(
 
 /// Kafka's `PartitionFactory.UNINITIALIZED_DELIVERY_COMPLETE_COUNT`.
 const UNINITIALIZED_DELIVERY_COMPLETE_COUNT: i32 = -1;
-
-/// The row message: a refusal's own message, or the operation error that
-/// `readStateSummary` prefixes with `Unable to read share group state summary: `.
-fn error_message(error: ShareStateError) -> String {
-    match error {
-        ShareStateError::Refused { message, .. } => message.to_owned(),
-        ShareStateError::Operation { message, .. } => {
-            format!("Unable to read share group state summary: {message}")
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

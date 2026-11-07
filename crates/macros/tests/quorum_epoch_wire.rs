@@ -70,19 +70,19 @@ fn valid_leader() -> QuorumLeader {
     }
 }
 fn epoch_to_wire(epoch: u32) -> i32 { i32::try_from(epoch).unwrap() }
-fn encode_body(message: &impl Encode, version: i16) -> Bytes {
+fn encode_body(message: &impl Encode, version: i16) -> Option<Bytes> {
     let mut output = BytesMut::with_capacity(128);
-    message.encode(&mut output, version).unwrap();
-    output.into()
+    message.encode(&mut output, version).ok()?;
+    Some(output.into())
 }
 
 krabka_macros::quorum_epoch_encoder! {
-    fn begin(top_level_error: i16, partition_error: i16, leader: &QuorumLeader, version: i16) -> Bytes
+    fn begin(top_level_error: i16, partition_error: i16, leader: &QuorumLeader, version: i16) -> Option<Bytes>
     [response = BeginQuorumEpochResponse, wire = begin_response]
     {}
 }
 krabka_macros::quorum_epoch_encoder! {
-    fn end(top_level_error: i16, partition_error: i16, leader: &QuorumLeader, version: i16) -> Bytes
+    fn end(top_level_error: i16, partition_error: i16, leader: &QuorumLeader, version: i16) -> Option<Bytes>
     [response = EndQuorumEpochResponse, wire = end_response]
     {}
 }
@@ -148,7 +148,7 @@ fn request_accessors_preserve_raw_values_borrowed_endpoints_and_topic_order() {
 fn response_encoders_keep_partition_leader_layouts(version: i16) {
     let leader = valid_leader();
     {
-        let begin_bytes = begin(0, 42, &leader, version);
+        let begin_bytes = begin(0, 42, &leader, version).unwrap();
         let decoded = BeginQuorumEpochResponse::decode(&mut &begin_bytes[..], version).unwrap();
         let topic = &decoded.topics[0];
         let partition = &topic.partitions[0];
@@ -160,11 +160,11 @@ fn response_encoders_keep_partition_leader_layouts(version: i16) {
                 && partition.leader_epoch == 9
         );
         assert2::assert!(decoded.node_endpoints.len() == usize::from(version == 1));
-        let end_bytes = end(0, 42, &leader, version);
+        let end_bytes = end(0, 42, &leader, version).unwrap();
         let decoded = EndQuorumEpochResponse::decode(&mut &end_bytes[..], version).unwrap();
         assert2::assert!(decoded.topics[0].partitions[0].leader_id == 7);
         assert2::assert!(decoded.node_endpoints.len() == usize::from(version == 1));
-        let error_bytes = begin(31, 42, &leader, version);
+        let error_bytes = begin(31, 42, &leader, version).unwrap();
         let error = BeginQuorumEpochResponse::decode(&mut &error_bytes[..], version).unwrap();
         assert2::assert!(
             error.error_code == 31 && error.topics.is_empty() && error.node_endpoints.is_empty()
@@ -176,8 +176,8 @@ fn response_encoders_keep_partition_leader_layouts(version: i16) {
 fn response_encoders_keep_bare_errors() {
     let leader = valid_leader();
     let bare = b"\x00\x1f\x00\x00\x00\x00";
-    assert!(begin(31, 42, &leader, 0).as_ref() == bare);
-    assert!(end(31, 42, &leader, 0).as_ref() == bare);
+    assert!(begin(31, 42, &leader, 0).unwrap().as_ref() == bare);
+    assert!(end(31, 42, &leader, 0).unwrap().as_ref() == bare);
 }
 
 #[yare::parameterized(
@@ -203,7 +203,7 @@ fn response_encoders_omit_incomplete_leader_endpoints(missing_id: bool) {
             endpoint: None,
         }
     };
-    let bytes = begin(0, 0, &absent, 1);
+    let bytes = begin(0, 0, &absent, 1).unwrap();
     let decoded = BeginQuorumEpochResponse::decode(&mut &bytes[..], 1).unwrap();
     assert2::assert!(decoded.node_endpoints.is_empty());
     assert2::assert!(decoded.topics[0].partitions[0].leader_id == absent.id.unwrap_or(-1));

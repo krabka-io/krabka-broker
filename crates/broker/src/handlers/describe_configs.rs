@@ -107,13 +107,7 @@ mod wire;
 #[cfg(test)]
 mod test_support;
 
-pub use self::{
-    resources::{effective_topic_configs, static_settings},
-    wire::{
-        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-    },
-};
+pub use self::resources::{effective_topic_configs, static_settings};
 use {
     self::{
         authz::{denied_result, resource_authz_failure},

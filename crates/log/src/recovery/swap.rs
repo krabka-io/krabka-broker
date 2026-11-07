@@ -49,7 +49,11 @@ const SWAP_EXTENSIONS: [&str; 4] = ["log", "index", "timeindex", "txnindex"];
 const SWAP_SIDECARS: [&str; 3] = ["index", "timeindex", "txnindex"];
 
 /// The files of a replaced segment that completing a swap deletes.
-const REPLACED_EXTENSIONS: [&str; 4] = ["log", "index", "timeindex", "txnindex"];
+///
+/// The `.stampindex` is not in the swap set, so the survivor takes no stamp
+/// ranges over and the replaced segments' stamp sidecars go with them. One at
+/// the survivor's own base would otherwise read as the survivor's own.
+const REPLACED_EXTENSIONS: [&str; 5] = ["log", "index", "timeindex", "txnindex", "stampindex"];
 
 /// The bytes of a v2 batch that its `batch_length` does not count: the base
 /// offset and the length field itself.

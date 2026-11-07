@@ -13,6 +13,10 @@
 //! Kafka does. The broker reads the file through it, and so can any tool that
 //! has to find the identity of a formatted directory.
 //!
+//! [`encode_bootstrap_records`] and [`decode_bootstrap_records`] hold the
+//! layout of `bootstrap.records.bin`, which the broker reads on its first
+//! start.
+//!
 //! [`run_with_records`] takes further [`MetadataRecord`]s from the caller and
 //! seeds them into the same stream. A restore tool that rebuilds a cluster from
 //! tiered-storage archives hands over the topic and partition records it
@@ -29,12 +33,17 @@ use {
     std::{io, io::Write},
 };
 
+mod bootstrap_records;
 mod format;
 mod ids;
 pub mod java_properties;
 mod meta_properties;
 
 pub use self::{
+    bootstrap_records::{
+        BOOTSTRAP_RECORDS, BOOTSTRAP_RECORDS_VERSION, BootstrapRecordsError,
+        BootstrapRecordsVersionError, decode_bootstrap_records, encode_bootstrap_records,
+    },
     format::{
         FAIL_AFTER_ENV, FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, ScramSpec, parse_node_id,
         run, run_with_records, run_with_records_to,

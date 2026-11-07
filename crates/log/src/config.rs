@@ -592,12 +592,12 @@ mod tests {
         }
     }
 
-    #[rstest_bdd_macros::when("a log policy is created without overrides")]
+    #[krabka_bdd::when("a log policy is created without overrides")]
     fn create_default_policy(log_policy: &mut LogPolicyScenario) {
         log_policy.config.set(LogConfig::default());
     }
 
-    #[rstest_bdd_macros::then("every setting matches Kafka 4.x and the documented storage policy")]
+    #[krabka_bdd::then("every setting matches Kafka 4.x and the documented storage policy")]
     fn every_default_matches(log_policy: &LogPolicyScenario) {
         assert2::assert!(
             *log_policy.config.get()
@@ -647,7 +647,7 @@ mod tests {
         );
     }
 
-    #[rstest_bdd_macros::then("sizes reach the storage layer in bytes and times in milliseconds")]
+    #[krabka_bdd::then("sizes reach the storage layer in bytes and times in milliseconds")]
     fn defaults_keep_base_units(log_policy: &LogPolicyScenario) {
         // The quantities exist to be handed to `.index` sizing, retention
         // arithmetic, and Kafka config reporting as plain integers; a
@@ -662,12 +662,12 @@ mod tests {
         assert2::check!(c.delete_retention.millis_i64() == 86_400_000);
     }
 
-    #[rstest_bdd_macros::given("a log has cleanup policy {policy}")]
+    #[krabka_bdd::given("a log has cleanup policy {policy}")]
     fn log_has_cleanup_policy(log_policy: &mut LogPolicyScenario, policy: CleanupPolicy) {
         log_policy.policy.set(policy);
     }
 
-    #[rstest_bdd_macros::when("the cleanup policy is read back")]
+    #[krabka_bdd::when("the cleanup policy is read back")]
     fn read_cleanup_policy(log_policy: &mut LogPolicyScenario) {
         let policy = *log_policy.policy.get();
         log_policy.reading.set(CleanupReading {
@@ -677,18 +677,18 @@ mod tests {
         });
     }
 
-    #[rstest_bdd_macros::then("compact membership is {compact}")]
+    #[krabka_bdd::then("compact membership is {compact}")]
     fn compact_membership(log_policy: &LogPolicyScenario, compact: bool) {
         assert2::assert!(log_policy.reading.get().compact == compact);
     }
 
-    #[rstest_bdd_macros::then("delete membership is {delete}")]
+    #[krabka_bdd::then("delete membership is {delete}")]
     fn delete_membership(log_policy: &LogPolicyScenario, delete: bool) {
         assert2::assert!(log_policy.reading.get().delete == delete);
     }
 
     /// Kafka reports no cleanup as empty text; the feature says `empty`.
-    #[rstest_bdd_macros::then("the Kafka text of the policy is {text}")]
+    #[krabka_bdd::then("the Kafka text of the policy is {text}")]
     fn kafka_text(log_policy: &LogPolicyScenario, text: String) {
         let expected = if text == "empty" { "" } else { &text };
         assert2::assert!(log_policy.reading.get().text == expected);

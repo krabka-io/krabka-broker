@@ -31,6 +31,7 @@ mod acl_test_support;
 
 mod acl_gates;
 mod admin_audit;
+mod config_alter;
 #[cfg(test)]
 mod controller_mutation_tests;
 mod coordinator_routing;
@@ -43,19 +44,12 @@ mod delegation_token_test_support;
 mod group_heartbeat_test_support;
 mod node_endpoints;
 mod partition_materialization;
-mod private_api_keys;
+pub mod private_api_keys;
 mod raft_voter;
 mod record_strings;
 mod registration_listeners;
 mod request_names;
 mod response_encoding;
-
-pub fn map_partition_rows<T>(
-    indexes: impl Iterator<Item = i32>,
-    row: impl FnMut(i32) -> T,
-) -> Vec<T> {
-    indexes.map(row).collect()
-}
 mod submit_failure;
 
 pub use self::{
@@ -76,7 +70,7 @@ pub use self::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
         DESCRIBE_BREAK_GLASS_API_KEY, DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,
         LIST_BARRIER_CUTS_API_KEY, PROPOSE_BREAK_GLASS_API_KEY, SET_TOPIC_FREEZE_API_KEY,
-        TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
+        TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY, krabka_private_api_name,
     },
     record_strings::decode_group_request,
     response_encoding::{
@@ -166,9 +160,8 @@ pub mod describe_producers;
 pub mod describe_quorum;
 // KIP-664 transaction introspection (api_key 65).
 pub mod describe_transactions;
-// KIP-966 paginated topic listing (api_key 75).
-// KIP-966: the eligible-leader-replica columns DescribeTopicPartitions
-// reports, read out of the metadata image.
+// KIP-966 paginated topic listing (api_key 75), with the eligible-leader-replica
+// columns read out of the metadata image.
 pub mod describe_topic_partitions;
 pub mod describe_user_scram_credentials;
 pub mod elect_leaders;
@@ -195,6 +188,8 @@ pub mod list_offsets;
 pub mod list_partition_reassignments;
 // KIP-664 transaction-summary admin RPC (api_key 66).
 pub mod list_transactions;
+// The settling of a failed local log read, shared by Fetch and ShareFetch.
+mod log_read_failure;
 pub mod metadata;
 pub mod offline_replicas;
 pub mod offset_commit;
@@ -205,8 +200,8 @@ pub mod produce;
 // KIP-714 client-metrics push, paired with get_telemetry_subscriptions.
 pub mod push_telemetry;
 pub mod remove_raft_voter;
-// Kafka's `AbstractRequest.getErrorResponse` for every api key.
 pub mod renew_delegation_token;
+// Kafka's `AbstractRequest.getErrorResponse` for every api key.
 pub mod request_error;
 // KIP-932 ShareGroupDescribe (api_key 77), with a per-group Describe ACL gate.
 pub mod share_group_describe;

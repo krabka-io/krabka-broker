@@ -8,13 +8,15 @@
 //! goes in them.
 
 use {
-    crate::{ids::ClusterId, meta_properties::MetaProperties},
+    crate::{
+        bootstrap_records::{BOOTSTRAP_RECORDS, encode_bootstrap_record, frame_bootstrap_records},
+        ids::ClusterId,
+        meta_properties::MetaProperties,
+    },
     base64::{Engine as _, engine::general_purpose::STANDARD},
     krabka_metadata::MetadataRecord,
     serde::Serialize,
-    serde_wincode::SerdeCompat,
     std::{env, ffi::OsString, fs, io, path::Path},
-    wincode::Serialize as _,
 };
 
 pub(super) const ZERO_CHECKPOINT_NAME: &str = "00000000000000000000-0000000000.checkpoint";
@@ -72,14 +74,6 @@ pub(super) fn write_meta_properties(
             )
         })
 }
-
-/// The `bootstrap.records.bin` format version this build writes: a
-/// big-endian `i16` at the front of the file, before the first record.
-///
-/// It is part of the 1.x on-disk contract. The broker's reader,
-/// `krabka_broker::bootstrap::load_bootstrap_records`, refuses a missing or
-/// unknown version, and its `BOOTSTRAP_RECORDS_VERSION` is the same number.
-pub(super) const BOOTSTRAP_RECORDS_VERSION: i16 = 0;
 
 /// The `bootstrap.json` format version this build writes: the required
 /// top-level `version` field.
@@ -155,21 +149,13 @@ pub(super) fn write_bootstrap_files(
     // 1. Per-record `SerdeCompat<MetadataRecord>` payloads.
     let mut record_blobs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
     for rec in records {
-        let bytes = <SerdeCompat<MetadataRecord>>::serialize(rec)
-            .map_err(|e| format!("serialize record: {e}"))?;
-        record_blobs.push(bytes);
+        record_blobs.push(encode_bootstrap_record(rec)?);
     }
 
     // 2. Binary stream: the version header, then length-prefixed (u32 LE)
     //    blobs, concatenated.
-    let mut bin = BOOTSTRAP_RECORDS_VERSION.to_be_bytes().to_vec();
-    for blob in &record_blobs {
-        let len: u32 = u32::try_from(blob.len())
-            .map_err(|_| format!("record too large: {} bytes", blob.len()))?;
-        bin.extend_from_slice(&len.to_le_bytes());
-        bin.extend_from_slice(blob);
-    }
-    let bin_path = log_dir.join("bootstrap.records.bin");
+    let bin = frame_bootstrap_records(&record_blobs)?;
+    let bin_path = log_dir.join(BOOTSTRAP_RECORDS);
     fs::write(&bin_path, &bin).map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
     fault.after(&bin_path)?;
 
@@ -203,8 +189,8 @@ mod tests {
     }
 
     /// `golden_records` in `bootstrap.records.bin`: the version header, then
-    /// one `u32` little-endian length and the wincode record. The broker's
-    /// reader pins the same bytes.
+    /// one `u32` little-endian length and the wincode record. The decoder in
+    /// `bootstrap_records` pins the same bytes.
     const GOLDEN_RECORDS_BIN: &[u8] = include_bytes!("../../tests/fixtures/bootstrap.records.bin");
 
     /// `golden_records` in `bootstrap.json`, for the cluster id below.
@@ -228,7 +214,7 @@ mod tests {
         write_bootstrap_files(dir.path(), cluster_id, &golden_records(), &Fault::default())
             .unwrap();
         assert2::assert!(
-            fs::read(dir.path().join("bootstrap.records.bin")).unwrap() == GOLDEN_RECORDS_BIN
+            fs::read(dir.path().join(BOOTSTRAP_RECORDS)).unwrap() == GOLDEN_RECORDS_BIN
         );
         assert2::assert!(
             fs::read_to_string(dir.path().join("bootstrap.json")).unwrap() == GOLDEN_MANIFEST

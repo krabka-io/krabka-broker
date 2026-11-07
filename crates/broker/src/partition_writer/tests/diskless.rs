@@ -358,3 +358,33 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     drop(tx);
     writer.await.expect("writer join");
 }
+
+/// A diskless partition with no offset sequencer cannot place a batch, so the
+/// group fails as a storage failure and nothing reaches the log.
+#[tokio::test]
+async fn a_diskless_append_without_a_sequencer_fails_every_job() {
+    let dir = tempdir().expect("tempdir");
+    let log = open_default_log(dir.path());
+    let wal: SharedWal = Arc::new(LocalFsyncWal::new(Arc::clone(&log)));
+    let (tx, rx) = mpsc::channel(2);
+    let first = queue_batch(&tx, sample_batch().call()).await;
+    let second = queue_batch(&tx, sample_batch().call()).await;
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
+        wal: Some(wal),
+        sequencer: None,
+        max_produce_group: 2,
+        ..Default::default()
+    });
+
+    for ack in [first, second] {
+        let error = ack.await.expect("ack recv").expect_err("no sequencer");
+        check!(
+            error.to_string()
+                == "log: I/O: diskless append missing offset sequencer: no sequencer configured"
+        );
+    }
+    check!(log.lock().unwrap().log_end_offset() == Offset(0));
+
+    drop(tx);
+    writer.await.expect("writer join");
+}

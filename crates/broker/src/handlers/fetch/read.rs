@@ -5,12 +5,16 @@
 #[krabka_macros::sendfile_cfg]
 use krabka_protocol::records::FileRegion;
 use {
-    super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read},
+    super::{
+        FetchWatermarks, VisibilityWindow, compute_visibility_window, fetch_reader,
+        plan::refused_read,
+    },
     crate::{
         blocking::{run_blocking, run_page_cache_io},
         codes,
         diskless::hot_tail::HotTailCache,
         error::BrokerError,
+        handlers::log_read_failure::local_read_failure,
         log_dir_status::LogDirRegistry,
         partition::Partition,
     },
@@ -100,37 +104,30 @@ pub(super) async fn do_read(
 /// The catch arms of Kafka's `ReplicaManager.readFromLog.read`:
 ///   * an `IOException`, which `LocalLog.maybeHandleIOException` has already
 ///     turned into `KafkaStorageException` after it took the dir offline, is
-///     `KAFKA_STORAGE_ERROR`. The dir goes offline here as well, so the next
-///     fetch reaches the offline-dir refusal and the controller moves
-///     leadership away, instead of the same read failing on every retry;
+///     `KAFKA_STORAGE_ERROR`. [`local_read_failure`] takes the dir offline as
+///     well, so the next fetch reaches the offline-dir refusal and the
+///     controller moves leadership away, instead of the same read failing on
+///     every retry;
 ///   * `OffsetOutOfRangeException` is `OFFSET_OUT_OF_RANGE`. The log raises
 ///     [`LogError::OffsetTooLow`] when retention or `DeleteRecords` moved the
 ///     log start between `plan_read` and the read, and
 ///     [`LogError::OffsetBelowLocalStart`] when tiering did. The row has the
 ///     shape `plan_read` gives the same answer, so the cold-tier fallback
 ///     treats both alike;
-///   * `CorruptRecordException` is `CORRUPT_MESSAGE`;
-///   * anything else is the generic row `Errors.forException` gives it.
+///   * `CorruptRecordException` is `CORRUPT_MESSAGE`, and anything else is the
+///     generic row `Errors.forException` gives it. `ShareFetch` settles its
+///     reads with the same [`local_read_failure`].
 fn settle_failed_read(
     part: &Partition,
     partition_index: i32,
     error: &BrokerError,
     log_dir_status: &LogDirRegistry,
 ) -> PartitionData {
-    if let BrokerError::Log(LogError::Io(io_error)) = error {
-        log_dir_status.mark_offline(
-            &part.log_dir.load(),
-            &format!("partition read failed: {io_error}"),
-        );
-    }
     let code = match error {
         BrokerError::Log(
             LogError::OffsetTooLow { .. } | LogError::OffsetBelowLocalStart { .. },
         ) => codes::OFFSET_OUT_OF_RANGE,
-        BrokerError::Log(LogError::CrcMismatch { .. } | LogError::Corrupt(_)) => {
-            codes::CORRUPT_MESSAGE
-        }
-        other => codes::from_broker_error(other),
+        other => local_read_failure(part, other, log_dir_status),
     };
     if code != codes::OFFSET_OUT_OF_RANGE {
         tracing::error!(
@@ -688,8 +685,7 @@ fn plan_read(
         partition.delivery.now_ms(),
     );
     let window = compute_visibility_window(
-        follower_fetch,
-        read_committed,
+        fetch_reader(follower_fetch, read_committed),
         FetchWatermarks {
             log_start: local_log_start,
             hw: high_watermark,
@@ -777,7 +773,7 @@ mod tests {
         krabka_log::{DeliveryPolicy, Log, LogConfig, LogError, Offset},
         krabka_protocol::{
             owned::fetch_response::{AbortedTransaction, PartitionData},
-            records::{Attributes, Record, RecordBatch, RecordsPayload},
+            records::{Attributes, Record, RecordBatch, RecordsError, RecordsPayload},
         },
         krabka_units::prelude::{ByteSizeExt as _, mebibytes},
         std::{
@@ -1533,6 +1529,9 @@ mod tests {
             "corrupt-record-batch-header" => {
                 BrokerError::Log(LogError::Corrupt("record batch header".into()))
             }
+            "record-batch-that-does-not-parse" => BrokerError::Log(LogError::Records(
+                RecordsError::RecordParse("record batch".into()),
+            )),
             "task-panic-boom" => read_task_panicked(&"boom"),
             other => panic!("unknown read failure {other}"),
         });

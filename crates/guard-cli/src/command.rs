@@ -51,13 +51,18 @@ pub async fn dispatch(
                 scope,
                 reason,
                 signing,
-            } => set_freeze(client, &scope, reason, &signing, true, uuid::Uuid::nil()).await,
+            } => set_freeze(client, &scope, reason, &signing, FreezeChange::Freeze).await,
             FreezeCommand::Clear {
                 scope,
                 proposal,
                 reason,
                 signing,
-            } => set_freeze(client, &scope, reason, &signing, false, proposal).await,
+            } => {
+                set_freeze(client, &scope, reason, &signing, FreezeChange::Thaw {
+                    proposal,
+                })
+                .await
+            }
             FreezeCommand::List {
                 scope,
                 verify_signatures,
@@ -84,6 +89,28 @@ pub async fn dispatch(
     }
 }
 
+/// Which way one [`set_freeze`] call moves a freeze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FreezeChange {
+    /// Freeze the scope. A freeze names no proposal.
+    Freeze,
+    /// Lift the freeze under the break-glass proposal that authorizes it.
+    Thaw { proposal: uuid::Uuid },
+}
+
+impl FreezeChange {
+    /// The request's `frozen` field.
+    fn frozen(self) -> bool { matches!(self, Self::Freeze) }
+
+    /// The request's proposal: the nil UUID for a freeze.
+    fn proposal(self) -> uuid::Uuid {
+        match self {
+            Self::Freeze => uuid::Uuid::nil(),
+            Self::Thaw { proposal } => proposal,
+        }
+    }
+}
+
 /// Set or lift one freeze.
 ///
 /// The two directions share this because they share a request. `frozen` and the
@@ -94,12 +121,12 @@ async fn set_freeze(
     scope: &ScopeArgs,
     reason: String,
     signing: &FreezeSigningArgs,
-    frozen: bool,
-    proposal: uuid::Uuid,
+    change: FreezeChange,
 ) -> Result<i32, Failure> {
     let scope = scope.resolve()?;
     let set_at_ms = now_ms();
-    let proposal_id = WireUuid(*proposal.as_bytes());
+    let frozen = change.frozen();
+    let proposal_id = WireUuid(*change.proposal().as_bytes());
 
     let (key_id, signature) = match signing.resolve()? {
         None => (String::new(), Vec::new()),
@@ -315,4 +342,20 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(time::UNIX_EPOCH)
         .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::FreezeChange, assert2::check};
+
+    #[test]
+    fn freeze_change_yields_the_request_fields() {
+        let proposal = uuid::Uuid::from_u128(0x1234);
+        for (change, expected) in [
+            (FreezeChange::Freeze, (true, uuid::Uuid::nil())),
+            (FreezeChange::Thaw { proposal }, (false, proposal)),
+        ] {
+            check!((change.frozen(), change.proposal()) == expected);
+        }
+    }
 }

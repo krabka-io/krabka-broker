@@ -4,7 +4,7 @@
 //! per-key config structures that each scope handler consumes.
 
 use {
-    super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC},
+    super::{ConfigOperation, ConfigResourceType},
     crate::{handlers::test_support::metadata_topic_record, test_support::broker_registration},
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
@@ -24,13 +24,13 @@ pub(super) fn make_image_with_broker(node_id: NodeId) -> MetadataImage {
 }
 
 pub(super) fn make_resource(name: &str, configs: Vec<AlterableConfig>) -> AlterConfigsResource {
-    make_scoped_resource(RESOURCE_TYPE_BROKER, name, configs)
+    make_scoped_resource(ConfigResourceType::Broker.to_wire(), name, configs)
 }
 
 pub(super) fn make_set_cfg(key: &str, value: &str) -> AlterableConfig {
     AlterableConfig {
         name: key.into(),
-        config_operation: OP_SET,
+        config_operation: ConfigOperation::Set.into(),
         value: Some(value.into()),
         ..Default::default()
     }
@@ -39,7 +39,7 @@ pub(super) fn make_set_cfg(key: &str, value: &str) -> AlterableConfig {
 pub(super) fn make_del_cfg(key: &str) -> AlterableConfig {
     AlterableConfig {
         name: key.into(),
-        config_operation: OP_DELETE,
+        config_operation: ConfigOperation::Delete.into(),
         value: None,
         ..Default::default()
     }
@@ -49,7 +49,7 @@ pub(super) fn make_topic_resource(
     name: &str,
     configs: Vec<AlterableConfig>,
 ) -> AlterConfigsResource {
-    make_scoped_resource(RESOURCE_TYPE_TOPIC, name, configs)
+    make_scoped_resource(ConfigResourceType::Topic.to_wire(), name, configs)
 }
 
 /// One stored topic override: a config key and its value.

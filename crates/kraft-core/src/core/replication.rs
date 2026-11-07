@@ -13,6 +13,7 @@ use {
         role::{ReplicaProgress, Role},
         types::{Epoch, LogOffsetMetadata, LogView, NodeId, SimInstant},
     },
+    krabka_verified::{LeaderVote, WatermarkInputs},
 };
 
 #[cfg(test)]
@@ -287,12 +288,18 @@ impl QuorumStateMachine {
         // until the record commits, but its local log cannot count toward the
         // new configuration's majority.
         let new_hwm = krabka_verified::recompute_high_watermark(
-            log_end,
+            WatermarkInputs {
+                log_end,
+                epoch_start_offset: *epoch_start_offset,
+                current_hwm: (*high_watermark).min(log_end),
+            },
             &follower_offsets,
             self.state.majority(),
-            *epoch_start_offset,
-            (*high_watermark).min(log_end),
-            self.is_voter(),
+            if self.is_voter() {
+                LeaderVote::Counts
+            } else {
+                LeaderVote::Excluded
+            },
         );
         assert2::assert!(
             new_hwm <= log_end,
@@ -439,20 +446,17 @@ impl QuorumStateMachine {
 
     /// Forget the leader and look for the current one: an observer with no
     /// leader, whose fetch timer retries the discovery Fetch.
-    fn become_discovering_observer(&mut self, now: SimInstant) -> Vec<Action> {
+    pub(super) fn become_discovering_observer(&mut self, now: SimInstant) -> Vec<Action> {
         self.state.leader_id = None;
         let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
-        self.role = Role::Observer {
-            leader_id: None,
-            fetch_deadline,
-        };
-        vec![
-            Action::PersistQuorumState,
-            Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Fetch,
-                deadline: fetch_deadline,
+        self.enter_role(
+            Role::Observer {
+                leader_id: None,
+                fetch_deadline,
             },
-        ]
+            TimerKind::Fetch,
+            fetch_deadline,
+        )
+        .into()
     }
 }

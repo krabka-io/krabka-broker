@@ -8,10 +8,13 @@ use {
         share_coordinator::{
             bootstrap::TOPIC as SHARE_STATE_TOPIC,
             config::ShareCoordinatorConfig,
-            coordinator::test_support::{
-                ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, batch,
-                configured_coordinator, coordinator, image_with_topic, initialize_led_group,
-                lead_all, logged_records, share_write,
+            coordinator::{
+                ShareErrorCode,
+                test_support::{
+                    ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, batch,
+                    configured_coordinator, coordinator, image_with_topic, initialize_led_group,
+                    lead_all, logged_records, share_write,
+                },
             },
         },
     },
@@ -95,7 +98,9 @@ async fn initialize_then_summary() {
         .await
         .unwrap();
 
-    let summary = coord.read_summary("g", TOPIC, 0).await;
+    let summary = coord
+        .read_summary_checked(&image_with_topic(TOPIC, 1), "g", TOPIC, 0)
+        .await;
     assert!(summary == Ok(Some((5, 0, Offset(100), 0))));
 }
 
@@ -156,7 +161,7 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             } else {
                 (3, 0, Offset(20), 0)
             };
-            assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some(expected)));
+            assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
             let snapshots: Vec<_> =
                 logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0).unwrap())
                     .into_iter()
@@ -174,7 +179,7 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             };
             assert!(snapshots == expected_snapshots);
             coord.reload_all_partitions_for_test().await;
-            assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some(expected)));
+            assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
             let entry = coord.entry("g", TOPIC, 0).expect("state replayed");
             assert!(entry.lock().await.fence_state_epoch == expected.0);
         }
@@ -204,7 +209,10 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
             .await
             == Ok(())
     );
-    check!(coord.read_summary(&longest, TOPIC, 0).await == Ok(Some((5, 0, Offset(100), 0))));
+    check!(
+        coord.read_summary_checked(&image, &longest, TOPIC, 0).await
+            == Ok(Some((5, 0, Offset(100), 0)))
+    );
     check!(coord.delete(&image, &longest, TOPIC, 0).await == Ok(()));
 
     let refused = coord
@@ -217,7 +225,12 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
                 message: message::UNKNOWN_SERVER_ERROR,
             })
     );
-    check!(coord.read_summary(&too_long, TOPIC, 0).await == Ok(None));
+    check!(
+        coord
+            .read_summary_checked(&image, &too_long, TOPIC, 0)
+            .await
+            == Ok(None)
+    );
 }
 
 /// A coordinator with stored state, and the image it runs over.
@@ -252,7 +265,9 @@ async fn seeded(dir: &Path, trunk: bool) -> Seeded {
         .write(&image, "g", TOPIC, 0, share_write((2, 3), (10, 4), vec![]))
         .await
         .unwrap();
-    assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4))));
+    assert!(
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4)))
+    );
     Seeded { coord, image }
 }
 
@@ -395,7 +410,7 @@ async fn read_fences_and_persists_the_leader_epoch() {
                 check!(written == expected_write, "row {index}, trunk {trunk}");
             }
             coord.reload_all_partitions_for_test().await;
-            let summary = coord.read_summary("g", TOPIC, 0).await;
+            let summary = coord.read_summary_checked(&image, "g", TOPIC, 0).await;
             check!(
                 summary.map(|s| s.map(|(_, leader, ..)| leader)) == Ok(Some(reloaded_leader_epoch)),
                 "row {index}, trunk {trunk}"
@@ -419,7 +434,9 @@ async fn failed_read_append_changes_no_state() {
             message: message::UNKNOWN_TOPIC_OR_PARTITION,
         })
     );
-    assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4))));
+    assert!(
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4)))
+    );
 }
 
 /// A re-initialize writes leader epoch 0, but the recorded leader epoch
@@ -433,7 +450,9 @@ async fn reinitialize_keeps_the_recorded_leader_epoch() {
         .initialize(&image, "g", TOPIC, 0, 3, Offset(40))
         .await
         .unwrap();
-    check!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((3, 0, Offset(40), 0))));
+    check!(
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((3, 0, Offset(40), 0)))
+    );
     let rows = [
         (
             2,
@@ -694,9 +713,10 @@ fn observed_share_operation(result: WriteOutcome) -> ObservedShareOperation {
 }
 
 fn observed_share_summary(
-    result: Result<Option<ShareStateSummary>, i16>,
+    result: Result<Option<ShareStateSummary>, ShareStateError>,
 ) -> ShareSummaryObservation {
     result
+        .map_err(ShareStateError::code)
         .map(|summary| summary.map(|(state, leader, start, count)| (state, leader, start.0, count)))
 }
 
@@ -799,7 +819,7 @@ async fn initialize_existing_share_state(
             .count(),
     );
     share_state_initialization.summary = Some(observed_share_summary(
-        coord.read_summary("g", TOPIC, 0).await,
+        coord.read_summary_checked(image, "g", TOPIC, 0).await,
     ));
 }
 
@@ -918,9 +938,11 @@ async fn write_seeded_share_state(share_state_write: &mut ShareStateWrite) {
         )
         .await;
     share_state_write.reply = Some(observed_share_operation(result));
-    share_state_write.summary = Some(observed_share_summary(
-        coord.read_summary("g", TOPIC, request.partition).await,
-    ));
+    // The stored state itself: rows also cover partition 2, which the image
+    // does not hold, and partition -1, which a summary read refuses.
+    share_state_write.summary = Some(observed_share_summary(Ok(coord
+        .summary("g", TOPIC, request.partition)
+        .await)));
 }
 
 #[rstest_bdd_macros::then(

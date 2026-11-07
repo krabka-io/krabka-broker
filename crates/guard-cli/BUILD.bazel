@@ -14,4 +14,7 @@ crate_binary(
     lib = ":guard-cli",
 )
 
-crate_tests(lib = "guard-cli")
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "guard-cli",
+)

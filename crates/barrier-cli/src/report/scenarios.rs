@@ -17,7 +17,6 @@ use {
     },
     rstest_bdd_macros::{then, when},
     std::net::TcpListener,
-    tokio::runtime,
 };
 
 /// What one run of the reporter printed, and the code it ended on.
@@ -33,6 +32,11 @@ impl Rendered {
     fn capture(report: impl FnOnce(&mut Console<'_>) -> i32) -> Self {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let exit = report(&mut Console::new(&mut out, &mut err));
+        Self::written(exit, out, err)
+    }
+
+    /// What a run that ended on `exit` wrote to `out` and `err`.
+    fn written(exit: i32, out: Vec<u8>, err: Vec<u8>) -> Self {
         Self {
             exit,
             stdout: String::from_utf8(out).expect("utf-8 stdout"),
@@ -150,7 +154,7 @@ fn refusal_reported(operator_messages: &OperatorMessages, exit: i32, message: St
 }
 
 #[when("an operator triggers a cut against an address where no broker listens")]
-fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
+async fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
     // Bind a port and let it go: nothing listens there afterwards, and no
     // other test can be handed it while this one holds the address.
     let address = TcpListener::bind("127.0.0.1:0")
@@ -166,11 +170,9 @@ fn trigger_against_nothing(operator_messages: &mut OperatorMessages) {
         "orders-cut",
     ])
     .expect("the command line parses");
-    let runtime = runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
-    let rendered = Rendered::capture(|console| runtime.block_on(run_with(cli, console)));
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let exit = run_with(cli, &mut Console::new(&mut out, &mut err)).await;
+    let rendered = Rendered::written(exit, out, err);
     operator_messages.rendered.set(rendered);
     operator_messages.address.set(address);
 }

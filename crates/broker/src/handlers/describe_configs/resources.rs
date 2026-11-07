@@ -22,9 +22,7 @@ use {
         wire::{
             CONFIG_SOURCE_CLIENT_METRICS, CONFIG_SOURCE_DYNAMIC_BROKER,
             CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
-            CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER, RESOURCE_TYPE_BROKER,
-            RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP,
-            RESOURCE_TYPE_TOPIC,
+            CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER,
         },
     },
     crate::{
@@ -34,6 +32,7 @@ use {
             self, broker_dynamic, kafka_broker,
             registry::{self, ConfigScope, NODE_ID},
         },
+        handlers::config_alter::ConfigResourceType,
     },
     krabka_protocol::owned::describe_configs_response::{
         DescribeConfigsResourceResult, DescribeConfigsResult,
@@ -117,8 +116,8 @@ pub(super) fn describe_one(
         ..Default::default()
     };
 
-    match r.resource_type {
-        RESOURCE_TYPE_TOPIC => {
+    match ConfigResourceType::from_wire(r.resource_type) {
+        Some(ConfigResourceType::Topic) => {
             // `Topic.validate` first, then `metadataCache.contains`: a name
             // Kafka refuses is INVALID_TOPIC_EXCEPTION, and a topic that does
             // not exist is UNKNOWN_TOPIC_OR_PARTITION with no message, never a
@@ -142,11 +141,13 @@ pub(super) fn describe_one(
                 options,
             ))
         }
-        RESOURCE_TYPE_BROKER => match broker_resource_node(&r.resource_name, serving.node) {
-            Ok(node_id) => ok(broker_configs(image, node_id, serving, &wanted, options)),
-            Err(message) => failed(codes::INVALID_REQUEST, Some(message)),
-        },
-        RESOURCE_TYPE_BROKER_LOGGER => {
+        Some(ConfigResourceType::Broker) => {
+            match broker_resource_node(&r.resource_name, serving.node) {
+                Ok(node_id) => ok(broker_configs(image, node_id, serving, &wanted, options)),
+                Err(message) => failed(codes::INVALID_REQUEST, Some(message)),
+            }
+        }
+        Some(ConfigResourceType::BrokerLogger) => {
             match broker_logger::validate_resource_name(&r.resource_name, serving.loggers.node_id) {
                 Ok(()) => ok(broker_logger::logger_configs(
                     serving.loggers.levels,
@@ -155,22 +156,22 @@ pub(super) fn describe_one(
                 Err(message) => failed(codes::INVALID_REQUEST, Some(message)),
             }
         }
-        RESOURCE_TYPE_CLIENT_METRICS if r.resource_name.is_empty() => failed(
+        Some(ConfigResourceType::ClientMetrics) if r.resource_name.is_empty() => failed(
             codes::INVALID_REQUEST,
             Some("Client metrics subscription name must not be empty".into()),
         ),
-        RESOURCE_TYPE_CLIENT_METRICS => ok(client_metrics_configs(
+        Some(ConfigResourceType::ClientMetrics) => ok(client_metrics_configs(
             image,
             &r.resource_name,
             client_metrics_default_interval_ms,
             &wanted,
             options,
         )),
-        RESOURCE_TYPE_GROUP if r.resource_name.is_empty() => failed(
+        Some(ConfigResourceType::Group) if r.resource_name.is_empty() => failed(
             codes::INVALID_REQUEST,
             Some("Group name must not be empty".into()),
         ),
-        RESOURCE_TYPE_GROUP => ok(group_configs(
+        Some(ConfigResourceType::Group) => ok(group_configs(
             image,
             &r.resource_name,
             GroupServing {
@@ -183,7 +184,7 @@ pub(super) fn describe_one(
         // `handle` refuses a request naming any other type before it gets
         // here; this is Kafka's own last `case` in
         // `ConfigHelper.describeConfigs`.
-        _ => failed(
+        None => failed(
             codes::INVALID_REQUEST,
             Some(format!("Unsupported resource type: {}", r.resource_type)),
         ),

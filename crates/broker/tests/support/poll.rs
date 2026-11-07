@@ -2,6 +2,7 @@
 
 use {
     std::{
+        fmt::Debug,
         future::Future,
         time::{Duration, Instant},
     },
@@ -16,11 +17,15 @@ pub struct RetrySetup {
     pub backoff: Duration,
 }
 
-/// Return the first accepted response, or the final response after the original deadline.
-/// The response predicate runs before the timeout test, and request failures propagate.
+/// Return the first accepted response. The response predicate runs before the
+/// timeout test, and request failures propagate.
 ///
 /// # Errors
 /// Returns the request error without retrying it.
+///
+/// # Panics
+/// Panics with the final response when none is accepted before the deadline,
+/// so a caller cannot mistake a timed-out poll for a ready one.
 #[bon::builder]
 pub async fn retry_response<R, E, F, Fut>(
     #[builder(default = Duration :: from_secs (10))] timeout: Duration,
@@ -29,6 +34,7 @@ pub async fn retry_response<R, E, F, Fut>(
     ready: impl Fn(&R) -> bool,
 ) -> Result<R, E>
 where
+    R: Debug,
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<R, E>>,
 {
@@ -36,10 +42,18 @@ where
     let deadline = Instant::now() + setup.timeout;
     loop {
         let response = request().await?;
-        if ready(&response) || Instant::now() > deadline {
+        if ready(&response) {
             return Ok(response);
         }
-        time::sleep(setup.backoff).await;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| {
+                panic!(
+                    "response did not reach its expected state within {:?}: {response:?}",
+                    setup.timeout
+                )
+            });
+        time::sleep(setup.backoff.min(remaining)).await;
     }
 }
 

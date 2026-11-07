@@ -27,6 +27,7 @@ use {
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     },
     krabka_units::convert::ByteSizeExt as _,
+    krabka_verified::{FetchReader, Isolation},
 };
 
 mod node_endpoints;
@@ -523,17 +524,27 @@ pub struct FetchWatermarks {
     pub deliverable: Offset,
 }
 
-/// The caller sets `read_committed` for consumer fetches only, so
-/// `read_committed` implies `!is_follower`.
+/// The reader of one partition read, from the request's two facts.
+///
+/// A follower has no isolation level: its `read_committed` is ignored, and it
+/// reads to the log end like any other follower.
+pub const fn fetch_reader(is_follower: bool, read_committed: bool) -> FetchReader {
+    if is_follower {
+        FetchReader::Follower
+    } else if read_committed {
+        FetchReader::Consumer(Isolation::ReadCommitted)
+    } else {
+        FetchReader::Consumer(Isolation::ReadUncommitted)
+    }
+}
+
 pub fn compute_visibility_window(
-    is_follower: bool,
-    read_committed: bool,
+    reader: FetchReader,
     watermarks: FetchWatermarks,
     fetch_offset: Offset,
 ) -> VisibilityWindow {
     let verified = krabka_verified::fetch_visibility(
-        is_follower,
-        read_committed,
+        reader,
         krabka_verified::FetchWatermarks {
             log_start: watermarks.log_start.0,
             hw: watermarks.hw.0,

@@ -46,12 +46,12 @@ pub fn retention_age_breached(now_ms: i64, last_contained_log_timestamp: i64, ma
 fn retained_snapshots(dir: &Path, log_start: Offset) -> Vec<RetainedSnapshot> {
     let mut ids: Vec<SnapshotId> = checkpoint_ids(dir)
         .into_iter()
-        .filter(|id| id.0 >= log_start.0)
+        .filter(|id| id.end_offset >= log_start.0)
         .collect();
     ids.sort_unstable();
     ids.into_iter()
         .filter_map(|id| {
-            let size = fs::metadata(dir.join(super::checkpoint::checkpoint_name(id.0, id.1)))
+            let size = fs::metadata(dir.join(super::checkpoint::checkpoint_name(id)))
                 .ok()?
                 .len();
             Some(RetainedSnapshot { id, size })
@@ -125,7 +125,7 @@ impl Engine {
     /// The `last_contained_log_timestamp` in the header of snapshot `id`, or
     /// `None` when the file does not read.
     fn snapshot_timestamp(&self, id: SnapshotId) -> Option<i64> {
-        let bytes = super::checkpoint::load_checkpoint_by_id(&self.data_dir, id.0, id.1)?;
+        let bytes = super::checkpoint::load_checkpoint_by_id(&self.data_dir, id)?;
         SnapshotReader::last_contained_log_timestamp(&bytes).ok()
     }
 
@@ -135,10 +135,10 @@ impl Engine {
     /// is above the log start, at or below the newest snapshot, and
     /// committed.
     fn delete_before_snapshot(&mut self, id: SnapshotId, rule: &str) -> Result<bool, RaftError> {
-        let boundary = Offset(id.0);
+        let boundary = Offset(id.end_offset);
         let latest = super::checkpoint::latest_checkpoint_id(&self.data_dir);
         let admitted = self.log.log_start_offset() < boundary
-            && latest.is_some_and(|latest| id.0 <= latest.0)
+            && latest.is_some_and(|latest| id.end_offset <= latest.end_offset)
             && boundary <= self.log.hwm();
         if !admitted {
             return Ok(false);
@@ -174,7 +174,7 @@ fn delete_checkpoints_below(dir: &Path, id: SnapshotId) -> Vec<SnapshotId> {
     below.sort_unstable();
     below.pop();
     below.retain(|found| {
-        fs::remove_file(dir.join(super::checkpoint::checkpoint_name(found.0, found.1))).is_ok()
+        fs::remove_file(dir.join(super::checkpoint::checkpoint_name(*found))).is_ok()
     });
     below
 }
@@ -240,29 +240,35 @@ mod tests {
             retained_snapshots(dir.path(), Offset(4))
                 == vec![
                     RetainedSnapshot {
-                        id: (4, 1),
+                        id: SnapshotId::new(4, 1),
                         size: 4
                     },
                     RetainedSnapshot {
-                        id: (7, 1),
+                        id: SnapshotId::new(7, 1),
                         size: 7
                     },
                     RetainedSnapshot {
-                        id: (10, 1),
+                        id: SnapshotId::new(10, 1),
                         size: 10
                     },
                 ]
         );
         // The newest snapshot below the boundary stays for a reader that is
         // part way through it, and an older one goes.
-        check!(delete_checkpoints_below(dir.path(), (7, 1)) == vec![(2, 1)]);
-        check!(delete_checkpoints_below(dir.path(), (10, 1)) == vec![(4, 1)]);
+        check!(
+            delete_checkpoints_below(dir.path(), SnapshotId::new(7, 1))
+                == vec![SnapshotId::new(2, 1)]
+        );
+        check!(
+            delete_checkpoints_below(dir.path(), SnapshotId::new(10, 1))
+                == vec![SnapshotId::new(4, 1)]
+        );
         check!(
             retained_snapshots(dir.path(), Offset(0))
                 .iter()
                 .map(|snapshot| snapshot.id)
                 .collect::<Vec<_>>()
-                == vec![(7, 1), (10, 1)]
+                == vec![SnapshotId::new(7, 1), SnapshotId::new(10, 1)]
         );
     }
 }

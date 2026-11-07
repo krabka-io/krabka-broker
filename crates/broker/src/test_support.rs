@@ -89,7 +89,6 @@ use {
             AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
             SimpleAclAuthorizer,
         },
-        bootstrap::encode_bootstrap_records,
         broker::{Broker, BrokerHandle, spawn_partition},
         codes::NONE,
         config::BrokerConfig,
@@ -118,6 +117,7 @@ use {
         txn::{bootstrap::TOPIC, coordinator::leadership::LoadStatus},
     },
     bytes::{Bytes, BytesMut},
+    krabka_format::{BOOTSTRAP_RECORDS, encode_bootstrap_records},
     krabka_metadata::{
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
         PartitionRecord, TopicConfigRecord, TopicRecord,
@@ -1253,7 +1253,7 @@ pub const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
 /// the file `krabka format` leaves for the first start to submit.
 pub fn write_bootstrap_records(log_dir: &Path, records: &[MetadataRecord]) {
     let bytes = encode_bootstrap_records(records).expect("encode bootstrap records");
-    fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
+    fs::write(log_dir.join(BOOTSTRAP_RECORDS), bytes).expect("write bootstrap records");
 }
 
 /// Initialize the share state of `(group, topic_id, partition)` at state
