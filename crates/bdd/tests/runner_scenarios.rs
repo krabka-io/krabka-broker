@@ -10,8 +10,8 @@ use {
     assert2::assert,
     futures_util::FutureExt,
     krabka_bdd::{
-        Attempt, Fixtures, Outcome, RowSpec, ScenarioSpec, StepSpec,
         __private::{StepKeyword, run, run_outcome},
+        Attempt, Fixtures, Outcome, RowSpec, ScenarioSpec, StepSpec,
     },
     rstest_bdd::{Step, iter, panic_message, skip},
     rstest_bdd_macros::{given, then, when},
@@ -61,10 +61,14 @@ fn flips_side(side: String) { let _ = side; }
 fn flips_kind(kind: String) { let _ = kind; }
 
 #[given("the runner skips because no broker is running")]
-fn skips() { skip!("no broker is running"); }
+fn skips() {
+    skip!("no broker is running");
+}
 
 #[then("the runner fails if it is reached")]
-fn fails_if_reached() { panic!("a step after a skip ran"); }
+fn fails_if_reached() {
+    panic!("a step after a skip ran");
+}
 
 const fn step(line: u32, keyword: StepKeyword, text: &'static str) -> StepSpec {
     StepSpec {
@@ -97,7 +101,11 @@ static PASSING_STEPS: [StepSpec; 3] = [
     StepSpec {
         star: true,
         written: "*",
-        ..step(5, StepKeyword::Given, "the runner counter is doubled after a pause")
+        ..step(
+            5,
+            StepKeyword::Given,
+            "the runner counter is doubled after a pause",
+        )
     },
     step(6, StepKeyword::Then, "the runner counter is 4"),
 ];
@@ -119,7 +127,11 @@ static FAILING_ROW: ScenarioSpec = ScenarioSpec {
 
 static ATTEMPT_STEPS: [StepSpec; 2] = [
     step(19, StepKeyword::When, "the runner attempts to parse x"),
-    step(20, StepKeyword::Then, "the runner attempt failed with invalid digit"),
+    step(
+        20,
+        StepKeyword::Then,
+        "the runner attempt failed with invalid digit",
+    ),
 ];
 static ATTEMPT: ScenarioSpec = scenario("An attempt reaches a later Then", 18, &ATTEMPT_STEPS);
 
@@ -139,7 +151,11 @@ static UNDEFINED_STEPS: [StepSpec; 1] = [step(
 static UNDEFINED: ScenarioSpec = scenario("A step matches no definition", 25, &UNDEFINED_STEPS);
 
 static SKIP_STEPS: [StepSpec; 2] = [
-    step(30, StepKeyword::Given, "the runner skips because no broker is running"),
+    step(
+        30,
+        StepKeyword::Given,
+        "the runner skips because no broker is running",
+    ),
     step(31, StepKeyword::Then, "the runner fails if it is reached"),
 ];
 static SKIP_ALLOWED: ScenarioSpec = ScenarioSpec {
@@ -210,7 +226,10 @@ async fn a_failing_step_reports_feature_rule_example_and_step() {
          Step 2 at line 12: Then the runner counter is 5\n  "
     );
     assert!(diagnostic.starts_with(&expected_head), "{diagnostic}");
-    assert!(diagnostic.contains("the counter is 1, not 5"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("the counter is 1, not 5"),
+        "{diagnostic}"
+    );
     assert!(panic_of(run(&FAILING_ROW, counter())).await == diagnostic);
 }
 
@@ -278,6 +297,8 @@ async fn an_in_progress_scenario_that_passes_fails_the_test() {
     let message = panic_of(run(&IN_PROGRESS_PASSING, counter())).await;
     assert!(
         message
-            == format!("{FEATURE}:34: Scenario: A scenario in progress now passes: remove @inprogress")
+            == format!(
+                "{FEATURE}:34: Scenario: A scenario in progress now passes: remove @inprogress"
+            )
     );
 }

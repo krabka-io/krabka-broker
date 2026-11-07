@@ -50,10 +50,10 @@ pub fn step_param_derive(item: ItemEnum) -> Result<TokenStream, ParseError> {
 /// `krabka-bdd` documents the expressions and the checks.
 #[moxy::attribute(name = "given")]
 pub fn given_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    step_attr::expand_native(StepAttribute::Given, &meta, item)
+    step_attr::expand_native(StepAttribute::Given, &meta.into(), item)
 }
 
 /// Defines a `When` step from one or more Cucumber expressions.
@@ -61,10 +61,10 @@ pub fn given_attribute(
 /// `krabka-bdd` documents the expressions and the checks.
 #[moxy::attribute(name = "when")]
 pub fn when_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    step_attr::expand_native(StepAttribute::When, &meta, item)
+    step_attr::expand_native(StepAttribute::When, &meta.into(), item)
 }
 
 /// Defines a `Then` step from one or more Cucumber expressions.
@@ -72,10 +72,10 @@ pub fn when_attribute(
 /// `krabka-bdd` documents the expressions and the checks.
 #[moxy::attribute(name = "then")]
 pub fn then_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    step_attr::expand_native(StepAttribute::Then, &meta, item)
+    step_attr::expand_native(StepAttribute::Then, &meta.into(), item)
 }
 
 /// Defines a step under all three keywords from one or more Cucumber
@@ -84,10 +84,10 @@ pub fn then_attribute(
 /// `krabka-bdd` documents the expressions and the checks.
 #[moxy::attribute(name = "step")]
 pub fn step_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    step_attr::expand_native(StepAttribute::Step, &meta, item)
+    step_attr::expand_native(StepAttribute::Step, &meta.into(), item)
 }
 
 /// Registers an `async fn(&ScenarioSpec)` to run before each scenario.
@@ -95,10 +95,10 @@ pub fn step_attribute(
 /// `krabka-bdd` documents `tags` and `order`.
 #[moxy::attribute(name = "before")]
 pub fn before_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    hook_attr::expand_native(HookPhase::Before, &meta, item)
+    hook_attr::expand_native(HookPhase::Before, &meta.into(), item)
 }
 
 /// Registers an `async fn(&ScenarioSpec, &Outcome)` to run after each
@@ -107,8 +107,8 @@ pub fn before_attribute(
 /// `krabka-bdd` documents `tags` and `order`.
 #[moxy::attribute(name = "after")]
 pub fn after_attribute(
-    meta: TokenStream,
+    meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
-    hook_attr::expand_native(HookPhase::After, &meta, item)
+    hook_attr::expand_native(HookPhase::After, &meta.into(), item)
 }

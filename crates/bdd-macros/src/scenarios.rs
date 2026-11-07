@@ -276,7 +276,7 @@ fn fixtures(argument: &Argument) -> Result<Vec<Fixture>, ParseError> {
     let [TokenTree::Group(group)] = value_tokens(argument) else {
         return Err(malformed());
     };
-    split_top_level(group.stream.clone().into_iter())
+    split_top_level(group.tokens.clone().into_iter())
         .into_iter()
         .map(|entry| match entry.as_slice() {
             [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..]

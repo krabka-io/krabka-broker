@@ -11,8 +11,8 @@
 use {
     krabka_bdd_model::model::parse_tag_expression,
     moxy::{
-        ast::{FromMeta, ItemFn, Meta, ParseError},
-        token::{Ident, Lit, LitStr, Spanner, TokenStream},
+        ast::{FromMeta, ItemFn, List, Meta, ParseError, Parser, Token},
+        token::{Ident, LitStr, Spanner, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
@@ -53,31 +53,43 @@ impl HookPhase {
 }
 
 /// The arguments of `#[before(...)]` and `#[after(...)]`.
-#[derive(Debug, Default, PartialEq, Eq, moxy::FromMeta)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct HookArgs {
     /// The tag expression a scenario's tags must match.
-    #[meta(default)]
     tags: Option<String>,
     /// Where the hook sorts among the others, lowest first.
-    #[meta(default)]
     order: Option<i32>,
 }
 
 /// The hook's arguments, its tag expression checked.
 fn hook_args(phase: HookPhase, meta: &TokenStream) -> Result<HookArgs, ParseError> {
-    if meta.is_empty() {
-        return Ok(HookArgs::default());
-    }
-    let name = Ident::new(phase.attribute());
-    let meta: Meta = moxy::parse!({ moxy::template! { {{ name }}({{ meta }}) } })?;
-    let args = HookArgs::from_meta(&meta)?;
-    if let Some(tags) = &args.tags {
-        parse_tag_expression(tags).map_err(|error| {
+    let parser = Parser::from_tokens(meta);
+    let list = List::<Meta, Token![,]>::parse_all(&parser)?;
+    let mut args = HookArgs::default();
+    for argument in &list {
+        let malformed = || {
             ParseError::new(
-                meta.span(),
-                format!("`tags = \"{tags}\"` is not a tag expression: {error}"),
+                argument.span(),
+                format!(
+                    "a `#[{}]` hook takes `tags = \"<tag expression>\"` and `order = <i32>`",
+                    phase.attribute()
+                ),
             )
-        })?;
+        };
+        if argument.path.is_ident("tags") && args.tags.is_none() {
+            let tags = String::from_meta(argument).map_err(|_| malformed())?;
+            parse_tag_expression(&tags).map_err(|error| {
+                ParseError::new(
+                    argument.span(),
+                    format!("`tags = \"{tags}\"` is not a tag expression: {error}"),
+                )
+            })?;
+            args.tags = Some(tags);
+        } else if argument.path.is_ident("order") && args.order.is_none() {
+            args.order = Some(i32::from_meta(argument).map_err(|_| malformed())?);
+        } else {
+            return Err(malformed());
+        }
     }
     Ok(args)
 }
@@ -114,13 +126,18 @@ pub fn expand(
     let target = &item.sig.ident;
     let span = target.span();
     let tags = args.tags.map(|tags| LitStr::new(&tags, span));
-    let order = Lit::i32_suffixed(args.order.unwrap_or(0));
+    let order: TokenStream = args
+        .order
+        .unwrap_or(0)
+        .to_string()
+        .parse()
+        .map_err(|_| ParseError::new(span, "a hook's `order` is an `i32`"))?;
     let wrapper = Ident::new(format!("__krabka_bdd_hook_{}", target.text())).with_span(span);
     Ok(moxy::template! {
         const _: () = {
             fn {{ wrapper }}<'a>(
-                scenario: &'a ::krabka_bdd::__private::ScenarioSpec,
-                outcome: ::core::option::Option<&'a ::krabka_bdd::__private::Outcome>,
+                scenario: &'a ::krabka_bdd::ScenarioSpec,
+                outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
             ) -> ::core::pin::Pin<
                 ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
             > {
@@ -177,13 +194,11 @@ mod tests {
     use {
         super::{HookArgs, HookPhase, expand, hook_args},
         assert2::assert,
-        moxy::token::{TokenStream, ToTokenStream},
+        moxy::token::{ToTokenStream, TokenStream},
         rstest::rstest,
     };
 
-    fn tokens(source: &str) -> TokenStream {
-        moxy::parse!({ source }).unwrap()
-    }
+    fn tokens(source: &str) -> TokenStream { source.parse().unwrap() }
 
     #[rstest]
     #[case::none("", HookArgs::default())]
@@ -215,6 +230,9 @@ mod tests {
     #[rstest]
     #[case::order_not_a_number(r#"order = "first""#)]
     #[case::tags_not_a_string("tags = docker")]
+    #[case::unknown_key("ordering = 1")]
+    #[case::repeated_key("order = 1, order = 2")]
+    #[case::bare_key("tags")]
     fn rejects_malformed_arguments(#[case] meta: &str) {
         assert!(let Err(_) = hook_args(HookPhase::Before, &tokens(meta)));
     }
@@ -261,8 +279,8 @@ mod tests {
             r#"
             const _: () = {
                 fn __krabka_bdd_hook_start<'a>(
-                    scenario: &'a ::krabka_bdd::__private::ScenarioSpec,
-                    outcome: ::core::option::Option<&'a ::krabka_bdd::__private::Outcome>,
+                    scenario: &'a ::krabka_bdd::ScenarioSpec,
+                    outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
                 ) -> ::core::pin::Pin<
                     ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
                 > {
@@ -274,7 +292,7 @@ mod tests {
                     ::krabka_bdd::__private::Hook {
                         phase: ::krabka_bdd::__private::HookPhase::BeforeScenario,
                         tags: ::core::option::Option::Some("@docker"),
-                        order: 10i32,
+                        order: 10,
                         file: ::core::file!(),
                         line: ::core::line!(),
                         run: __krabka_bdd_hook_start,
@@ -284,7 +302,9 @@ mod tests {
             "#,
         );
         assert!(
-            expanded.map(|tokens| tokens.to_token_stream().to_string()).ok()
+            expanded
+                .map(|tokens| tokens.to_token_stream().to_string())
+                .ok()
                 == Some(expected.to_string())
         );
     }
@@ -297,11 +317,11 @@ mod tests {
             &tokens("async fn stop(scenario: &ScenarioSpec, outcome: &Outcome) {}"),
         );
         let expected = tokens(
-            r#"
+            "
             const _: () = {
                 fn __krabka_bdd_hook_stop<'a>(
-                    scenario: &'a ::krabka_bdd::__private::ScenarioSpec,
-                    outcome: ::core::option::Option<&'a ::krabka_bdd::__private::Outcome>,
+                    scenario: &'a ::krabka_bdd::ScenarioSpec,
+                    outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
                 ) -> ::core::pin::Pin<
                     ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
                 > {
@@ -316,17 +336,19 @@ mod tests {
                     ::krabka_bdd::__private::Hook {
                         phase: ::krabka_bdd::__private::HookPhase::AfterScenario,
                         tags: ::core::option::Option::None,
-                        order: 0i32,
+                        order: 0,
                         file: ::core::file!(),
                         line: ::core::line!(),
                         run: __krabka_bdd_hook_stop,
                     }
                 }
             };
-            "#,
+            ",
         );
         assert!(
-            expanded.map(|tokens| tokens.to_token_stream().to_string()).ok()
+            expanded
+                .map(|tokens| tokens.to_token_stream().to_string())
+                .ok()
                 == Some(expected.to_string())
         );
     }

@@ -10,8 +10,8 @@
 use {
     assert2::assert,
     krabka_bdd::{
-        Fixtures, Outcome, ScenarioSpec, StepSpec,
         __private::{StepKeyword, run, run_outcome},
+        Fixtures, Outcome, ScenarioSpec, StepSpec,
     },
     rstest_bdd_macros::{given, then, when},
     std::{

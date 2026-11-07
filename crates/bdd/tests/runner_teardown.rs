@@ -9,8 +9,8 @@
 use {
     assert2::assert,
     krabka_bdd::{
-        Fixtures, Outcome, ScenarioSpec, StepSpec, World,
         __private::{Hook, HookPhase, StepKeyword, inventory, run_outcome},
+        Fixtures, Outcome, ScenarioSpec, StepSpec, World,
     },
     rstest::rstest,
     rstest_bdd::skip,
@@ -109,10 +109,14 @@ fn world_ready(world: &TeardownWorld) { world.record("step: ready".to_owned()); 
 fn step_fails() -> Result<(), String> { Err("the step failed on purpose".to_owned()) }
 
 #[when("the teardown step panics")]
-fn step_panics() { panic!("kaboom"); }
+fn step_panics() {
+    panic!("kaboom");
+}
 
 #[when("the teardown step skips")]
-fn step_skips() { skip!("nothing to tear down"); }
+fn step_skips() {
+    skip!("nothing to tear down");
+}
 
 const fn step(line: u32, keyword: StepKeyword, text: &'static str) -> StepSpec {
     StepSpec {
@@ -148,24 +152,18 @@ const fn scenario(
 }
 
 static PASSES: ScenarioSpec = scenario("The scenario passes", 4, &["teardown"], &[READY]);
-static FAILS: ScenarioSpec = scenario(
-    "A step fails",
-    8,
-    &["teardown"],
-    &[READY, step(10, StepKeyword::When, "the teardown step fails")],
-);
-static PANICS: ScenarioSpec = scenario(
-    "A step panics",
-    13,
-    &["teardown"],
-    &[READY, step(15, StepKeyword::When, "the teardown step panics")],
-);
-static SKIPS: ScenarioSpec = scenario(
-    "A step skips",
-    18,
-    &["teardown", "allow_skipped"],
-    &[READY, step(20, StepKeyword::When, "the teardown step skips")],
-);
+static FAILS: ScenarioSpec = scenario("A step fails", 8, &["teardown"], &[
+    READY,
+    step(10, StepKeyword::When, "the teardown step fails"),
+]);
+static PANICS: ScenarioSpec = scenario("A step panics", 13, &["teardown"], &[
+    READY,
+    step(15, StepKeyword::When, "the teardown step panics"),
+]);
+static SKIPS: ScenarioSpec = scenario("A step skips", 18, &["teardown", "allow_skipped"], &[
+    READY,
+    step(20, StepKeyword::When, "the teardown step skips"),
+]);
 /// Untagged: no hook applies.
 static UNHOOKED: ScenarioSpec = scenario("Untagged", 4, &[], &[READY]);
 

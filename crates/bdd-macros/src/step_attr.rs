@@ -402,9 +402,9 @@ mod tests {
         rstest::rstest,
     };
 
-    /// `text` with `<` and `>` for `{` and `}`, which keeps Clippy from
+    /// `text` with `‹` and `›` for `{` and `}`, which keeps Clippy from
     /// reading the test patterns as format strings.
-    fn braced(text: &str) -> String { text.replace('<', "{").replace('>', "}") }
+    fn braced(text: &str) -> String { text.replace('‹', "{").replace('›', "}") }
 
     fn values(declared: &[(&str, &str)]) -> Vec<ParamInfo> {
         declared
@@ -495,8 +495,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matching("<name> has <count:u32> items", &[("name", "String"), ("count", "u32")])]
-    #[case::underscore("<count> items", &[("_count", "u32")])]
+    #[case::matching("‹name› has ‹count:u32› items", &[("name", "String"), ("count", "u32")])]
+    #[case::underscore("‹count› items", &[("_count", "u32")])]
     #[case::no_placeholders("the broker starts", &[])]
     fn accepts_placeholders_in_parameter_order(
         #[case] pattern: &str,
@@ -507,14 +507,14 @@ mod tests {
 
     #[rstest]
     #[case::swapped(
-        "<count> items in <name>",
+        "‹count› items in ‹name›",
         &[("name", "String"), ("count", "u32")],
         "`count`, `name`",
         "`name`, `count`"
     )]
-    #[case::missing_parameter("<count> items", &[], "`count`", "none")]
+    #[case::missing_parameter("‹count› items", &[], "`count`", "none")]
     #[case::extra_parameter("the broker starts", &[("count", "u32")], "none", "`count`")]
-    #[case::misnamed("<n> items", &[("count", "u32")], "`n`", "`count`")]
+    #[case::misnamed("‹n› items", &[("count", "u32")], "`n`", "`count`")]
     fn rejects_placeholders_out_of_parameter_order(
         #[case] pattern: &str,
         #[case] declared: &[(&str, &str)],
@@ -533,8 +533,8 @@ mod tests {
 
     #[test]
     fn rejects_an_invalid_pattern() {
-        assert!(let Err(message) = check_pattern(&braced("a <n:> b"), &values(&[("n", "u8")])));
-        assert!(message.starts_with(&braced("step pattern `a <n:> b` is invalid: ")));
+        assert!(let Err(message) = check_pattern(&braced("a ‹n:› b"), &values(&[("n", "u8")])));
+        assert!(message.starts_with(&braced("step pattern `a ‹n:› b` is invalid: ")));
     }
 
     fn sources(expressions: &[&str]) -> Vec<String> {
@@ -544,21 +544,21 @@ mod tests {
     #[rstest]
     #[case::one("a topic", &[], ReturnKind::Unit, &["a topic"])]
     #[case::cucumber(
-        "a/an topic with <int> partition(s)",
+        "a/an topic with ‹int› partition(s)",
         &[("partitions", "u32")],
         ReturnKind::Unit,
         &[
-            "a topic with <partitions:u32> partition",
-            "a topic with <partitions:u32> partitions",
-            "an topic with <partitions:u32> partition",
-            "an topic with <partitions:u32> partitions",
+            "a topic with ‹partitions:u32› partition",
+            "a topic with ‹partitions:u32› partitions",
+            "an topic with ‹partitions:u32› partition",
+            "an topic with ‹partitions:u32› partitions",
         ]
     )]
     #[case::attempt(
-        "the client attempts to delete <string>",
+        "the client attempts to delete ‹string›",
         &[("topic", "String")],
         ReturnKind::Attempt,
-        &["the client attempts to delete <topic:string>"]
+        &["the client attempts to delete ‹topic:string›"]
     )]
     fn expands_one_expression(
         #[case] expression: &str,
@@ -583,8 +583,8 @@ mod tests {
 
     #[test]
     fn step_args_skip_the_order_check() {
-        let patterns = step_patterns(&sources(&["<a> and <b>"]), &[], true, ReturnKind::Unit);
-        assert!(patterns == Ok(sources(&["<a> and <b>"])));
+        let patterns = step_patterns(&sources(&["‹a› and ‹b›"]), &[], true, ReturnKind::Unit);
+        assert!(patterns == Ok(sources(&["‹a› and ‹b›"])));
     }
 
     #[rstest]
@@ -592,7 +592,7 @@ mod tests {
         &[],
         ReturnKind::Unit,
         "a step attribute takes one or more Cucumber expressions, such as \
-         `#[given(\"a topic with <int> partitions\")]`"
+         `#[given(\"a topic with ‹int› partitions\")]`"
     )]
     #[case::attempts_without_attempt(
         &["the client attempts to delete it"],
@@ -625,7 +625,7 @@ mod tests {
         assert!(patterns == Err(braced(message)));
     }
 
-    fn tokens(source: &str) -> TokenStream { moxy::parse!({ source }).unwrap() }
+    fn tokens(source: &str) -> TokenStream { source.parse().unwrap() }
 
     fn expand_source(
         attribute: StepAttribute,
@@ -649,14 +649,14 @@ mod tests {
     fn one_pattern_needs_no_forwarder() {
         let expanded = expand_source(
             StepAttribute::Given,
-            r#""a topic with <int> partitions""#,
+            r#""a topic with ‹int› partitions""#,
             "fn topic(world: &mut World, partitions: u32) { world.create(partitions); }",
         );
         assert!(
             expanded
                 == Ok((
                     printed(
-                        r#"#[::rstest_bdd_macros::given("a topic with <partitions:u32> partitions")]"#
+                        r#"#[::rstest_bdd_macros::given("a topic with ‹partitions:u32› partitions")]"#
                     ),
                     String::new(),
                 ))
@@ -730,12 +730,12 @@ mod tests {
         "",
         "fn s() {}",
         "a step attribute takes one or more Cucumber expressions, such as \
-         `#[given(\"a topic with <int> partitions\")]`"
+         `#[given(\"a topic with ‹int› partitions\")]`"
     )]
     #[case::order(
-        r#""<count> items in <name>""#,
+        r#""‹count› items in ‹name›""#,
         "fn s(name: String, count: u32) {}",
-        "step pattern `<count:u32> items in <name>` has placeholders `count`, `name` but \
+        "step pattern `‹count:u32› items in ‹name›` has placeholders `count`, `name` but \
          the step function's non-fixture parameters are `name`, `count`: rstest-bdd binds them \
          by position, so name them alike and in the same order, and take a fixture by \
          reference or mark it `#[from]`"
