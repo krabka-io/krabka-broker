@@ -105,7 +105,7 @@ pub(super) async fn install_snapshot(
     image_tx: &watch::Sender<Arc<MetadataImage>>,
     store: &mut ObserverStore,
 ) -> Option<u64> {
-    let (end_offset, epoch) = snapshot_id;
+    let SnapshotId { end_offset, epoch } = snapshot_id;
     let next_fetch_offset = u64::try_from(end_offset).ok()?;
     let bytes = transfer(config, conn, target, snapshot_id).await?;
     let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
@@ -215,11 +215,13 @@ mod tests {
             test_support::single_partition_topic,
         },
         assert2::assert,
+        base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
         krabka_metadata::MetadataRecord,
-        krabka_protocol::owned::api_versions_request,
-        krabka_raft::kraft::{
-            snapshot_fetch::MetadataSnapshotFetchMax, transport::wire::decode_fetch_snapshot,
+        krabka_protocol::{
+            Decode as _,
+            owned::{api_versions_request, fetch_snapshot_request::FetchSnapshotRequest},
         },
+        krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax,
         std::{
             net::SocketAddr,
             sync::atomic::{AtomicUsize, Ordering},
@@ -307,6 +309,22 @@ mod tests {
         out
     }
 
+    /// The snapshot, position and byte budget a `FetchSnapshot` request body
+    /// asks for, when it names `cluster_id` in Kafka's base64 form.
+    fn requested_range(body: &[u8], cluster_id: Uuid) -> Option<(SnapshotId, i64, i32)> {
+        let mut cur = body;
+        let request = FetchSnapshotRequest::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
+        if request.cluster_id != Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes())) {
+            return None;
+        }
+        let partition = request.topics.first()?.partitions.first()?;
+        let snapshot_id = SnapshotId::new(
+            partition.snapshot_id.end_offset,
+            partition.snapshot_id.epoch,
+        );
+        Some((snapshot_id, partition.position, request.max_bytes))
+    }
+
     /// The request body itself.
     ///
     /// `MockBroker` splits each frame after the fixed
@@ -328,9 +346,9 @@ mod tests {
             error_code: 0,
             leader_hint: 1,
             leader_epoch: 3,
-            log_start_offset: snapshot_id.0,
-            high_watermark: snapshot_id.0,
-            quorum_high_watermark: snapshot_id.0,
+            log_start_offset: snapshot_id.end_offset,
+            high_watermark: snapshot_id.end_offset,
+            quorum_high_watermark: snapshot_id.end_offset,
             snapshot_id: Some(snapshot_id),
             records: bytes::Bytes::new(),
         }
@@ -356,21 +374,13 @@ mod tests {
     #[tokio::test]
     async fn a_pruned_fetch_installs_the_snapshot_and_resumes_at_its_end_offset() {
         let cluster_id = Uuid::new_v4();
-        let snapshot_id = (4_096_i64, 7_i32);
+        let snapshot_id = SnapshotId::new(4_096, 7);
         let artifact = snapshot_of(cluster_id, "pruned-away");
         let served = artifact.clone();
         let chunks = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&chunks);
         let mock = snapshot_broker(snapshot_id, move |body| {
-            let Some(PeerRequest::FetchSnapshot {
-                snapshot_id: wanted,
-                position,
-                max_bytes,
-                ..
-            }) = decode_fetch_snapshot(request_body(body))
-            else {
-                return None;
-            };
+            let (wanted, position, max_bytes) = requested_range(request_body(body), cluster_id)?;
             counted.fetch_add(1, Ordering::SeqCst);
             let start = usize::try_from(position).unwrap().min(served.len());
             let end = start
@@ -461,7 +471,7 @@ mod tests {
     #[test_macro(tokio::test)]
     async fn failed_snapshot_transfer_is_not_applied(failure: SnapshotTransferFailure) {
         let cluster_id = Uuid::new_v4();
-        let snapshot_id = (4_096_i64, 7_i32);
+        let snapshot_id = SnapshotId::new(4_096, 7);
         let mock = snapshot_broker(snapshot_id, move |_body| {
             let (size, error_code) = match failure {
                 // Non-zero total with an empty range: a records field that
@@ -503,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn a_snapshot_that_will_not_decode_is_neither_published_nor_persisted() {
         let cluster_id = Uuid::new_v4();
-        let snapshot_id = (4_096_i64, 7_i32);
+        let snapshot_id = SnapshotId::new(4_096, 7);
         let garbage = bytes::Bytes::from_static(b"this is not a KIP-630 checkpoint");
         let served = garbage.clone();
         let mock = snapshot_broker(snapshot_id, move |_body| {

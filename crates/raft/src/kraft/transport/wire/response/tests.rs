@@ -156,7 +156,7 @@ fn encoded_ack_response_carries_success_error_codes() {
 #[test]
 fn fetch_snapshot_response_round_trips() {
     let resp = PeerResponse::FetchSnapshot {
-        snapshot_id: (42, 3),
+        snapshot_id: SnapshotId::new(42, 3),
         size: 9,
         position: 0,
         bytes: Bytes::from_static(b"snapshotX"),
@@ -171,7 +171,7 @@ fn fetch_snapshot_response_round_trips() {
 #[test]
 fn fetch_snapshot_response_round_trips_error_code() {
     let resp = PeerResponse::FetchSnapshot {
-        snapshot_id: (42, 3),
+        snapshot_id: SnapshotId::new(42, 3),
         size: 0,
         position: 0,
         bytes: Bytes::new(),
@@ -261,7 +261,7 @@ fn kafka_empty_fetch_response(
         ..fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))))
     } },
     snapshot = { "snapshot", FetchAnswer {
-        snapshot_id: Some((42, 3)),
+        snapshot_id: Some(SnapshotId::new(42, 3)),
         ..fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))))
     } },
     leader_without_an_endpoint = {

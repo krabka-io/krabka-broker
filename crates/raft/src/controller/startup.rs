@@ -13,7 +13,7 @@ use {
         },
         error::RaftError,
         kraft::{
-            Activation, KraftController, KraftOpenConfig,
+            Activation, KraftController, KraftOpenConfig, SnapshotPolicy,
             controller::checkpoint::load_latest_checkpoint, core::QuorumTimeouts,
         },
         network::{OutboundDialer, PlaintextDialer, RealPeerSender},
@@ -177,9 +177,13 @@ impl Controller {
                 .metadata_raft_command_queue_capacity(config.metadata_raft_command_queue_capacity)
                 .metadata_raft_fetch_max(config.metadata_raft_fetch_max)
                 .peers(peers)
-                .snapshot_interval_records(config.snapshot_interval_records)
-                .max_bytes_between_snapshots(config.max_bytes_between_snapshots)
-                .max_snapshot_interval(config.max_snapshot_interval)
+                .snapshot_policy(
+                    SnapshotPolicy::builder()
+                        .interval_records(config.snapshot_interval_records)
+                        .max_bytes(config.max_bytes_between_snapshots)
+                        .max_interval(config.max_snapshot_interval)
+                        .build(),
+                )
                 .metadata_snapshot_fetch_max(metadata_snapshot_fetch_max)
                 .metadata_log(config.metadata_log)
                 .activation(Activation {

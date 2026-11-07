@@ -18,13 +18,10 @@ use {
 /// for an election.
 const HEARTBEAT_DIVISOR: u64 = 3;
 
-/// A configured timeout as whole milliseconds.
-///
-/// Every deadline derived from the timeout crosses into integers here. The
-/// core's per-(node, epoch) jitter is defined over integer milliseconds
-/// (`election_jitter_ms`), so keeping the base in the same domain leaves every
-/// election deadline bit-identical to the raw-integer arithmetic it replaces.
-pub fn whole_millis(timeout: Time) -> u64 { u64::try_from(timeout.millis_i64()).unwrap_or(0) }
+// Every deadline the engine derives from a configured timeout crosses into
+// integers through the core's own conversion, so it lands on the same
+// millisecond timeline as the core's election jitter.
+pub use crate::kraft::core::whole_millis;
 
 pub fn initial_election_at(
     core: &QuorumStateMachine,

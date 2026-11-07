@@ -9,11 +9,12 @@
 use {
     super::{
         Sim,
-        node::{HEARTBEAT, deadline_millis, election_timeout_of},
+        node::{HEARTBEAT, election_timeout_of},
         trace::TraceAction,
     },
     crate::{
         action::Action,
+        core::whole_millis,
         event::Event,
         simulation_support::{
             NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer,
@@ -24,7 +25,7 @@ use {
 };
 
 impl Sim {
-    krabka_macros::simulation_heartbeat!(crate, deadline_millis(HEARTBEAT));
+    krabka_macros::simulation_heartbeat!(crate, whole_millis(HEARTBEAT));
 
     krabka_macros::simulation_earliest_timer!(crate);
 
@@ -77,7 +78,7 @@ impl Sim {
                 if let Some(leader_id) = self.reachable_leader(id) {
                     let deadline = self
                         .now
-                        .saturating_add_ms(deadline_millis(election_timeout_of(id)));
+                        .saturating_add_ms(whole_millis(election_timeout_of(id)));
                     if let Some(node) = self.nodes.get_mut(&id) {
                         node.fetch_deadline = Some(deadline);
                     }
@@ -127,7 +128,7 @@ impl Sim {
             &mut node.fetch_deadline,
             &mut node.heartbeat_deadline,
             &mut node.check_quorum_deadline,
-            self.now.saturating_add_ms(deadline_millis(HEARTBEAT)),
+            self.now.saturating_add_ms(whole_millis(HEARTBEAT)),
         );
     }
 }

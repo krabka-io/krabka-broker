@@ -101,7 +101,10 @@ mod tests {
     use {
         super::*,
         crate::{
-            kraft::transport::{api_key, wire::METADATA_TOPIC_ID},
+            kraft::{
+                snapshot_fetch::SnapshotId,
+                transport::{api_key, wire::METADATA_TOPIC_ID},
+            },
             server::{
                 api_versions::table::CONTROLLER_LISTENER_APIS,
                 test_support::{encoded, single_voter_engine, wait_for_leader},
@@ -196,7 +199,7 @@ mod tests {
             cluster_id: None,
             from: NodeId(2),
             current_leader_epoch: i32::try_from(leader_epoch).expect("epoch fits i32"),
-            snapshot_id: (10, 1),
+            snapshot_id: SnapshotId::new(10, 1),
             position: 0,
             max_bytes: 32,
         }

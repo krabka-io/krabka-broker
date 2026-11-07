@@ -113,7 +113,7 @@ impl FetchAnswer {
                 ..Default::default()
             };
         }
-        if let Some((end_offset, epoch)) = self.snapshot_id {
+        if let Some(SnapshotId { end_offset, epoch }) = self.snapshot_id {
             partition.snapshot_id = fetch_resp::SnapshotId {
                 end_offset,
                 epoch,
@@ -382,7 +382,7 @@ pub fn encode_fetch_snapshot_answer(
         };
     }
     if let Some(SnapshotChunk {
-        snapshot_id: (end_offset, epoch),
+        snapshot_id: SnapshotId { end_offset, epoch },
         size,
         position,
         bytes,
@@ -433,7 +433,7 @@ fn encode_fetch_snapshot_response(
     bytes: &Bytes,
     error_code: i16,
 ) -> Option<Bytes> {
-    let (end_offset, epoch) = snapshot_id;
+    let SnapshotId { end_offset, epoch } = snapshot_id;
     let resp = FetchSnapshotResponse {
         topics: vec![fs_resp::TopicSnapshot {
             name: METADATA_TOPIC.to_owned(),
@@ -555,8 +555,10 @@ impl PeerResponse {
             offset: p.diverging_epoch.end_offset,
             epoch: epoch_from_wire(p.diverging_epoch.epoch),
         });
-        let snapshot_id = (p.snapshot_id.end_offset >= 0)
-            .then_some((p.snapshot_id.end_offset, p.snapshot_id.epoch));
+        let snapshot_id = (p.snapshot_id.end_offset >= 0).then_some(SnapshotId {
+            end_offset: p.snapshot_id.end_offset,
+            epoch: p.snapshot_id.epoch,
+        });
         let records = match &p.records {
             Some(records) => records_payload_to_bytes(records)?,
             None => Bytes::new(),
@@ -580,7 +582,10 @@ impl PeerResponse {
         let p = resp.topics.first()?.partitions.first()?;
         let bytes = records_payload_to_bytes(&p.unaligned_records)?;
         Some(Self::FetchSnapshot {
-            snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
+            snapshot_id: SnapshotId {
+                end_offset: p.snapshot_id.end_offset,
+                epoch: p.snapshot_id.epoch,
+            },
             size: p.size,
             position: p.position,
             bytes,

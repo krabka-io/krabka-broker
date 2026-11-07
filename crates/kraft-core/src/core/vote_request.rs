@@ -116,17 +116,15 @@ impl QuorumStateMachine {
             // Binding: persist the vote, become Voted.
             self.state.voted_key = Some(candidate_key);
             let deadline = self.election_deadline(now);
-            self.role = Role::Voted {
-                election_deadline: deadline,
-            };
-            actions.push(Action::PersistQuorumState);
-            actions.push(Action::TransitionedTo(self.role.name()));
             // Arm the election timer: if the candidate we voted for dies, this
             // node must time out and start its own election (else deadlock).
-            actions.push(Action::ResetTimer {
-                kind: TimerKind::Election,
+            actions.extend(self.enter_role(
+                Role::Voted {
+                    election_deadline: deadline,
+                },
+                TimerKind::Election,
                 deadline,
-            });
+            ));
         }
         actions.push(Action::ReplyVote {
             to: from,

@@ -7,17 +7,20 @@ use {
     crate::{
         MetadataLogConfig,
         error::{MetadataReplayError, PersistedFormatError},
-        kraft::controller::{
-            checkpoint::latest_checkpoint_id,
-            control_state::voter_set_to_wire,
-            quorum_state_file::{load_quorum_state, save_quorum_state},
-            records::typed_control_batch,
-            recovery::{control_state_at, replay_committed, replay_control_records},
-            test_support::{
-                await_leader, build_engine_only, elect_single_voter_engine, open_test_controller,
-                submit_change_with_timeout, submit_on_engine, test_kraft_config, topic_record,
-                voter_set,
+        kraft::{
+            controller::{
+                checkpoint::latest_checkpoint_id,
+                control_state::voter_set_to_wire,
+                quorum_state_file::{load_quorum_state, save_quorum_state},
+                records::typed_control_batch,
+                recovery::{control_state_at, replay_committed, replay_control_records},
+                test_support::{
+                    await_leader, build_engine_only, elect_single_voter_engine,
+                    open_test_controller, submit_change_with_timeout, submit_on_engine,
+                    test_kraft_config, topic_record, voter_set,
+                },
             },
+            snapshot_fetch::SnapshotId,
         },
     },
     assert2::{assert, check},
@@ -369,7 +372,10 @@ async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
         .await
         .unwrap();
     snapshot_and_shut_down(ctrl).await;
-    let (checkpoint_end, _) = latest_checkpoint_id(dir.path()).expect("checkpoint");
+    let SnapshotId {
+        end_offset: checkpoint_end,
+        ..
+    } = latest_checkpoint_id(dir.path()).expect("checkpoint");
 
     let ctrl = open_test_controller(dir.path().to_path_buf(), cluster_id, voters).expect("reopen");
     check!(
@@ -793,7 +799,7 @@ async fn a_restart_applies_no_record_below_the_latest_checkpoint_again() {
     check!(
         (
             engine.log.log_start_offset(),
-            latest_checkpoint_id(dir.path()).map(|id| id.0)
+            latest_checkpoint_id(dir.path()).map(|id| id.end_offset)
         ) == (older_checkpoint, Some(newest_checkpoint.0))
     );
     drop(engine);

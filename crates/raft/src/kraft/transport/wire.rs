@@ -26,6 +26,11 @@ mod response;
 /// broker-only observer sends `FetchSnapshot` itself, and the version on its
 /// request header has to be the one the body was encoded at.
 pub use self::codec::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION};
+/// Test-only decoders that read back the request bodies an engine sent.
+#[cfg(test)]
+pub use self::request::{
+    decode_begin, decode_end, decode_fetch, decode_fetch_snapshot, decode_vote,
+};
 pub(crate) use self::{
     codec::{
         METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, encode_message, epoch_from_wire,
@@ -34,10 +39,7 @@ pub(crate) use self::{
     request::{decode_request, parse_cluster_id},
 };
 pub use self::{
-    request::{
-        PeerRequest, PreferredCandidate, decode_begin, decode_end, decode_fetch,
-        decode_fetch_snapshot, decode_vote, fetch_replica_id,
-    },
+    request::{PeerRequest, PreferredCandidate, fetch_replica_id},
     response::{
         FetchAnswer, FetchSnapshotPartition, LeaderEndpoint, PeerResponse, QuorumLeader,
         SnapshotChunk, encode_begin_quorum_epoch_response, encode_end_quorum_epoch_response,
