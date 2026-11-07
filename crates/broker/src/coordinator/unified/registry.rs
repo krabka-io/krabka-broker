@@ -565,7 +565,7 @@ mod tests {
             .send(GroupActorMessage::Describe { reply })
             .await
             .expect("send Describe");
-        assert!(view.await.expect("a describe view").group_epoch == 7);
+        assert!(view.await.expect("a describe view").unwrap().group_epoch == 7);
         coord.shutdown_all().await;
     }
 

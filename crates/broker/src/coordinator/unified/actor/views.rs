@@ -349,7 +349,7 @@ mod tests {
             reply: tx,
         })
         .await;
-        let view = rx.await.unwrap();
+        let view = rx.await.unwrap().unwrap();
         assert!(view.group_id == "g" && view.members.is_empty());
 
         // Admin surface lists/describes the classic group, then deletes it (empty).

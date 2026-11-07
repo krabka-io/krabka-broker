@@ -20,10 +20,10 @@ use {
             ApiVersion, ErrorResponse as _, RequestContext,
             acl_gates::{group_protocol_refusal, subscribed_names_response},
             coordinator_routing::java_blank,
-            group_coordinator_error, group_coordinator_error_response,
+            group_actor_error_code, group_coordinator_error_response,
             share_fetch::member_id_is_valid,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_protocol::owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -110,10 +110,7 @@ pub async fn handle(
     .await;
     Ok(match asked {
         Ok(resp) => resp,
-        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
-        Err(AskError::Dropped) => {
-            ShareGroupHeartbeatResponse::error(stopped_actor_code(broker, &group_id), None)
-        }
+        Err(error) => reply(group_actor_error_code(broker, &group_id, error), None),
     })
 }
 
@@ -182,20 +179,6 @@ fn invalid_request_message(req: &ShareGroupHeartbeatRequest) -> Option<&'static 
 /// The early refusal: `code` carrying `message`.
 fn reply(code: i16, message: Option<String>) -> ShareGroupHeartbeatResponse {
     ShareGroupHeartbeatResponse::error(code, message)
-}
-
-/// The code of a heartbeat that the group's actor dropped unanswered.
-///
-/// The actor stops when this broker unloads the group's offsets partition,
-/// and when a write fails, and the heartbeats still in its mailbox stop with
-/// it. Kafka fails an operation on a shard that unloads with
-/// `NOT_COORDINATOR`, so the routing check runs again: it answers
-/// `NOT_COORDINATOR` once another broker leads the partition. A broker that
-/// still serves the group answers `COORDINATOR_NOT_AVAILABLE`, which the
-/// client retries, and the retry starts a new actor from the committed state
-/// of the group.
-fn stopped_actor_code(broker: &Broker, group_id: &str) -> i16 {
-    group_coordinator_error(broker, group_id).unwrap_or(codes::COORDINATOR_NOT_AVAILABLE)
 }
 
 #[cfg(test)]

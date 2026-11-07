@@ -53,6 +53,7 @@ pub async fn describe(handle: &GroupActorHandle) -> DescribeView {
     ask(&handle.tx, |reply| GroupActorMessage::Describe { reply })
         .await
         .unwrap()
+        .expect("the live group is a consumer group")
 }
 
 /// The live describe view of one member.
@@ -302,20 +303,20 @@ pub async fn consumer_heartbeat_owning(
     .await
 }
 
-/// Reads the live `ClassicInspect` view. Only a classic-kind group
-/// replies.
 pub fn check_stable_classic_member(view: &ClassicView, member_id: &str) {
     assert2::check!(view.state == GroupState::Stable);
     assert2::check!(view.members.len() == 1);
     assert2::check!(view.members[0].member_id == member_id);
 }
 
+/// Reads the live `ClassicInspect` view of a classic-kind group.
 pub async fn classic_inspect(handle: &GroupActorHandle) -> ClassicView {
     ask(&handle.tx, |reply| GroupActorMessage::ClassicInspect {
         reply,
     })
     .await
     .unwrap()
+    .expect("the live group is classic")
 }
 
 /// A classic member leaves the group (v3 single-member leave list).

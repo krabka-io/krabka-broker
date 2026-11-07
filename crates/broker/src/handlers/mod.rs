@@ -49,6 +49,8 @@ mod record_strings;
 mod registration_listeners;
 mod request_names;
 mod response_encoding;
+#[cfg(test)]
+mod stopped_actor_tests;
 
 pub fn map_partition_rows<T>(
     indexes: impl Iterator<Item = i32>,
@@ -68,8 +70,9 @@ pub use self::{
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{
-        group_coordinator_error, group_coordinator_error_response, group_partition_loading,
-        group_version_disabled, share_group_not_found_message, streams_protocol_enabled,
+        actor_stopped_code, group_actor_error_code, group_coordinator_error,
+        group_coordinator_error_response, group_partition_loading, group_version_disabled,
+        share_group_not_found_message, streams_protocol_enabled,
     },
     node_endpoints::leader_endpoints,
     private_api_keys::{
