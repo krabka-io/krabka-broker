@@ -5,6 +5,7 @@
 
 use {
     super::{
+        read::LiveOffsets,
         request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
         throttle::leader_throttles_replica,
     },
@@ -171,35 +172,6 @@ async fn preferred_read_replica(
         .config
         .replica_selector
         .select(Some(rack_id), leader_id(record), &replicas)
-}
-
-/// The live bounds of a partition's offsets.
-struct OffsetSnapshot {
-    high_watermark: i64,
-    last_stable_offset: i64,
-    log_start_offset: i64,
-}
-
-/// The response Kafka's `ReplicaManager.readFromLog` gives a fetch it never
-/// reads: empty records at the offset snapshot's live bounds.
-///
-/// `ReplicaManager.fetchMessages` skips the log read entirely once it has
-/// named a preferred read replica (`hasPreferredReadReplica` in
-/// `maybeReadFromLocalLog` and again at `tryComplete`), and answers with this
-/// snapshot rather than parking in the fetch purgatory -- a consumer told to
-/// go elsewhere should not also wait out `fetch.max.wait.ms` on this broker
-/// first.
-async fn preferred_replica_snapshot(partition: &Partition) -> OffsetSnapshot {
-    let hw = partition.high_watermark().await;
-    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-    let log_start = log.reported_log_start();
-    let last_stable_offset = log.last_stable_offset(hw);
-    drop(log);
-    OffsetSnapshot {
-        high_watermark: hw.0,
-        last_stable_offset: last_stable_offset.0,
-        log_start_offset: log_start.0,
-    }
 }
 
 /// The node that must lead a partition before a fetch may read it, or `None`
@@ -787,15 +759,13 @@ pub(super) async fn plan_partition_read(
         )
         .await;
         if output.preferred_read_replica >= 0 {
-            // Kafka never reads the log for a fetch it is redirecting: it
-            // answers at once from the offset snapshot instead of also
-            // parking this broker's copy of the request in the fetch
-            // purgatory.
-            let snapshot = preferred_replica_snapshot(leader_partition).await;
+            // Kafka never reads the log for a fetch it is redirecting
+            // (`hasPreferredReadReplica` in `ReplicaManager.fetchMessages`):
+            // it answers at once with empty records at the live bounds
+            // instead of also parking this broker's copy of the request in
+            // the fetch purgatory.
+            LiveOffsets::of(leader_partition).await.report(&mut output);
             output.error_code = codes::NONE;
-            output.high_watermark = snapshot.high_watermark;
-            output.last_stable_offset = snapshot.last_stable_offset;
-            output.log_start_offset = snapshot.log_start_offset;
             output.records = Some(RecordsPayload::Raw(bytes::Bytes::new()));
             return PlannedRead {
                 slot: ResponseSlot::Read,
