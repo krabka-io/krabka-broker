@@ -103,10 +103,9 @@ fn write_regular_snapshot(
 
 impl Engine {
     /// (Every voter, KIP-630) once the committed offset has advanced past the
-    /// last snapshot by `snapshot_interval_records` records, by
-    /// `max_bytes_between_snapshots` bytes, or `max_snapshot_interval` has
-    /// elapsed since the last checkpoint, serialize the current image to a
-    /// checkpoint, then clean the log by its retention limits.
+    /// last snapshot far enough that [`SnapshotPolicy::is_due`] says so, by
+    /// records, by applied bytes or by elapsed time, serialize the current
+    /// image to a checkpoint, then clean the log by its retention limits.
     ///
     /// This runs on every voter, not only the leader: a follower's HWM
     /// advances on every applied Fetch response just like a leader's, and
