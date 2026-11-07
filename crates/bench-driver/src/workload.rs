@@ -1156,6 +1156,9 @@ impl<'a> ProducerObservations<'a> {
         }
     }
 
+    /// Record one settled send, with the instant it was enqueued.
+    fn record_settled(&mut self, ack: SettledAck) { self.record_ack(ack.result, ack.sent_at); }
+
     /// Record one settled send in the phase observed at receipt.
     fn record_ack(&mut self, result: AckResult, sent_at: Instant) {
         match result {
@@ -1210,54 +1213,35 @@ impl<'a> ProducerObservations<'a> {
     }
 }
 
+/// Pipeline depth: how many records a producer task may have in flight
+/// (awaiting their ack) before its send loop applies back-pressure.
+///
+/// Without pipelining the loop sent one record and awaited its ack before the
+/// next, capping a task's throughput at 1/RTT regardless of cluster capacity,
+/// so the numbers measured the driver, not the cluster. A bounded window lets
+/// throughput track the cluster while keeping memory in hand.
+const MAX_IN_FLIGHT_SENDS: usize = 512;
+
 async fn run_producer(task: ProducerTask) -> ProducerOut {
     let ProducerTask {
-        setup:
-            TaskSetup {
-                idx,
-                scenario,
-                bootstrap,
-                topic,
-                scenario_id,
-                stop,
-                security,
-                grid,
-                request_timeout,
-                dispatch_queue_capacity,
-                frame_max,
-            },
+        setup,
         first_ack,
         kill_at,
         final_drain_timeout,
         histogram,
     } = task;
-    // Idempotence forces acks=All; turn it off whenever the scenario
-    // requested something weaker.
-    let enable_idempotence = matches!(scenario.acks, Acks::All);
-    match Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .dispatch_queue_capacity(dispatch_queue_capacity.get())
-        .frame_max(frame_max.size())
-        .client_id(format!("bench-producer-{idx}"))
-        .acks(scenario.acks.into_producer())
-        .compression(scenario.compression.into_producer())
-        .enable_idempotence(enable_idempotence)
-        .linger(scenario.linger.to_std())
-        .batch_size(scenario.batch_size.bytes_usize())
-        .max_in_flight_per_connection(producer_max_in_flight(enable_idempotence))
-        // A produce to a healthy broker completes in low single-digit ms, so a
-        // 2s ceiling should not trip under normal load — but it bounds how long a
-        // send to a *killed* leader blocks before the client re-routes, so the
-        // measured failover recovery reflects the cluster's leader re-election
-        // rather than the 30s default request timeout.
-        .request_timeout(request_timeout.to_std())
-        // `None` → plaintext (default). `Some` → all produce traffic for this
-        // task goes over the broker's TLS listener.
-        .maybe_security(security)
-        .build()
-        .await
-        .context("build producer")
-    {
+    let built = build_producer(&setup).await;
+    let TaskSetup {
+        idx,
+        scenario,
+        topic,
+        scenario_id,
+        stop,
+        grid,
+        request_timeout,
+        ..
+    } = setup;
+    match built {
         Err(e) => ProducerOut {
             measurements: TaskMeasurements {
                 latency: histogram,
@@ -1297,13 +1281,6 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
                 }
             };
 
-            // Pipeline depth: how many records may be in flight (awaiting their ack)
-            // before the loop applies back-pressure. Without pipelining the loop sent
-            // one record and awaited its ack before the next, capping a task's
-            // throughput at 1/RTT regardless of cluster capacity — so the numbers
-            // measured the driver, not the cluster. A bounded window lets throughput
-            // track the cluster while keeping memory in hand.
-            let max_inflight: usize = 512;
             let mut inflight: FuturesUnordered<AckFuture> = FuturesUnordered::new();
             let enqueue_limit = enqueue_limit(request_timeout);
 
@@ -1312,27 +1289,8 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
                 if state == STATE_STOP {
                     break;
                 }
-                // Drain every ack that has already settled — promptly, so the recorded
-                // latency is the real send→ack time, not how long a record waited in
-                // the in-flight set behind an older stuck send.
-                while let Some(SettledAck {
-                    result: res,
-                    sent_at: t0,
-                }) = inflight.next().now_or_never().flatten()
-                {
-                    observations.record_ack(res, t0);
-                }
-                // Back-pressure: at capacity, block until any send completes. Waiting
-                // for the oldest can make one dead-leader send hide live-partition acks.
-                while inflight.len() >= max_inflight {
-                    if let Some(SettledAck {
-                        result: res,
-                        sent_at: t0,
-                    }) = inflight.next().await
-                    {
-                        observations.record_ack(res, t0);
-                    }
-                }
+                drain_settled(&mut inflight, &mut observations);
+                await_capacity(&mut inflight, &mut observations).await;
                 if let Some(p) = pacer.as_mut() {
                     p.await_token().await;
                 }
@@ -1368,42 +1326,112 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
                 }
             }
 
-            // Drain anything still outstanding when the measurement window closed, but
-            // do not let a stuck producer retry slot keep the whole benchmark job alive
-            // forever. Unsettled sends are counted as drops so failover reports capture
-            // the stall instead of timing out without a JSON result.
-            let drain_until = Instant::now() + final_drain_timeout.to_std();
-            while !inflight.is_empty() {
-                let now = Instant::now();
-                if now >= drain_until {
-                    observations.record_drain_timeout(inflight.len());
-                    break;
-                }
-                match timeout_at(drain_until, inflight.next()).await {
-                    Ok(Some(SettledAck {
-                        result: res,
-                        sent_at: t0,
-                    })) => observations.record_ack(res, t0),
-                    Ok(None) => break,
-                    Err(_) => {
-                        observations.record_drain_timeout(inflight.len());
-                        break;
-                    }
-                }
-            }
-
-            // `flush` and `close` wait on the same sends the drain gave up on, so
-            // they get the same bound: a producer that stops issuing requests must
-            // not hold the run open past its report.
-            if !finished_within(final_drain_timeout, producer.flush()).await {
-                observations.record_teardown_timeout("flush");
-            }
-            if !finished_within(final_drain_timeout, Box::pin(producer.close())).await {
-                observations.record_teardown_timeout("close");
-            }
-
+            drain_inflight(&mut inflight, final_drain_timeout, &mut observations).await;
+            teardown(producer, final_drain_timeout, &mut observations).await;
             observations.output
         }
+    }
+}
+
+/// Build the producer one task sends through, from that task's setup.
+async fn build_producer(setup: &TaskSetup) -> Result<Producer> {
+    let scenario = &setup.scenario;
+    // Idempotence forces acks=All; turn it off whenever the scenario
+    // requested something weaker.
+    let enable_idempotence = matches!(scenario.acks, Acks::All);
+    Producer::builder()
+        .bootstrap(setup.bootstrap.clone())
+        .dispatch_queue_capacity(setup.dispatch_queue_capacity.get())
+        .frame_max(setup.frame_max.size())
+        .client_id(format!("bench-producer-{}", setup.idx))
+        .acks(scenario.acks.into_producer())
+        .compression(scenario.compression.into_producer())
+        .enable_idempotence(enable_idempotence)
+        .linger(scenario.linger.to_std())
+        .batch_size(scenario.batch_size.bytes_usize())
+        .max_in_flight_per_connection(producer_max_in_flight(enable_idempotence))
+        // A produce to a healthy broker completes in low single-digit ms, so a
+        // 2s ceiling should not trip under normal load — but it bounds how long a
+        // send to a *killed* leader blocks before the client re-routes, so the
+        // measured failover recovery reflects the cluster's leader re-election
+        // rather than the 30s default request timeout.
+        .request_timeout(setup.request_timeout.to_std())
+        // `None` → plaintext (default). `Some` → all produce traffic for this
+        // task goes over the broker's TLS listener.
+        .maybe_security(setup.security.clone())
+        .build()
+        .await
+        .context("build producer")
+}
+
+/// Record every ack that has already settled, without waiting.
+///
+/// Draining promptly keeps the recorded latency the real send→ack time, not
+/// how long a record waited in the in-flight set behind an older stuck send.
+fn drain_settled(
+    inflight: &mut FuturesUnordered<AckFuture>,
+    observations: &mut ProducerObservations<'_>,
+) {
+    while let Some(ack) = inflight.next().now_or_never().flatten() {
+        observations.record_settled(ack);
+    }
+}
+
+/// Back-pressure: at capacity, block until any send completes.
+///
+/// Waiting for the oldest instead could let one dead-leader send hide
+/// live-partition acks.
+async fn await_capacity(
+    inflight: &mut FuturesUnordered<AckFuture>,
+    observations: &mut ProducerObservations<'_>,
+) {
+    while inflight.len() >= MAX_IN_FLIGHT_SENDS {
+        if let Some(ack) = inflight.next().await {
+            observations.record_settled(ack);
+        }
+    }
+}
+
+/// Drain anything still outstanding when the measurement window closed.
+///
+/// A stuck producer retry slot must not keep the whole benchmark job alive
+/// forever, so the drain stops at `final_drain_timeout`. Unsettled sends are
+/// counted as drops, so failover reports capture the stall instead of timing
+/// out without a JSON result.
+async fn drain_inflight(
+    inflight: &mut FuturesUnordered<AckFuture>,
+    final_drain_timeout: Time,
+    observations: &mut ProducerObservations<'_>,
+) {
+    let drain_until = Instant::now() + final_drain_timeout.to_std();
+    while !inflight.is_empty() {
+        let now = Instant::now();
+        if now >= drain_until {
+            observations.record_drain_timeout(inflight.len());
+            break;
+        }
+        match timeout_at(drain_until, inflight.next()).await {
+            Ok(Some(ack)) => observations.record_settled(ack),
+            Ok(None) => break,
+            Err(_) => {
+                observations.record_drain_timeout(inflight.len());
+                break;
+            }
+        }
+    }
+}
+
+/// Flush and close the producer, each within `limit`.
+///
+/// `flush` and `close` wait on the same sends the drain gave up on, so they
+/// get the same bound: a producer that stops issuing requests must not hold
+/// the run open past its report.
+async fn teardown(producer: Producer, limit: Time, observations: &mut ProducerObservations<'_>) {
+    if !finished_within(limit, producer.flush()).await {
+        observations.record_teardown_timeout("flush");
+    }
+    if !finished_within(limit, Box::pin(producer.close())).await {
+        observations.record_teardown_timeout("close");
     }
 }
 

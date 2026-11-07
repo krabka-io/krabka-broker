@@ -23,8 +23,8 @@ use krabka_metadata::{
 };
 use {
     super::policy::{
-        FailoverDecision, FailoverPlan, Ladder, elect_leaderless_one, failover_one,
-        push_partition_change, unclean_restart_one,
+        FailoverDecision, FailoverPlan, Ladder, LeaderRecovery, NextEpochs, PartitionChange,
+        elect_leaderless_one, failover_one, push_partition_change, unclean_restart_one,
     },
     crate::{
         config_keys::{
@@ -135,13 +135,38 @@ fn record_recovery(
     mark_leaderless(publisher, pr, gone);
 }
 
-/// Validate a scan's epoch change, preserving its exhaustion diagnostic.
-fn checked_epochs(
+/// The epochs an election of a new leader for `pr` writes: the partition
+/// epoch and the leader epoch both advance. `None`, after a warning that says
+/// `exhausted_message`, when either cannot.
+fn epochs_for_election(pr: &PartitionRecord, exhausted_message: &str) -> Option<NextEpochs> {
+    warn_if_exhausted(
+        pr,
+        next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
+            .map(|(partition, leader)| NextEpochs { partition, leader }),
+        exhausted_message,
+    )
+}
+
+/// The epochs an ISR change that keeps `pr`'s leader writes: only the
+/// partition epoch advances. `None`, after a warning that says
+/// `exhausted_message`, when it cannot.
+fn epochs_for_isr_change(pr: &PartitionRecord, exhausted_message: &str) -> Option<NextEpochs> {
+    warn_if_exhausted(
+        pr,
+        next_partition_change(pr.partition_epoch, pr.leader_epoch, false)
+            .map(|(partition, leader)| NextEpochs { partition, leader }),
+        exhausted_message,
+    )
+}
+
+/// Pass `epochs` through, warning with `exhausted_message` when an epoch of
+/// `pr` could not advance.
+fn warn_if_exhausted<T>(
     pr: &PartitionRecord,
-    leader_changes: bool,
+    epochs: Option<T>,
     exhausted_message: &str,
-) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
-    next_partition_change(pr.partition_epoch, pr.leader_epoch, leader_changes).or_else(|| {
+) -> Option<T> {
+    epochs.or_else(|| {
         warn!(topic = %pr.topic, partition = pr.partition, "{exhausted_message}");
         None
     })
@@ -152,8 +177,8 @@ fn checked_election_epochs(
     unavailable: &mut Vec<(String, i32)>,
     pr: &PartitionRecord,
     exhausted_message: &str,
-) -> Option<(i32, krabka_metadata::LeaderEpoch)> {
-    let epochs = checked_epochs(pr, true, exhausted_message);
+) -> Option<NextEpochs> {
+    let epochs = epochs_for_election(pr, exhausted_message);
     if epochs.is_none() {
         unavailable.push((pr.topic.clone(), pr.partition));
     }
@@ -168,40 +193,17 @@ fn push_checked_isr_shrink(
     exhausted_message: &str,
     applied: impl FnOnce(&[NodeId]),
 ) -> bool {
-    let Some((partition_epoch, leader_epoch)) = checked_epochs(pr, false, exhausted_message) else {
+    let Some(epochs) = epochs_for_isr_change(pr, exhausted_message) else {
         return false;
     };
     applied(&isr);
-    push_partition_change(
-        changes,
-        pr,
-        pr.leader,
+    push_partition_change(changes, pr, PartitionChange {
+        leader: pr.leader,
         isr,
-        partition_epoch,
-        leader_epoch,
-        false,
-    );
+        epochs,
+        recovery: LeaderRecovery::Recovered,
+    });
     true
-}
-
-fn push_election_change(
-    changes: &mut Vec<MetadataRecord>,
-    pr: &PartitionRecord,
-    leader: NodeId,
-    isr: Vec<NodeId>,
-    partition_epoch: i32,
-    leader_epoch: krabka_metadata::LeaderEpoch,
-    unclean: bool,
-) {
-    push_partition_change(
-        changes,
-        pr,
-        leader,
-        isr,
-        partition_epoch,
-        leader_epoch,
-        unclean,
-    );
 }
 
 fn shrink_or_mark_unavailable(
@@ -250,7 +252,7 @@ pub async fn compute_failover_changes(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, new_leader_epoch)) = checked_election_epochs(
+                let Some(epochs) = checked_election_epochs(
                     &mut unavailable,
                     pr,
                     "failover skipped because a metadata epoch is exhausted",
@@ -278,18 +280,14 @@ pub async fn compute_failover_changes(
                     new_leader = leader.0,
                     old_isr = ?pr.isr,
                     new_isr = ?isr,
-                    new_leader_epoch = new_leader_epoch.0,
+                    new_leader_epoch = epochs.leader.0,
                     unclean,
                     "failover: re-electing partition leader (triggered by dead broker)"
                 );
-                push_election_change(
+                push_partition_change(
                     &mut changes,
                     pr,
-                    leader,
-                    isr,
-                    partition_epoch,
-                    new_leader_epoch,
-                    unclean,
+                    PartitionChange::election(leader, isr, epochs, unclean),
                 );
             }
             FailoverDecision::ShrinkIsr { isr } => {
@@ -372,9 +370,8 @@ pub async fn compute_offline_dir_failover_changes(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, leader_epoch)) = checked_epochs(
+                let Some(epochs) = epochs_for_election(
                     pr,
-                    true,
                     "offline-dir failover skipped because a metadata epoch is exhausted",
                 ) else {
                     continue;
@@ -386,14 +383,10 @@ pub async fn compute_offline_dir_failover_changes(
                     );
                     metrics.record_unclean_leader_election();
                 }
-                push_election_change(
+                push_partition_change(
                     &mut changes,
                     pr,
-                    leader,
-                    isr,
-                    partition_epoch,
-                    leader_epoch,
-                    unclean,
+                    PartitionChange::election(leader, isr, epochs, unclean),
                 );
             }
             FailoverDecision::ShrinkIsr { isr } => {
@@ -543,7 +536,7 @@ fn restart_plan(
                 isr,
                 unclean,
             } => {
-                let Some((partition_epoch, new_leader_epoch)) = checked_election_epochs(
+                let Some(epochs) = checked_election_epochs(
                     &mut unavailable,
                     pr,
                     "unclean-restart failover skipped because a metadata epoch is exhausted",
@@ -565,18 +558,14 @@ fn restart_plan(
                     new_leader = leader.0,
                     old_isr = ?pr.isr,
                     new_isr = ?isr,
-                    new_leader_epoch = new_leader_epoch.0,
+                    new_leader_epoch = epochs.leader.0,
                     unclean,
                     "unclean restart: re-electing partition leader"
                 );
                 push_partition_change(
                     &mut changes,
                     pr,
-                    leader,
-                    isr,
-                    partition_epoch,
-                    new_leader_epoch,
-                    unclean,
+                    PartitionChange::election(leader, isr, epochs, unclean),
                 );
             }
             FailoverDecision::ShrinkIsr { isr } => {
@@ -684,9 +673,8 @@ fn compute_leaderless_changes_with_alive(
         else {
             continue;
         };
-        let Some((partition_epoch, leader_epoch)) = checked_epochs(
+        let Some(epochs) = epochs_for_election(
             pr,
-            true,
             "election of a leaderless partition skipped because a metadata epoch is exhausted",
         ) else {
             continue;
@@ -703,18 +691,14 @@ fn compute_leaderless_changes_with_alive(
             partition = pr.partition,
             new_leader = leader.0,
             new_isr = ?isr,
-            new_leader_epoch = leader_epoch.0,
+            new_leader_epoch = epochs.leader.0,
             unclean,
             "electing a leader for a partition with none"
         );
         push_partition_change(
             &mut changes,
             pr,
-            leader,
-            isr,
-            partition_epoch,
-            leader_epoch,
-            unclean,
+            PartitionChange::election(leader, isr, epochs, unclean),
         );
     }
     // A leader is what clears the last-known ELR, and the election it comes

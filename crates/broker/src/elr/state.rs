@@ -28,12 +28,13 @@
 //! them in `Some`.
 
 use {
-    crate::features::{ELR_VERSION, feature_enabled},
+    crate::{
+        config_keys::ELIGIBLE_LEADER_REPLICAS,
+        features::{ELR_VERSION, feature_enabled},
+    },
     krabka_metadata::{MetadataImage, NodeId, PartitionRecord},
     std::collections::BTreeMap,
 };
-
-const LEGACY_ELR_CONFIG: &str = "krabka.elr";
 
 /// One partition's ELR state, in the wire types the response uses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -81,7 +82,7 @@ impl TopicElr {
         let mut state = if feature_enabled(image, ELR_VERSION, 1) {
             image
                 .topic_config(topic)
-                .and_then(|config| config.get(LEGACY_ELR_CONFIG))
+                .and_then(|config| config.get(ELIGIBLE_LEADER_REPLICAS))
                 .map_or_else(Self::default, |value| Self::parse(value))
         } else {
             Self::default()
@@ -173,7 +174,7 @@ pub fn test_records(topic: &str, value: &str) -> Vec<krabka_metadata::MetadataRe
 pub fn legacy_elr(image: &MetadataImage, topic: &str) -> Option<TopicElr> {
     image
         .topic_config(topic)?
-        .get(LEGACY_ELR_CONFIG)
+        .get(ELIGIBLE_LEADER_REPLICAS)
         .map(|value| TopicElr::parse(value))
 }
 
@@ -185,7 +186,7 @@ pub fn without_legacy_elr(
     let mut overrides = replacement
         .cloned()
         .or_else(|| image.topic_config(topic).cloned())?;
-    overrides.remove(LEGACY_ELR_CONFIG)?;
+    overrides.remove(ELIGIBLE_LEADER_REPLICAS)?;
     Some(krabka_metadata::MetadataRecord::V1TopicConfig(
         krabka_metadata::TopicConfigRecord {
             topic: topic.to_owned(),

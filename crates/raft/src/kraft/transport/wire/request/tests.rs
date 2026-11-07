@@ -24,7 +24,9 @@ fn raw_vote_request() -> VoteRequest {
     }
 }
 
-fn raw_vote_body(request: &VoteRequest) -> Bytes { encode_body(request, VOTE_VERSION) }
+fn raw_vote_body(request: &VoteRequest) -> Bytes {
+    encode_body(request, VOTE_VERSION).expect("the body encodes")
+}
 
 /// The directory ids of the two replicas in a Vote.
 #[derive(Clone, Copy)]

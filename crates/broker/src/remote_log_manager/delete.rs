@@ -3,8 +3,11 @@
 //! partition-wide cascade that a `DeleteTopics` request starts.
 
 use {
-    super::{RemoteTier, archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
-    crate::{blocking::spawn_blocking, metrics::RemoteTierPath},
+    super::{archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
+    crate::{
+        blocking::spawn_blocking,
+        metrics::{BrokerMetrics, RemoteTierPath},
+    },
     krabka_log::Offset,
     krabka_remote_storage::{
         RemoteIndexCache, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
@@ -20,9 +23,22 @@ use {
 /// `DeletePartitionFinished`] lifecycle for `tp`, and delete every remote
 /// segment along the way. The `DeleteTopics` handler runs this as a detached
 /// task, so the response does not wait on remote-tier I/O. A failure logs
-/// at WARN. Leftover `DeleteSegmentStarted` segments are harmless in the
-/// in-memory RLMM, because a `DeleteTopics`-recreate combination regenerates
-/// the topic id and the new partition is a fresh `TopicIdPartition`.
+/// at WARN.
+///
+/// Every segment delete is counted in `metrics` as KIP-405's
+/// `RemoteDeleteRequestsPerSec`, and a failed one as
+/// `RemoteDeleteErrorsPerSec`, the same as a retention delete. A failed
+/// segment does not stop the cascade from deleting the rest, but it does stop
+/// the partition at `DeletePartitionStarted`: that segment's bytes may still be
+/// in the object store, so the partition is not finished. Kafka's
+/// `RemoteLogManager.deleteRemoteLogPartition` likewise publishes no
+/// `DELETE_SEGMENT_FINISHED` once an RSM delete throws. Nothing retries the
+/// partition on its own; the warning is the operator's signal.
+///
+/// After a `DeleteTopics` the counts land on a topic that no longer exists,
+/// so the metric-series evictor drops them on its next pass. A scrape sees
+/// them only if it runs before that pass. Kafka does not count cascade deletes
+/// at all.
 ///
 /// # A write-once archive keeps every byte
 ///
@@ -40,6 +56,7 @@ pub async fn cascade_remote_partition_delete(
     rsm: Arc<dyn RemoteStorageManager>,
     rlmm: Arc<dyn RemoteLogMetadataManager>,
     index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
+    metrics: BrokerMetrics,
 ) {
     if let Err(e) = put_partition_state(
         &rlmm,
@@ -71,6 +88,7 @@ pub async fn cascade_remote_partition_delete(
         rsm: &rsm,
         rlmm: &rlmm,
         index_cache: &index_cache,
+        metrics: &metrics,
     };
     let segments = match rlmm.list_remote_log_segments(&tp) {
         Ok(list) => list,
@@ -80,12 +98,21 @@ pub async fn cascade_remote_partition_delete(
             return;
         }
     };
+    let mut failed = 0_usize;
     for md in segments {
         // Skip segments already past `DeleteSegmentStarted` (no-op delete).
         if md.state() == RemoteLogSegmentState::DeleteSegmentFinished {
             continue;
         }
-        let _ = delete_one_segment(targets, &tp, broker_id, &md).await;
+        if !delete_segment_metered(targets, &tp, broker_id, &md).await {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        warn!(topic = %tp.topic, partition = tp.partition, failed,
+              "remote-log-manager: partition delete left segments undeleted; \
+               it stays DeletePartitionStarted");
+        return;
     }
 
     if let Err(e) = put_partition_state(
@@ -118,13 +145,15 @@ async fn put_partition_state(
 
 /// The parts of a remote tier that deleting one segment reaches: the archive
 /// mode that decides whether bytes go at all, the two managers that remove
-/// them, and the index cache that has to release them.
+/// them, the index cache that has to release them, and the metrics that count
+/// the delete.
 #[derive(Clone, Copy)]
 pub(super) struct DeleteTargets<'a> {
     pub(super) archive: ArchiveMode,
     pub(super) rsm: &'a Arc<dyn RemoteStorageManager>,
     pub(super) rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
     pub(super) index_cache: &'a Arc<RemoteIndexCache>,
+    pub(super) metrics: &'a BrokerMetrics,
 }
 
 /// Drive one segment through the `DeleteSegmentStarted` → RSM delete →
@@ -132,21 +161,21 @@ pub(super) struct DeleteTargets<'a> {
 /// `CopySegmentStarted` segment records `DeleteSegmentStarted` first, since
 /// neither may step straight to `DeleteSegmentFinished`; a segment already
 /// `DeleteSegmentStarted` picks up from there.
-/// Returns `true` when the lifecycle completes cleanly. Shared by
-/// [`remote_retention_pass`](super::remote_retention::remote_retention_pass)
-/// and [`cascade_remote_partition_delete`].
+/// Returns `true` when the lifecycle completes cleanly. Every caller goes
+/// through [`delete_segment_metered`].
 ///
 /// Under [`ArchiveMode::WriteOnce`] the RSM delete is skipped outright and
 /// only the metadata lifecycle advances. Calling it would fail — the backend
 /// refuses every delete, and the bucket's object-lock policy refuses it under
 /// that — so the skip is what keeps a routine pass from logging an error every
 /// tick.
-pub(super) async fn delete_one_segment(
+async fn delete_one_segment(
     DeleteTargets {
         archive,
         rsm,
         rlmm,
         index_cache,
+        ..
     }: DeleteTargets<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
@@ -229,20 +258,22 @@ pub(super) async fn delete_one_segment(
     true
 }
 
-/// [`delete_one_segment`] through `tier`, counted as KIP-405's
+/// [`delete_one_segment`] through `targets`, counted as KIP-405's
 /// `RemoteDeleteRequestsPerSec`, and as `RemoteDeleteErrorsPerSec` when the
 /// lifecycle does not complete. Returns whether it did.
 pub(super) async fn delete_segment_metered(
-    tier: &RemoteTier<'_>,
+    targets: DeleteTargets<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
     md: &RemoteLogSegmentMetadata,
 ) -> bool {
-    tier.metrics
+    targets
+        .metrics
         .record_remote_request(RemoteTierPath::Delete, &tp.topic);
-    let deleted = delete_one_segment(tier.delete_targets(), tp, broker_id, md).await;
+    let deleted = delete_one_segment(targets, tp, broker_id, md).await;
     if !deleted {
-        tier.metrics
+        targets
+            .metrics
             .record_remote_error(RemoteTierPath::Delete, &tp.topic);
     }
     deleted
@@ -323,7 +354,7 @@ mod tests {
         assert2::{assert, check},
         fixtures::{copy_all_exports, copy_exports, local_backends},
         krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage},
-        std::{fs, ops::RangeInclusive},
+        std::{fs, ops::RangeInclusive, sync::atomic::Ordering},
         test_support::{ArchivedSegment, archived_segments, seed_segment},
     };
 
@@ -466,6 +497,7 @@ mod tests {
             Arc::clone(&rsm),
             Arc::clone(&rlmm),
             disabled_index_cache(),
+            BrokerMetrics::new(),
         )
         .await;
 
@@ -494,10 +526,47 @@ mod tests {
             rsm,
             Arc::clone(&rlmm),
             disabled_index_cache(),
+            BrokerMetrics::new(),
         )
         .await;
         // No segments after, no panics; that's the test.
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cascade_partition_delete_stays_started_when_a_segment_delete_fails() {
+        let rsm_impl = Arc::new(fixtures::RefusesDeleteRsm::default());
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+        let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let resources = fixtures::OwnedTierResources {
+            rlmm: Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>,
+            metrics: BrokerMetrics::new(),
+            index_cache: disabled_index_cache(),
+        };
+        let copied = copy_exports(&resources.tier(&rsm), fixtures::two_exports()).await;
+        check!(copied == 2);
+
+        cascade_remote_partition_delete(
+            tp(),
+            1,
+            ArchiveMode::Mutable,
+            Arc::clone(&rsm),
+            Arc::clone(&resources.rlmm),
+            disabled_index_cache(),
+            resources.metrics.clone(),
+        )
+        .await;
+
+        check!(
+            rsm_impl.deletes_attempted.load(Ordering::Relaxed) == 2,
+            "one failed segment does not stop the cascade deleting the rest"
+        );
+        check!(
+            dumped_delete_state(&rlmm_impl)
+                == Some(RemotePartitionDeleteState::DeletePartitionStarted),
+            "a partition whose bytes are still in the store is not finished"
+        );
+        check!(resources.delete_counts() == (2, 2));
     }
 
     #[tokio::test]
@@ -521,6 +590,7 @@ mod tests {
             Arc::clone(&rsm),
             Arc::clone(&rlmm),
             disabled_index_cache(),
+            BrokerMetrics::new(),
         )
         .await;
 

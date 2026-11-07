@@ -10,14 +10,10 @@ use {
     crate::{
         error::RaftError,
         kraft::{
-            controller::checkpoint::{
-                CheckpointChunk, latest_checkpoint_id, load_checkpoint_by_id, open_checkpoint,
-            },
-            snapshot_fetch::SnapshotId,
+            controller::checkpoint::{CheckpointChunk, latest_checkpoint_id, open_checkpoint},
             transport::Inbound,
         },
     },
-    std::path::Path,
     tokio::sync::oneshot,
 };
 
@@ -113,20 +109,14 @@ impl ControllerHandle {
     }
 }
 
-/// The highest `(end_offset, epoch)` `.checkpoint` in `dir` plus its raw
-/// bytes. Matches the bare-checkpoint format the engine writes (no `.meta`
-/// sidecar).
-pub(super) fn load_latest_checkpoint(dir: &Path) -> Option<(SnapshotId, Vec<u8>)> {
-    let id = latest_checkpoint_id(dir)?;
-    let bytes = load_checkpoint_by_id(dir, id.0, id.1)?;
-    Some((id, bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::{controller::test_support::joining_controller, metadata_partition_dir},
+        crate::{
+            controller::test_support::joining_controller,
+            kraft::controller::checkpoint::load_latest_checkpoint, metadata_partition_dir,
+        },
         std::fs,
         tempfile::TempDir,
     };
@@ -159,8 +149,9 @@ mod tests {
         )
         .unwrap();
 
-        let latest = load_latest_checkpoint(dir.path()).expect("checkpoint");
-        assert2::assert!(latest == ((2, 3), b"best".to_vec()));
+        let id = latest_checkpoint_id(dir.path());
+        let latest = load_latest_checkpoint(dir.path()).expect("readable checkpoint");
+        assert2::assert!((id, latest) == (Some((2, 3)), Some(b"best".to_vec())));
     }
 
     #[yare::parameterized(

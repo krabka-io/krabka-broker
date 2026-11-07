@@ -105,7 +105,7 @@ pub fn v2_to_legacy(batch: &RecordBatch, target: Magic) -> Result<Bytes, LegacyR
         // be represented in v0/v1; the v2 decode path already produced
         // decompressed records for us, so emitting flat is correct.
         _ => {
-            encode_flat_message_set(records, target, &mut out);
+            encode_flat_message_set(records, target, &mut out)?;
         }
     }
     Ok(out.freeze())
@@ -268,7 +268,7 @@ mod tests {
                 value: None,
             });
         let mut wire = BytesMut::new();
-        encode_flat_message_set(records, Magic::V1, &mut wire);
+        encode_flat_message_set(records, Magic::V1, &mut wire).unwrap();
         wire
     }
 

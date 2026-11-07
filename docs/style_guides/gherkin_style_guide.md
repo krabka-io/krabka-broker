@@ -135,12 +135,13 @@ The fork the root `Cargo.toml` pins fixes most of upstream's silent failures. It
 - A `*` step after a `When` or `Then` continues that keyword.
 - A failing step's panic names the feature file and line, the rule, the scenario, the outline row and the step as written.
 - `ignore_tags = "<tag expression>"` marks matching scenarios `#[ignore]` instead of dropping them, so `--ignored` still runs them. Tags may contain `:` and `.`.
+- `expect_failure_tags = "<tag expression>"` runs matching scenarios as expected failures. The test passes while a step fails, and fails with "scenario tagged ... now passes: remove the tag" once every step passes, so a scenario cannot stay `@inprogress` after the work is done. A tag set that matches both `ignore_tags` and `expect_failure_tags` is a compile error.
+- Placeholder values bind to a step function's parameters by name, so the parameter order does not matter. Position is the fallback only where names cannot match, such as a `StepArgs` struct.
 
 What is still open:
 
 - Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file, or the new scenarios do not exist. Edits to an existing file are tracked. Bazel is not affected, because the `compile_data` glob is a build input.
 - When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily. `krabka_bdd::scenarios!` turns that into a failing test.
-- Placeholder values bind to a step function's parameters by position, not by name. Keep the parameters in the order the placeholders appear in the pattern: reordering them still compiles and silently swaps the values.
 
 ## krabka-bdd
 

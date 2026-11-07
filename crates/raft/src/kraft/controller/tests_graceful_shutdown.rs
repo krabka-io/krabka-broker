@@ -58,8 +58,12 @@ async fn a_stopping_leader(stop: Stop, resigns: bool, waits_out_the_window: bool
         fetch: secs(5),
     };
     let window = graceful_shutdown_window(timeouts.fetch);
-    let (ctrl, _dir, mut sends) =
-        spawn_recording_controller(timeouts, wire::PeerResponse::Ack { epoch: 1 }.encode());
+    let (ctrl, _dir, mut sends) = spawn_recording_controller(
+        timeouts,
+        wire::PeerResponse::Ack { epoch: 1 }
+            .encode()
+            .expect("the body encodes"),
+    );
     elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
     let _ = end_quorum_epochs(&mut sends);
 
@@ -122,8 +126,12 @@ async fn a_following_engine_stops_at_once() {
         election: secs(5),
         fetch: secs(5),
     };
-    let (ctrl, _dir, mut sends) =
-        spawn_recording_controller(timeouts, wire::PeerResponse::Ack { epoch: 1 }.encode());
+    let (ctrl, _dir, mut sends) = spawn_recording_controller(
+        timeouts,
+        wire::PeerResponse::Ack { epoch: 1 }
+            .encode()
+            .expect("the body encodes"),
+    );
     ctrl.inject_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(2),
         leader_epoch: 1,
