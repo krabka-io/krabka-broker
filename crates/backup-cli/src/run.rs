@@ -1259,7 +1259,7 @@ mod tests {
             store,
         } = archive_fixture();
         let id = "0001700000000000";
-        let signing = super::CaptureSigningArgs::default();
+        let signing = CaptureSigningArgs::default();
         let request = super::CaptureRequest::builder()
             .log_dir(Path::new("/var/lib/krabka"))
             .bootstrap_server("broker-1:9092")
@@ -1400,7 +1400,7 @@ mod tests {
             args: archive,
             store,
         } = archive_fixture();
-        let signing = super::CaptureSigningArgs::default();
+        let signing = CaptureSigningArgs::default();
         let request = |log_dir| {
             super::CaptureRequest::builder()
                 .log_dir(log_dir)
