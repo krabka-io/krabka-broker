@@ -5,6 +5,7 @@ use {
         broker::leader_listener_endpoint,
         codes,
         coordinator::{GroupCoordinator, bootstrap::OFFSETS_TOPIC, partitioner},
+        error::BrokerError,
         metadata_source::MetadataSource,
         metrics::{BrokerMetrics, ShareGroupLabel},
         network::client::InterBrokerClient,
@@ -35,6 +36,18 @@ use {
 
 pub fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
     krabka_verified::effective_share_backlog(hwm, spso, log_start)
+}
+
+/// Why one share-group partition has no backlog sample this tick.
+#[derive(Debug, thiserror::Error)]
+enum SampleError {
+    /// The share-state summary read failed, with the coordinator's code
+    /// when the state partition leader refused it.
+    #[error("share state summary read failed: {0}")]
+    StateSummary(#[from] BrokerError),
+    /// The high watermark and log start probe failed.
+    #[error("partition offsets probe failed: {0}")]
+    Offsets(String),
 }
 
 pub struct BacklogPoller {
@@ -76,13 +89,9 @@ impl BacklogPoller {
                             groups = groups.len(),
                             "sampling share-group backlog",
                         );
-                        match self.snapshot(&image, groups).await {
-                            Ok(next) => {
-                                tracing::debug!(samples = next.len(), "share-group backlog sample complete");
-                                replace(&self.metrics, &mut last, next);
-                            }
-                            Err(error) => tracing::warn!(%error, "share-group backlog sample failed"),
-                        }
+                        let next = merge_sample(&last, self.snapshot(&image, groups).await);
+                        tracing::debug!(samples = next.len(), "share-group backlog sample complete");
+                        replace(&self.metrics, &mut last, next);
                     }
                 }
             }
@@ -94,7 +103,7 @@ impl BacklogPoller {
         &self,
         image: &krabka_metadata::MetadataImage,
         groups: Vec<String>,
-    ) -> Result<HashMap<ShareGroupLabel, i64>, String> {
+    ) -> HashMap<ShareGroupLabel, Result<i64, SampleError>> {
         let mut snapshot = HashMap::new();
         for group_id in groups {
             if !owns_group(image, self.node_id, &group_id) {
@@ -118,28 +127,47 @@ impl BacklogPoller {
                     continue;
                 };
                 for partition in partitions {
-                    let spso = self
-                        .persister
-                        .read_state_summary(&group_id, topic_id, partition)
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
-                    let PartitionOffsets {
-                        high_watermark: hwm,
-                        log_start,
-                    } = self.offsets(image, &topic, partition).await?;
+                    let backlog = self
+                        .sample_partition(image, &group_id, topic_id, &topic, partition)
+                        .await;
                     snapshot.insert(
                         ShareGroupLabel {
                             group_id: group_id.clone(),
                             topic: topic.clone(),
                             partition,
                         },
-                        effective_backlog(hwm, spso, log_start),
+                        backlog,
                     );
                 }
             }
         }
-        Ok(snapshot)
+        snapshot
+    }
+
+    /// The effective backlog of one share-group partition, from its
+    /// share-partition start offset (`-1` when it has no share state), high
+    /// watermark and log start offset. See [`effective_backlog`].
+    async fn sample_partition(
+        &self,
+        image: &krabka_metadata::MetadataImage,
+        group_id: &str,
+        topic_id: uuid::Uuid,
+        topic: &str,
+        partition: i32,
+    ) -> Result<i64, SampleError> {
+        let spso = self
+            .persister
+            .read_state_summary(group_id, topic_id, partition)
+            .await?
+            .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
+        let PartitionOffsets {
+            high_watermark: hwm,
+            log_start,
+        } = self
+            .offsets(image, topic, partition)
+            .await
+            .map_err(SampleError::Offsets)?;
+        Ok(effective_backlog(hwm, spso, log_start))
     }
 
     async fn offsets(
@@ -347,6 +375,34 @@ fn prune_stale(
     });
 }
 
+/// The next backlog map from one tick's per-partition samples.
+///
+/// A partition that sampled takes its new backlog. A partition whose sample
+/// failed keeps its value from `last`, so its gauge holds the last good
+/// sample instead of being cleared, and is left out when it has none. One
+/// failing partition therefore does not freeze the gauges of the others.
+fn merge_sample(
+    last: &HashMap<ShareGroupLabel, i64>,
+    sampled: HashMap<ShareGroupLabel, Result<i64, SampleError>>,
+) -> HashMap<ShareGroupLabel, i64> {
+    sampled
+        .into_iter()
+        .filter_map(|(label, sample)| match sample {
+            Ok(backlog) => Some((label, backlog)),
+            Err(error) => {
+                tracing::warn!(
+                    group_id = %label.group_id,
+                    topic = %label.topic,
+                    partition = label.partition,
+                    %error,
+                    "share-group backlog sample failed for partition; keeping its last sample",
+                );
+                last.get(&label).map(|&backlog| (label, backlog))
+            }
+        })
+        .collect()
+}
+
 fn replace(
     metrics: &BrokerMetrics,
     last: &mut HashMap<ShareGroupLabel, i64>,
@@ -372,14 +428,15 @@ fn clear(metrics: &BrokerMetrics, last: &mut HashMap<ShareGroupLabel, i64>) {
 mod tests {
     use {
         super::{
-            BacklogPoller, PartitionOffsets, effective_backlog, fetch_offsets, latest_fetch_offset,
-            owns_group, prune_stale, replace,
+            BacklogPoller, PartitionOffsets, SampleError, effective_backlog, fetch_offsets,
+            latest_fetch_offset, merge_sample, owns_group, prune_stale, replace,
         },
         crate::{
             codes,
             coordinator::{
                 bootstrap::OFFSETS_TOPIC, partitioner, unified::test_support::make_coord,
             },
+            error::BrokerError,
             metadata_source::MetadataSource,
             metrics::{BrokerMetrics, ShareGroupLabel},
             partition_registry::PartitionRegistry,
@@ -580,6 +637,47 @@ mod tests {
         replace(&metrics, &mut last, HashMap::new());
         assert2::assert!(metrics.share_group_backlog.get(&label).is_none());
         assert2::assert!(last.is_empty());
+    }
+
+    /// One failing partition does not freeze the others. A healthy
+    /// partition publishes its new backlog, a failing one keeps the gauge
+    /// value of its last good sample, and a failing one with no earlier sample
+    /// publishes nothing.
+    #[test]
+    fn a_failing_partition_keeps_its_last_sample_and_spares_the_others() {
+        let label = |partition| ShareGroupLabel {
+            group_id: "workers".into(),
+            topic: "work".into(),
+            partition,
+        };
+        let metrics = BrokerMetrics::new();
+        let mut last = HashMap::new();
+        replace(
+            &metrics,
+            &mut last,
+            maplit::hashmap! {label(0) => 5, label(1) => 7},
+        );
+
+        let next = merge_sample(&last, maplit::hashmap! {
+            label(0) => Ok(3),
+                label(1) => Err(SampleError::Offsets("leader unreachable".to_owned())),
+                label(2) => Err(SampleError::StateSummary(BrokerError::SharePartitionState {
+                    code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    message: "coordinator loading".to_owned(),
+                })),
+        });
+        replace(&metrics, &mut last, next);
+
+        let gauges: Vec<_> = (0..3)
+            .map(|partition| {
+                metrics
+                    .share_group_backlog
+                    .get(&label(partition))
+                    .map(|gauge| gauge.get())
+            })
+            .collect();
+        assert2::assert!(gauges == [Some(3), Some(7), None]);
+        assert2::assert!(last == maplit::hashmap! {label(0) => 3, label(1) => 7});
     }
 
     #[test]

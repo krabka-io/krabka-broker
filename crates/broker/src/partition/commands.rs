@@ -7,9 +7,11 @@ use {
         blocking::run_blocking,
         config_keys::apply_to_log_config,
         error::BrokerError,
+        log_dir_status::LogDirRegistry,
         partition::{
             Partition, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch, WriterMessage,
         },
+        partition_writer::{flag_storage_failure, storage_failure_error},
         task_util::{AskError, ask},
     },
     krabka_log::Offset,
@@ -102,42 +104,49 @@ impl Partition {
     /// waiting for WAL quorum must not block metadata reconciliation.
     ///
     /// # Errors
-    /// Returns an error if the blocking task cannot complete.
+    /// Returns an error if the blocking task cannot complete, or if the log
+    /// start checkpoint that must precede enabling remote storage cannot be
+    /// written. The log then keeps its old config, and a storage failure, a
+    /// panic in the task included, takes the partition's log directory
+    /// offline in `log_dir_status` until the broker restarts.
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
+        log_dir_status: &LogDirRegistry,
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
         let log = Arc::clone(&self.log);
         let writer = self.writer_tx.clone();
-        run_blocking(move || {
-            let mut log = log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+        let result = run_blocking(move || {
+            let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
             let current = log.config_snapshot();
             if current == merged {
-                return;
+                return Ok(());
             }
-            let enables_tiering = merged.remote_storage_enable && !current.remote_storage_enable;
-            log.set_config(merged);
             // A tiered log reopens at whatever start the checkpoint holds, with
             // no floor at the first segment, so a start local retention moved
             // and has not yet written must reach the file before the log turns
             // tiered: a crash would otherwise reopen it at the older start and
             // send reads for offsets retention deleted to a tier that never
-            // held them.
-            if enables_tiering && let Err(error) = log.flush_log_start_checkpoint() {
-                tracing::warn!(%error, "log start checkpoint before enabling remote storage failed");
+            // held them. A failed write leaves the log untiered on a
+            // directory that goes offline.
+            if merged.remote_storage_enable && !current.remote_storage_enable {
+                log.flush_log_start_checkpoint()?;
             }
+            log.set_config(merged);
             drop(log);
             // A full queue already wakes the writer; a stopped writer has no timer.
             let _ = writer.try_send(WriterMessage::ConfigChanged);
+            Ok(())
         })
         .await
-        .map_err(|error| {
-            BrokerError::Replication(format!("log configuration task failed: {error}"))
-        })
+        .map_err(|error| storage_failure_error("log configuration task failed", error))
+        .and_then(|applied| applied.map_err(BrokerError::Log));
+        if let Err(error) = &result {
+            flag_storage_failure(error, &self.log_dir, log_dir_status);
+        }
+        result
     }
 
     /// Append a leader-assigned batch to the local log and keep its
@@ -426,47 +435,105 @@ mod tests {
             test_support::default_records_batch,
         },
         assert2::assert,
-        krabka_log::name,
+        krabka_log::{IoTarget, name},
         std::{
             collections::BTreeMap,
-            fs,
+            fs, io,
+            path::{Path, PathBuf},
             sync::{Arc, mpsc},
             thread,
             time::{Duration, SystemTime},
         },
+        tempfile::TempDir,
         tokio::sync::{Notify, mpsc::channel},
     };
+
+    /// A partition whose log owes a start that local retention moved and has
+    /// not yet written: the checkpoint holds 1, the log starts at 2. Returns
+    /// the partition, its directory, the checkpoint path, and the config the
+    /// log then runs with.
+    fn partition_owing_a_retention_moved_start()
+    -> (Partition, TempDir, PathBuf, krabka_log::LogConfig) {
+        let (part, dir) = test_partition(Arc::new(Notify::new()));
+        let checkpoint = name::log_start_offset_checkpoint_path(dir.path());
+        let mut log = part.log.lock().unwrap();
+        log.set_config(krabka_log::LogConfig {
+            segment_size: krabka_units::bytes(1),
+            retention_size: Some(krabka_units::bytes(0)),
+            file_delete_delay: krabka_units::millis(0),
+            ..krabka_log::LogConfig::default()
+        });
+        for _ in 0..3 {
+            log.append(&mut default_records_batch().call()).unwrap();
+        }
+        log.set_log_start_offset(Offset(1)).unwrap();
+        log.tick(SystemTime::now(), Offset(2)).unwrap();
+        assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+        let base = log.config_snapshot();
+        drop(log);
+        (part, dir, checkpoint, base)
+    }
+
+    fn remote_storage_on() -> BTreeMap<String, String> {
+        [("remote.storage.enable".to_owned(), "true".to_owned())].into()
+    }
 
     /// A tiered log reopens at the checkpointed start with no floor at its
     /// first segment, so the start local retention moved must be on disk
     /// before a config change turns the log tiered.
     #[tokio::test]
     async fn enabling_remote_storage_writes_the_start_retention_moved() {
-        let (part, dir) = test_partition(Arc::new(Notify::new()));
-        let checkpoint = name::log_start_offset_checkpoint_path(dir.path());
-        let base = {
-            let mut log = part.log.lock().unwrap();
-            log.set_config(krabka_log::LogConfig {
-                segment_size: krabka_units::bytes(1),
-                retention_size: Some(krabka_units::bytes(0)),
-                file_delete_delay: krabka_units::millis(0),
-                ..krabka_log::LogConfig::default()
-            });
-            for _ in 0..3 {
-                log.append(&mut default_records_batch().call()).unwrap();
-            }
-            log.set_log_start_offset(Offset(1)).unwrap();
-            log.tick(SystemTime::now(), Offset(2)).unwrap();
-            log.config_snapshot()
-        };
-        assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+        let (part, _dir, checkpoint, base) = partition_owing_a_retention_moved_start();
 
-        let overrides = [("remote.storage.enable".to_owned(), "true".to_owned())].into();
-        part.apply_log_config_overrides(&overrides, &base)
+        part.apply_log_config_overrides(&remote_storage_on(), &base, &LogDirRegistry::default())
             .await
             .unwrap();
 
         assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
+    }
+
+    /// A disk that refuses to publish the log-start checkpoint.
+    #[derive(Debug)]
+    struct StartCheckpointFails;
+
+    impl krabka_log::LogIo for StartCheckpointFails {
+        fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
+            if target == IoTarget::LogStartOffsetCheckpoint {
+                return Err(io::ErrorKind::StorageFull.into());
+            }
+            fs::rename(from, to)
+        }
+    }
+
+    /// The log must not turn tiered while the checkpoint still holds the
+    /// older start. A failed write keeps the old config, takes the log
+    /// directory offline as every other partition write failure does, and
+    /// returns the error.
+    #[tokio::test]
+    async fn a_failed_start_checkpoint_keeps_remote_storage_off_and_takes_the_dir_offline() {
+        let (part, dir, checkpoint, base) = partition_owing_a_retention_moved_start();
+        part.log
+            .lock()
+            .unwrap()
+            .test_set_io(Arc::new(StartCheckpointFails));
+        let registry = LogDirRegistry::default();
+
+        let error = part
+            .apply_log_config_overrides(&remote_storage_on(), &base, &registry)
+            .await
+            .unwrap_err();
+
+        let offline: Vec<PathBuf> = registry.offline().into_iter().map(|(dir, _)| dir).collect();
+        assert!(let BrokerError::Log(krabka_log::LogError::Io(_)) = error);
+        assert!(
+            (
+                part.log.lock().unwrap().config_snapshot(),
+                fs::read_to_string(&checkpoint).unwrap(),
+                offline,
+            ) == (base.clone(), "0\n1\n".to_owned(), vec![
+                dir.path().to_path_buf()
+            ])
+        );
     }
 
     #[tokio::test]
@@ -475,7 +542,7 @@ mod tests {
         let (tx, mut rx) = channel(1);
         part.writer_tx = tx;
         let base = part.log.lock().unwrap().config_snapshot();
-        part.apply_log_config_overrides(&BTreeMap::new(), &base)
+        part.apply_log_config_overrides(&BTreeMap::new(), &base, &LogDirRegistry::default())
             .await
             .unwrap();
         assert!(rx.try_recv().is_err());
@@ -485,7 +552,7 @@ mod tests {
         for size in [1, 2] {
             let bytes = 1_048_576 * size;
             let overrides = [("segment.bytes".to_owned(), bytes.to_string())].into();
-            part.apply_log_config_overrides(&overrides, &base)
+            part.apply_log_config_overrides(&overrides, &base, &LogDirRegistry::default())
                 .await
                 .unwrap();
             assert!(
@@ -514,7 +581,8 @@ mod tests {
         });
         lock_held.await.unwrap();
         let overrides = [("segment.bytes".into(), "1048576".into())].into();
-        let update = part.apply_log_config_overrides(&overrides, &base);
+        let registry = LogDirRegistry::default();
+        let update = part.apply_log_config_overrides(&overrides, &base, &registry);
         tokio::pin!(update);
         assert!(futures_util::poll!(update.as_mut()).is_pending());
         // This task must run while the blocking pool waits for the log lock.

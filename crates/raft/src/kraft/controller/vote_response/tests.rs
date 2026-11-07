@@ -97,6 +97,7 @@ fn answer(granted: bool, leader_id: Option<NodeId>, epoch: Epoch) -> bytes::Byte
         },
     }
     .encode()
+    .expect("the body encodes")
 }
 
 /// A prospective that a voter refuses while naming the leader of its epoch

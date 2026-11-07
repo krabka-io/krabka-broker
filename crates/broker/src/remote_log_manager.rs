@@ -132,6 +132,7 @@ async fn disable_and_delete_remote(
         Arc::clone(tier.rsm),
         Arc::clone(tier.rlmm),
         Arc::clone(tier.index_cache),
+        tier.metrics.clone(),
     )
     .await;
 
@@ -314,6 +315,7 @@ impl RemoteTier<'_> {
             rsm: self.rsm,
             rlmm: self.rlmm,
             index_cache: self.index_cache,
+            metrics: self.metrics,
         }
     }
 }

@@ -56,7 +56,8 @@ async fn truncation_restores_histories_at_the_retained_batch_end() {
                 log_start_offset: 0,
                 records: bytes::Bytes::new(),
             })
-            .encode();
+            .encode()
+            .expect("the body encodes");
             engine.on_fetch_response(NodeId(2), &response);
         } else {
             engine.execute_one_local(Action::TruncateTo(point));

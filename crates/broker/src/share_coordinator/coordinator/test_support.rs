@@ -91,7 +91,12 @@ pub async fn assert_recovered_epoch_is_fenced(
     topic_image: &krabka_metadata::MetadataImage,
     topic_id: uuid::Uuid,
 ) {
-    assert!(coordinator.read_summary("g", topic_id, 0).await == Ok(Some((2, 0, Offset(10), 0))));
+    assert!(
+        coordinator
+            .read_summary_checked(topic_image, "g", topic_id, 0)
+            .await
+            == Ok(Some((2, 0, Offset(10), 0)))
+    );
     assert!(
         coordinator
             .initialize(topic_image, "g", topic_id, 0, 1, Offset(20))

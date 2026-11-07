@@ -22,7 +22,7 @@ use {
     std::{
         fs, io,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, PoisonError},
     },
     tokio_util::sync::CancellationToken,
 };
@@ -187,27 +187,34 @@ fn spawn_move(task: MoveTask) {
     let cancel = CancellationToken::new();
     let target_partition_path =
         log_dir::partition_dir(&task.target_log_dir, &task.topic, task.partition.get());
-    let replicator = tokio::spawn(replicator_loop(ReplicatorTask {
-        part: task.part,
-        future_log: Arc::clone(&task.future_log),
-        future_path: task.future_path.clone(),
-        target_partition_path,
+    let state = Arc::new(FutureLogState {
         target_log_dir: task.target_log_dir.clone(),
+        future_path: task.future_path.clone(),
+        future_log: Arc::clone(&task.future_log),
         cancel: cancel.clone(),
+        task: Mutex::new(None),
+    });
+    // The entry is published before the task starts, so a task that ends at
+    // once removes it rather than racing ahead of the insert. The task slot
+    // stays locked until it holds the handle, so a cancel or shutdown that
+    // finds the entry in between waits for the handle to abort and await.
+    let mut slot = state.task.lock().unwrap_or_else(PoisonError::into_inner);
+    task.future_logs
+        .insert((task.topic.clone(), task.partition), Arc::clone(&state));
+    *slot = Some(tokio::spawn(replicator_loop(ReplicatorTask {
+        part: task.part,
+        future_log: task.future_log,
+        future_path: task.future_path,
+        target_partition_path,
+        target_log_dir: task.target_log_dir,
+        cancel,
         _partitions: task.partitions,
-        future_logs: Arc::clone(&task.future_logs),
-        topic: task.topic.clone(),
+        future_logs: task.future_logs,
+        registration: Arc::clone(&state),
+        topic: task.topic,
         partition: task.partition,
         policy: task.policy,
-    }));
-    let state = Arc::new(FutureLogState {
-        target_log_dir: task.target_log_dir,
-        future_path: task.future_path,
-        future_log: task.future_log,
-        cancel,
-        task: Mutex::new(Some(replicator)),
-    });
-    task.future_logs.insert((task.topic, task.partition), state);
+    })));
 }
 
 #[cfg(test)]

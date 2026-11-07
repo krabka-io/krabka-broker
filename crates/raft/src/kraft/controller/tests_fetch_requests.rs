@@ -117,7 +117,8 @@ fn answer(engine: &Engine, error_code: i16, hwm: i64, records: bytes::Bytes) -> 
             log_start_offset: engine.log.log_start_offset().0,
             records,
         }
-        .encode(FETCH_VERSION),
+        .encode(FETCH_VERSION)
+        .expect("the body encodes"),
     )
 }
 

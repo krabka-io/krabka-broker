@@ -158,7 +158,8 @@ impl PeerRequest {
             .expect("Vote fields must fit Kafka signed int32 wire fields")
     }
 
-    /// Encode after checking the Vote identity and epoch wire range.
+    /// Encode after checking the Vote identity and epoch wire range. `None`
+    /// when a field is out of its wire range or the body does not encode.
     #[must_use]
     pub fn try_encode(&self) -> Option<Bytes> {
         match *self {
@@ -198,7 +199,7 @@ impl PeerRequest {
                     }],
                     ..Default::default()
                 };
-                Some(encode_body(&req, VOTE_VERSION))
+                encode_body(&req, VOTE_VERSION)
             }
             Self::BeginQuorumEpoch {
                 cluster_id,
@@ -230,7 +231,7 @@ impl PeerRequest {
                     })],
                     ..Default::default()
                 };
-                Some(encode_body(&req, QUORUM_EPOCH_VERSION))
+                encode_body(&req, QUORUM_EPOCH_VERSION)
             }
             Self::EndQuorumEpoch {
                 cluster_id,
@@ -263,7 +264,7 @@ impl PeerRequest {
                     })],
                     ..Default::default()
                 };
-                Some(encode_body(&req, QUORUM_EPOCH_VERSION))
+                encode_body(&req, QUORUM_EPOCH_VERSION)
             }
             Self::Fetch {
                 cluster_id,
@@ -302,7 +303,7 @@ impl PeerRequest {
                     }],
                     ..Default::default()
                 };
-                Some(encode_body(&req, FETCH_VERSION))
+                encode_body(&req, FETCH_VERSION)
             }
             Self::FetchSnapshot {
                 cluster_id,
@@ -311,7 +312,7 @@ impl PeerRequest {
                 snapshot_id,
                 position,
                 max_bytes,
-            } => Some(encode_fetch_snapshot_request(
+            } => encode_fetch_snapshot_request(
                 cluster_id,
                 from,
                 current_leader_epoch,
@@ -320,7 +321,7 @@ impl PeerRequest {
                     position,
                     max_bytes,
                 },
-            )),
+            ),
         }
     }
 
@@ -478,7 +479,7 @@ fn encode_fetch_snapshot_request(
         position,
         max_bytes,
     }: ChunkWindow,
-) -> Bytes {
+) -> Option<Bytes> {
     let (end_offset, epoch) = snapshot_id;
     let req = FetchSnapshotRequest {
         cluster_id: cluster_id_to_wire(cluster_id),

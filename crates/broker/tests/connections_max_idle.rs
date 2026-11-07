@@ -60,7 +60,7 @@ use {
         path::{Path, PathBuf},
         time::Duration,
     },
-    support::listeners::loopback_listener,
+    support::{listeners::loopback_listener, wire::decode_response_frame},
     tempfile::TempDir,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -166,10 +166,7 @@ async fn api_versions(stream: &mut TcpStream, corr_id: i32) -> io::Result<ApiVer
     let len = stream.read_u32().await?;
     let mut response = vec![0_u8; len as usize];
     stream.read_exact(&mut response).await?;
-    let mut cur: &[u8] = &response;
-    let _correlation_id = cur.get_i32();
-    ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|error| io::Error::other(format!("ApiVersions decode: {error}")))
+    decode_response_frame(&response, corr_id, 0, false, "ApiVersions decode")
 }
 
 /// Jumps the tokio clock forward without letting the wall clock move.

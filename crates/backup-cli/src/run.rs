@@ -27,6 +27,7 @@ use {
         TopicMetadata, groups::ListGroupsOptions,
     },
     krabka_client_core::security::ClientSecurity,
+    krabka_object_store::MAX_WAL_OBJECT_BYTES,
     krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
     krabka_remote_storage::{ObjectEntry, Sha256Digest, diskless::capture::DisklessWalCapture},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
@@ -531,7 +532,6 @@ async fn seal_capture(
     capture: &mut DisklessWalCapture,
     events: &mut Vec<BackupEvent>,
 ) -> Result<(), BackupError> {
-    const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
     let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
         signing.worm_signing_key.as_ref(),
@@ -548,8 +548,8 @@ async fn seal_capture(
         .collect::<BTreeSet<_>>();
     let mut claims = Vec::with_capacity(keys.len());
     for key in keys {
-        let bytes = store
-            .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
+        let digest = store
+            .digest_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
             .await?;
         claims.push(ObjectEntry {
             suffix: Path::new(&key)
@@ -558,8 +558,8 @@ async fn seal_capture(
                     format!(".{}", extension.to_string_lossy())
                 }),
             key,
-            size_bytes: bytes.len() as u64,
-            sha256: Sha256Digest::of(&bytes),
+            size_bytes: digest.size_bytes,
+            sha256: Sha256Digest(digest.sha256),
             e_tag: None,
             version_id: None,
             create_precondition: false,
