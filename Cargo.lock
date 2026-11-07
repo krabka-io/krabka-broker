@@ -4105,9 +4105,11 @@ name = "krabka-guard"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "bon",
  "clap",
  "hex",
  "krabka-audit",
+ "krabka-bdd",
  "krabka-broker",
  "krabka-client-core",
  "krabka-macros",
@@ -4115,6 +4117,11 @@ dependencies = [
  "krabka-security",
  "krabka-units 0.8.0",
  "ring",
+ "rstest",
+ "rstest-bdd",
+ "rstest-bdd-harness",
+ "rstest-bdd-macros",
+ "rust-embed",
  "serde",
  "tempfile",
  "tokio",
