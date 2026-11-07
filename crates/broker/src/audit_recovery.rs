@@ -37,8 +37,18 @@ pub fn recover_from_partition_tail(
     tail_window_offsets: i64,
     tail_read_max: ByteSize,
 ) -> Option<ChainResume> {
-    let leo = partition.log_end_offset();
-    let log_start = partition.log_start_offset();
+    let (log_start, leo) = match partition.log_offsets() {
+        Ok(offsets) => offsets,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                topic = %partition.topic,
+                "cannot read the audit partition's offsets; the audit hash chain starts again from \
+                 genesis"
+            );
+            return None;
+        }
+    };
     if leo <= log_start {
         return None;
     }

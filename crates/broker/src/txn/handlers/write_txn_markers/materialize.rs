@@ -143,7 +143,7 @@ pub(super) async fn append_marker_and_materialize(
                 requested: coordinator_epoch,
             });
         }
-        Decision::Retry => return Ok(partition.log_end_offset()),
+        Decision::Retry => return partition.log_end_offset(),
         Decision::AppendAndPublishOffsets | Decision::AppendWithoutOffsetPublication => {}
     }
     let pending_offsets = if topic == OFFSETS_TOPIC {
@@ -166,7 +166,7 @@ pub(super) async fn append_marker_and_materialize(
     let mut marker = build_marker_batch(
         producer_id,
         producer_epoch,
-        partition.log_end_offset(),
+        partition.log_end_offset()?,
         marker_type,
         coordinator_epoch,
     );
@@ -174,7 +174,7 @@ pub(super) async fn append_marker_and_materialize(
     // marker does not travel that path, so it stamps its own, and a marker
     // that kept the default of zero would carry a false leader epoch.
     marker.partition_leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-    let append_from = partition.log_end_offset();
+    let append_from = partition.log_end_offset()?;
     let appended = if let Some(stamp) = commit_stamp {
         partition.produce_commit_marker(marker, stamp).await
     } else {
@@ -479,7 +479,7 @@ mod tests {
                     .await
                     .expect("close the transaction");
             }
-            let before = part.log_end_offset();
+            let before = part.log_end_offset().unwrap();
             let result = append_marker_and_materialize(&part, None, &topic, MarkerAppend {
                 producer_epoch: marker_epoch,
                 transaction_version,
@@ -487,7 +487,7 @@ mod tests {
             })
             .await;
             let answered = result.map_or_else(|error| from_broker_error(&error), |_| NONE);
-            actual.push((label, answered, part.log_end_offset() != before));
+            actual.push((label, answered, part.log_end_offset().unwrap() != before));
             expected.push((label, code, appended));
         }
         assert!(actual == expected);
@@ -521,7 +521,7 @@ mod tests {
         part.produce_batch(append_data(5))
             .await
             .expect("append first transaction");
-        let before_marker = part.log_end_offset();
+        let before_marker = part.log_end_offset().unwrap();
 
         let malformed = append_marker_and_materialize(&part, None, "fenced-orders", MarkerAppend {
             producer_id: krabka_log::ProducerId(-1),
@@ -548,7 +548,7 @@ mod tests {
             stale_producer,
             Err(BrokerError::ProducerEpochFenced { .. })
         ));
-        assert!(part.log_end_offset() == before_marker);
+        assert!(part.log_end_offset().unwrap() == before_marker);
 
         let marker = MarkerAppend {
             producer_id,
@@ -568,18 +568,18 @@ mod tests {
         );
         first.expect("append current marker");
         second.expect("suppress conflicting completed marker");
-        let after_marker = part.log_end_offset();
+        let after_marker = part.log_end_offset().unwrap();
         assert!(after_marker == before_marker + 1);
 
         append_marker_and_materialize(&part, None, "fenced-orders", marker)
             .await
             .expect("exact marker retry");
-        assert!(part.log_end_offset() == after_marker);
+        assert!(part.log_end_offset().unwrap() == after_marker);
 
         part.produce_batch(append_data(6))
             .await
             .expect("append next transaction");
-        let before_stale_coordinator = part.log_end_offset();
+        let before_stale_coordinator = part.log_end_offset().unwrap();
         let stale_coordinator =
             append_marker_and_materialize(&part, None, "fenced-orders", MarkerAppend {
                 producer_id,
@@ -594,7 +594,7 @@ mod tests {
             stale_coordinator,
             Err(BrokerError::CoordinatorEpochFenced { .. })
         ));
-        assert!(part.log_end_offset() == before_stale_coordinator);
+        assert!(part.log_end_offset().unwrap() == before_stale_coordinator);
         assert!(
             part.log
                 .lock()
@@ -744,7 +744,7 @@ mod tests {
         )
         .await;
         assert!(lost.is_err());
-        let after_marker = part.log_end_offset();
+        let after_marker = part.log_end_offset().unwrap();
 
         append_marker_and_materialize(
             &part,
@@ -754,7 +754,7 @@ mod tests {
         )
         .await
         .expect("retried marker");
-        assert!(part.log_end_offset() == after_marker);
+        assert!(part.log_end_offset().unwrap() == after_marker);
 
         let coord_actor = broker
             .group_coordinator
@@ -864,7 +864,7 @@ mod tests {
         )
         .await
         .expect("append marker generation");
-        let after_marker = part.log_end_offset();
+        let after_marker = part.log_end_offset().unwrap();
         let marker_count = || {
             part.log
                 .lock()

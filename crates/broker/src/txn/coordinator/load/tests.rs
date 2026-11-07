@@ -309,7 +309,7 @@ async fn load_view(batches: Vec<RecordBatch>, tids: &[&str]) -> PartitionView {
     }
     // Replication committed every record: a load publishes only up to the
     // high watermark.
-    part.replica_state.lock().await.hw = part.log_end_offset();
+    part.replica_state.lock().await.hw = part.log_end_offset().unwrap();
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         Arc::clone(&partitions),
@@ -462,7 +462,7 @@ async fn a_load_waits_until_the_high_watermark_covers_the_replay() {
         ..RecordBatch::default()
     };
     part.log.lock().unwrap().append(&mut batch).unwrap();
-    assert!(part.high_watermark().await < part.log_end_offset());
+    assert!(part.high_watermark().await < part.log_end_offset().unwrap());
     let coordinator = coordinator(NodeId(1), &partitions);
 
     let loads = coordinator

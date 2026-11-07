@@ -740,7 +740,7 @@ mod tests {
             .log_dir(dir.path())
             .log(log)
             .call();
-        assert!(part.log_end_offset() == 0);
+        assert!(part.log_end_offset().unwrap() == 0);
         // The metadata reconcile installs this broker, node 1, as the leader.
         part.install_leader_change(1, 0).await;
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&part));
@@ -758,7 +758,7 @@ mod tests {
 
         // The abort marker is a single control record → LEO advances to 1.
         assert!(
-            part.log_end_offset() == 1,
+            part.log_end_offset().unwrap() == 1,
             "abort marker must be appended (LEO 1), got {:?}",
             part.log_end_offset()
         );
@@ -1229,7 +1229,7 @@ mod tests {
         let mut expected = Vec::new();
         let mut actual = Vec::new();
         for step in steps {
-            let before = part.log_end_offset().0;
+            let before = part.log_end_offset().unwrap().0;
             let response = handle_transactional(
                 &coordinator,
                 TransactionalInit::builder()
@@ -1249,7 +1249,7 @@ mod tests {
                     producer_id: response.producer_id,
                     producer_epoch: response.producer_epoch,
                 },
-                if part.log_end_offset().0 > before {
+                if part.log_end_offset().unwrap().0 > before {
                     LogMutation::Appended
                 } else {
                     LogMutation::Unchanged
@@ -1522,7 +1522,7 @@ mod tests {
             coordinator,
             partition: part,
         } = coordinator_with_completed_transaction(dir.path(), TID).await;
-        assert!(part.log_end_offset() == 1);
+        assert!(part.log_end_offset().unwrap() == 1);
 
         // The test holds the entry lock, so both tasks below park on it in
         // the order they are stepped.
@@ -1556,7 +1556,7 @@ mod tests {
         // The id stays expired: nothing was published back into the map, and
         // the log ends at the tombstone the sweep appended.
         check!(coordinator.get(TID).is_none());
-        check!(part.log_end_offset() == 2);
+        check!(part.log_end_offset().unwrap() == 2);
     }
 
     /// KIP-360 + producer id rotation: an `Ongoing` transaction fenced and
@@ -1744,7 +1744,7 @@ mod tests {
             (bumped.error_code, bumped.producer_id, bumped.producer_epoch)
                 == (codes::NONE, 1000, 4)
         );
-        check!(part.log_end_offset() == 2);
+        check!(part.log_end_offset().unwrap() == 2);
 
         // The live producer opens a transaction at the bumped epoch without
         // another `InitProducerId` call -- Kafka's implicit-begin path, where
@@ -1776,7 +1776,7 @@ mod tests {
             ) == (codes::NONE, 1000, 4)
         );
         // Nothing appended: the retry answered from the entry alone.
-        check!(part.log_end_offset() == 2);
+        check!(part.log_end_offset().unwrap() == 2);
         // The live transaction is untouched.
         let entry = coordinator.get(TID).expect("entry").lock().await.clone();
         check!(entry.state == TxnState::Ongoing);
@@ -1824,7 +1824,7 @@ mod tests {
         );
 
         // One append: the seed, then the bump.
-        check!(part.log_end_offset() == 2);
+        check!(part.log_end_offset().unwrap() == 2);
 
         // The pre-existing handle reflects the same durable identity as the
         // response, not a stale snapshot and not a copy that only a fresh

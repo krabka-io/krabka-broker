@@ -175,8 +175,17 @@ impl BarrierCoordinator {
             let Some(partition) = self.partitions.get(STATE_TOPIC, index) else {
                 continue;
             };
-            let mut offset = partition.log_start_offset();
-            let end = partition.log_end_offset();
+            let (mut offset, end) = match partition.log_offsets() {
+                Ok(offsets) => offsets,
+                Err(error) => {
+                    warn!(
+                        partition = index.get(),
+                        %error,
+                        "cannot read the offsets for __barrier_state recovery; skipping partition"
+                    );
+                    continue;
+                }
+            };
             'partition_replay: while offset < end {
                 let read = match partition.read_log(offset, self.config.recovery_read_max) {
                     Ok(read) => read,

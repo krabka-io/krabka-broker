@@ -117,7 +117,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
             coordinator.read_summary("g", topic_id, 0).await
                 == Err(codes::COORDINATOR_LOAD_IN_PROGRESS)
         );
-        assert!(part.log_end_offset() == Offset(0));
+        assert!(part.log_end_offset().unwrap() == Offset(0));
 
         let leadership = state_partition_image(0, 1, 0);
         // A bounded recovery attempt before the writer is released must not

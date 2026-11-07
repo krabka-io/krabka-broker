@@ -269,7 +269,9 @@ impl BrokerHandle {
         let part = self.maybe_local_partition(topic, partition)?;
         // Unwrap `Offset` -> `i64` at this test-helper boundary: integration
         // tests compare the result against raw offset literals.
-        Some(part.log_end_offset().0)
+        // A poisoned log answers `None`, as a partition this broker does not
+        // host does.
+        Some(part.log_end_offset().ok()?.0)
     }
 
     /// This broker's raft `node_id` (1-indexed broker id used in raft quorum

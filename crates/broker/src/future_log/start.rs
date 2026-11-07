@@ -545,6 +545,6 @@ mod tests {
 
         assert!(old_cancel.is_cancelled());
         assert!(!future_path.exists());
-        assert!(source.partition.log_end_offset() == 3);
+        assert!(source.partition.log_end_offset().unwrap() == 3);
     }
 }

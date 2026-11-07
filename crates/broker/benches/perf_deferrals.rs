@@ -320,7 +320,7 @@ async fn replicate_once(
 ) -> Result<Duration, BenchError> {
     let replica = replica.rotate_if_full(template.encoded_batch_len())?;
     let mut batch = template.clone();
-    batch.base_offset = replica.seam.next_offset().0;
+    batch.base_offset = replica.seam.next_offset()?.0;
     let start = Instant::now();
     replica.seam.replicate(batch).await?;
     Ok(start.elapsed())

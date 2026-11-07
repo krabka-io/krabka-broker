@@ -13,7 +13,7 @@ pub async fn diskless_logical_start(
     topic_id: uuid::Uuid,
 ) -> Result<Offset, BrokerError> {
     reader.ensure_index_log_valid()?;
-    let local_start = partition.log_start_offset().0;
+    let local_start = partition.log_start_offset()?.0;
     let index = reader.index.lock().await;
     let floor = index.delete_floor(topic_id, partition.index.0);
     Ok(Offset(

@@ -5,7 +5,7 @@
 use {
     super::{
         INVALID_OFFSET,
-        append::{AppendContext, AppendOutcome, PendingAck, dispatch_prepared},
+        append::{AppendContext, AppendOutcome, PendingAck, dispatch_prepared, stamp_log_start},
         delivery::DeliveryGate,
         framing::{FramedPartition, PartitionPayload},
         leadership::{
@@ -1004,7 +1004,7 @@ fn record_validation_refusal(
     }
     out.record_errors = record_errors;
     // Kafka's `processFailedRecord` reads the log start offset for the row.
-    out.log_start_offset = part.log_start_offset().0;
+    out.log_start_offset = stamp_log_start(part);
     Some(out)
 }
 

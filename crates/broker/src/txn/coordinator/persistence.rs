@@ -264,7 +264,7 @@ fn replay_into(
     (read_max, last_epoch_tag): (krabka_units::ByteSize, bool),
     partition_for: impl Fn(&str) -> Option<PartitionIndex>,
 ) -> Result<(), BrokerError> {
-    let mut offset = part.log_start_offset();
+    let mut offset = part.log_start_offset()?;
     loop {
         let out = part.read_log(offset, read_max)?;
         if out.batches.is_empty() {
@@ -427,7 +427,7 @@ mod tests {
             "{length} bytes is a protocol error"
         );
         assert2::assert!(coordinator.state.contains_key(&tid) == persisted);
-        assert2::assert!(log.log_end_offset().0 == i64::from(persisted));
+        assert2::assert!(log.log_end_offset().unwrap().0 == i64::from(persisted));
     }
 
     #[test]

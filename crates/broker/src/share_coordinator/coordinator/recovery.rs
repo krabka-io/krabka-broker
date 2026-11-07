@@ -194,7 +194,7 @@ fn replay_partition(
     updates_per_snapshot: u32,
 ) -> Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError> {
     let mut replayed = HashMap::new();
-    let mut offset = part.log_start_offset();
+    let mut offset = part.log_start_offset()?;
     loop {
         let batches = read_replay_batches(part, offset, read_max)?;
 
@@ -240,10 +240,7 @@ fn read_replay_batches(
     read_max: krabka_units::ByteSize,
 ) -> Result<Vec<RecordBatch>, BrokerError> {
     let raw = {
-        let log = part
-            .log
-            .lock()
-            .map_err(|_| BrokerError::Share("log mutex poisoned".into()))?;
+        let log = part.lock_log()?;
         log.read_raw(offset, log.log_end_offset(), read_max)?
     };
     let mut cursor = raw.bytes.as_ref();

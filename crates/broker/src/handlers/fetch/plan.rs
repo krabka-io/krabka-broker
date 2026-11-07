@@ -138,8 +138,11 @@ async fn preferred_read_replica(
     let isr: HashSet<krabka_metadata::NodeId> = record.isr.iter().copied().collect();
     // The leader's own view is its log end and zero time since caught up, as
     // Kafka builds it. Read before the replica state lock, so the log's
-    // mutex is never taken under it.
-    let leader_log_end = partition.log_end_offset();
+    // mutex is never taken under it. A poisoned log redirects nobody: the
+    // leader answers the fetch itself.
+    let Ok(leader_log_end) = partition.log_end_offset() else {
+        return -1;
+    };
     let now = Instant::now();
     let replicas: Vec<ReplicaView> = {
         let state = partition.replica_state.lock().await;

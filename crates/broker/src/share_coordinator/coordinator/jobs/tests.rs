@@ -296,7 +296,7 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
         .unwrap();
     let latest = coord.state_for_test("gb", T2, 0).await.unwrap();
     check!(latest.last_snapshot_offset > Offset(0));
-    assert!(part.log_start_offset() == latest.last_snapshot_offset);
+    assert!(part.log_start_offset().unwrap() == latest.last_snapshot_offset);
 }
 
 fn with_share_version(mut image: MetadataImage, level: i16) -> Arc<MetadataImage> {
@@ -363,7 +363,7 @@ async fn run_loop_reacts_to_images_and_timers() {
         let part = coord.partitions.get(bootstrap::TOPIC, b_partition).unwrap();
         if jobs_run {
             check!(
-                eventually(|| part.log_start_offset() > Offset(0)).await,
+                eventually(|| part.log_start_offset().unwrap() > Offset(0)).await,
                 "level {level}"
             );
         } else {
@@ -373,7 +373,10 @@ async fn run_loop_reacts_to_images_and_timers() {
                 .filter(|record| matches!(record.logged, Logged::Snapshot(_)))
                 .count();
             check!(snapshots == 1, "level {level}");
-            check!(part.log_start_offset() == Offset(0), "level {level}");
+            check!(
+                part.log_start_offset().unwrap() == Offset(0),
+                "level {level}"
+            );
         }
         shutdown.cancel();
     }
