@@ -172,7 +172,12 @@ pub(super) fn warn_if_target_stale(cfg: &Config, message: &'static str) -> bool 
     if !replication_target_changed(cfg) {
         return false;
     }
-    warn!("{}", message);
+    warn!(
+        topic = %cfg.topic,
+        partition = cfg.partition.get(),
+        "{}",
+        message
+    );
     true
 }
 
@@ -226,7 +231,8 @@ pub(super) async fn rewind_follower(
         }
         Err(error) => {
             let reset = matches!(rewind, Rewind::ResetTo(_));
-            warn!(%error, offset, reset, "{}", failure);
+            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error, offset, reset,
+                "{}", failure);
             false
         }
     }
@@ -279,6 +285,8 @@ where
     };
     let backoff = |error: String| {
         warn!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
             %error,
             "replicator: could not read the leader's offsets after out_of_range; retrying"
         );
@@ -312,6 +320,8 @@ where
             };
             let Some(leader_start) = reset_for_leader_start(replica_end, leader_start) else {
                 info!(
+                    topic = %cfg.topic,
+                    partition = cfg.partition.get(),
                     replica_end,
                     leader_start,
                     leader_end,
@@ -339,6 +349,8 @@ where
         "replicator: skipping out_of_range recovery from stale local target"
     );
     warn!(
+        topic = %cfg.topic,
+        partition = cfg.partition.get(),
         replica_end,
         target,
         reset,
@@ -444,6 +456,8 @@ where
         Ok(restart) => restart,
         Err(error) => {
             warn!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
                 %error,
                 "replicator: could not read the leader's restart point; retrying"
             );
@@ -476,8 +490,11 @@ where
     .await
     {
         info!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
             offset,
-            "replicator: offset moved to tiered storage; {}", reason
+            "replicator: offset moved to tiered storage; {}",
+            reason
         );
     }
     RowAction::Continue
@@ -656,7 +673,13 @@ struct EpochFenceQuery {
 // `OffsetForLeaderEpoch` round trip to `recover_epoch_fence`, which the tests
 // below drive with a scripted leader.
 #[cfg_attr(test, mutants::skip)]
-#[tracing::instrument(name = "replicator_handle_epoch_fence", level = "info", skip_all, err)]
+#[tracing::instrument(
+    name = "replicator_handle_epoch_fence",
+    level = "info",
+    skip_all,
+    fields(topic = %cfg.topic, partition = cfg.partition.get()),
+    err,
+)]
 pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
     recover_epoch_fence(cfg, |query| leader_epoch_end(cfg, query)).await
 }
@@ -734,6 +757,8 @@ where
     .await
     {
         info!(
+            topic = %cfg.topic,
+            partition = cfg.partition.get(),
             target = target.0,
             leader_epoch = leader.map(|leader| leader.epoch.0),
             leader_end_offset = leader.map(|leader| leader.end_offset.0),
@@ -1422,7 +1447,7 @@ mod tests {
     /// bounds afterwards, and the producers whose state it kept.
     #[derive(Debug, PartialEq)]
     struct Rewound {
-        succeeded: bool,
+        rewound: bool,
         log_start: i64,
         log_end: i64,
         producers: Vec<i64>,
@@ -1433,13 +1458,13 @@ mod tests {
     /// batches; producer 1 last wrote at offset 1 and producer 2 at offset 4.
     #[rstest::rstest]
     #[case::truncate_keeps_the_head(Rewind::TruncateTo(Offset(3)), Rewound {
-        succeeded: true, log_start: 0, log_end: 3, producers: vec![1],
+        rewound: true, log_start: 0, log_end: 3, producers: vec![1],
     })]
     #[case::reset_below_the_end_empties_the_log(Rewind::ResetTo(Offset(2)), Rewound {
-        succeeded: true, log_start: 2, log_end: 2, producers: vec![1],
+        rewound: true, log_start: 2, log_end: 2, producers: vec![1],
     })]
     #[case::reset_past_the_end_keeps_every_producer(Rewind::ResetTo(Offset(10)), Rewound {
-        succeeded: true, log_start: 10, log_end: 10, producers: vec![1, 2],
+        rewound: true, log_start: 10, log_end: 10, producers: vec![1, 2],
     })]
     #[tokio::test]
     async fn rewind_follower_cuts_the_log_and_its_producer_state(
@@ -1459,7 +1484,7 @@ mod tests {
                 .await;
         }
 
-        let succeeded = rewind_follower(&partition, &cfg, rewind, "rewind failed").await;
+        let rewound = rewind_follower(&partition, &cfg, rewind, "rewind failed").await;
 
         let mut producers: Vec<i64> = cfg
             .producer_state
@@ -1471,7 +1496,7 @@ mod tests {
         producers.sort_unstable();
         assert!(
             Rewound {
-                succeeded,
+                rewound,
                 log_start: partition.log_start_offset().0,
                 log_end: partition.log_end_offset().0,
                 producers,
