@@ -1066,6 +1066,76 @@ mod tests {
         ]);
     }
 
+    /// Valid bounds every case below breaks in one place.
+    fn valid_bounds() -> GroupTimeoutBounds {
+        GroupTimeoutBounds {
+            session_timeout: Duration::from_secs(45),
+            heartbeat_interval: Duration::from_secs(5),
+            min_session_timeout: Duration::from_secs(45),
+            max_session_timeout: Duration::from_mins(1),
+            min_heartbeat_interval: Duration::from_secs(5),
+            max_heartbeat_interval: Duration::from_secs(15),
+            max_size: 1,
+        }
+    }
+
+    /// Each broken relation yields one exact message for every group kind,
+    /// and the checks run in this order.
+    #[test]
+    fn each_group_kind_reports_each_broken_bound() {
+        type Break = fn(&mut GroupTimeoutBounds);
+        let breaks: [(Break, &str); 8] = [
+            (
+                |b| {
+                    b.min_session_timeout = Duration::ZERO;
+                    b.min_heartbeat_interval = Duration::ZERO;
+                },
+                "minimum session timeout must be positive",
+            ),
+            (
+                |b| b.min_session_timeout = Duration::from_mins(2),
+                "minimum session timeout exceeds maximum",
+            ),
+            (
+                |b| b.session_timeout = Duration::from_secs(44),
+                "session timeout is outside its bounds",
+            ),
+            (
+                |b| b.session_timeout = Duration::from_secs(61),
+                "session timeout is outside its bounds",
+            ),
+            (
+                |b| {
+                    b.min_heartbeat_interval = Duration::ZERO;
+                    b.max_size = 0;
+                },
+                "minimum heartbeat interval must be positive",
+            ),
+            (
+                |b| b.min_heartbeat_interval = Duration::from_secs(16),
+                "minimum heartbeat interval exceeds maximum",
+            ),
+            (
+                |b| b.heartbeat_interval = Duration::from_secs(16),
+                "heartbeat interval is outside its bounds",
+            ),
+            (|b| b.max_size = 0, "maximum size must be positive"),
+        ];
+        for kind in ["consumer group", "share group", "streams group"] {
+            assert!(let Ok(()) = validate_group_bounds(kind, &valid_bounds()));
+            for (break_bound, problem) in breaks {
+                let mut bounds = valid_bounds();
+                break_bound(&mut bounds);
+                match validate_group_bounds(kind, &bounds) {
+                    Err(BrokerError::InvalidRuntimeConfig(message)) => {
+                        check!(message == format!("{kind} {problem}"));
+                    }
+                    other => panic!("{kind}: {problem}: got {other:?}"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn rejects_an_empty_consumer_group_assignor_registry() {
         let mut config = BrokerConfig::default();
