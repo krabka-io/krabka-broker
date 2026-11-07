@@ -11,7 +11,6 @@
 #![allow(dead_code)]
 
 use {
-    krabka_bdd::TokioMultiThreadContext,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, CreateTopicSpec, DeleteRecordsOp, TopicMutationOptions,
@@ -175,10 +174,13 @@ impl Cluster {
 pub struct LazyCluster(Option<Cluster>);
 
 impl LazyCluster {
-    /// The scenario's cluster, started on `runtime` the first time.
-    pub fn get(&mut self, runtime: &TokioMultiThreadContext) -> &Cluster {
-        self.0
-            .get_or_insert_with(|| runtime.block_on(Cluster::start()))
+    /// The scenario's cluster, started the first time.
+    pub async fn get(&mut self) -> &Cluster {
+        let cluster = match self.0.take() {
+            Some(cluster) => cluster,
+            None => Cluster::start().await,
+        };
+        self.0.insert(cluster)
     }
 }
 

@@ -21,7 +21,7 @@ use {
         },
     },
     krabka_remote_storage_topic::{snapshot, snapshot::Snapshot},
-    krabka_restore::{Cli, RestoreError, restore},
+    krabka_restore::{Cli, DisklessPartitionReport, RestoreError, restore},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::{
         fs,
@@ -812,4 +812,119 @@ fn check_restored_next_offset(target: &Path, next_offset: i64) {
                 }
             )]
     );
+}
+
+/// A capture that passes its own consistency checks but disagrees with the
+/// batches in its WAL object is refused with the error that names the first
+/// disagreement the walk meets, whether or not the restore keeps the batch
+/// that disagrees.
+#[yare::parameterized(
+    an_internal_offset_gap = {
+        2, 1, 2, 3, false, &[],
+        "integrity failure: diskless-wal/1/a.ckwl: non-contiguous batch offsets inside captured run",
+    },
+    a_gap_past_the_offset_bound = {
+        2, 0, 2, 3, false, &["--to-offset", "orders:0=0"],
+        "integrity failure: diskless-wal/1/a.ckwl: non-contiguous batch offsets inside captured run",
+    },
+    a_gap_below_the_delete_floor = {
+        2, 3, 2, 3, false, &[],
+        "integrity failure: diskless-wal/1/a.ckwl: non-contiguous batch offsets inside captured run",
+    },
+    a_run_that_ends_before_its_last_batch = {
+        1, 1, 0, 1, false, &[],
+        "integrity failure: diskless-wal/1/a.ckwl: captured run disagrees with batch boundaries",
+    },
+    a_run_past_its_footer = {
+        1, 1, 2, 3, false, &[],
+        "integrity failure: diskless-wal/1/a.ckwl: capture range is not contained in a CKWL footer run",
+    },
+    a_range_that_cuts_a_batch = {
+        1, 1, 0, 1, true, &[],
+        "records: batch body truncated (need 2 more bytes)",
+    },
+)]
+#[test_macro(tokio::test)]
+async fn a_capture_that_disagrees_with_its_wal_batches_names_the_first_disagreement(
+    second_base: i64,
+    delete_floor: i64,
+    last_offset: i64,
+    recovery_cutoff: i64,
+    halve_byte_len: bool,
+    extra: &[&str],
+    expected: &str,
+) {
+    let archive = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let capture_path = archive.path().join("capture.json");
+    let mut capture = fixture_with_second_base(archive.path(), true, false, second_base);
+    let partition = &mut capture.partitions[0];
+    partition.delete_floor = delete_floor;
+    partition.recovery_cutoff = recovery_cutoff;
+    partition.ranges[0].entry.last_offset = last_offset;
+    if halve_byte_len {
+        partition.ranges[0].entry.byte_len /= 2;
+    }
+    write_capture(&capture_path, &capture);
+    let extra: Vec<String> = extra.iter().map(|flag| (*flag).to_owned()).collect();
+    let mut options = capture_args(archive.path(), target.path(), &capture_path, &extra);
+    options.dry_run = true;
+
+    let error = restore(&options).await.unwrap_err();
+
+    check!(error.to_string() == expected);
+}
+
+/// What a diskless restore reports for its one partition, by the bound and
+/// exclusion it runs under and the delete floor of its capture.
+#[yare::parameterized(
+    below_the_floor_is_not_kept = { 1, &[], (2, 1, 1, 1, 0) },
+    everything = { 0, &[], (2, 1, 2, 2, 0) },
+    bounded = { 0, &["--to-offset", "orders:0=0"], (1, 1, 1, 1, 0) },
+    an_excluded_record = { 0, &["--exclude-offset", "orders:0=0..1"], (2, 1, 2, 1, 1) },
+    wholly_below_the_floor = { 2, &[], (2, 1, 0, 0, 0) },
+)]
+#[test_macro(tokio::test)]
+async fn a_diskless_restore_reports_what_it_kept(
+    delete_floor: i64,
+    extra: &[&str],
+    expected: (i64, u64, u64, u64, u64),
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].delete_floor = delete_floor;
+    capture.partitions[0].recovery_cutoff = 2;
+    let topic_id = capture.partitions[0].topic_id;
+    write_capture(&capture_path, &capture);
+    let extra: Vec<String> = extra.iter().map(|flag| (*flag).to_owned()).collect();
+
+    let report = restore(&capture_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &extra,
+    ))
+    .await
+    .unwrap();
+
+    let (recovery_cutoff, objects, batches, records, records_dropped) = expected;
+    check!(
+        report.diskless.unwrap().partitions
+            == vec![DisklessPartitionReport {
+                topic: "orders".to_owned(),
+                partition: 0,
+                topic_id,
+                delete_floor,
+                recovery_cutoff,
+                objects,
+                batches,
+                records,
+                records_dropped,
+            }]
+    );
+    check_orders_offsets(target.path(), Offset(delete_floor), Offset(recovery_cutoff));
 }

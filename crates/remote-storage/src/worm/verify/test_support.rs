@@ -369,6 +369,7 @@ pub(super) enum Tamper {
     DuplicateObject(usize),
     WrongObjectCoordinates(usize),
     DropObjectEntry(usize),
+    EmptyObjects(usize),
     StrayObject,
     BumpFormatVersion(usize),
 }
@@ -444,6 +445,11 @@ impl Tamper {
                 entries.pop();
                 archive
                     .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
+                    .await;
+            }
+            Self::EmptyObjects(i) => {
+                archive
+                    .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(Vec::new()))
                     .await;
             }
             Self::StrayObject => {
