@@ -36,7 +36,7 @@ use {
         wire::{self as frames, ApiRequestSetup},
     },
     assert2::assert,
-    bytes::{Buf, Bytes, BytesMut},
+    bytes::{Bytes, BytesMut},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -160,23 +160,11 @@ where
     let resp = frames::read_frame(stream).await?;
 
     let mut cur = &resp[..];
-    if cur.len() < 4 {
-        return Err(io::Error::other("response missing correlation id"));
-    }
-    let _resp_corr_id = cur.get_i32();
-    if response_header == frames::HeaderEncoding::Flexible {
-        if cur.is_empty() {
-            return Err(io::Error::other(
-                "flexible response missing tagged-fields byte",
-            ));
-        }
-        let tagged = cur.get_u8();
-        if tagged != 0 {
-            return Err(io::Error::other(format!(
-                "response header tagged-fields byte is {tagged}, expected 0"
-            )));
-        }
-    }
+    frames::strip_response_header(
+        &mut cur,
+        corr_id.0,
+        response_header == frames::HeaderEncoding::Flexible,
+    )?;
     Ok(cur.to_vec())
 }
 

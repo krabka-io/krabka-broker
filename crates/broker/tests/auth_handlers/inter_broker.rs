@@ -75,7 +75,7 @@ pub async fn drive_inter_broker_client_then_apiversions(
 
     // Non-flexible response: header is v0 (just corr_id).
     let _av_resp: ApiVersionsResponse =
-        decode_response_frame(&resp, 0, false, "ApiVersions decode")?;
+        decode_response_frame(&resp, 99, 0, false, "ApiVersions decode")?;
     Ok(())
 }
 

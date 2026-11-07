@@ -1,7 +1,7 @@
 //! Length-prefixed Kafka frame I/O, leaving headers and decoding to each caller.
 
 use {
-    bytes::BufMut,
+    bytes::{Buf, BufMut},
     krabka_units::{ByteSize, convert::ByteSizeExt},
     std::io,
     tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -175,15 +175,52 @@ pub fn request_frame(
     frame
 }
 
-/// Decode a manually framed response with the caller's header and error policies.
+/// Strip a response header and check that it answers the request sent with `correlation`.
+///
+/// A flexible header also carries a tagged-fields byte, which must be zero:
+/// the broker defines no response-header tagged fields.
 ///
 /// # Errors
-/// Returns the protocol decode error with the original diagnostic prefix.
+/// Returns an error when the header is truncated, when its correlation id is
+/// not the request's, or when its tagged-fields byte is not zero.
+pub fn strip_response_header(
+    frame: &mut &[u8],
+    correlation: i32,
+    flexible_header: bool,
+) -> io::Result<()> {
+    if frame.len() < 4 {
+        return Err(io::Error::other("response missing correlation id"));
+    }
+    let response_correlation = frame.get_i32();
+    if response_correlation != correlation {
+        return Err(io::Error::other(format!(
+            "response correlation id {response_correlation} does not match request {correlation}"
+        )));
+    }
+    if flexible_header {
+        if frame.is_empty() {
+            return Err(io::Error::other(
+                "flexible response missing tagged-fields byte",
+            ));
+        }
+        let tagged = frame.get_u8();
+        if tagged != 0 {
+            return Err(io::Error::other(format!(
+                "response header tagged-fields byte is {tagged}, expected 0"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Decode a manually framed response to the request sent with `correlation`.
 ///
-/// # Panics
-/// Panics if the frame lacks the correlation ID or its requested tagged byte.
+/// # Errors
+/// Returns the [`strip_response_header`] error, or the protocol decode error
+/// with the caller's diagnostic prefix.
 pub fn decode_response_frame<R>(
     frame: &[u8],
+    correlation: i32,
     version: i16,
     flexible_header: bool,
     context: &str,
@@ -191,11 +228,7 @@ pub fn decode_response_frame<R>(
 where
     R: for<'de> krabka_protocol::Decode<'de>,
 {
-    use bytes::Buf;
     let mut body = frame;
-    let _correlation = body.get_i32();
-    if flexible_header {
-        let _tagged = body.get_u8();
-    }
+    strip_response_header(&mut body, correlation, flexible_header)?;
     R::decode(&mut body, version).map_err(|error| io::Error::other(format!("{context}: {error}")))
 }
