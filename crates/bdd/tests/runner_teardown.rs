@@ -9,7 +9,7 @@
 use {
     assert2::assert,
     krabka_bdd::{
-        __private::{Hook, HookPhase, StepKeyword, inventory, run_outcome},
+        __private::{Flavor, Hook, HookPhase, StepKeyword, inventory, run_outcome},
         Fixtures, Outcome, ScenarioSpec, StepSpec, World,
     },
     rstest::rstest,
@@ -165,14 +165,17 @@ static UNHOOKED: ScenarioSpec = scenario("Untagged", 4, &[], &[READY]);
 #[case::fails(&FAILS, "failed")]
 #[case::panics(&PANICS, "failed")]
 #[case::skips(&SKIPS, "skipped")]
-#[tokio::test]
-async fn after_hooks_and_world_after_always_run(
+fn after_hooks_and_world_after_always_run(
     #[case] scenario: &'static ScenarioSpec,
     #[case] expected: &str,
 ) {
     let world = TeardownWorld::default();
     let log = Arc::clone(&world.log);
-    let outcome = run_outcome(scenario, Fixtures::new().with_world("world", world)).await;
+    let outcome = run_outcome(
+        scenario,
+        Fixtures::new().with_world("world", world),
+        Flavor::CurrentThread,
+    );
 
     assert!(kind(&outcome) == expected);
     assert!(
@@ -193,24 +196,28 @@ async fn after_hooks_and_world_after_always_run(
     );
 }
 
-#[tokio::test]
-async fn a_panicking_step_reports_the_panic_message() {
+#[test]
+fn a_panicking_step_reports_the_panic_message() {
     let outcome = run_outcome(
         &PANICS_AGAIN,
         Fixtures::new().with_world("world", TeardownWorld::default()),
-    )
-    .await;
+        Flavor::CurrentThread,
+    );
     let Outcome::Failed(failure) = outcome else {
         panic!("expected a failure, got {outcome:?}");
     };
     assert!(failure.message().contains("kaboom"), "{failure}");
 }
 
-#[tokio::test]
-async fn hooks_apply_only_to_matching_tags() {
+#[test]
+fn hooks_apply_only_to_matching_tags() {
     let world = TeardownWorld::default();
     let log = Arc::clone(&world.log);
-    let outcome = run_outcome(&UNHOOKED, Fixtures::new().with_world("world", world)).await;
+    let outcome = run_outcome(
+        &UNHOOKED,
+        Fixtures::new().with_world("world", world),
+        Flavor::CurrentThread,
+    );
     assert!(outcome == Outcome::Passed);
     assert!(log.lock().unwrap().len() == 3);
     assert!(hook_entries("Untagged").is_empty());

@@ -11,12 +11,55 @@ use {
     },
     futures_util::FutureExt,
     rstest_bdd::{
-        StepContext,
-        execution::{StepExecutionRequest, execute_step_async},
-        panic_message,
+        Step, StepContext, StepExecutionMode, StepKeyword, StepPattern,
+        execution::{StepExecutionRequest, execute_step, execute_step_async},
+        iter, panic_message,
     },
-    std::{future::Future, panic::AssertUnwindSafe},
+    std::{
+        any::Any,
+        future::Future,
+        panic::{self, AssertUnwindSafe},
+        ptr,
+    },
+    tokio::runtime::{Builder, Runtime},
 };
+
+/// The Tokio runtime a scenario runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    /// One thread: a task a step spawns moves only while a step awaits.
+    CurrentThread,
+    /// Worker threads, so a task a step spawns keeps running between steps.
+    MultiThread {
+        /// The number of worker threads; `None` takes Tokio's default.
+        workers: Option<usize>,
+    },
+}
+
+impl Flavor {
+    /// A runtime of this flavor, with I/O and time enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics when Tokio cannot build the runtime.
+    #[must_use]
+    pub fn build(self) -> Runtime {
+        let mut builder = match self {
+            Self::CurrentThread => Builder::new_current_thread(),
+            Self::MultiThread { workers } => {
+                let mut builder = Builder::new_multi_thread();
+                if let Some(workers) = workers {
+                    builder.worker_threads(workers);
+                }
+                builder
+            }
+        };
+        builder
+            .enable_all()
+            .build()
+            .unwrap_or_else(|error| panic!("cannot build the scenario's runtime: {error}"))
+    }
+}
 
 /// How a scenario ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +81,8 @@ pub enum Outcome {
 /// `@allow_skipped`; and, for an `@inprogress` scenario, with
 /// `now passes: remove @inprogress` when it passes. An `@inprogress`
 /// scenario that fails prints its diagnostic to stderr and returns.
-pub async fn run(scenario: &'static ScenarioSpec, fixtures: Fixtures) {
-    let outcome = run_outcome(scenario, fixtures).await;
+pub fn run(scenario: &'static ScenarioSpec, fixtures: Fixtures, flavor: Flavor) {
+    let outcome = run_outcome(scenario, fixtures, flavor);
     match verdict(scenario, &outcome) {
         Verdict::Pass => {}
         Verdict::ExpectedFailure(report) => eprintln!("{report}"),
@@ -54,22 +97,34 @@ pub async fn run(scenario: &'static ScenarioSpec, fixtures: Fixtures) {
 /// `after` hooks, the Worlds' `after`. The `after` hooks and the Worlds'
 /// `after` always run, whether the scenario passed, failed, skipped or
 /// panicked.
-pub async fn run_outcome(scenario: &'static ScenarioSpec, fixtures: Fixtures) -> Outcome {
-    run_with(
+///
+/// The Worlds, the hooks and each `async fn` step run in `block_on` on one
+/// runtime of `flavor`. A sync step runs outside `block_on`, with the
+/// runtime's context entered, as rstest-bdd runs it: it can `tokio::spawn`
+/// onto the scenario's runtime, and it can `block_on` a runtime of its own.
+/// The fixtures are dropped before the runtime.
+pub fn run_outcome(scenario: &'static ScenarioSpec, fixtures: Fixtures, flavor: Flavor) -> Outcome {
+    let runtime = flavor.build();
+    let outcome = run_with(
         scenario,
         &fixtures,
         &hooks::registered(),
         &registered_definitions(),
-    )
-    .await
+        &runtime,
+    );
+    let context = runtime.enter();
+    drop(fixtures);
+    drop(context);
+    outcome
 }
 
 /// [`run_outcome`] over the given hooks and step definitions.
-async fn run_with(
+fn run_with(
     scenario: &'static ScenarioSpec,
     fixtures: &Fixtures,
     hooks: &[&Hook],
     definitions: &[Definition<'_>],
+    runtime: &Runtime,
 ) -> Outcome {
     let mut ctx = StepContext::default();
     fixtures.insert_into(&mut ctx);
@@ -77,7 +132,7 @@ async fn run_with(
 
     let mut outcome = Outcome::Passed;
     for world in &worlds {
-        if let Err(message) = guarded(world.before(scenario)).await {
+        if let Err(message) = runtime.block_on(guarded(world.before(scenario))) {
             outcome = fail(
                 outcome,
                 scenario,
@@ -88,14 +143,24 @@ async fn run_with(
         }
     }
     if outcome == Outcome::Passed {
-        outcome = run_hooks(scenario, hooks, HookPhase::BeforeScenario, outcome).await;
+        outcome = runtime.block_on(run_hooks(
+            scenario,
+            hooks,
+            HookPhase::BeforeScenario,
+            outcome,
+        ));
     }
     if outcome == Outcome::Passed {
-        outcome = run_steps(scenario, &mut ctx, definitions).await;
+        outcome = run_steps(scenario, &mut ctx, definitions, runtime);
     }
-    outcome = run_hooks(scenario, hooks, HookPhase::AfterScenario, outcome).await;
+    outcome = runtime.block_on(run_hooks(
+        scenario,
+        hooks,
+        HookPhase::AfterScenario,
+        outcome,
+    ));
     for world in worlds.iter().rev() {
-        if let Err(message) = guarded(world.after(scenario, &outcome)).await {
+        if let Err(message) = runtime.block_on(guarded(world.after(scenario, &outcome))) {
             outcome = fail(
                 outcome,
                 scenario,
@@ -144,16 +209,17 @@ async fn run_hooks(
 }
 
 /// Runs every step in order until one fails or skips.
-async fn run_steps(
+fn run_steps(
     scenario: &'static ScenarioSpec,
     ctx: &mut StepContext<'_>,
     definitions: &[Definition<'_>],
+    runtime: &Runtime,
 ) -> Outcome {
     for (index, step) in scenario.steps.iter().enumerate() {
         let at = || Location::Step { index, step: *step };
         let resolution = resolve(definitions, step.keyword, step.star, step.text);
-        let keyword = match &resolution {
-            Resolution::Found(definition) => definition.keyword,
+        let (keyword, pattern) = match &resolution {
+            Resolution::Found(definition) => (definition.keyword, definition.pattern),
             Resolution::Undefined | Resolution::Ambiguous(_) => {
                 let message = resolution
                     .problem(step.keyword, step.star, step.text)
@@ -170,7 +236,14 @@ async fn run_steps(
             feature_path: scenario.feature_path,
             scenario_name: scenario.scenario,
         };
-        match guarded(execute_step_async(&request, ctx)).await {
+        let result = if is_async(keyword, pattern) {
+            runtime.block_on(guarded(execute_step_async(&request, ctx)))
+        } else {
+            let _context = runtime.enter();
+            panic::catch_unwind(AssertUnwindSafe(|| execute_step(&request, ctx)))
+                .map_err(|payload| panicked(payload.as_ref()))
+        };
+        match result {
             Err(message) => return Outcome::Failed(Failure::new(scenario, at(), message)),
             Ok(Err(error)) if error.is_skip() => {
                 return Outcome::Skipped(error.skip_message().map(ToOwned::to_owned));
@@ -187,12 +260,27 @@ async fn run_steps(
     Outcome::Passed
 }
 
+/// Whether the registered definition of `keyword` and `pattern` is an
+/// `async fn`.
+fn is_async(keyword: StepKeyword, pattern: &StepPattern) -> bool {
+    iter::<Step>.into_iter().any(|step| {
+        step.keyword == keyword
+            && ptr::eq(step.pattern, pattern)
+            && matches!(step.execution_mode, StepExecutionMode::Async)
+    })
+}
+
 /// Awaits `future`, turning a panic into its message.
 async fn guarded<F: Future>(future: F) -> Result<F::Output, String> {
     AssertUnwindSafe(future)
         .catch_unwind()
         .await
-        .map_err(|payload| format!("panicked: {}", panic_message(payload.as_ref())))
+        .map_err(|payload| panicked(payload.as_ref()))
+}
+
+/// The failure message of a panic with `payload`.
+fn panicked(payload: &(dyn Any + Send)) -> String {
+    format!("panicked: {}", panic_message(payload))
 }
 
 /// Records a problem: the first one makes the outcome Failed, later ones are
@@ -354,15 +442,16 @@ mod tests {
     };
     static OTHER: StepPattern = StepPattern::new("something else");
 
-    #[tokio::test]
-    async fn run_with_fails_an_undefined_step_without_calling_the_registry() {
+    #[test]
+    fn run_with_fails_an_undefined_step_without_calling_the_registry() {
         let definitions = [Definition {
             keyword: StepKeyword::Given,
             pattern: &OTHER,
             file: "s.rs",
             line: 1,
         }];
-        let outcome = run_with(&UNDEFINED, &Fixtures::new(), &[], &definitions).await;
+        let runtime = Flavor::CurrentThread.build();
+        let outcome = run_with(&UNDEFINED, &Fixtures::new(), &[], &definitions, &runtime);
         let expected = Failure::new(
             &UNDEFINED,
             Location::Step {

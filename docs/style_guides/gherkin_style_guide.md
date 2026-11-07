@@ -187,7 +187,7 @@ Each call also emits `<dir>_scenarios::every_step_matches_one_definition`. It re
 For each scenario the runner:
 
 1. Puts the fixtures in a `StepContext`, then runs the `World`'s `before` and the `#[krabka_bdd::before]` hooks that apply.
-2. Resolves each step strictly (an `And` or `But` takes the keyword before it, a `*` step tries every keyword) and runs it with rstest-bdd's `execute_step_async`, so an `async fn` step really awaits, on the scenario's one runtime. A value a step returns, such as an `Attempt`, is offered to later steps as a fixture of its type.
+2. Resolves each step strictly (an `And` or `But` takes the keyword before it, a `*` step tries every keyword) and runs it. An `async fn` step runs in `block_on` on the scenario's one runtime, so it really awaits. A sync step runs outside `block_on` with that runtime's context entered, as plain rstest-bdd runs it: it can `tokio::spawn` onto the scenario's runtime, and a fixture may own a runtime of its own that the step blocks on. The fixtures are dropped before the runtime. A value a step returns, such as an `Attempt`, is offered to later steps as a fixture of its type.
 3. Always runs the `#[krabka_bdd::after]` hooks and the `World`'s `after`, with the outcome, on pass, failure, skip and panic.
 4. On failure, panics with one diagnostic: the feature file and line, the `Rule:`, the `Scenario:`, the Examples row with its values, the step with its index, line and keyword as written, and the error.
 

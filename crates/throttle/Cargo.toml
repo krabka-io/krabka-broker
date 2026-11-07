@@ -24,6 +24,11 @@ num-traits = { workspace = true }
 qubit-clock = { workspace = true }
 
 [dev-dependencies]
+# No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 krabka-macros = { version = "1.1.5", path = "../macros" }
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
 stateright = { workspace = true }
 yare = { workspace = true }

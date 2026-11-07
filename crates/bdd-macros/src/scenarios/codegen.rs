@@ -55,16 +55,24 @@ impl Runtime {
         }
     }
 
-    /// The `#[tokio::test(..)]` arguments after `crate = ..`.
-    fn test_arguments(self) -> TokenStream {
+    /// The `krabka_bdd::__private::Flavor` the runner builds the runtime from.
+    fn flavor(self) -> TokenStream {
         match self {
-            Self::CurrentThread => moxy::template! { flavor = "current_thread" },
-            Self::MultiThread { workers: None } => moxy::template! { flavor = "multi_thread" },
+            Self::CurrentThread => {
+                moxy::template! { ::krabka_bdd::__private::Flavor::CurrentThread }
+            }
+            Self::MultiThread { workers: None } => moxy::template! {
+                ::krabka_bdd::__private::Flavor::MultiThread { workers: ::core::option::Option::None }
+            },
             Self::MultiThread {
                 workers: Some(workers),
             } => {
                 let workers = number(&workers);
-                moxy::template! { flavor = "multi_thread", worker_threads = {{ workers }} }
+                moxy::template! {
+                    ::krabka_bdd::__private::Flavor::MultiThread {
+                        workers: ::core::option::Option::Some({{ workers }}),
+                    }
+                }
             }
         }
     }
@@ -193,7 +201,7 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
         scenario.test_name.trim_start_matches('_').to_uppercase()
     ));
     let spec = spec(plan, scenario);
-    let runtime = arguments.runtime.test_arguments();
+    let flavor = arguments.runtime.flavor();
     let ignore = ignore_reason(&scenario.tags).map(lit);
     let params: Vec<TokenStream> = arguments
         .fixtures
@@ -217,7 +225,12 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
             }
         })
         .collect();
-    let rstest = (!params.is_empty()).then(|| moxy::template! { #[::rstest::rstest] });
+    // `#[rstest]` generates the test itself, so it takes no `#[test]`.
+    let test = if params.is_empty() {
+        moxy::template! { #[test] }
+    } else {
+        moxy::template! { #[::rstest::rstest] }
+    };
     moxy::template! {
         static {{ spec_name }}: ::krabka_bdd::__private::ScenarioSpec = {{ spec }};
 
@@ -225,15 +238,14 @@ fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> To
             ::krabka_bdd::__private::RegisteredScenario(&{{ spec_name }})
         }
 
-        @if let Some(rstest) = &rstest { {{ rstest }} }
-        #[::krabka_bdd::__private::tokio::test(crate = "::krabka_bdd::__private::tokio", {{ runtime }})]
+        {{ test }}
         @if let Some(reason) = &ignore { #[ignore = {{ reason }}] }
-        async fn {{ name }}(@for param in &params { {{ param }}, }) {
+        fn {{ name }}(@for param in &params { {{ param }}, }) {
             ::krabka_bdd::__private::run(
                 &{{ spec_name }},
                 ::krabka_bdd::__private::Fixtures::new() @for insert in &inserts { {{ insert }} },
-            )
-            .await;
+                {{ flavor }},
+            );
         }
     }
 }

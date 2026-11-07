@@ -78,7 +78,7 @@ pub mod __private {
         crate::{
             fixtures::Fixtures,
             hooks::{Hook, HookFn, HookPhase},
-            runner::{run, run_outcome},
+            runner::{Flavor, run, run_outcome},
             spec::{RowSpec, ScenarioSpec, StepSpec},
             step_check::{RegisteredScenario, StepUse, check_registry, check_steps},
         },

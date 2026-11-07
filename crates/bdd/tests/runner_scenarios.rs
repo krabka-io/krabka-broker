@@ -8,14 +8,16 @@
 
 use {
     assert2::assert,
-    futures_util::FutureExt,
     krabka_bdd::{
-        __private::{StepKeyword, run, run_outcome},
+        __private::{Flavor, StepKeyword, run, run_outcome},
         Attempt, Fixtures, Outcome, RowSpec, ScenarioSpec, StepSpec,
     },
     rstest_bdd::{Step, iter, panic_message, skip},
     rstest_bdd_macros::{given, then, when},
-    std::{future::Future, panic::AssertUnwindSafe, time::Duration},
+    std::{
+        panic::{self, AssertUnwindSafe},
+        time::Duration,
+    },
     tokio::time::sleep,
 };
 
@@ -175,12 +177,9 @@ static IN_PROGRESS_PASSING: ScenarioSpec = ScenarioSpec {
 
 fn counter() -> Fixtures { Fixtures::new().with("counter", Counter::default()) }
 
-/// The panic message of `future`, which must panic.
-async fn panic_of(future: impl Future<Output = ()>) -> String {
-    let payload = AssertUnwindSafe(future)
-        .catch_unwind()
-        .await
-        .expect_err("the run panics");
+/// The panic message of `run`, which must panic.
+fn panic_of(run: impl FnOnce()) -> String {
+    let payload = panic::catch_unwind(AssertUnwindSafe(run)).expect_err("the run panics");
     panic_message(payload.as_ref())
 }
 
@@ -200,15 +199,15 @@ fn defined_at(pattern: &str) -> String {
     format!("{}:{} `{pattern}`", step.file, step.line)
 }
 
-#[tokio::test]
-async fn a_passing_scenario_runs_every_step_including_async_and_star_steps() {
-    assert!(run_outcome(&PASSING, counter()).await == Outcome::Passed);
-    run(&PASSING, counter()).await;
+#[test]
+fn a_passing_scenario_runs_every_step_including_async_and_star_steps() {
+    assert!(run_outcome(&PASSING, counter(), Flavor::CurrentThread) == Outcome::Passed);
+    run(&PASSING, counter(), Flavor::CurrentThread);
 }
 
-#[tokio::test]
-async fn a_failing_step_reports_feature_rule_example_and_step() {
-    let diagnostic = failure_of(run_outcome(&FAILING_ROW, counter()).await);
+#[test]
+fn a_failing_step_reports_feature_rule_example_and_step() {
+    let diagnostic = failure_of(run_outcome(&FAILING_ROW, counter(), Flavor::CurrentThread));
     let expected_head = format!(
         "scenario failed at {FEATURE}:10\n  \
          Rule: A failing step names where it failed\n  \
@@ -221,18 +220,22 @@ async fn a_failing_step_reports_feature_rule_example_and_step() {
         diagnostic.contains("the counter is 1, not 5"),
         "{diagnostic}"
     );
-    assert!(panic_of(run(&FAILING_ROW, counter())).await == diagnostic);
+    assert!(panic_of(|| run(&FAILING_ROW, counter(), Flavor::CurrentThread)) == diagnostic);
 }
 
-#[tokio::test]
-async fn a_returned_attempt_reaches_a_later_then() {
+#[test]
+fn a_returned_attempt_reaches_a_later_then() {
     let fixtures = Fixtures::new().with("attempt", ParseAttempt::default());
-    assert!(run_outcome(&ATTEMPT, fixtures).await == Outcome::Passed);
+    assert!(run_outcome(&ATTEMPT, fixtures, Flavor::CurrentThread) == Outcome::Passed);
 }
 
-#[tokio::test]
-async fn ambiguous_steps_fail_listing_every_definition() {
-    let diagnostic = failure_of(run_outcome(&AMBIGUOUS, Fixtures::new()).await);
+#[test]
+fn ambiguous_steps_fail_listing_every_definition() {
+    let diagnostic = failure_of(run_outcome(
+        &AMBIGUOUS,
+        Fixtures::new(),
+        Flavor::CurrentThread,
+    ));
     let expected = format!(
         "scenario failed at {FEATURE}:22\n  \
          Scenario: A step matches two definitions equally well\n  \
@@ -246,25 +249,29 @@ async fn ambiguous_steps_fail_listing_every_definition() {
     assert!(diagnostic == expected);
 }
 
-#[tokio::test]
-async fn an_undefined_step_fails_naming_it() {
-    let diagnostic = failure_of(run_outcome(&UNDEFINED, Fixtures::new()).await);
+#[test]
+fn an_undefined_step_fails_naming_it() {
+    let diagnostic = failure_of(run_outcome(
+        &UNDEFINED,
+        Fixtures::new(),
+        Flavor::CurrentThread,
+    ));
     assert!(diagnostic.ends_with(
         "Step 1 at line 26: Given no definition matches this runner step\n  \
          undefined: no Given step definition matches `no definition matches this runner step`"
     ));
 }
 
-#[tokio::test]
-async fn a_skip_stops_the_scenario() {
-    let outcome = run_outcome(&SKIP_ALLOWED, Fixtures::new()).await;
+#[test]
+fn a_skip_stops_the_scenario() {
+    let outcome = run_outcome(&SKIP_ALLOWED, Fixtures::new(), Flavor::CurrentThread);
     assert!(outcome == Outcome::Skipped(Some("no broker is running".to_owned())));
-    run(&SKIP_ALLOWED, Fixtures::new()).await;
+    run(&SKIP_ALLOWED, Fixtures::new(), Flavor::CurrentThread);
 }
 
-#[tokio::test]
-async fn a_skip_without_allow_skipped_fails() {
-    let message = panic_of(run(&SKIP_NOT_ALLOWED, Fixtures::new())).await;
+#[test]
+fn a_skip_without_allow_skipped_fails() {
+    let message = panic_of(|| run(&SKIP_NOT_ALLOWED, Fixtures::new(), Flavor::CurrentThread));
     assert!(
         message
             == format!(
@@ -274,18 +281,18 @@ async fn a_skip_without_allow_skipped_fails() {
     );
 }
 
-#[tokio::test]
-async fn an_in_progress_scenario_that_fails_passes_the_test() {
+#[test]
+fn an_in_progress_scenario_that_fails_passes_the_test() {
     assert!(matches!(
-        run_outcome(&IN_PROGRESS_FAILING, counter()).await,
+        run_outcome(&IN_PROGRESS_FAILING, counter(), Flavor::CurrentThread),
         Outcome::Failed(_)
     ));
-    run(&IN_PROGRESS_FAILING, counter()).await;
+    run(&IN_PROGRESS_FAILING, counter(), Flavor::CurrentThread);
 }
 
-#[tokio::test]
-async fn an_in_progress_scenario_that_passes_fails_the_test() {
-    let message = panic_of(run(&IN_PROGRESS_PASSING, counter())).await;
+#[test]
+fn an_in_progress_scenario_that_passes_fails_the_test() {
+    let message = panic_of(|| run(&IN_PROGRESS_PASSING, counter(), Flavor::CurrentThread));
     assert!(
         message
             == format!(
