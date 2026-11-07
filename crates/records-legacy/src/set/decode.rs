@@ -10,7 +10,7 @@ use {
     super::ParsedRecord,
     crate::{
         error::LegacyRecordsError,
-        message::{Magic, Message, compression_from_attrs},
+        message::{Magic, Message, attrs, compression_from_attrs},
     },
     bytes::Buf,
     krabka_compression::{CompressionType, RecordDecompressionPolicy},
@@ -145,11 +145,19 @@ fn decode_into(
                 && let Some(last) = inner.last()
             {
                 let base_abs = wrapper_base_offset(offset, last.offset.0)?;
+                // Kafka's `LegacyRecord.timestamp` reports a LogAppendTime
+                // wrapper's timestamp for every inner record.
+                let log_append_time = (msg.attributes & attrs::TIMESTAMP_TYPE_BIT != 0)
+                    .then_some(msg.timestamp)
+                    .flatten();
                 for rec in inner {
                     let absolute = base_abs + i128::from(rec.offset.0);
                     rec.offset = Offset(i64::try_from(absolute).map_err(|_| {
                         LegacyRecordsError::Malformed("absolute inner offset exceeds i64".into())
                     })?);
+                    if let Some(timestamp) = log_append_time {
+                        rec.timestamp = Some(timestamp);
+                    }
                 }
             }
         }
