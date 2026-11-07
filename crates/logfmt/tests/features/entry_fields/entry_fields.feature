@@ -48,6 +48,9 @@ Feature: Event fields become queryable top-level entry fields
         | a negative delta stays signed               | delta    | number  | -3                   |
         | an offset past the signed range stays exact | offset   | number  | 18446744073709551615 |
         | a ratio keeps its fraction                  | ratio    | number  | 0.5                  |
+        | a NaN has no JSON number, so it is null     | load     | null    | null                 |
+        | an infinity has no JSON number either       | rate     | null    | null                 |
+        | a negative infinity has none either         | headroom | null    | null                 |
 
   Rule: A value with no JSON type is written as its text
 
