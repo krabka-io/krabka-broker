@@ -20,7 +20,7 @@ krabka-bdd-macros = { path = "../bdd-macros" }
 krabka-bdd-model = { path = "../bdd-model" }
 rstest-bdd = { workspace = true }
 rstest-bdd-harness = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
 assert2 = { workspace = true }

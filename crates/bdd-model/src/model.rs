@@ -18,6 +18,17 @@ pub enum Keyword {
     Then,
 }
 
+impl Keyword {
+    /// The keyword as a feature file writes it: `Given`, `When` or `Then`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Given => "Given",
+            Self::When => "When",
+            Self::Then => "Then",
+        }
+    }
+}
+
 impl From<StepType> for Keyword {
     fn from(ty: StepType) -> Self {
         match ty {
@@ -206,7 +217,7 @@ impl Collector<'_> {
 
 /// Replaces each `<name>` in `text` whose name is a column of the row. Other
 /// angle-bracketed text stays as it is.
-fn substitute(text: &str, values: &HashMap<&str, &str>) -> String {
+pub(crate) fn substitute(text: &str, values: &HashMap<&str, &str>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some((before, after)) = rest.split_once('<') {
