@@ -5,6 +5,7 @@
 
 use {
     super::{
+        fetch_reader,
         plan::{
             PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
             required_leader,
@@ -47,8 +48,7 @@ fn planned_read_request(
         hot_tail: Some(Arc::clone(&broker.hot_tail)),
         fetch_offset: Offset(read.fetch_offset),
         max_bytes,
-        read_committed: read.read_committed,
-        is_follower_fetch: read.is_follower_fetch,
+        reader: fetch_reader(read.is_follower_fetch, read.read_committed),
         sendfile_capable,
         sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
     }

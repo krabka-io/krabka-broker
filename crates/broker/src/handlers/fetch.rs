@@ -533,6 +533,21 @@ pub const fn fetch_reader(is_follower: bool, read_committed: bool) -> FetchReade
     }
 }
 
+/// The two questions the fetch path asks of a [`FetchReader`].
+pub trait FetchReaderExt {
+    /// A follower replica, which reads to the log end.
+    fn is_follower(&self) -> bool;
+    /// A consumer under `read_committed`, which reads below the last stable
+    /// offset and gets the aborted transactions of what it reads.
+    fn is_read_committed(&self) -> bool;
+}
+
+impl FetchReaderExt for FetchReader {
+    fn is_follower(&self) -> bool { *self == Self::Follower }
+
+    fn is_read_committed(&self) -> bool { *self == Self::Consumer(Isolation::ReadCommitted) }
+}
+
 pub fn compute_visibility_window(
     reader: FetchReader,
     watermarks: FetchWatermarks,
