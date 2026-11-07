@@ -46,7 +46,7 @@
   ],
   "packageRules": [
     {
-      "description": "kube and kube-core name one k8s-openapi minor version (kube 4.x requires ^0.28), and k8s-openapi refuses to build unless exactly one Kubernetes version feature is enabled on each copy. A k8s-openapi bump that runs ahead of kube therefore adds a second copy with no feature, which fails its build script, and the bump cannot go green. Move k8s-openapi by hand, in the same change as the kube release that requires it.",
+      "description": "kube and kube-core name one k8s-openapi minor version (kube 5.x requires ^0.29), and k8s-openapi refuses to build unless exactly one Kubernetes version feature is enabled on each copy. A k8s-openapi bump that runs ahead of kube therefore adds a second copy with no feature, which fails its build script, and the bump cannot go green. Move k8s-openapi by hand, in the same change as the kube release that requires it.",
       "matchManagers": [
         "cargo"
       ],
