@@ -51,8 +51,8 @@
 //! records -- its own one call to make.
 
 use {
-    super::{BrokerMetrics, PartitionLabel, QuotaType, SchemaRejectionLabel, TopicLabel},
-    crate::{metrics::QuotaEntityLabel, schema_validation::RejectReason},
+    super::{BrokerMetrics, PartitionLabel, SchemaRejectionLabel, TopicLabel},
+    crate::{metrics::QuotaEntityLabel, quota::QuotaType, schema_validation::RejectReason},
     dashmap::DashSet,
     krabka_metadata::{MetadataImage, NodeId},
     prometheus_client::metrics::{counter::Counter, family::Family},
