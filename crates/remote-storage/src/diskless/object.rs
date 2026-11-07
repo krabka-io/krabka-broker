@@ -193,9 +193,9 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
 /// The `N` bytes of a footer entry at `at`, for a fixed-width little-endian
 /// field.
 fn le_field<const N: usize>(raw: &[u8], at: usize) -> Result<[u8; N], WalObjectError> {
-    raw[at..at + N]
-        .try_into()
-        .map_err(|_| WalObjectError::BadManifest)
+    raw.get(at..at + N)
+        .and_then(|field| field.try_into().ok())
+        .ok_or(WalObjectError::BadManifest)
 }
 
 /// Whether the run `start..start + len` ends at or before `footer`, the offset
