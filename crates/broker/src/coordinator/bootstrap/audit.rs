@@ -31,7 +31,7 @@ use {
         config_keys::{AUDIT_PLACEMENT_EPOCH_PREFIX, MIN_INSYNC_REPLICAS},
         error::BrokerError,
         handlers::forward_to_controller::guarded_operation_on_source,
-        metadata_source::MetadataSource,
+        metadata_source::{MetadataSource, topic_reaches_image},
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::{
@@ -158,24 +158,17 @@ async fn create_audit_topic(
         // the topic first is one; any other is a real failure. The local image
         // trails the leader, so wait for the topic before deciding.
         Err(RaftError::ForwardedChangeRejected)
-            if audit_topic_reaches_image(config, controller).await =>
+            if topic_reaches_image(
+                controller.watch_image(),
+                &config.audit_topic,
+                config.audit_partition_wait_timeout.to_std(),
+            )
+            .await =>
         {
             Ok(())
         }
         Err(e) => Err(BrokerError::Startup(e.to_string())),
     }
-}
-
-/// Whether the audit topic reaches the local image within
-/// `audit.partition.wait.timeout`.
-async fn audit_topic_reaches_image(config: &BrokerConfig, controller: &dyn MetadataSource) -> bool {
-    let mut images = controller.watch_image();
-    time::timeout(
-        config.audit_partition_wait_timeout.to_std(),
-        images.wait_for(|image| image.topic(&config.audit_topic).is_some()),
-    )
-    .await
-    .is_ok_and(|seen| seen.is_ok())
 }
 
 /// Keep the audit placement whole while this node leads the metadata quorum.
