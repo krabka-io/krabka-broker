@@ -10,7 +10,8 @@ use {
     crate::{
         codes,
         coordinator::unified::{
-            config::NextGenConfig, group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver,
+            config::NextGenConfig, group::CoordinatorGroup,
+            regex_resolver::no_topic_regex_resolver, test_support::stop_group_actor,
         },
         test_support::{BrokenTimer, TimerFailure},
     },
@@ -204,4 +205,41 @@ async fn the_actor_stops_when_its_tick_cannot_be_re_armed() {
 
     check!(group.empty_since_ms.is_some());
     check!(timer.registrations() == 2);
+}
+
+/// An unload takes a group out of the registry, waits for its actor to stop,
+/// and only then drops the respawn seed the actor may have left. A respawn in
+/// between, from the stopping actor's own exit or from a request already
+/// routed, would bring the group back on a broker that no longer leads its
+/// offsets partition. A seed whose group the registry no longer holds
+/// therefore respawns nothing.
+#[tokio::test]
+async fn a_respawn_seed_of_a_group_the_registry_no_longer_holds_respawns_nothing() {
+    let (coord, _log) = make_coordinator();
+    coord.leave_respawn_seed(CoordinatorGroup::new_classic("g"));
+
+    check!(coord.live_or_respawned("g").is_none());
+    check!(coord.find("g").is_none());
+}
+
+/// The closed handle of an actor that stopped after a failed write stays
+/// registered until its replacement takes its place, from the seed it left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_respawn_seed_of_a_registered_stopped_actor_respawns_it() {
+    let (coord, _log) = make_coordinator();
+    let stopped = coord.get_or_create_classic("g");
+    stop_group_actor(&coord, "g").await;
+    coord.leave_respawn_seed(CoordinatorGroup::new_classic("g"));
+
+    let next = coord
+        .live_or_respawned("g")
+        .expect("the stopped actor is replaced");
+
+    check!(!Arc::ptr_eq(&next, &stopped));
+    check!(!next.tx.is_closed());
+    check!(
+        coord
+            .find("g")
+            .is_some_and(|found| Arc::ptr_eq(&found, &next))
+    );
 }

@@ -146,15 +146,23 @@ impl GroupCoordinator {
     /// Unlike [`find`](Self::find), it never returns the closed handle of an
     /// actor that stopped: a request sent there would get no answer, which
     /// the handlers could only report as `UNKNOWN_SERVER_ERROR`.
+    ///
+    /// It respawns only while the registry still holds the stopped actor. An
+    /// unload takes the group out of the registry before it drops the seed,
+    /// so a respawn in between, from the stopping actor's own exit or from a
+    /// request already routed, would bring the group back on a broker that no
+    /// longer coordinates it.
     #[must_use]
     pub(crate) fn live_or_respawned(
         self: &Arc<Self>,
         group_id: &str,
     ) -> Option<Arc<GroupActorHandle>> {
-        if let Some(kind) = self.respawn_kind(group_id) {
-            return Some(self.get_or_create_group(group_id, kind));
+        let found = self.find(group_id)?;
+        if !found.tx.is_closed() {
+            return Some(found);
         }
-        self.find(group_id).filter(|handle| !handle.tx.is_closed())
+        let kind = self.respawn_kind(group_id)?;
+        self.respawn_closed_group(group_id, kind, &found)
     }
 
     /// The protocol of the group a stopped actor left for `group_id`'s next

@@ -240,6 +240,25 @@ impl GroupCoordinator {
         )
     }
 
+    /// Replaces the closed actor `closed` of `group_id` with a fresh one of
+    /// `kind`, seeded from what the stopped actor left, only while the
+    /// registry still holds `closed`. A group removed since answers `None`,
+    /// and an actor that replaced `closed` since is returned as it is.
+    pub(crate) fn respawn_closed_group(
+        self: &Arc<Self>,
+        group_id: &str,
+        kind: GroupKindTag,
+        closed: &Arc<GroupActorHandle>,
+    ) -> Option<Arc<GroupActorHandle>> {
+        respawn_registered(
+            &self.groups,
+            group_id,
+            closed,
+            || self.spawn_group(group_id, kind),
+            || self.group_seed(group_id, kind),
+        )
+    }
+
     fn spawn_group(self: &Arc<Self>, group_id: &str, kind: GroupKindTag) -> GroupActorHandle {
         GroupActorHandle::spawn(
             group_id.into(),
