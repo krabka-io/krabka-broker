@@ -1,5 +1,7 @@
 //! The five client quotas the broker charges and throttles on.
 
+use super::request::request_percentage_token_rate;
+
 /// The client quota that caused a throttle the broker applied.
 ///
 /// Kafka splits its quotas the same way, and names them the same way in
@@ -70,7 +72,7 @@ impl QuotaType {
     /// configured.
     pub(super) fn token_rate(self, rate: f64) -> f64 {
         match self {
-            Self::Request => super::request::request_percentage_token_rate(rate),
+            Self::Request => request_percentage_token_rate(rate),
             Self::Produce | Self::Fetch | Self::ControllerMutation | Self::ConnectionCreation => {
                 rate
             }

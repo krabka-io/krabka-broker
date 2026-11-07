@@ -138,8 +138,8 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
 /// nothing for it and would remove the `connection_creation_rate` limit at the
 /// next image change.
 ///
-/// The rate comes back in the unit the image configures it in; [`QuotaType::token_rate`]
-/// converts it to the bucket's token unit.
+/// The rate comes back in the unit the image configures it in;
+/// [`QuotaType::token_rate`] converts it to the bucket's token unit.
 fn configured_rate(
     image: &MetadataImage,
     ip_names: &IpNames,

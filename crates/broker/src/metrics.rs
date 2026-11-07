@@ -706,12 +706,14 @@ pub struct BrokerMetrics {
     /// caused it (`krabka_broker_quota_throttle_duration_seconds{quota_type}`).
     ///
     /// A request charges several quotas and sleeps for the largest delay of
-    /// them, so the sample lands under the [`QuotaType`](crate::quota::QuotaType) that produced that
+    /// them, so the sample lands under the [`QuotaType`] that produced that
     /// largest delay — the quota an operator would have to raise to make the
     /// throttle stop. Requests that no quota delayed are not observed here, so
     /// unlike [`Self::request_throttle_duration_seconds`] the `_count` of this
     /// family is the number of throttled requests, and `_sum` is the wall
     /// time the broker held clients back.
+    ///
+    /// [`QuotaType`]: crate::quota::QuotaType
     #[metric(help = "Seconds of throttle the broker actually applied, \
         labelled by the client quota that caused it (Produce = \
         producer_byte_rate, Fetch = consumer_byte_rate, Request = \
