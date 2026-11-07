@@ -22,7 +22,7 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
-    krabka_protocol::records::{Record, RecordBatch},
+    krabka_protocol::records::Record,
     krabka_raft::ControllerHandle,
     std::{
         path::PathBuf,
@@ -198,11 +198,10 @@ pub(super) fn replay_stream(
 ) -> super::replay::Replayed {
     use super::replay::{Replayed, apply_record, apply_tombstone};
     let mut replayed = Replayed::default();
-    let batch = RecordBatch::default();
     for LogRecord { key, value } in stream {
         let key = parse_key(&key).unwrap();
         match value {
-            Some(value) => apply_record(coordinator, &mut replayed, key, &value, &batch).unwrap(),
+            Some(value) => apply_record(coordinator, &mut replayed, key, &value).unwrap(),
             None => apply_tombstone(coordinator, &mut replayed, key).unwrap(),
         }
     }
