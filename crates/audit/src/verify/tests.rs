@@ -575,3 +575,54 @@ fn stale_checkpoint_chain_head_mismatch_detected() {
         "reason should mention chain_head, got: {reason}"
     );
 }
+
+/// The kind of bytes a torn or tampered write leaves after the last batch.
+#[derive(Debug, Clone, Copy)]
+enum CorruptTail {
+    Garbage,
+    HalfBatch,
+}
+
+/// A checkpointed partition whose only segment ends in `tail`, and the byte
+/// position where the valid batches end.
+fn partition_with_corrupt_tail(directory: &Path, tail: CorruptTail) -> (Vec<u8>, u64) {
+    let CheckpointedPartition {
+        public_key, log, ..
+    } = checkpointed_partition(directory, 100);
+    drop(log);
+    let segment = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|x| x == "log"))
+        .expect("the partition has a segment");
+    let mut bytes = fs::read(&segment).unwrap();
+    let valid = u64::try_from(bytes.len()).unwrap();
+    let appended = match tail {
+        CorruptTail::Garbage => vec![0xde; 40],
+        CorruptTail::HalfBatch => bytes[..bytes.len() / 8].to_vec(),
+    };
+    bytes.extend_from_slice(&appended);
+    fs::write(&segment, bytes).unwrap();
+    (public_key, valid)
+}
+
+#[test]
+fn undecodable_tail_fails_verification_at_its_byte_position() {
+    for tail in [CorruptTail::Garbage, CorruptTail::HalfBatch] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (public_key, valid) = partition_with_corrupt_tail(tmp.path(), tail);
+
+        let report = trusted_report(tmp.path(), public_key);
+
+        let found = report
+            .first_break
+            .as_ref()
+            .map(|found| (found.offset, found.seq, found.byte_position));
+        check!(
+            (report.ok, report.records.0, report.checkpoints.0, found)
+                == (false, 3, 1, Some((4, None, Some(valid)))),
+            "tail: {tail:?}"
+        );
+        check_break(&report, "an undecodable tail is a break", "undecodable");
+    }
+}

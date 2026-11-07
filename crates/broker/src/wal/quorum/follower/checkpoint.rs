@@ -11,7 +11,7 @@ use {
     krabka_verified::wal,
     std::{
         fs::{self, File},
-        io::Write as _,
+        io::{self, Write as _},
         path::Path,
     },
 };
@@ -160,6 +160,21 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), B
 }
 
 pub(super) fn write_durable_offset(path: &Path, durable: DurableRange) -> Result<(), BrokerError> {
+    write_durable_offset_with(path, durable, |from, to| fs::rename(from, to))
+}
+
+/// Writes the checkpoint with `rename` as the filesystem rename, the seam a
+/// test uses to stop the write at a chosen rename as a crash would.
+///
+/// At every point a crash can stop it, the primary or the backup holds a
+/// readable checkpoint. When only the backup is there, as after a crash
+/// between the two renames of an earlier write, it is moved back to the
+/// primary before anything is deleted, as the WAL quorum membership file is.
+fn write_durable_offset_with(
+    path: &Path,
+    durable: DurableRange,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), BrokerError> {
     let temporary = path.with_extension("checkpoint.tmp");
     let backup = path.with_file_name(DURABLE_OFFSET_BACKUP_FILE);
     let mut file = File::create(&temporary)?;
@@ -167,12 +182,16 @@ pub(super) fn write_durable_offset(path: &Path, durable: DurableRange) -> Result
     file.sync_all()?;
     drop(file);
     if backup.exists() {
-        fs::remove_file(&backup)?;
+        if path.exists() {
+            fs::remove_file(&backup)?;
+        } else {
+            rename(&backup, path)?;
+        }
     }
     if path.exists() {
-        fs::rename(path, &backup)?;
+        rename(path, &backup)?;
     }
-    if let Err(error) = fs::rename(&temporary, path) {
+    if let Err(error) = rename(&temporary, path) {
         restore_durable_offset_backup(path, &backup);
         return Err(error.into());
     }
@@ -306,6 +325,43 @@ mod tests {
                 "{file}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn durable_offset_write_keeps_a_lone_backup_readable_until_the_new_primary_lands() {
+        let CheckpointLog {
+            dir,
+            checkpoint,
+            mut log,
+        } = checkpoint_log(RecordCount(2));
+        log.sync().unwrap();
+        let backup = dir.path().join(DURABLE_OFFSET_BACKUP_FILE);
+        // An earlier write crashed between its two renames: only the backup
+        // holds the durable range.
+        fs::write(&backup, "0\n0 2\n").unwrap();
+        let temporary = checkpoint.with_extension("checkpoint.tmp");
+        let mut readable_at_final_rename = None;
+
+        let result = write_durable_offset_with(
+            &checkpoint,
+            DurableRange {
+                start: Offset(0),
+                end: Offset(2),
+            },
+            |from, to| {
+                if from == temporary {
+                    // A crash here leaves whatever is on disk now.
+                    readable_at_final_rename = Some(checkpoint.exists() || backup.exists());
+                    return Err(io::Error::other("crash before the final rename"));
+                }
+                fs::rename(from, to)
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(readable_at_final_rename == Some(true));
+        recover_durable_offset(&mut log, &checkpoint).unwrap();
+        assert!(log.log_end_offset() == Offset(2));
     }
 
     #[test]

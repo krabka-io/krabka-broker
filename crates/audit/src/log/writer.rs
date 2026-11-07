@@ -120,7 +120,7 @@ impl AuditWriter {
         // drain loop -- but it never skips [`Self::finish`]. Losing the cadence
         // is not a reason to abandon a chain head that is already committable,
         // so a dead timer takes the same exit a closed channel takes, and only
-        // the two indeterminate-write paths still leave without flushing.
+        // the indeterminate-write paths still leave without flushing.
         let timer = Arc::clone(&self.timer);
         let Some(mut ckpt) = arm(&*timer, self.checkpoint_every.to_std(), CHECKPOINT_TASK) else {
             return self.finish().await;
@@ -186,8 +186,14 @@ impl AuditWriter {
                         tracing::error!(%error, "audit writer stopped after indeterminate replay");
                         return;
                     }
-                    if !self.spooling {
-                        let _ = self.write_pending_loss_marker(false).await;
+                    if !self.spooling
+                        && let Err(error) = self.write_pending_loss_marker(false).await
+                    {
+                        if matches!(error, AuditError::Indeterminate(_)) {
+                            tracing::error!(%error, "audit writer stopped after indeterminate loss marker");
+                            return;
+                        }
+                        tracing::error!(%error, "failed to write pending audit loss marker");
                     }
                     let Some(next) = arm(&*timer, self.replay_every.to_std(), REPLAY_TASK) else {
                         break;
@@ -205,8 +211,17 @@ impl AuditWriter {
     ///
     /// It is a method rather than the tail of [`Self::run`] because a timer
     /// that will not arm has to reach it too, before the loop is ever entered.
+    ///
+    /// A marker write that may have landed ends the flush there: the head a
+    /// closing checkpoint would sign does not include that marker.
     async fn finish(mut self) {
-        let _ = self.write_pending_loss_marker(true).await;
+        if let Err(error) = self.write_pending_loss_marker(true).await {
+            if matches!(error, AuditError::Indeterminate(_)) {
+                tracing::error!(%error, "audit writer skipped its closing checkpoint after indeterminate loss marker");
+                return;
+            }
+            tracing::error!(%error, "failed to write pending audit loss marker");
+        }
         if self.since_checkpoint > 0 {
             self.emit_checkpoint().await;
         }
@@ -338,10 +353,11 @@ mod tests {
             log::{
                 AuditLog,
                 test_support::{
-                    AuditEventCount, CheckpointFrequency, CheckpointSetup,
-                    FailableSink as TestFailableSink, ROOMY_CAP, SinkStats, await_until,
-                    failed_sink_stats, finish_lifecycle_writer, finish_writer, header, life,
-                    params, quiet_params, roomy_spool, spawn_writer, test_signer,
+                    AuditEventCount, CheckpointFrequency, CheckpointSetup, ClockedParams,
+                    FailableSink as TestFailableSink, REPLAY_EVERY, ROOMY_CAP, SinkStats,
+                    await_until, failed_sink_stats, finish_lifecycle_writer, finish_writer, header,
+                    life, params, params_with_clock, quiet_params, roomy_spool, spawn_writer,
+                    test_signer,
                 },
             },
             sink::{AuditSink, MemorySink},
@@ -350,9 +366,13 @@ mod tests {
         },
         assert2::check,
         qubit_clock::{
-            MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, TimerFuture,
+            ManualMonotonicClock, MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError,
+            TimerFuture,
         },
-        std::path::Path,
+        std::{
+            path::Path,
+            sync::atomic::{AtomicBool, Ordering::SeqCst},
+        },
         tokio::task::JoinHandle,
     };
 
@@ -730,5 +750,122 @@ mod tests {
         })
         .await;
         finish_writer(log, handle).await;
+    }
+
+    /// A sink whose writes land but, once armed, report
+    /// [`AuditError::Indeterminate`]: the record reached the sink and the reply
+    /// was lost.
+    #[derive(Debug, Default)]
+    struct LostReplySink {
+        lose_replies: AtomicBool,
+        inner: MemorySink,
+    }
+
+    impl LostReplySink {
+        fn lose_replies(&self) { self.lose_replies.store(true, SeqCst); }
+
+        fn classes(&self) -> Vec<AuditEventClass> {
+            self.inner.records().iter().map(|r| r.class).collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AuditSink for LostReplySink {
+        async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError> {
+            self.inner.write(record, durable).await?;
+            if self.lose_replies.load(SeqCst) {
+                return Err(AuditError::Indeterminate("reply lost".into()));
+            }
+            Ok(())
+        }
+    }
+
+    /// A writer without a spool, wired to a [`LostReplySink`] and a manual
+    /// clock, plus the pending-loss counter its receiver shares.
+    struct LostReplyWriter {
+        log: Arc<AuditLog>,
+        sink: Arc<LostReplySink>,
+        losses: Arc<PendingLosses>,
+        clock: Arc<ManualMonotonicClock>,
+        handle: JoinHandle<()>,
+        _directory: tempfile::TempDir,
+    }
+
+    fn lost_reply_writer() -> LostReplyWriter {
+        let TempSpool { dir, spool } = roomy_spool();
+        let sink = Arc::new(LostReplySink::default());
+        let (log, receiver) = AuditLog::new(16);
+        let losses = receiver.pending_losses();
+        let ClockedParams { mut params, clock } = params_with_clock(
+            Arc::<LostReplySink>::clone(&sink),
+            spool,
+            Arc::new(AuditStats::new()),
+        );
+        params.spool = None;
+        params.signer = Some(test_signer().signer);
+        let handle = spawn_writer(receiver, params);
+        LostReplyWriter {
+            log,
+            sink,
+            losses,
+            clock,
+            handle,
+            _directory: dir,
+        }
+    }
+
+    /// A running writer whose first event has landed, with one loss pending
+    /// and every later write coming back `Indeterminate`.
+    async fn writer_with_a_pending_marker_and_lost_replies() -> LostReplyWriter {
+        let writer = lost_reply_writer();
+        // The first event proves the writer is running with both tickers
+        // armed before the clock moves.
+        writer.log.emit(life(NodeId(1)));
+        await_until("event reached the sink", || {
+            !writer.sink.classes().is_empty()
+        })
+        .await;
+        writer.losses.add(1);
+        writer.sink.lose_replies();
+        writer
+    }
+
+    /// The marker landed exactly once and nothing was written after it.
+    fn check_marker_written_once(sink: &LostReplySink) {
+        check!(
+            sink.classes()
+                == vec![
+                    AuditEventClass::ApplicationLifecycle,
+                    AuditEventClass::RecordsLost,
+                ]
+        );
+    }
+
+    #[tokio::test]
+    async fn indeterminate_loss_marker_on_the_replay_tick_stops_the_writer() {
+        let writer = writer_with_a_pending_marker_and_lost_replies().await;
+        writer
+            .clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
+        await_until("loss marker reached the sink", || {
+            writer.sink.classes().len() == 2
+        })
+        .await;
+        finish_writer(writer.log, writer.handle).await;
+
+        // A writer that ran on would stamp the marker again at the same seq
+        // and prev_hash on shutdown or the next tick.
+        check_marker_written_once(&writer.sink);
+    }
+
+    #[tokio::test]
+    async fn indeterminate_loss_marker_at_shutdown_skips_the_closing_checkpoint() {
+        let writer = writer_with_a_pending_marker_and_lost_replies().await;
+        finish_writer(writer.log, writer.handle).await;
+
+        // A checkpoint after a marker that may have landed would sign a head
+        // that does not include it.
+        check_marker_written_once(&writer.sink);
     }
 }
