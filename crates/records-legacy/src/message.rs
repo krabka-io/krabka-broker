@@ -27,6 +27,7 @@ mod encode;
 mod test_support;
 
 pub use self::attributes::{attrs, attrs_with_compression, compression_from_attrs};
+pub use self::encode::wire_len;
 
 /// Magic byte, that is, the legacy message-format version: 0 or 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
