@@ -41,6 +41,19 @@ async fn park(config: &ObserverConfig) -> bool {
     time_util::fired(tick.await, TASK)
 }
 
+/// [`park`], cut short by `shutdown`.
+///
+/// Reports whether the loop goes on: `false` when the timer failed or the
+/// observer is shutting down. `MetadataObserver::cancel` awaits the loop, so
+/// every park has to race the shutdown, or the broker's shutdown waits out a
+/// whole poll interval.
+async fn park_or_stop(config: &ObserverConfig, shutdown: &CancellationToken) -> bool {
+    tokio::select! {
+        () = shutdown.cancelled() => false,
+        held = park(config) => held,
+    }
+}
+
 /// Which controller the loop fetches from next, and what the last answers
 /// said.
 ///
@@ -193,8 +206,9 @@ pub(super) async fn run_loop(
             &config.bootstrap_servers,
         );
         let Some((target, addr)) = cursor.pick(&targets).cloned() else {
-            if !park(&config).await {
-                return;
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                held = park(&config) => if !held { return; },
             }
             continue;
         };
@@ -278,9 +292,8 @@ pub(super) async fn run_loop(
             }
         } else {
             cursor.missed(&targets, target);
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                held = park(&config) => if !held { return; },
+            if !park_or_stop(&config, &shutdown).await {
+                return;
             }
         }
     }
@@ -698,6 +711,33 @@ mod tests {
         // The checkpoint covers records below offset 12, so the last applied
         // one is 11 — the offset this node reports in its `BrokerHeartbeat`.
         assert!(observer.current_metadata_offset() == 11);
+    }
+
+    /// With no controller to ask, the loop parks for `poll_interval`. A
+    /// shutdown during that park ends the loop at once, as it does at the
+    /// loop's other two parks, rather than once the interval has run out:
+    /// `MetadataObserver::cancel` awaits the loop, so the broker's shutdown
+    /// would wait out the interval with it.
+    #[tokio::test]
+    async fn a_loop_parked_with_nobody_to_ask_stops_as_soon_as_it_is_cancelled() {
+        let clock = ManualMonotonicClock::new_shared();
+        let dir = tempfile::tempdir().unwrap();
+        let observer = MetadataObserver::start(config_on(vec![], clock.new_timer(), dir.path()));
+
+        // The park is the loop's only registration on this clock.
+        let waiters = sync::Arc::clone(&clock);
+        let parked =
+            task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+                .await
+                .unwrap();
+        assert!(
+            parked,
+            "the observer parks when it has no voter to fetch from"
+        );
+
+        // The manual clock never advances, so only the shutdown can end the park.
+        let stopped = time::timeout(Duration::from_secs(5), observer.cancel()).await;
+        assert!(stopped.is_ok(), "the parked loop ignored the shutdown");
     }
 
     fn check_unanswered_shutdown(observer: &MetadataObserver, timer: &BrokenTimer) {
