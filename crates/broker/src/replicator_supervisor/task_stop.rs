@@ -125,11 +125,11 @@ mod tests {
         }
     }
 
-    /// A task that may not be aborted, such as a WAL follower that owns its
-    /// shard's files, is waited for past the deadline until it stops on its
-    /// own, so nothing it started outlives the stop.
-    #[tokio::test(start_paused = true)]
-    async fn a_task_that_may_not_be_aborted_is_waited_for_past_the_deadline() {
+    /// A task that, once signalled, runs `after_signal` and then marks itself
+    /// finished: its token, its handle and the mark.
+    fn finishing_task(
+        after_signal: impl Future<Output = ()> + Send + 'static,
+    ) -> (CancellationToken, JoinHandle<()>, Arc<AtomicBool>) {
         let shutdown = CancellationToken::new();
         let finished = Arc::new(AtomicBool::new(false));
         let handle = tokio::spawn({
@@ -137,10 +137,19 @@ mod tests {
             let finished = Arc::clone(&finished);
             async move {
                 shutdown.cancelled().await;
-                time::sleep(Duration::from_secs(10)).await;
+                after_signal.await;
                 finished.store(true, Ordering::SeqCst);
             }
         });
+        (shutdown, handle, finished)
+    }
+
+    /// A task that may not be aborted, such as a WAL follower that owns its
+    /// shard's files, is waited for past the deadline until it stops on its
+    /// own, so nothing it started outlives the stop.
+    #[tokio::test(start_paused = true)]
+    async fn a_task_that_may_not_be_aborted_is_waited_for_past_the_deadline() {
+        let (shutdown, handle, finished) = finishing_task(time::sleep(Duration::from_secs(10)));
         let task = StoppingTask {
             abortable: false,
             ..stopping(shutdown, handle)
@@ -155,17 +164,7 @@ mod tests {
     /// before it can finish what it does after the signal.
     #[tokio::test]
     async fn a_cancelled_task_finishes_its_own_shutdown() {
-        let shutdown = CancellationToken::new();
-        let finished = Arc::new(AtomicBool::new(false));
-        let handle = tokio::spawn({
-            let shutdown = shutdown.clone();
-            let finished = Arc::clone(&finished);
-            async move {
-                shutdown.cancelled().await;
-                task::yield_now().await;
-                finished.store(true, Ordering::SeqCst);
-            }
-        });
+        let (shutdown, handle, finished) = finishing_task(task::yield_now());
 
         stop_tasks([stopping(shutdown, handle)], TASK_STOP_TIMEOUT).await;
 
