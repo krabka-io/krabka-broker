@@ -15,11 +15,17 @@ use {
 pub(super) const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A replica task to stop: the name its log lines carry, the token that asks
-/// it to stop, and its handle.
+/// it to stop, its handle, and whether it may be aborted.
 pub(super) struct StoppingTask {
     pub(super) label: String,
     pub(super) shutdown: CancellationToken,
     pub(super) handle: JoinHandle<()>,
+    /// Whether the task may be aborted at the deadline. A fetcher may: it
+    /// writes through the partition writer, so aborting it leaves no I/O
+    /// behind. A WAL follower may not: it mutates its shard's files itself,
+    /// and on a current-thread runtime that work runs on the blocking pool
+    /// and would outlive an abort, racing the shard's removal or promotion.
+    pub(super) abortable: bool,
 }
 
 impl StoppingTask {
@@ -28,6 +34,7 @@ impl StoppingTask {
             label: format!("fetcher {} for leader {}", key.fetcher_id, key.leader.0),
             shutdown: task.shutdown,
             handle: task.handle,
+            abortable: true,
         }
     }
 
@@ -39,6 +46,7 @@ impl StoppingTask {
             ),
             shutdown: task.shutdown,
             handle: task.handle,
+            abortable: false,
         }
     }
 }
@@ -46,8 +54,10 @@ impl StoppingTask {
 /// Stops replica tasks the way Kafka's
 /// `AbstractFetcherManager.closeAllFetchers` does: it signals every task
 /// first, then waits for each one, so a fetcher can close its session and
-/// finish a writer round trip. A task still running when `timeout` has passed
-/// since the signal is aborted. A task that panicked is logged at error.
+/// finish a writer round trip. An abortable task still running when `timeout`
+/// has passed since the signal is aborted. Any other task is waited for until
+/// it stops, with a warning at the deadline. A task that panicked is logged at
+/// error.
 pub(super) async fn stop_tasks(tasks: impl IntoIterator<Item = StoppingTask>, timeout: Duration) {
     let tasks = tasks.into_iter().collect::<Vec<_>>();
     for task in &tasks {
@@ -55,18 +65,29 @@ pub(super) async fn stop_tasks(tasks: impl IntoIterator<Item = StoppingTask>, ti
     }
     let deadline = time::Instant::now() + timeout;
     for StoppingTask {
-        label, mut handle, ..
+        label,
+        mut handle,
+        abortable,
+        ..
     } in tasks
     {
         let joined = match time::timeout_at(deadline, &mut handle).await {
             Ok(joined) => joined,
-            Err(_elapsed) => {
+            Err(_elapsed) if abortable => {
                 warn!(
                     task = %label,
                     timeout = ?timeout,
                     "replica task did not stop after cancellation; aborting it"
                 );
                 handle.abort();
+                handle.await
+            }
+            Err(_elapsed) => {
+                warn!(
+                    task = %label,
+                    timeout = ?timeout,
+                    "replica task did not stop after cancellation; still waiting for it"
+                );
                 handle.await
             }
         };
@@ -100,7 +121,34 @@ mod tests {
             label: "test task".to_owned(),
             shutdown,
             handle,
+            abortable: true,
         }
+    }
+
+    /// A task that may not be aborted, such as a WAL follower that owns its
+    /// shard's files, is waited for past the deadline until it stops on its
+    /// own, so nothing it started outlives the stop.
+    #[tokio::test(start_paused = true)]
+    async fn a_task_that_may_not_be_aborted_is_waited_for_past_the_deadline() {
+        let shutdown = CancellationToken::new();
+        let finished = Arc::new(AtomicBool::new(false));
+        let handle = tokio::spawn({
+            let shutdown = shutdown.clone();
+            let finished = Arc::clone(&finished);
+            async move {
+                shutdown.cancelled().await;
+                time::sleep(Duration::from_secs(10)).await;
+                finished.store(true, Ordering::SeqCst);
+            }
+        });
+        let task = StoppingTask {
+            abortable: false,
+            ..stopping(shutdown, handle)
+        };
+
+        stop_tasks([task], Duration::from_secs(1)).await;
+
+        check!(finished.load(Ordering::SeqCst));
     }
 
     /// A task that stops on its signal runs to its end: it is not aborted
