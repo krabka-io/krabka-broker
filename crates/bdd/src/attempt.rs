@@ -79,9 +79,10 @@ impl<T, E> Attempt<T, E> {
     /// `false` for its error.
     #[track_caller]
     pub fn assert_failed_with(&self, expected: impl FnOnce(&E) -> bool) {
-        if !expected(self.failed()) {
-            panic!("the attempt failed, but not with the expected error");
+        if expected(self.failed()) {
+            return;
         }
+        panic!("the attempt failed, but not with the expected error");
     }
 
     /// Reports whether no step has made the attempt.

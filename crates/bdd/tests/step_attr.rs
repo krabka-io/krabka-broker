@@ -9,6 +9,8 @@ use {
     krabka_bdd::{Attempt, Hook, HookPhase, Outcome, ScenarioSpec},
     rstest::rstest,
     rstest_bdd::{Step, StepKeyword, StepText, extract_placeholders},
+    std::future,
+    tokio::time::{Duration, sleep},
 };
 
 #[derive(Debug, Default)]
@@ -48,15 +50,15 @@ fn delete(cluster: &Cluster, name: String) -> Attempt<(), String> {
 }
 
 #[krabka_bdd::when("the client waits {int} ms")]
-async fn wait(milliseconds: u64) {
-    tokio::time::sleep(tokio::time::Duration::from_millis(milliseconds)).await;
-}
+async fn wait(milliseconds: u64) { sleep(Duration::from_millis(milliseconds)).await; }
 
 #[krabka_bdd::before(tags = "@docker", order = 5)]
-async fn start_docker(scenario: &ScenarioSpec) { drop(scenario); }
+async fn start_docker(scenario: &ScenarioSpec) { future::ready(scenario).await; }
 
 #[krabka_bdd::after]
-async fn report(scenario: &ScenarioSpec, outcome: &Outcome) { drop((scenario, outcome)); }
+async fn report(scenario: &ScenarioSpec, outcome: &Outcome) {
+    future::ready((scenario, outcome)).await;
+}
 
 /// Every step this file defines, as `(keyword, pattern)`, sorted.
 fn registered_here() -> Vec<(String, &'static str)> {
@@ -123,9 +125,11 @@ fn every_expansion_and_keyword_is_registered() {
     assert!(registered == expected);
 }
 
+// `extract_placeholders` keeps the quotes of a `:string` capture; the step
+// wrapper strips them before it parses the argument.
 #[rstest]
-#[case::article(StepKeyword::Given, "a topic named ‹name:string›", "a topic named \"orders\"", &["orders"])]
-#[case::other_article(StepKeyword::Given, "an topic named ‹name:string›", "an topic named 'events'", &["events"])]
+#[case::article(StepKeyword::Given, "a topic named ‹name:string›", "a topic named \"orders\"", &["\"orders\""])]
+#[case::other_article(StepKeyword::Given, "an topic named ‹name:string›", "an topic named 'events'", &["'events'"])]
 #[case::singular(StepKeyword::When, "the client creates ‹count:u32› partition", "the client creates 1 partition", &["1"])]
 #[case::plural(StepKeyword::When, "the client adds ‹count:u32› partitions", "the client adds 12 partitions", &["12"])]
 #[case::word(

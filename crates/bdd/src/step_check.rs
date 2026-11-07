@@ -164,13 +164,11 @@ pub fn resolve<'d, 'a>(
         .into_iter()
         .filter(|definition| definition.pattern.specificity().ok() == top)
         .collect();
-    match winners.as_slice() {
-        [only] => Resolution::Found(only),
-        _ => {
-            winners.sort_by(|left, right| (left.file, left.line).cmp(&(right.file, right.line)));
-            Resolution::Ambiguous(winners)
-        }
+    if let [only] = winners.as_slice() {
+        return Resolution::Found(only);
     }
+    winners.sort_by(|left, right| (left.file, left.line).cmp(&(right.file, right.line)));
+    Resolution::Ambiguous(winners)
 }
 
 /// Checks that every step in `uses` matches exactly one registered step

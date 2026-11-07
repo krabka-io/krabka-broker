@@ -154,14 +154,14 @@ impl Fixtures {
     }
 
     /// Inserts every fixture into `ctx`.
-    pub fn insert_into<'a>(&'a self, ctx: &mut StepContext<'a>) {
+    pub(crate) fn insert_into<'a>(&'a self, ctx: &mut StepContext<'a>) {
         for entry in &self.entries {
             (entry.insert)(ctx, entry.name, &entry.cell);
         }
     }
 
     /// The World fixtures, in the order they were added.
-    pub fn worlds(&self) -> Vec<WorldRef<'_>> {
+    pub(crate) fn worlds(&self) -> Vec<WorldRef<'_>> {
         self.entries
             .iter()
             .filter_map(|entry| {

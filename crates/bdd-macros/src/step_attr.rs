@@ -24,7 +24,7 @@ use {
             Attributed, FnParam, GenericArgument, ItemFn, List, ParseError, Parser, PatType,
             PathArguments, Pattern, ReturnType, Token, Type,
         },
-        token::{Ident, LitStr, Spanner, ToTokenStream, TokenStream},
+        token::{Ident, LitStr, Span, Spanner, ToTokenStream, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
     rstest_bdd_patterns::{
@@ -326,11 +326,14 @@ pub fn expand(
         .collect();
     let patterns = step_patterns(&sources, &values, step_args, returns).map_err(fail)?;
 
+    // The patterns carry a macro span: at the caller's span, Clippy would read
+    // their placeholders as format arguments.
+    let generated = Span::mixed_site();
     let mut registrations = patterns.iter().flat_map(|pattern| {
         attribute.keywords().iter().map(move |keyword| {
             (
-                Ident::new(keyword).with_span(span),
-                LitStr::new(pattern, span),
+                Ident::new(keyword).with_span(generated),
+                LitStr::new(pattern, generated),
             )
         })
     });

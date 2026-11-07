@@ -164,6 +164,11 @@ static SKIPS: ScenarioSpec = scenario("A step skips", 18, &["teardown", "allow_s
     READY,
     step(20, StepKeyword::When, "the teardown step skips"),
 ]);
+/// A copy of [`PANICS`] under another name, so its hook entries stay apart.
+static PANICS_AGAIN: ScenarioSpec = ScenarioSpec {
+    scenario: "A step panics, checked for its message",
+    ..PANICS
+};
 /// Untagged: no hook applies.
 static UNHOOKED: ScenarioSpec = scenario("Untagged", 4, &[], &[READY]);
 
@@ -203,7 +208,7 @@ async fn after_hooks_and_world_after_always_run(
 #[tokio::test]
 async fn a_panicking_step_reports_the_panic_message() {
     let outcome = run_outcome(
-        &PANICS,
+        &PANICS_AGAIN,
         Fixtures::new().with_world("world", TeardownWorld::default()),
     )
     .await;
