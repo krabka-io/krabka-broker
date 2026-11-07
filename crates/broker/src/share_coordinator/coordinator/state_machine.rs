@@ -569,6 +569,21 @@ impl ShareCoordinator {
         Some(st.clone())
     }
 
+    /// Test-only: the summary of the stored state of the key, or `None` when
+    /// the key has no state. Unlike [`ShareCoordinator::read_summary_checked`]
+    /// it checks neither the state partition status nor the metadata image,
+    /// so a test sees what is stored even for a topic the image no longer
+    /// holds.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) async fn stored_summary_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Option<ShareStateSummary> {
+        self.summary(group, topic_id, partition).await
+    }
+
     /// The summary of the stored state of the key, or `None` when the key
     /// has no state.
     async fn summary(

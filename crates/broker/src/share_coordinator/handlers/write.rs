@@ -241,10 +241,8 @@ mod tests {
         write_state_story.summary.set(
             state
                 .coordinator
-                .read_summary_checked(&state.image, "share-group", TOPIC, 4)
-                .await
-                .ok()
-                .flatten(),
+                .stored_summary_for_test("share-group", TOPIC, 4)
+                .await,
         );
     }
     #[rstest_bdd_macros::then(

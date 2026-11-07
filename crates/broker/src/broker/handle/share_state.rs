@@ -9,8 +9,10 @@ impl BrokerHandle {
     /// Test-only: read the share-state summary
     /// `(state_epoch, leader_epoch, start_offset, delivery_complete_count)`
     /// for `(group, topic_id, partition)` straight from this broker's
-    /// internal `ShareCoordinator`.
-    /// Returns `None` when the key has no initialized state. KIP-932 lifecycle
+    /// internal `ShareCoordinator`, with no status or metadata check.
+    /// Returns `None` when the key has no initialized state, also after its
+    /// topic left the metadata image, so a test sees whether the share state
+    /// itself was deleted. KIP-932 lifecycle
     /// tests use this to assert that the group coordinator initialized the
     /// per-partition share state. The persister RPCs stay off the wire.
     #[cfg(any(test, feature = "test-helpers"))]
@@ -24,15 +26,8 @@ impl BrokerHandle {
         // boundary: integration tests compare it against raw offset literals.
         self.broker
             .share_coordinator
-            .read_summary_checked(
-                &self.broker.controller.current_image(),
-                group,
-                topic_id,
-                partition,
-            )
+            .stored_summary_for_test(group, topic_id, partition)
             .await
-            .ok()
-            .flatten()
             .map(|(state_epoch, leader_epoch, start_offset, count)| {
                 (state_epoch, leader_epoch, start_offset.0, count)
             })
