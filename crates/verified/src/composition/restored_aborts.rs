@@ -2,9 +2,9 @@
 use super::restore_selection::selection_ordered;
 use {
     super::{
-        FetchWatermarks, RestoreAbortedTxn, RestoreSegmentExtent, aborted_transaction_interval,
-        aborted_transaction_overlaps, fetch_visibility, restore_txn_index_entry_valid,
-        truncation_frontier,
+        FetchReader, FetchWatermarks, Isolation, RestoreAbortedTxn, RestoreSegmentExtent,
+        aborted_transaction_interval, aborted_transaction_overlaps, fetch_visibility,
+        restore_txn_index_entry_valid, truncation_frontier,
     },
     creusot_std::prelude::*,
 };
@@ -96,7 +96,11 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
     fetch_start: i64,
     cut: i64,
 ) -> Option<Vec<usize>> {
-    let visibility = fetch_visibility(false, true, w, fetch_start);
+    let visibility = fetch_visibility(
+        FetchReader::Consumer(Isolation::ReadCommitted),
+        w,
+        fetch_start,
+    );
     let narrowed = truncation_frontier(visibility.limit_offset, cut);
     let mut selected: Vec<usize> = Vec::new();
     let mut i = 0usize;

@@ -1,5 +1,12 @@
 use {super::*, proptest::collection};
 
+/// A leader at 10 whose epoch starts at 0, with no watermark yet.
+const FROM_ZERO_AT_TEN: WatermarkInputs = WatermarkInputs {
+    log_end: 10,
+    epoch_start_offset: 0,
+    current_hwm: 0,
+};
+
 /// The leader's own log end counts toward a candidate's majority only when
 /// it actually reaches that candidate.
 ///
@@ -33,12 +40,10 @@ proptest! {
         let current_hwm = current_hwm.min(log_end);
         prop_assert_eq!(
             recompute_high_watermark(
-                log_end,
+                WatermarkInputs { log_end, epoch_start_offset, current_hwm },
                 &followers,
                 majority,
-                epoch_start_offset,
-                current_hwm,
-                leader_counts,
+                if leader_counts { LeaderVote::Counts } else { LeaderVote::Excluded },
             ),
             hwm_sort_oracle(
                 log_end,
@@ -116,7 +121,16 @@ fn hwm_never_regresses_and_gates_on_epoch_start(
 ) {
     // majority offset (2 of {10, 3, 9} with majority=2 -> 9) is <= epoch_start 9: hold.
     assert2::assert!(
-        recompute_high_watermark(10, followers, 2, epoch_start, current, true) == expected
+        recompute_high_watermark(
+            WatermarkInputs {
+                log_end: 10,
+                epoch_start_offset: epoch_start,
+                current_hwm: current,
+            },
+            followers,
+            2,
+            LeaderVote::Counts,
+        ) == expected
     );
 }
 
@@ -130,7 +144,10 @@ fn hwm_counts_leader_and_followers_until_majority(
     majority: usize,
     expected: i64,
 ) {
-    assert2::assert!(recompute_high_watermark(10, followers, majority, 0, 0, true) == expected);
+    assert2::assert!(
+        recompute_high_watermark(FROM_ZERO_AT_TEN, followers, majority, LeaderVote::Counts)
+            == expected
+    );
 }
 
 /// A three-voter WAL quorum: the leader's log end is one vote and a
@@ -155,6 +172,6 @@ fn majority_watermark_follows_the_second_highest_ack(
 
 #[test]
 fn hwm_can_exclude_a_removed_leader() {
-    check!(recompute_high_watermark(10, &[9, 4], 2, 0, 0, true) == 9);
-    check!(recompute_high_watermark(10, &[9, 4], 2, 0, 0, false) == 4);
+    check!(recompute_high_watermark(FROM_ZERO_AT_TEN, &[9, 4], 2, LeaderVote::Counts) == 9);
+    check!(recompute_high_watermark(FROM_ZERO_AT_TEN, &[9, 4], 2, LeaderVote::Excluded) == 4);
 }

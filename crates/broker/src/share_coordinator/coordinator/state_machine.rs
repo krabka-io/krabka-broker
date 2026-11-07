@@ -1,5 +1,5 @@
 //! The `ShareCoordinator` state machine: `initialize`, `write`, `read`,
-//! `read_summary`, and `delete`.
+//! `read_summary_checked`, and `delete`.
 //!
 //! These are the five operations the KIP-932 persister RPCs drive. They hold
 //! the validation and epoch-fencing rules of Kafka's `ShareCoordinatorShard`,
@@ -11,8 +11,8 @@
 
 use {
     super::{
-        Active, LeaderEpoch, ShareCoordinator, ShareErrorCode, ShareStateError, ShareStateSummary,
-        ShareWrite, StateEpoch, Term, UNINITIALIZED_START_OFFSET, message, persist::AppendError,
+        Active, LeaderEpoch, ShareCoordinator, ShareStateError, ShareStateSummary, ShareWrite,
+        StateEpoch, Term, UNINITIALIZED_START_OFFSET, message, persist::AppendError,
     },
     crate::{
         codes,
@@ -569,28 +569,19 @@ impl ShareCoordinator {
         Some(st.clone())
     }
 
-    /// Returns `(state_epoch, leader_epoch, start_offset, delivery_complete_count)`.
-    ///
-    /// Returns `Ok(None)` when the key has no state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the
-    /// state partition of the key is not active on this broker,
-    /// `NOT_COORDINATOR` when the partition stops leading on this broker
-    /// before its records commit, and `COORDINATOR_NOT_AVAILABLE` when they
-    /// do not commit within the write timeout.
-    pub(crate) async fn read_summary(
+    /// Test-only: the summary of the stored state of the key, or `None` when
+    /// the key has no state. Unlike [`ShareCoordinator::read_summary_checked`]
+    /// it checks neither the state partition status nor the metadata image,
+    /// so a test sees what is stored even for a topic the image no longer
+    /// holds.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) async fn stored_summary_for_test(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
-        let active = self.active_for_key(group, &topic_id, partition).await?;
-        let summary = self.summary(group, topic_id, partition).await;
-        self.answer(active, Ok(summary))
-            .await
-            .map_err(ShareStateError::code)
+    ) -> Option<ShareStateSummary> {
+        self.summary(group, topic_id, partition).await
     }
 
     /// The summary of the stored state of the key, or `None` when the key

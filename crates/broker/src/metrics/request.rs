@@ -10,11 +10,7 @@ use {
         QuotaTypeLabel, UNKNOWN_LABEL,
     },
     crate::{
-        handlers::{
-            ALTER_BARRIER_GROUPS_API_KEY, ApiKeyCode, DESCRIBE_BARRIER_GROUPS_API_KEY,
-            KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY, TRIGGER_BARRIER_API_KEY,
-            WRITE_BARRIER_MARKERS_API_KEY,
-        },
+        handlers::{ApiKeyCode, KRABKA_PRIVATE_API_KEY_FLOOR, krabka_private_api_name},
         quota::QuotaDelay,
     },
     krabka_protocol::api_key,
@@ -223,32 +219,20 @@ impl BrokerMetrics {
 /// An api key the generated `ApiKey` enum knows resolves to its variant name.
 /// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
 /// krabka-private key with a generated schema. Any other krabka-private api
-/// key resolves through [`krabka_private_api_key_label_name`]. Anything else
-/// folds under [`UNKNOWN_LABEL`].
+/// key resolves through [`krabka_private_api_name`]. Anything else folds under
+/// [`UNKNOWN_LABEL`].
+///
+/// Without the krabka-private arm every krabka-private request shares one
+/// `api_requests{api_key="Unknown"}` series with genuine garbage traffic, and
+/// an operator cannot tell the two apart. Cardinality stays bounded: the range
+/// holds one label per krabka-private RPC, plus [`UNKNOWN_LABEL`].
 fn api_key_label_name(api_key: ApiKeyCode) -> &'static str {
     match api_key::ApiKey::from_i16(api_key) {
         Some(k) => k.into(),
         None if api_key >= KRABKA_PRIVATE_API_KEY_FLOOR => {
-            krabka_private_api_key_label_name(api_key)
+            krabka_private_api_name(api_key).unwrap_or(UNKNOWN_LABEL)
         }
         None => UNKNOWN_LABEL,
-    }
-}
-
-/// Resolve a krabka-private wire `api_key` to its RPC name.
-///
-/// Without this arm every krabka-private request shares one
-/// `api_requests{api_key="Unknown"}` series with genuine garbage traffic, and
-/// an operator cannot tell the two apart. Cardinality stays bounded: the range
-/// holds one label per krabka-private RPC, plus [`UNKNOWN_LABEL`].
-fn krabka_private_api_key_label_name(api_key: ApiKeyCode) -> &'static str {
-    match api_key {
-        ALTER_BARRIER_GROUPS_API_KEY => "AlterBarrierGroups",
-        DESCRIBE_BARRIER_GROUPS_API_KEY => "DescribeBarrierGroups",
-        TRIGGER_BARRIER_API_KEY => "TriggerBarrier",
-        LIST_BARRIER_CUTS_API_KEY => "ListBarrierCuts",
-        WRITE_BARRIER_MARKERS_API_KEY => "WriteBarrierMarkers",
-        _ => UNKNOWN_LABEL,
     }
 }
 
@@ -257,9 +241,12 @@ mod tests {
     use {
         super::*,
         crate::handlers::{
-            ALTER_BARRIER_GROUPS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
-            KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY, TRIGGER_BARRIER_API_KEY,
-            WRITE_BARRIER_MARKERS_API_KEY,
+            ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY,
+            DESCRIBE_BARRIER_GROUPS_API_KEY, DESCRIBE_BREAK_GLASS_API_KEY,
+            DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,
+            LIST_BARRIER_CUTS_API_KEY, PROPOSE_BREAK_GLASS_API_KEY, SET_TOPIC_FREEZE_API_KEY,
+            TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
+            private_api_keys::KRABKA_PRIVATE_APIS, registry::build_registry,
         },
         assert2::assert,
         krabka_units::{micros, millis},
@@ -383,6 +370,11 @@ mod tests {
             (TRIGGER_BARRIER_API_KEY, "TriggerBarrier"),
             (LIST_BARRIER_CUTS_API_KEY, "ListBarrierCuts"),
             (WRITE_BARRIER_MARKERS_API_KEY, "WriteBarrierMarkers"),
+            (SET_TOPIC_FREEZE_API_KEY, "SetTopicFreeze"),
+            (DESCRIBE_TOPIC_FREEZES_API_KEY, "DescribeTopicFreezes"),
+            (PROPOSE_BREAK_GLASS_API_KEY, "ProposeBreakGlass"),
+            (APPROVE_BREAK_GLASS_API_KEY, "ApproveBreakGlass"),
+            (DESCRIBE_BREAK_GLASS_API_KEY, "DescribeBreakGlass"),
             // A Kafka api key still resolves through the generated enum, and
             // so does the one krabka-private key that has a generated schema.
             (0, "Produce"),
@@ -398,6 +390,28 @@ mod tests {
 
         for (api_key, want) in cases {
             assert!(api_key_label_name(api_key) == want, "api_key {api_key}");
+        }
+    }
+
+    /// Every api key the broker dispatches carries its own label, so its
+    /// traffic never shares the `Unknown` series with garbage. A krabka-private
+    /// RPC registered without a row in the shared name table fails here.
+    #[test]
+    fn no_dispatched_api_key_folds_under_unknown() {
+        for api_key in build_registry().registered_api_keys() {
+            assert!(
+                api_key_label_name(api_key) != UNKNOWN_LABEL,
+                "api_key {api_key}"
+            );
+        }
+    }
+
+    /// The label of each krabka-private RPC is the name the shared table
+    /// gives it, so a row added there is labelled without touching metrics.
+    #[test]
+    fn krabka_private_api_labels_follow_the_shared_table() {
+        for api in KRABKA_PRIVATE_APIS {
+            assert!(api_key_label_name(api.api_key) == api.name, "{api:?}");
         }
     }
 

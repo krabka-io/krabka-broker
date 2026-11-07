@@ -458,14 +458,14 @@ impl SharePersister {
         if local {
             return self
                 .share_coordinator
-                .read_summary(group, topic_id, partition)
+                .read_summary_checked(&self.controller.current_image(), group, topic_id, partition)
                 .await
-                .map_err(|code| {
+                .map_err(|error| {
                     refused(
                         "ReadShareGroupStateSummary",
                         partition,
-                        code,
-                        "no error message",
+                        error.code(),
+                        &error.summary_row_message(),
                     )
                 });
         }
@@ -774,7 +774,7 @@ mod tests {
         crate::{
             codes::{
                 COORDINATOR_LOAD_IN_PROGRESS, FENCED_LEADER_EPOCH, FENCED_STATE_EPOCH,
-                INVALID_REQUEST,
+                INVALID_REQUEST, UNKNOWN_TOPIC_OR_PARTITION,
             },
             handlers::test_support::{
                 StartedBroker, create_topic, share_topic_uuid, start_share_allow_all_no_audit,
@@ -878,27 +878,37 @@ mod tests {
         assert2::assert!(actual == expected);
     }
 
+    /// A started single broker, the id of its new share topic `name`, and its
+    /// share persister. The broker leads every `__share_group_state`
+    /// partition, so every persister call takes the local path.
+    async fn local_persister(name: &str) -> (StartedBroker, uuid::Uuid, Arc<SharePersister>) {
+        let started = start_share_allow_all_no_audit().await;
+        let topic_id = share_topic_uuid(
+            create_topic()
+                .broker(&started.broker)
+                .client_id("share-persister-test")
+                .name(name)
+                .call()
+                .await,
+        );
+        let persister = started
+            .broker
+            .broker_arc_for_test()
+            .group_coordinator
+            .share_persister()
+            .cloned()
+            .expect("share persister");
+        (started, topic_id, persister)
+    }
+
     /// A local `InitializeShareGroupState` that the coordinator refuses keeps
     /// the coordinator code, as the remote path does. `AlterShareGroupOffsets`
     /// answers that code per partition, so the answer must not depend on
     /// whether this broker leads the `__share_group_state` partition.
     #[tokio::test]
     async fn a_refused_local_initialize_keeps_the_coordinator_code() {
-        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
-        let topic_id = share_topic_uuid(
-            create_topic()
-                .broker(&broker)
-                .client_id("share-persister-test")
-                .name("fenced")
-                .call()
-                .await,
-        );
-        let persister = broker
-            .broker_arc_for_test()
-            .group_coordinator
-            .share_persister()
-            .cloned()
-            .expect("share persister");
+        let (StartedBroker { broker, dir: _dir }, topic_id, persister) =
+            local_persister("fenced").await;
 
         persister
             .initialize("g", topic_id, 0, 5, Offset(0))
@@ -920,6 +930,55 @@ mod tests {
                     ),
                 ))
         );
+    }
+
+    /// A local `ReadShareGroupStateSummary` refuses a negative partition and a
+    /// topic the metadata image does not hold, with the coordinator code and
+    /// row message, as the remote handler does. The admin offset RPCs read
+    /// these summaries, so the answer must not depend on whether this broker
+    /// leads the `__share_group_state` partition.
+    #[tokio::test]
+    async fn a_refused_local_summary_keeps_the_coordinator_code_and_message() {
+        let (StartedBroker { broker, dir: _dir }, topic_id, persister) =
+            local_persister("summary").await;
+        let cases = [
+            (
+                topic_id,
+                -1,
+                INVALID_REQUEST,
+                message::NEGATIVE_PARTITION_ID,
+            ),
+            (
+                uuid::Uuid::from_u128(0xdead),
+                0,
+                UNKNOWN_TOPIC_OR_PARTITION,
+                message::UNKNOWN_TOPIC_OR_PARTITION,
+            ),
+        ];
+        let mut actual = Vec::new();
+        for &(topic, partition, _, _) in &cases {
+            actual.push(
+                match persister.read_state_summary("g", topic, partition).await {
+                    Err(BrokerError::SharePartitionState { code, message }) => Ok((code, message)),
+                    other => Err(format!("{other:?}")),
+                },
+            );
+        }
+        broker.shutdown().await;
+
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|&(_, partition, code, message)| {
+                Ok((
+                    code,
+                    format!(
+                        "ReadShareGroupStateSummary for partition {partition} refused by the \
+                         leader: {message}"
+                    ),
+                ))
+            })
+            .collect();
+        assert2::assert!(actual == expected);
     }
 
     /// A share-state call routed to a remote leader dials it with the
