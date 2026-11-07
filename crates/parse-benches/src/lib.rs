@@ -775,17 +775,45 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), BudgetError> {
     Ok(())
 }
 
+/// Whether a subcommand that ran found what it checks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The command did its work and found nothing to reject.
+    Passed,
+    /// The command ran, and the comparison it judges was rejected.
+    Rejected,
+}
+
+/// What one subcommand found, and the line that says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandReport {
+    /// Whether the command passed or rejected what it judged.
+    pub outcome: Outcome,
+    /// The line to print: on standard output for a pass, on standard error
+    /// for a rejection.
+    pub message: String,
+}
+
+impl CommandReport {
+    fn passed(message: String) -> Self {
+        Self {
+            outcome: Outcome::Passed,
+            message,
+        }
+    }
+}
+
 /// Run one subcommand and say what it found.
 ///
-/// The returned message is printed on success. `Ok(false)` means the command
-/// ran and the comparison was rejected; the verdict and Markdown are written
-/// either way, so a rejection is published with its evidence.
+/// An [`Outcome::Rejected`] report means the command ran and the comparison
+/// was rejected; the verdict and Markdown are written either way, so a
+/// rejection is published with its evidence.
 ///
 /// # Errors
 ///
 /// Returns [`ParseBenchesError`] when an input cannot be read, parsed or
 /// judged.
-pub fn run_command(command: &Command) -> Result<(bool, String), ParseBenchesError> {
+pub fn run_command(command: &Command) -> Result<CommandReport, ParseBenchesError> {
     match command {
         Command::Executables {
             cargo_messages,
@@ -795,28 +823,22 @@ pub fn run_command(command: &Command) -> Result<(bool, String), ParseBenchesErro
             let manifest =
                 manifest_from_cargo_messages(&fs::read_to_string(cargo_messages)?, commit)?;
             write_json(output, &manifest)?;
-            Ok((
-                true,
-                format!(
-                    "{} bench executables of {commit} recorded in {}",
-                    manifest.executables.len(),
-                    output.display()
-                ),
-            ))
+            Ok(CommandReport::passed(format!(
+                "{} bench executables of {commit} recorded in {}",
+                manifest.executables.len(),
+                output.display()
+            )))
         }
         Command::CheckContract { contract } => {
             let bytes = fs::read(contract)?;
             let parsed = Contract::from_json(&bytes)?;
-            Ok((
-                true,
-                format!(
-                    "{}: {} cells, {} rounds, sha256 {}",
-                    parsed.name,
-                    parsed.cells.len(),
-                    parsed.rounds,
-                    contract_digest(&bytes)
-                ),
-            ))
+            Ok(CommandReport::passed(format!(
+                "{}: {} cells, {} rounds, sha256 {}",
+                parsed.name,
+                parsed.cells.len(),
+                parsed.rounds,
+                contract_digest(&bytes)
+            )))
         }
         Command::Assemble {
             artifact_dir,
@@ -824,14 +846,11 @@ pub fn run_command(command: &Command) -> Result<(bool, String), ParseBenchesErro
         } => {
             let record = assemble(artifact_dir)?;
             write_json(output, &record)?;
-            Ok((
-                true,
-                format!(
-                    "{} trials written to {}",
-                    record.trials.len(),
-                    output.display()
-                ),
-            ))
+            Ok(CommandReport::passed(format!(
+                "{} trials written to {}",
+                record.trials.len(),
+                output.display()
+            )))
         }
         Command::Evaluate {
             record,
@@ -859,7 +878,14 @@ pub fn run_command(command: &Command) -> Result<(bool, String), ParseBenchesErro
                     output.display()
                 )
             };
-            Ok((verdict.passed, summary))
+            Ok(CommandReport {
+                outcome: if verdict.passed {
+                    Outcome::Passed
+                } else {
+                    Outcome::Rejected
+                },
+                message: summary,
+            })
         }
     }
 }
