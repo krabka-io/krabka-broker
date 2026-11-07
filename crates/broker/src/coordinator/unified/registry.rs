@@ -538,6 +538,59 @@ mod tests {
         coord.shutdown_all().await;
     }
 
+    /// Sends the request that `message` builds down `tx` and waits for its
+    /// answer.
+    async fn ask<M, T>(tx: &mpsc::Sender<M>, message: impl FnOnce(oneshot::Sender<T>) -> M) -> T {
+        let (reply, answer) = oneshot::channel();
+        tx.send(message(reply)).await.expect("send the request");
+        answer.await.expect("an answer")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_finalized_bootstrap_hydrates_one_group_of_each_kind() {
+        let coord = make_coord();
+        coord.seeds.insert("consumer".into(), GroupSeed {
+            group_epoch: 7,
+            ..GroupSeed::default()
+        });
+        coord.share_seeds.insert("share".into(), ShareGroupSeed {
+            group_epoch: 17,
+            ..ShareGroupSeed::default()
+        });
+        coord
+            .streams_seeds
+            .insert("streams".into(), StreamsGroupSeed {
+                group_epoch: 27,
+                ..StreamsGroupSeed::default()
+            });
+
+        coord.finalize_bootstrap();
+
+        let consumer = coord.find("consumer").expect("the consumer actor");
+        let share = coord.find_share("share").expect("the share actor");
+        let streams = coord.find_streams("streams").expect("the streams actor");
+        let epochs = (
+            ask(&consumer.tx, |reply| GroupActorMessage::Describe { reply })
+                .await
+                .group_epoch,
+            ask(&share.tx, |reply| ShareGroupActorMessage::Describe {
+                reply,
+            })
+            .await
+            .group_epoch,
+            ask(&streams.tx, |reply| StreamsGroupActorMessage::Describe {
+                reply,
+            })
+            .await
+            .group_epoch,
+        );
+        check!(coord.seeds.is_empty());
+        check!(coord.share_seeds.is_empty());
+        check!(coord.streams_seeds.is_empty());
+        assert!(epochs == (7, 17, 27));
+        coord.shutdown_all().await;
+    }
+
     /// Sends `Shutdown` down `tx` and waits until the actor has exited and
     /// closed its mailbox, as an actor does after a failed log write.
     async fn stop_actor<M>(tx: &mpsc::Sender<M>, shutdown: impl FnOnce(oneshot::Sender<()>) -> M) {
