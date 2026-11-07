@@ -495,17 +495,22 @@ pub fn seed_finished_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, count: u
     for i in 0..count {
         let index = u128::try_from(i).expect("test segment count fits in u128");
         let base = i64::try_from(i).expect("test segment count fits in i64") * 10;
-        let id = 0x5000 + index;
-        stuck_started_segment(rlmm, id, base);
-        rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
-            remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-            event_timestamp_ms: 100,
-            custom_metadata: None,
-            state: RemoteLogSegmentState::CopySegmentFinished,
-            broker_id: 1,
-        })
-        .unwrap();
+        finished_segment(rlmm, 0x5000 + index, base);
     }
+}
+
+/// Put one `CopySegmentFinished` segment over offsets `base` to `base + 9`
+/// into `rlmm`, without going near an RSM.
+pub fn finished_segment(rlmm: &Arc<dyn RemoteLogMetadataManager>, id: u128, base: i64) {
+    stuck_started_segment(rlmm, id, base);
+    rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+        remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
+        event_timestamp_ms: 100,
+        custom_metadata: None,
+        state: RemoteLogSegmentState::CopySegmentFinished,
+        broker_id: 1,
+    })
+    .unwrap();
 }
 
 /// The fixture's orders topic in metadata image 9, with an explicit partition count.
