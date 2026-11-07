@@ -158,14 +158,13 @@ pub async fn capture_configured(
             Some(_) => security.load().await?,
             None => None,
         };
-        let request = CaptureRequest {
-            log_dir,
-            bootstrap_server,
-            security: client_security,
-            signing,
-            archive,
-            captured_at_ms: now_ms(),
-        };
+        let request = CaptureRequest::builder()
+            .maybe_log_dir(log_dir)
+            .maybe_bootstrap_server(bootstrap_server)
+            .maybe_security(client_security)
+            .signing(signing)
+            .archive(archive)
+            .build();
         run_capture(request, &mut events).await
     }
     .await;
@@ -174,12 +173,15 @@ pub async fn capture_configured(
 
 /// Everything one capture reads: where to take artifacts from, how to reach
 /// and sign for the cluster, where to put them, and the capture's timestamp.
+#[derive(bon::Builder)]
 struct CaptureRequest<'a> {
     log_dir: Option<&'a Path>,
     bootstrap_server: Option<&'a str>,
     security: Option<ClientSecurity>,
     signing: &'a CaptureSigningArgs,
     archive: &'a ArchiveArgs,
+    /// When the capture ran; now, unless a test pins it.
+    #[builder(default = now_ms())]
     captured_at_ms: u64,
 }
 
@@ -193,14 +195,14 @@ async fn capture_secured_at(
     captured_at_ms: u64,
 ) -> OperationReport<String> {
     let mut events = Vec::new();
-    let request = CaptureRequest {
-        log_dir,
-        bootstrap_server,
-        security,
-        signing,
-        archive,
-        captured_at_ms,
-    };
+    let request = CaptureRequest::builder()
+        .maybe_log_dir(log_dir)
+        .maybe_bootstrap_server(bootstrap_server)
+        .maybe_security(security)
+        .signing(signing)
+        .archive(archive)
+        .captured_at_ms(captured_at_ms)
+        .build();
     let result = run_capture(request, &mut events).await;
     OperationReport { result, events }
 }
@@ -1280,14 +1282,13 @@ mod tests {
         } = archive_fixture();
         let id = "0001700000000000";
         let signing = super::CaptureSigningArgs::default();
-        let request = super::CaptureRequest {
-            log_dir: Some(Path::new("/var/lib/krabka")),
-            bootstrap_server: Some("broker-1:9092"),
-            security: None,
-            signing: &signing,
-            archive: &args,
-            captured_at_ms: 1_700_000_000_000,
-        };
+        let request = super::CaptureRequest::builder()
+            .log_dir(Path::new("/var/lib/krabka"))
+            .bootstrap_server("broker-1:9092")
+            .signing(&signing)
+            .archive(&args)
+            .captured_at_ms(1_700_000_000_000)
+            .build();
         let expected = Manifest {
             version: MANIFEST_VERSION,
             capture_id: id.to_owned(),
