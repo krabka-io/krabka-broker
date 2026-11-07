@@ -303,7 +303,7 @@ async fn a_retried_marker_waits_for_the_marker_the_log_holds() {
             code(&retry_timed_out),
             code(&retry_committed),
             marker_epochs(&partition),
-            partition.log_end_offset(),
+            partition.log_end_offset().unwrap(),
         ) == (
             codes::REQUEST_TIMED_OUT,
             codes::REQUEST_TIMED_OUT,

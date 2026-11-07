@@ -64,7 +64,7 @@ pub async fn append_marker(
     if decision != BarrierMarkerFenceDecision::Append {
         return Err(MarkerAppendError::Fence(decision));
     }
-    let batch = build_barrier_batch(marker, partition.log_end_offset(), expected_epoch)?;
+    let batch = build_barrier_batch(marker, partition.log_end_offset()?, expected_epoch)?;
     let appended = partition.produce_control_batch(batch).await;
     // Held through the append, so no other generation installs in between.
     drop(installed);
@@ -115,7 +115,9 @@ mod tests {
         };
         let result = append_marker(&partition, &marker, NodeId(1), 5).await;
         assert2::check!(result.is_ok() == appended, "{length} bytes");
-        assert2::check!(partition.log_end_offset() == if appended { Offset(1) } else { Offset(0) });
+        assert2::check!(
+            partition.log_end_offset().unwrap() == if appended { Offset(1) } else { Offset(0) }
+        );
     }
 
     #[tokio::test]

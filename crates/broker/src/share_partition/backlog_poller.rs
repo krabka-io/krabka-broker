@@ -157,9 +157,13 @@ impl BacklogPoller {
                 .partitions
                 .get(topic, PartitionIndex(partition))
                 .ok_or_else(|| format!("leader partition {topic}-{partition} is not local"))?;
+            let log_start = local
+                .log_start_offset()
+                .map_err(|error| format!("leader partition {topic}-{partition}: {error}"))?
+                .0;
             return Ok(PartitionOffsets {
                 high_watermark: local.high_watermark().await.0,
-                log_start: local.log_start_offset().0,
+                log_start,
             });
         }
         self.remote_offsets(image, leader, topic, partition).await

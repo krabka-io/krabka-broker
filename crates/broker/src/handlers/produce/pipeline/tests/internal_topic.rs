@@ -173,6 +173,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
             .get("__consumer_offsets", krabka_ids::PartitionIndex(0))
             .expect("the partition is registered")
             .log_end_offset()
+            .unwrap()
             == krabka_log::Offset(2),
         "the seed batch plus the admin client's one append; the ordinary \
          application's refused batch must not have landed"

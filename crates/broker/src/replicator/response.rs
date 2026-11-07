@@ -414,8 +414,10 @@ async fn record_leader_progress(
     part.set_follower_hw(Offset(part_resp.high_watermark)).await;
     // KIP-73: the lag behind the leader's high watermark decides
     // whether the follower throttle applies to this partition.
-    cfg.lag
-        .update(part_resp.high_watermark, part.log_end_offset().0);
+    // A poisoned log has no log end to measure the lag from.
+    if let Ok(log_end) = part.log_end_offset() {
+        cfg.lag.update(part_resp.high_watermark, log_end.0);
+    }
     follow_leader_log_start(part, cfg, part_resp.log_start_offset).await;
     RowAction::Continue
 }
@@ -906,7 +908,7 @@ mod tests {
 
         assert2::assert!(
             (
-                part.log_start_offset(),
+                part.log_start_offset().unwrap(),
                 part.reported_leader_log_start
                     .load(atomic::Ordering::Acquire)
             ) == (Offset(start), recorded)
@@ -1098,12 +1100,12 @@ mod tests {
             part,
         } = local_partition_fixture();
         part.replicate_batch(one_record_batch(0)).await.unwrap();
-        assert!(part.log_end_offset() == Offset(1));
+        assert!(part.log_end_offset().unwrap() == Offset(1));
 
         let resp = diverging_response(cfg.leader_epoch.0, 0);
 
         assert!(handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == RowAction::Drop);
-        assert!(part.log_end_offset() == Offset(1));
+        assert!(part.log_end_offset().unwrap() == Offset(1));
     }
 
     /// KIP-320 follower side, `AbstractFetcherThread.getOffsetTruncationState`:
@@ -1269,7 +1271,10 @@ mod tests {
             let action = handle_response(resp, &cfg, cfg.leader_epoch.0).await;
 
             assert!(action == RowAction::Continue, "{name}");
-            assert!(part.log_end_offset() == Offset(expected_end), "{name}");
+            assert!(
+                part.log_end_offset().unwrap() == Offset(expected_end),
+                "{name}"
+            );
             let epochs = part.epoch_history();
             assert!(epochs == expected_epochs, "{name}");
         }
@@ -1291,17 +1296,17 @@ mod tests {
             })
         };
         assert!(handle_response(respond(0), &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
-        assert!(part.log_end_offset() == Offset(1));
+        assert!(part.log_end_offset().unwrap() == Offset(1));
 
         // A batch that starts below the log end offset is a duplicate. The
         // append is refused and leaves the log as it was.
         let bad = respond(0);
         assert!(handle_response(bad, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
-        assert!(part.log_end_offset() == Offset(1));
+        assert!(part.log_end_offset().unwrap() == Offset(1));
 
         let retry = respond(1);
         assert!(handle_response(retry, &cfg, cfg.leader_epoch.0).await == RowAction::Continue);
-        assert!(part.log_end_offset() == Offset(2));
+        assert!(part.log_end_offset().unwrap() == Offset(2));
     }
 
     fn one_batch_response(cfg: &Config, offset: i64, raw: bool) -> FetchResponse {
@@ -1370,7 +1375,7 @@ mod tests {
                 .into_iter()
                 .map(|(dir, _reason)| dir)
                 .collect();
-            actual.push((raw, action, offline, part.log_end_offset()));
+            actual.push((raw, action, offline, part.log_end_offset().unwrap()));
             expected.push((
                 raw,
                 RowAction::Offline,
@@ -1403,7 +1408,7 @@ mod tests {
                 );
             }
 
-            assert!(part.log_end_offset() == Offset(6), "raw: {raw}");
+            assert!(part.log_end_offset().unwrap() == Offset(6), "raw: {raw}");
         }
     }
 
@@ -1458,7 +1463,10 @@ mod tests {
 
         assert2::assert!(action == RowAction::Continue);
         assert2::assert!(
-            (part.log_start_offset(), part.log_end_offset()) == (Offset(want.0), Offset(want.1))
+            (
+                part.log_start_offset().unwrap(),
+                part.log_end_offset().unwrap()
+            ) == (Offset(want.0), Offset(want.1))
         );
     }
 
@@ -1491,7 +1499,10 @@ mod tests {
         } else {
             part.reset_to(Offset(3)).await.unwrap();
         }
-        let before = (part.log_start_offset(), part.log_end_offset());
+        let before = (
+            part.log_start_offset().unwrap(),
+            part.log_end_offset().unwrap(),
+        );
         let batch = RecordBatch {
             attributes: Attributes::default().with_compression(codec),
             last_offset_delta: 4,
@@ -1518,7 +1529,12 @@ mod tests {
         assert2::assert!(
             handle_response(response, &cfg, cfg.leader_epoch.0).await == RowAction::Continue
         );
-        assert2::assert!((part.log_start_offset(), part.log_end_offset()) == before);
+        assert2::assert!(
+            (
+                part.log_start_offset().unwrap(),
+                part.log_end_offset().unwrap()
+            ) == before
+        );
     }
 
     #[tokio::test]

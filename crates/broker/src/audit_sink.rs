@@ -276,6 +276,6 @@ mod tests {
             .expect_err("former leader must reject audit write");
 
         assert!(error.to_string().contains("led by node 1"));
-        assert!(partition.log_end_offset() == Offset(0));
+        assert!(partition.log_end_offset().unwrap() == Offset(0));
     }
 }

@@ -16,7 +16,8 @@
 use {
     super::response::{error_partition_result, partition_result},
     crate::{
-        broker::Broker, codes, handlers::offline_replicas::live_brokers, partition::Partition,
+        broker::Broker, codes, error::BrokerError, handlers::offline_replicas::live_brokers,
+        partition::Partition,
     },
     krabka_log::Offset,
     krabka_protocol::owned::delete_records_response::DeleteRecordsTopicResult,
@@ -55,7 +56,12 @@ pub(super) struct Waiting {
 ///
 /// A follower is live when its broker is registered and not fenced, which is
 /// Kafka's `MetadataCache.hasAliveBroker`.
-pub(super) async fn current(broker: &Broker, part: &Partition) -> Offset {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the leader's log mutex is
+/// poisoned; see [`Partition::lock_log`].
+pub(super) async fn current(broker: &Broker, part: &Partition) -> Result<Offset, BrokerError> {
     let image = broker.controller.current_image();
     let alive = live_brokers(broker, &image).await;
     // The assignment comes from the image: a broker that just became leader
@@ -65,13 +71,13 @@ pub(super) async fn current(broker: &Broker, part: &Partition) -> Offset {
     let replicas = image
         .partition(&part.topic, part.index.get())
         .map_or_default(|record| record.replicas.clone());
-    let leader_log_start = part.log_start_offset();
-    part.replica_state.lock().await.low_watermark(
+    let leader_log_start = part.log_start_offset()?;
+    Ok(part.replica_state.lock().await.low_watermark(
         broker.config.node_id,
         leader_log_start,
         &replicas,
         &alive,
-    )
+    ))
 }
 
 /// Wait until every row in `waiting` reaches its required offset, or until
@@ -110,7 +116,13 @@ pub(super) async fn await_followers(
                 *slot = error_partition_result(row.partition, codes::NOT_LEADER_OR_FOLLOWER);
                 continue;
             }
-            let low_watermark = current(broker, &part).await;
+            let low_watermark = match current(broker, &part).await {
+                Ok(low_watermark) => low_watermark,
+                Err(error) => {
+                    *slot = error_partition_result(row.partition, codes::from_broker_error(&error));
+                    continue;
+                }
+            };
             if low_watermark.0 >= row.required {
                 *slot = partition_result(row.partition, low_watermark.0, codes::NONE);
             } else {

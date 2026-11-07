@@ -32,7 +32,7 @@ use {
     std::{
         collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         mem,
-        sync::{Arc, PoisonError, atomic},
+        sync::{Arc, atomic},
         time::Duration,
     },
     tokio::time::Instant,
@@ -432,16 +432,28 @@ struct PartitionRow {
 /// Every row asks for the configured fetch maximum, Kafka's
 /// `replica.fetch.max.bytes`. The KIP-73 follower throttle decides only
 /// whether a partition joins the round.
+///
+/// A partition whose log mutex is poisoned does not join it: with no log end
+/// to fetch from, a row would ask the leader for the log from offset 0.
 fn partition_row(cfg: &Config) -> Option<PartitionRow> {
     let entry = cfg.partitions.get(&cfg.topic, cfg.partition)?;
-    let fetch_offset = entry.log_end_offset();
     let leader_epoch = entry.current_leader_epoch.load(atomic::Ordering::Acquire);
-    let last_fetched_epoch = {
-        let log = entry.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.epoch_checkpoint()
-            .latest_epoch()
-            // Unwrap the log-layer `LeaderEpoch` into the raw wire field.
-            .map_or(-1, |epoch| epoch.0)
+    let (fetch_offset, log_start_offset, last_fetched_epoch) = {
+        let log = entry
+            .lock_log()
+            .inspect_err(|error| {
+                tracing::warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                               "replicator: not fetching a partition whose log mutex is poisoned");
+            })
+            .ok()?;
+        (
+            log.log_end_offset(),
+            log.log_start_offset(),
+            log.epoch_checkpoint()
+                .latest_epoch()
+                // Unwrap the log-layer `LeaderEpoch` into the raw wire field.
+                .map_or(-1, |epoch| epoch.0),
+        )
     };
     Some(PartitionRow {
         request: FetchPartition {
@@ -452,7 +464,7 @@ fn partition_row(cfg: &Config) -> Option<PartitionRow> {
             last_fetched_epoch,
             // The leader's `DeleteRecords` waits until every live follower
             // reports a log start at or above the trim point.
-            log_start_offset: entry.log_start_offset().0,
+            log_start_offset: log_start_offset.0,
             partition_max_bytes: cfg.connection.replication.fetch_max.bytes_i32(),
             ..FetchPartition::default()
         },

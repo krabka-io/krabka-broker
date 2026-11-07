@@ -16,6 +16,7 @@ use {
         incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
+        task_util::joined_cleanly,
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
@@ -69,14 +70,18 @@ fn take_partition_writer_tasks(partitions: &PartitionRegistry) -> Vec<JoinHandle
         .collect()
 }
 
-async fn shutdown_partition_writers(partitions: &PartitionRegistry) {
+/// Abort and await every partition writer, and answer whether none of them
+/// had panicked.
+async fn shutdown_partition_writers(partitions: &PartitionRegistry) -> bool {
     let tasks = take_partition_writer_tasks(partitions);
     for task in &tasks {
         task.abort();
     }
+    let mut clean = true;
     for task in tasks {
-        let _ = task.await;
+        clean &= joined_cleanly("partition writer", task).await;
     }
+    clean
 }
 
 /// Take a producer-state snapshot at the end of every partition's log, as
@@ -84,10 +89,27 @@ async fn shutdown_partition_writers(partitions: &PartitionRegistry) {
 /// restores producer state without replaying the active segment, and write a
 /// log start that retention moved and has not yet checkpointed. The writers
 /// are stopped first, so no append races the snapshot.
-fn close_logs(partitions: &PartitionRegistry) {
+///
+/// Answers whether every log closed. A log whose mutex a panicked task
+/// poisoned is left as it is and logged: it gets no snapshot and no
+/// checkpoint, and the broker writes no clean-shutdown proof, so the next
+/// start recovers it.
+fn close_logs(partitions: &PartitionRegistry) -> bool {
+    let mut clean = true;
     for partition in partitions.arcs() {
-        let Ok(mut log) = partition.log.lock() else {
-            continue;
+        let mut log = match partition.lock_log() {
+            Ok(log) => log,
+            Err(error) => {
+                tracing::error!(
+                    topic = %partition.topic,
+                    partition = partition.index.0,
+                    %error,
+                    "a task panicked while it held this partition's log; the log is not closed, \
+                     and the next start recovers it"
+                );
+                clean = false;
+                continue;
+            }
         };
         if let Err(error) = log.take_producer_snapshot() {
             tracing::warn!(
@@ -108,6 +130,7 @@ fn close_logs(partitions: &PartitionRegistry) {
             );
         }
     }
+    clean
 }
 
 fn abort_partition_writers(partitions: &PartitionRegistry) {
@@ -269,7 +292,9 @@ impl BrokerHandle {
         let part = self.maybe_local_partition(topic, partition)?;
         // Unwrap `Offset` -> `i64` at this test-helper boundary: integration
         // tests compare the result against raw offset literals.
-        Some(part.log_end_offset().0)
+        // A poisoned log answers `None`, as a partition this broker does not
+        // host does.
+        Some(part.log_end_offset().ok()?.0)
     }
 
     /// This broker's raft `node_id` (1-indexed broker id used in raft quorum
@@ -527,13 +552,17 @@ impl BrokerHandle {
     /// Await the listener watcher, so that it opens no listener after this,
     /// and then every data-plane accept loop, each of which closes its
     /// connections. The caller has cancelled the shutdown token.
-    async fn stop_listeners(&mut self) {
+    ///
+    /// Answers whether none of those tasks had panicked.
+    async fn stop_listeners(&mut self) -> bool {
+        let mut clean = true;
         if let Some(task) = self.listener_watcher.take() {
-            let _ = task.await;
+            clean &= joined_cleanly("listener watcher", task).await;
         }
         for task in self.broker.data_plane.close() {
-            let _ = task.await;
+            clean &= joined_cleanly("accept loop", task).await;
         }
+        clean
     }
 
     /// Cancel the listener and drain in-flight connections. The returned
@@ -546,9 +575,12 @@ impl BrokerHandle {
         // in-flight replication tasks must observe a clean cancellation
         // rather than a torn-down metadata-watch channel.
         self.broker.supervisor_shutdown.cancel();
+        // Whether every task joined below ended without a panic, and every
+        // log closed. Either failure withholds the clean-shutdown proof.
+        let mut clean = true;
         let h = self.broker.supervisor_handle.lock().await.take();
         if let Some(h) = h {
-            let _ = h.await;
+            clean &= joined_cleanly("replicator supervisor", h).await;
         }
         // Drain the disk-usage scanner if it was spawned.
         // The scanner observes the same `supervisor_shutdown` cancellation
@@ -557,7 +589,7 @@ impl BrokerHandle {
         // of the broker apart.
         let h = self.broker.disk_scanner_handle.lock().await.take();
         if let Some(h) = h {
-            let _ = h.await;
+            clean &= joined_cleanly("disk-usage scanner", h).await;
         }
         // The remote-log-manager sweep observes `supervisor_shutdown` too: its
         // copy pass stops at the next segment and withdraws a copy in flight
@@ -568,16 +600,16 @@ impl BrokerHandle {
         // new leaders are copying into. The handle stays on the broker,
         // finished, so a test can see it stopped.
         if let Some(h) = self.broker.remote_log_manager_handle.lock().await.as_mut() {
-            let _ = h.await;
+            clean &= joined_cleanly("remote-log manager", h).await;
         }
         self.shutdown.cancel();
         if let Some(task) = self.topic_rlmm_task.take() {
-            let _ = task.await;
+            clean &= joined_cleanly("topic-based RLMM", task).await;
         }
         if let Some(task) = self.diskless_task.take() {
-            let _ = task.await;
+            clean &= joined_cleanly("diskless runtime", task).await;
         }
-        self.stop_listeners().await;
+        clean &= self.stop_listeners().await;
         self.broker.share_partition_leaders.shutdown().await;
         self.broker
             .audit_log
@@ -589,18 +621,23 @@ impl BrokerHandle {
         self.broker.audit_log.close();
         let task = self.broker.audit_writer_handle.lock().await.take();
         if let Some(task) = task {
-            let _ = task.await;
+            clean &= joined_cleanly("audit writer", task).await;
         }
-        shutdown_moves(&self.broker.future_logs).await;
-        shutdown_partition_writers(&self.broker.partitions).await;
-        close_logs(&self.broker.partitions);
+        clean &= shutdown_moves(&self.broker.future_logs).await;
+        clean &= shutdown_partition_writers(&self.broker.partitions).await;
+        clean &= close_logs(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;
         // Every log this broker holds is now closed, so the record set it
         // brings back on restart is the one the cluster believes it has. That
         // is the whole content of the clean-shutdown proof, and this is the
         // last moment it is true, so leave it here. A crash never reaches this
         // line, which is exactly why the absence of the file means unclean.
-        self.write_clean_shutdown_proof();
+        // A task that panicked, or a log left poisoned, makes the claim false,
+        // so the proof is withheld then too, as Kafka's `LogManager.shutdown`
+        // writes its marker only for a directory whose every close succeeded.
+        if clean {
+            self.write_clean_shutdown_proof();
+        }
         // Shut down the raft engine so this broker's controller stops
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking

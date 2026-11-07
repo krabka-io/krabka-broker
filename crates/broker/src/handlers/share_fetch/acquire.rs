@@ -402,12 +402,17 @@ fn tiered_source<'a>(
 /// classic group to offset order, and a share group is exactly the reader that
 /// does not need it: the window runs to the high watermark and the deferral
 /// marks hold the waiting records back one range at a time.
-async fn read_upper_bound(part: &Partition, read_committed: bool) -> Offset {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] under `read_committed` if the
+/// log mutex is poisoned: with no last stable offset, nothing is safe to read.
+async fn read_upper_bound(part: &Partition, read_committed: bool) -> Result<Offset, BrokerError> {
     let hwm = part.high_watermark().await;
     if read_committed {
         part.last_stable_offset(hwm)
     } else {
-        hwm
+        Ok(hwm)
     }
 }
 
@@ -476,7 +481,7 @@ async fn acquire_with_log_start_recovery<'a>(
     // record below the new start stays locked until it times out.
     let floor = match broker.diskless_read.as_deref().filter(|_| part.diskless) {
         Some(reader) => diskless_logical_start(reader, part, topic_id).await,
-        None => Ok(part.log_start_offset()),
+        None => part.log_start_offset(),
     }?;
     st.advance_past_log_start(floor);
     *fresh = PartitionData::default();
@@ -613,7 +618,15 @@ async fn acquire_partition(
         persist_best_effort(mgr, group, p, &cell, &mut st).await;
         return;
     };
-    let upper = read_upper_bound(&part, read_committed).await;
+    let upper = match read_upper_bound(&part, read_committed).await {
+        Ok(upper) => upper,
+        Err(error) => {
+            p.out.error_code = codes::from_broker_error(&error);
+            p.leadable = false;
+            persist_best_effort(mgr, group, p, &cell, &mut st).await;
+            return;
+        }
+    };
     // A released or expired record at the delivery limit is archived
     // first, so it cannot hold the window shut.
     st.archive_exhausted(settings.delivery_count_limit);

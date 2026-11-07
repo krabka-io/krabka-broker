@@ -248,7 +248,7 @@ async fn a_retry_during_the_acks_all_wait_answers_the_first_offset() {
                 ))
                 .await;
                 check!(
-                    partition.log_end_offset() == Offset(original + 1),
+                    partition.log_end_offset().unwrap() == Offset(original + 1),
                     "{label}: the retry must not append a second copy"
                 );
                 (
@@ -275,7 +275,7 @@ async fn a_retry_during_the_acks_all_wait_answers_the_first_offset() {
             };
             check!(first_row.is_none_or(|row| row == first_copy_row), "{label}");
             check!(
-                partition.log_end_offset() == Offset(original + 1),
+                partition.log_end_offset().unwrap() == Offset(original + 1),
                 "{label}"
             );
         }
@@ -334,7 +334,7 @@ async fn a_retry_after_later_batches_answers_the_first_offset() {
                     produce_from(idempotent(PRODUCER_ID), 2, -1, services).await,
                 ));
             }
-            let log_end = partition.log_end_offset();
+            let log_end = partition.log_end_offset().unwrap();
             if tracker_forgot {
                 fixture
                     .producer_state
@@ -358,7 +358,7 @@ async fn a_retry_after_later_batches_answers_the_first_offset() {
                     },
                 "{label}"
             );
-            check!(partition.log_end_offset() == log_end, "{label}");
+            check!(partition.log_end_offset().unwrap() == log_end, "{label}");
             drop(waiting);
         }
     }

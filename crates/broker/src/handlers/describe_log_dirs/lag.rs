@@ -22,7 +22,7 @@ pub(super) const INVALID_OFFSET_LAG: i64 = -1;
 /// `max(HW − LEO, 0)` for a loaded current log.
 ///
 /// Returns [`INVALID_OFFSET_LAG`] when the partition is not materialized on
-/// this broker.
+/// this broker, or when its log mutex is poisoned.
 pub(super) async fn offset_lag_for(
     partitions: &PartitionRegistry,
     topic: &str,
@@ -31,7 +31,9 @@ pub(super) async fn offset_lag_for(
     let Some(part) = partitions.get(topic, krabka_ids::PartitionIndex(partition)) else {
         return INVALID_OFFSET_LAG;
     };
-    let leo = part.log_end_offset();
+    let Ok(leo) = part.log_end_offset() else {
+        return INVALID_OFFSET_LAG;
+    };
     let hw = part.high_watermark().await;
     // Lag is a record-count delta between two offsets, not an offset.
     (hw.0 - leo.0).max(0)
@@ -41,7 +43,7 @@ pub(super) async fn offset_lag_for(
 /// clamp.
 ///
 /// Returns [`INVALID_OFFSET_LAG`] if the partition is not materialized
-/// locally. The future LEO counts as 0 if the future-log registry has no
+/// locally, or if its log mutex is poisoned. The future LEO counts as 0 if the future-log registry has no
 /// entry. The registry has no entry when the broker has just started and the
 /// resume task has not opened the future log yet.
 pub(super) fn future_offset_lag(
@@ -53,7 +55,9 @@ pub(super) fn future_offset_lag(
     let Some(part) = partitions.get(topic, partition) else {
         return INVALID_OFFSET_LAG;
     };
-    let current_leo = part.log_end_offset();
+    let Ok(current_leo) = part.log_end_offset() else {
+        return INVALID_OFFSET_LAG;
+    };
     let future_leo =
         future_logs
             .get(&(topic.to_owned(), partition))
@@ -206,7 +210,15 @@ mod tests {
     }
     #[rstest_bdd_macros::then("the log lag is {expected} and the current log end remains 5")]
     fn check_log_lag(directory_lag: &LogDirectoryLagScenario, expected: i64) {
-        assert!(directory_lag.current.as_ref().unwrap().log_end_offset() == krabka_log::Offset(5));
+        assert!(
+            directory_lag
+                .current
+                .as_ref()
+                .unwrap()
+                .log_end_offset()
+                .unwrap()
+                == krabka_log::Offset(5)
+        );
         assert2::check!(directory_lag.lag.unwrap() == expected);
     }
     #[rstest_bdd_macros::scenario(

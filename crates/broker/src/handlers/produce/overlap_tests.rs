@@ -161,7 +161,7 @@ fn expected_rows(names: &[&str], rows: Vec<PartitionProduceResponse>) -> Vec<Top
 async fn until_appended(partitions: &[Arc<Partition>]) {
     while partitions
         .iter()
-        .any(|partition| partition.log_end_offset().0 == 0)
+        .any(|partition| partition.log_end_offset().unwrap().0 == 0)
     {
         sleep(Duration::from_millis(1)).await;
     }
@@ -260,13 +260,13 @@ async fn one_admitted_partition_keeps_its_response_slot_and_ack_gate(acks: i16, 
         async {
             if busy {
                 sleep(Duration::from_millis(20)).await;
-                check!(part.log_end_offset() == Offset(0));
+                check!(part.log_end_offset().unwrap() == Offset(0));
             }
             drop(busy_guard);
         },
     );
     completed.expect("append");
-    check!(part.log_end_offset() == Offset(1));
+    check!(part.log_end_offset().unwrap() == Offset(1));
     if busy {
         let charged = fixture
             .metrics
@@ -333,7 +333,7 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
                 waited.expect("every partition behind the busy writer appends while it is busy");
             }
         }
-        check!(partitions[0].log_end_offset().0 == 0);
+        check!(partitions[0].log_end_offset().unwrap().0 == 0);
         drop(busy);
         timeout(PATIENCE, completing)
             .await
@@ -494,7 +494,7 @@ async fn a_partition_named_twice_appends_in_request_order_beside_a_refusal() {
         waited.push((pending.topic_row, pending.partition_row, row));
     }
     assert!(waited == [(0, 0, appended(0)), (2, 0, appended(1))]);
-    check!(orders.log_end_offset().0 == 2);
+    check!(orders.log_end_offset().unwrap().0 == 2);
     let unanswered = PartitionProduceResponse {
         index: 0,
         base_offset: -1,
