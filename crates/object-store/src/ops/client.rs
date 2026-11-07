@@ -25,7 +25,7 @@ use {
     crate::{
         error::ObjectStoreError,
         ops::{ObjectOps, ObjectStream, PutOutcome, PutRequest},
-        read::read_capped,
+        read::{CappedDigest, digest_capped, read_capped},
     },
     std::{
         future,
@@ -263,6 +263,14 @@ impl ObjectOps for ObjectStoreClient {
 
     async fn get_capped(&self, key: &Path, max_bytes: u64) -> Result<Bytes, ObjectStoreError> {
         read_capped(&self.inner, key, max_bytes).await
+    }
+
+    async fn digest_capped(
+        &self,
+        key: &Path,
+        max_bytes: u64,
+    ) -> Result<CappedDigest, ObjectStoreError> {
+        digest_capped(&self.inner, key, max_bytes).await
     }
 
     async fn get_range(&self, key: &Path, range: GetRange) -> Result<Bytes, ObjectStoreError> {

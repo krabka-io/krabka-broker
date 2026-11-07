@@ -22,7 +22,7 @@ mod client;
 mod tests;
 
 pub use self::client::ObjectStoreClient;
-use crate::error::ObjectStoreError;
+use crate::{error::ObjectStoreError, read::CappedDigest};
 
 /// A listing delivered one object at a time.
 ///
@@ -92,6 +92,14 @@ pub trait ObjectOps: Send + Sync {
     /// Bind the GET to the HEAD version or etag when the backend provides one,
     /// and reject an oversized response while streaming even without either.
     async fn get_capped(&self, key: &Path, max_bytes: u64) -> Result<Bytes, ObjectStoreError>;
+
+    /// Hash a whole object under the same byte limit and checks as
+    /// [`ObjectOps::get_capped`], streaming it rather than buffering it.
+    async fn digest_capped(
+        &self,
+        key: &Path,
+        max_bytes: u64,
+    ) -> Result<CappedDigest, ObjectStoreError>;
 
     /// Fetch a byte range of an object.
     async fn get_range(&self, key: &Path, range: GetRange) -> Result<Bytes, ObjectStoreError>;
