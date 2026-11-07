@@ -235,12 +235,17 @@ mod tests {
         let inner: Vec<_> = inner_offsets.iter().copied().map(record_at).collect();
         let mut flat = BytesMut::new();
         encode_flat_message_set(inner, Magic::V1, &mut flat);
+        gzip_v1_wrapper(&flat, wrapper_offset)
+    }
+
+    /// A gzip v1 wrapper at `wrapper_offset` whose value is `inner_set`.
+    fn gzip_v1_wrapper(inner_set: &[u8], wrapper_offset: i64) -> BytesMut {
         let wrapper = Message {
             magic: Magic::V1,
             attributes: attrs_with_compression(0, CompressionType::Gzip),
             timestamp: Some(10),
             key: None,
-            value: Some(krabka_compression::compress(CompressionType::Gzip, &flat).unwrap()),
+            value: Some(krabka_compression::compress(CompressionType::Gzip, inner_set).unwrap()),
         };
         let mut wire = BytesMut::new();
         wire.put_i64(wrapper_offset);
@@ -416,17 +421,7 @@ mod tests {
         let mut flat = BytesMut::new();
         encode_flat_message_set(inner, Magic::V1, &mut flat);
         flat.truncate(complete.len() + 12 + 5);
-        let wrapper = Message {
-            magic: Magic::V1,
-            attributes: attrs_with_compression(0, CompressionType::Gzip),
-            timestamp: Some(10),
-            key: None,
-            value: Some(krabka_compression::compress(CompressionType::Gzip, &flat).unwrap()),
-        };
-        let mut wire = BytesMut::new();
-        wire.put_i64(101);
-        wire.put_i32(i32::try_from(wrapper.encoded_len()).unwrap());
-        wrapper.encode_into(&mut wire);
+        let wire = gzip_v1_wrapper(&flat, 101);
 
         // The last complete inner record anchors at the wrapper offset.
         let expected = vec![record_at(100), record_at(101)];
