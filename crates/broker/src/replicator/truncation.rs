@@ -168,7 +168,7 @@ fn reset_for_leader_start(replica_end: i64, leader_start: i64) -> Option<i64> {
     (leader_start > replica_end).then_some(leader_start)
 }
 
-fn warn_if_target_stale(cfg: &Config, message: &'static str) -> bool {
+pub(super) fn warn_if_target_stale(cfg: &Config, message: &'static str) -> bool {
     if !replication_target_changed(cfg) {
         return false;
     }
@@ -188,6 +188,7 @@ macro_rules! return_if_target_stale {
         }
     };
 }
+pub(super) use return_if_target_stale;
 
 /// How a follower moves its log back to agree with the leader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -337,11 +338,11 @@ where
     let reset = restart.is_some();
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookups were in flight.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping out_of_range recovery from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping out_of_range recovery from stale target",
+        RowAction::Drop
+    );
     let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,
@@ -470,11 +471,11 @@ where
     };
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookup was in flight.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping tiered-storage restart from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping tiered-storage restart from stale target",
+        RowAction::Drop
+    );
     let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,

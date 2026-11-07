@@ -19,7 +19,8 @@ use {
         replication_target_changed,
         truncation::{
             Rewind, diverging_epoch_truncation_target, handle_epoch_fence,
-            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range, rewind_follower,
+            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+            return_if_target_stale, rewind_follower, warn_if_target_stale,
         },
     },
     crate::{
@@ -292,11 +293,11 @@ async fn handle_epoch_error(error_code: i16, cfg: &Config) -> RowAction {
     // Fetch at ~full CPU, starving metadata propagation and the
     // cooperative cancellation that would otherwise retire it — the
     // broker then never becomes ready and crashloops.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-        "replicator: stopping on fenced epoch from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: stopping on fenced epoch from stale target",
+        RowAction::Drop
+    );
     if error_code == codes::FENCED_LEADER_EPOCH {
         warn!(
             topic = %cfg.topic,
@@ -337,11 +338,11 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
     // end_offset:-1); a populated `epoch >= 0` marks a divergence.
     // Recheck immediately before mutating: metadata may have
     // changed since the response-level guard above.
-    if replication_target_changed(cfg) {
-        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping diverging_epoch truncation from stale target");
-        return RowAction::Drop;
-    }
+    return_if_target_stale!(
+        cfg,
+        "replicator: skipping diverging_epoch truncation from stale target",
+        RowAction::Drop
+    );
     if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
         let _target_guard = krabka_macros::replication_target_guard!(
             part,
