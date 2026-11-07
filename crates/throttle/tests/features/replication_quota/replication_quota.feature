@@ -8,10 +8,11 @@ Feature: The replication quota measures throttled traffic over its sample window
   The quota measures a SimpleRate: the bytes recorded in the samples it keeps,
   divided by the time since the oldest sample started, and never by less than
   one sample window. The quota is exceeded while that rate is above the bound.
-  A broker keeps Kafka's default replication quota window: 11 samples
-  (replication.quota.window.num) of 1 second
-  (replication.quota.window.size.seconds) each. A sample with no traffic in the
-  last 11 seconds is forgotten.
+  The quota keeps replication.quota.window.num samples (Kafka's default 11)
+  of replication.quota.window.size.seconds each (default 1), both read from the
+  broker's server.properties. A sample with no traffic in the last
+  num times size seconds (11 by default) is forgotten. The scenarios below use
+  the defaults unless they set a window.
 
   Rule: Traffic up to the bound leaves the quota open
 
@@ -68,3 +69,17 @@ Feature: The replication quota measures throttled traffic over its sample window
     Scenario: A leader with no throttle rate never exceeds its quota
       When leader replication traffic sends 1000000000 bytes
       Then the leader replication quota is not exceeded
+
+  Rule: The quota window comes from the replication quota window configs
+
+    Scenario: A two-second sample admits two seconds of traffic at once
+      Given the broker sets replication.quota.window.size.seconds to 2
+      And leader replication traffic is throttled at 1000 bytes per second
+      When leader replication traffic sends 2000 bytes
+      Then the leader replication quota is not exceeded
+
+    Scenario: A shorter window forgets an overshoot sooner
+      Given the broker sets replication.quota.window.num to 3
+      And leader replication traffic is throttled at 1000 bytes per second
+      When leader replication traffic sends 20000 bytes
+      Then the leader replication quota stays exceeded for 3000 ms

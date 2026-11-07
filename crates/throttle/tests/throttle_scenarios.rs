@@ -2,10 +2,10 @@
 //! quotas, bound to the features under `tests/features`.
 
 use {
-    krabka_throttle::{ReplicationQuota, ThrottleState},
-    krabka_units::prelude::{ByteRate, ByteRateExt as _},
+    krabka_throttle::{QuotaWindow, ReplicationQuota, ThrottleState},
+    krabka_units::prelude::{ByteRate, ByteRateExt as _, secs},
     qubit_clock::ManualMonotonicClock,
-    std::{sync::Arc, time::Duration},
+    std::{num::NonZeroU32, sync::Arc, time::Duration},
 };
 
 /// One kind of throttled traffic, each measured by its own broker quota.
@@ -22,6 +22,19 @@ enum Traffic {
     LogDirectoryMove,
 }
 
+/// A `server.properties` key that sets a replication quota window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+enum WindowConfig {
+    #[step_param("replication.quota.window.num")]
+    ReplicationSamples,
+    #[step_param("replication.quota.window.size.seconds")]
+    ReplicationSampleSeconds,
+    #[step_param("alter.log.dirs.replication.quota.window.num")]
+    AlterLogDirsSamples,
+    #[step_param("alter.log.dirs.replication.quota.window.size.seconds")]
+    AlterLogDirsSampleSeconds,
+}
+
 /// How a quota reads one millisecond before a wait ends and when it ends.
 #[derive(Debug, PartialEq, Eq)]
 struct QuotaOverTime {
@@ -32,6 +45,8 @@ struct QuotaOverTime {
 /// A broker's throttles on a manual clock, driven in domain terms.
 struct ThrottledBroker {
     clock: Arc<ManualMonotonicClock>,
+    replication_window: QuotaWindow,
+    alter_log_dirs_window: QuotaWindow,
     throttles: ThrottleState,
 }
 
@@ -39,7 +54,43 @@ impl ThrottledBroker {
     fn new() -> Self {
         let clock = ManualMonotonicClock::new_shared();
         let throttles = ThrottleState::with_clock(Arc::<ManualMonotonicClock>::clone(&clock));
-        Self { clock, throttles }
+        Self {
+            clock,
+            replication_window: QuotaWindow::KAFKA_DEFAULT,
+            alter_log_dirs_window: QuotaWindow::KAFKA_DEFAULT,
+            throttles,
+        }
+    }
+
+    /// Sets one window config and restarts the throttles with it, as a
+    /// broker reads `server.properties` once at startup.
+    fn configure(&mut self, config: WindowConfig, value: NonZeroU32) {
+        let with_samples = |window: QuotaWindow| QuotaWindow::new(value, window.sample());
+        let with_seconds = |window: QuotaWindow| {
+            QuotaWindow::new(
+                NonZeroU32::new(window.samples()).unwrap_or(NonZeroU32::MIN),
+                secs(value.get()),
+            )
+        };
+        match config {
+            WindowConfig::ReplicationSamples => {
+                self.replication_window = with_samples(self.replication_window);
+            }
+            WindowConfig::ReplicationSampleSeconds => {
+                self.replication_window = with_seconds(self.replication_window);
+            }
+            WindowConfig::AlterLogDirsSamples => {
+                self.alter_log_dirs_window = with_samples(self.alter_log_dirs_window);
+            }
+            WindowConfig::AlterLogDirsSampleSeconds => {
+                self.alter_log_dirs_window = with_seconds(self.alter_log_dirs_window);
+            }
+        }
+        self.throttles = ThrottleState::with_windows()
+            .clock(Arc::<ManualMonotonicClock>::clone(&self.clock))
+            .replication_window(self.replication_window)
+            .alter_log_dirs_window(self.alter_log_dirs_window)
+            .call();
     }
 
     fn quota(&self, traffic: Traffic) -> &ReplicationQuota {
@@ -89,6 +140,11 @@ fn throttle() -> ThrottleScenario {
     ThrottleScenario {
         broker: ThrottledBroker::new(),
     }
+}
+
+#[rstest_bdd_macros::given("the broker sets {config} to {value}")]
+fn broker_sets_window(throttle: &mut ThrottleScenario, config: WindowConfig, value: NonZeroU32) {
+    throttle.broker.configure(config, value);
 }
 
 #[rstest_bdd_macros::given("{traffic} traffic is throttled at {rate} bytes per second")]

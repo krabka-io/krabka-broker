@@ -32,3 +32,23 @@ Feature: A broker meters three kinds of throttled traffic separately
       And follower replication traffic is throttled at 1000 bytes per second
       When leader replication traffic sends 5000 bytes
       Then the follower replication quota is not exceeded
+
+  Rule: Log directory moves keep their own quota window
+
+    Leader and follower replication take replication.quota.window.num and
+    replication.quota.window.size.seconds. Log directory moves take
+    alter.log.dirs.replication.quota.window.num and
+    alter.log.dirs.replication.quota.window.size.seconds, as Kafka's
+    QuotaManagers builds them.
+
+    Scenario: The log directory move window does not change the replication window
+      Given the broker sets alter.log.dirs.replication.quota.window.num to 3
+      And leader replication traffic is throttled at 1000 bytes per second
+      When leader replication traffic sends 20000 bytes
+      Then the leader replication quota stays exceeded for 11000 ms
+
+    Scenario: Log directory moves forget an overshoot after their own window
+      Given the broker sets alter.log.dirs.replication.quota.window.num to 3
+      And log directory move traffic is throttled at 1000 bytes per second
+      When log directory move traffic sends 20000 bytes
+      Then the log directory move quota stays exceeded for 3000 ms

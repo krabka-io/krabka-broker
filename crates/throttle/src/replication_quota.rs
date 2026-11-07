@@ -28,12 +28,15 @@
 //! port does the same.
 
 use {
-    krabka_units::prelude::{ByteRate, ByteRateExt},
+    krabka_units::prelude::{ByteRate, ByteRateExt, Time, TimeExt as _},
     num_traits::ToPrimitive as _,
     qubit_clock::{MonotonicClock, StdMonotonicClock},
-    std::sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, Ordering::Relaxed},
+    std::{
+        num::NonZeroU32,
+        sync::{
+            Arc, Mutex, MutexGuard, PoisonError,
+            atomic::{AtomicBool, Ordering::Relaxed},
+        },
     },
 };
 
@@ -46,6 +49,51 @@ const DEFAULT_SAMPLES: u32 = 11;
 /// `alter.log.dirs.replication.quota.window.size.seconds`
 /// (`QuotaConfig.QUOTA_WINDOW_SIZE_SECONDS_DEFAULT`), in milliseconds.
 const DEFAULT_WINDOW_MS: i64 = 1_000;
+
+/// The sample window of a [`ReplicationQuota`].
+///
+/// It is how many samples the quota keeps and how long each one is: Kafka's
+/// `replication.quota.window.num` and `replication.quota.window.size.seconds`,
+/// or their `alter.log.dirs.replication.quota.window.*` twins for log
+/// directory moves.
+///
+/// Kafka validates both as `atLeast(1)`, so neither can be zero. A sample
+/// shorter than a millisecond is held as one millisecond, the resolution the
+/// quota reads its clock at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaWindow {
+    samples: u32,
+    sample_ms: i64,
+}
+
+impl QuotaWindow {
+    /// Kafka's default window: 11 samples of 1 second.
+    pub const KAFKA_DEFAULT: Self = Self {
+        samples: DEFAULT_SAMPLES,
+        sample_ms: DEFAULT_WINDOW_MS,
+    };
+
+    /// A window of `samples` samples, each `sample` long.
+    #[must_use]
+    pub fn new(samples: NonZeroU32, sample: Time) -> Self {
+        Self {
+            samples: samples.get(),
+            sample_ms: sample.millis_i64().max(1),
+        }
+    }
+
+    /// The number of samples, `*.quota.window.num`.
+    #[must_use]
+    pub const fn samples(self) -> u32 { self.samples }
+
+    /// The length of one sample, `*.quota.window.size.seconds`.
+    #[must_use]
+    pub fn sample(self) -> Time { Time::from_millis(self.sample_ms) }
+}
+
+impl Default for QuotaWindow {
+    fn default() -> Self { Self::KAFKA_DEFAULT }
+}
 
 /// One sample of Kafka's `SampledStat`: the bytes recorded while it was
 /// current, when it started, and when it last took a record.
@@ -180,18 +228,26 @@ pub struct ReplicationQuota {
 }
 
 impl ReplicationQuota {
-    /// An unbounded quota on a caller-supplied clock, with Kafka's default
-    /// window. Tests pass a [`qubit_clock::ManualMonotonicClock`].
+    /// An unbounded quota on a caller-supplied clock, with the sample
+    /// `window` its `*.quota.window.*` configs set. Tests pass a
+    /// [`qubit_clock::ManualMonotonicClock`].
     #[must_use]
-    pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
+    pub fn with_window(clock: Arc<dyn MonotonicClock>, window: QuotaWindow) -> Self {
         Self {
             state: Mutex::new(QuotaState {
                 bound: None,
-                rate: SampledRate::new(DEFAULT_SAMPLES, DEFAULT_WINDOW_MS),
+                rate: SampledRate::new(window.samples, window.sample_ms),
             }),
             bounded: AtomicBool::new(false),
             clock,
         }
+    }
+
+    /// An unbounded quota on a caller-supplied clock, with Kafka's default
+    /// window.
+    #[must_use]
+    pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::with_window(clock, QuotaWindow::KAFKA_DEFAULT)
     }
 
     /// An unbounded quota on the system's monotonic clock, with Kafka's

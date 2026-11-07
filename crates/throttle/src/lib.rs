@@ -5,6 +5,6 @@ mod replication_quota;
 mod runtime;
 
 pub use {
-    replication_quota::ReplicationQuota,
+    replication_quota::{QuotaWindow, ReplicationQuota},
     runtime::{MICROS_PER_TOKEN, ThrottleState, TokenBucket, whole_token_request},
 };
