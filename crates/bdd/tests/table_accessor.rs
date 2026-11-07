@@ -89,8 +89,16 @@ fn rows_reads_a_horizontal_table(#[case] datatable: &str, #[case] expected: Vec<
     "| topic | partition | replicas |\n| orders | 0 | 3 |",
     TableError::UnknownColumn { column: "replicas".to_owned(), known: PARTITION_COLUMNS },
 )]
+#[case::unknown_column_with_no_rows(
+    "| topic | partiton |",
+    TableError::UnknownColumn { column: "partiton".to_owned(), known: PARTITION_COLUMNS },
+)]
 #[case::duplicate_column(
     "| topic | topic | partition |\n| orders | orders | 0 |",
+    TableError::DuplicateColumn { column: "topic".to_owned() },
+)]
+#[case::duplicate_column_with_no_rows(
+    "| topic | topic | partition |",
     TableError::DuplicateColumn { column: "topic".to_owned() },
 )]
 #[case::missing_required_column(

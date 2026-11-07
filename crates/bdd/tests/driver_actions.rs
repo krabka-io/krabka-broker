@@ -120,6 +120,22 @@ impl Action<TopicRegistry> for SlowAction {
     }
 }
 
+/// Does its work in `run` itself, under a span of its own, before it hands
+/// back a ready future.
+struct EagerAction;
+
+impl Action<TopicRegistry> for EagerAction {
+    type Error = RegistryError;
+    type Output = ();
+
+    fn name(&self) -> &'static str { "eager" }
+
+    fn run(self, _: &mut TopicRegistry) -> impl Future<Output = Result<(), RegistryError>> {
+        tracing::info_span!("registry.write").in_scope(|| ());
+        ready(Ok(()))
+    }
+}
+
 // ---- Step definitions: testing decisions only -------------------------------
 
 type Deletion = Attempt<u32, RegistryError>;
@@ -199,12 +215,14 @@ krabka_bdd::scenarios!(
 
 // ---- The action span --------------------------------------------------------
 
-/// What a span recorded: its name, its fields and whether it was entered.
+/// What a span recorded: its name, its fields, whether it was entered, and
+/// the span it was opened inside.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct CapturedSpan {
     span: &'static str,
     fields: BTreeMap<String, Value>,
     entered: bool,
+    parent: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,11 +231,12 @@ enum Value {
     Number(f64),
 }
 
-/// A subscriber that keeps every span it sees.
+/// A subscriber that keeps every span it sees, and which span is entered.
 #[derive(Clone, Default)]
 struct Capture {
     spans: Arc<Mutex<Vec<CapturedSpan>>>,
     next: Arc<AtomicU64>,
+    entered: Arc<Mutex<Vec<Id>>>,
 }
 
 impl Capture {
@@ -226,6 +245,12 @@ impl Capture {
     fn with_span(&self, id: &Id, update: impl FnOnce(&mut CapturedSpan)) {
         let index = usize::try_from(id.into_u64() - 1).unwrap();
         update(&mut self.spans.lock().unwrap()[index]);
+    }
+
+    fn name_of(&self, id: &Id) -> &'static str {
+        let mut name = "";
+        self.with_span(id, |span| name = span.span);
+        name
     }
 }
 
@@ -251,8 +276,14 @@ impl Subscriber for Capture {
     fn enabled(&self, _: &Metadata<'_>) -> bool { true }
 
     fn new_span(&self, attributes: &Attributes<'_>) -> Id {
+        let parent = if attributes.is_contextual() {
+            self.entered.lock().unwrap().last().cloned()
+        } else {
+            attributes.parent().cloned()
+        };
         let mut span = CapturedSpan {
             span: attributes.metadata().name(),
+            parent: parent.map(|id| self.name_of(&id)),
             ..CapturedSpan::default()
         };
         attributes.record(&mut Fields(&mut span.fields));
@@ -268,9 +299,12 @@ impl Subscriber for Capture {
 
     fn event(&self, _: &Event<'_>) {}
 
-    fn enter(&self, id: &Id) { self.with_span(id, |span| span.entered = true); }
+    fn enter(&self, id: &Id) {
+        self.with_span(id, |span| span.entered = true);
+        self.entered.lock().unwrap().push(id.clone());
+    }
 
-    fn exit(&self, _: &Id) {}
+    fn exit(&self, _: &Id) { self.entered.lock().unwrap().pop(); }
 }
 
 /// `span` with its elapsed time taken out, and that time.
@@ -289,6 +323,7 @@ fn action_span(name: &str, outcome: &str) -> CapturedSpan {
             ("outcome".to_owned(), Value::Text(outcome.to_owned())),
         ]),
         entered: true,
+        parent: None,
     }
 }
 
@@ -344,6 +379,26 @@ async fn the_span_records_the_time_the_action_took() {
     let (span, elapsed_ms) = without_elapsed(capture.spans().remove(0));
     assert!(span == action_span("wait", "succeeded"));
     assert!(elapsed_ms >= 20.0);
+}
+
+#[tokio::test]
+async fn work_an_action_does_before_its_future_runs_inside_its_span() {
+    let capture = Capture::default();
+    let mut registry = TopicRegistry::default();
+    act(&mut registry, EagerAction)
+        .with_subscriber(capture.clone())
+        .await;
+
+    let write = capture.spans().remove(1);
+    assert!(
+        write
+            == CapturedSpan {
+                span: "registry.write",
+                entered: true,
+                parent: Some(ACTION_SPAN),
+                ..CapturedSpan::default()
+            }
+    );
 }
 
 #[tokio::test]

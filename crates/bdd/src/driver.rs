@@ -195,7 +195,11 @@ where
         outcome = field::Empty,
     );
     let started = Instant::now();
-    let result = action.run(driver).instrument(span.clone()).await;
+    // `run` itself is called inside the span too: an action may do its work
+    // before it returns the future.
+    let result = async { action.run(driver).await }
+        .instrument(span.clone())
+        .await;
     span.record("elapsed_ms", started.elapsed().as_secs_f64() * 1000.0);
     span.record(
         "outcome",

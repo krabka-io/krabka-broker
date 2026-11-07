@@ -108,12 +108,14 @@ impl<T: TableCells + ?Sized> TableCells for &T {
 ///
 /// # Errors
 ///
-/// Returns a [`TableError`] for an empty table or for the first row that
+/// Returns a [`TableError`] for an empty table, for a header with an unknown
+/// or repeated column, even with no data rows, or for the first row that
 /// [`TableRow::from_row`] rejects, with that row's number.
 pub fn rows<T: TableRow>(datatable: &[Vec<String>]) -> Result<Vec<T>, TableError> {
     let Some((headers, body)) = datatable.split_first() else {
         return Err(TableError::NoHeader);
     };
+    check_header(headers, T::COLUMNS)?;
     body.iter()
         .zip(2..)
         .map(|(cells, row)| T::from_row(headers, cells).map_err(|error| error.at_row(row)))
@@ -714,6 +716,25 @@ pub struct RowCells<'a> {
     cells: &'a [String],
 }
 
+/// Checks a header against `columns`: no column twice, and none that
+/// `columns` does not name. A table with no data rows is checked too.
+fn check_header(headers: &[String], columns: &'static [&'static str]) -> Result<(), TableError> {
+    for (index, header) in headers.iter().enumerate() {
+        if headers.iter().take(index).any(|earlier| earlier == header) {
+            return Err(TableError::DuplicateColumn {
+                column: header.clone(),
+            });
+        }
+        if !columns.contains(&header.as_str()) {
+            return Err(TableError::UnknownColumn {
+                column: header.clone(),
+                known: columns,
+            });
+        }
+    }
+    Ok(())
+}
+
 impl<'a> RowCells<'a> {
     /// Checks the row against the header and the header against `columns`.
     ///
@@ -733,19 +754,7 @@ impl<'a> RowCells<'a> {
                 columns: headers.len(),
             });
         }
-        for (index, header) in headers.iter().enumerate() {
-            if headers.iter().take(index).any(|earlier| earlier == header) {
-                return Err(TableError::DuplicateColumn {
-                    column: header.clone(),
-                });
-            }
-            if !columns.contains(&header.as_str()) {
-                return Err(TableError::UnknownColumn {
-                    column: header.clone(),
-                    known: columns,
-                });
-            }
-        }
+        check_header(headers, columns)?;
         Ok(Self { headers, cells })
     }
 
