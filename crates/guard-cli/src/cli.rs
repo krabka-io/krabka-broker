@@ -10,6 +10,7 @@
 use {
     super::failure::Failure,
     clap::{Args, Parser, Subcommand, ValueEnum},
+    krabka_cli_connection::ConnectionArgs,
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
     krabka_units::{Time, parse},
     std::path::{Path, PathBuf},
@@ -21,14 +22,21 @@ use {
 /// same flags.
 ///
 /// [`run_from_args`]: crate::run_from_args
-#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-guard",
     version,
     about = "Freeze topic writes, lift a freeze, and run the break-glass two-person rule"
 )]
-pub struct Cli {}
+pub struct Cli {
+    /// Where the cluster is.
+    #[command(flatten)]
+    pub connection: ConnectionArgs,
+
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// The two halves of the tool.
 #[derive(Subcommand)]

@@ -5,7 +5,6 @@
 //! module never logs or formats the parsed properties or resulting policy.
 
 use {
-    crate::BackupError,
     clap::Args,
     krabka_client_core::security::{
         ClientSecurity, KeyStore, SaslCredentials, TlsConnectorConfig, TrustStore,
@@ -16,7 +15,22 @@ use {
     tokio::fs,
 };
 
-/// Kafka client properties shared by capture and offset restoration.
+/// Why a `--command-config` file gave no security policy.
+///
+/// The messages name the offending property and never its value, because the
+/// file holds passwords.
+#[derive(Debug, thiserror::Error)]
+pub enum CommandConfigError {
+    /// The file could not be read. The error names the path.
+    #[error("{0}")]
+    Io(Error),
+
+    /// The file was read, and its properties do not make a policy.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+/// Kafka client properties for a cluster connection.
 #[derive(Debug, Args, Clone, Default)]
 pub struct SecurityArgs {
     /// Kafka client properties containing `security.protocol`, TLS and SASL.
@@ -29,14 +43,14 @@ impl SecurityArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`BackupError::Io`] when the file cannot be read and
-    /// [`BackupError::InvalidArgument`] when its security properties conflict.
-    pub async fn load(&self) -> Result<Option<ClientSecurity>, BackupError> {
+    /// Returns [`CommandConfigError::Io`] when the file cannot be read and
+    /// [`CommandConfigError::Invalid`] when its security properties conflict.
+    pub async fn load(&self) -> Result<Option<ClientSecurity>, CommandConfigError> {
         let Some(path) = &self.command_config else {
             return Ok(None);
         };
         let bytes = fs::read(path).await.map_err(|source| {
-            BackupError::Io(Error::new(
+            CommandConfigError::Io(Error::new(
                 source.kind(),
                 format!("read command config {}: {source}", path.display()),
             ))
@@ -48,14 +62,18 @@ impl SecurityArgs {
 
 /// The entries of a `--command-config` file, read as Kafka's tools read it:
 /// `Utils.loadProps`, which is `Properties.load(InputStream)`.
-fn parse_properties(bytes: impl AsRef<[u8]>) -> Result<BTreeMap<String, String>, BackupError> {
+fn parse_properties(
+    bytes: impl AsRef<[u8]>,
+) -> Result<BTreeMap<String, String>, CommandConfigError> {
     let properties = java_properties::load(bytes.as_ref()).map_err(|MalformedEscape| {
-        BackupError::InvalidArgument("invalid unicode escape in command config".into())
+        CommandConfigError::Invalid("invalid unicode escape in command config".into())
     })?;
     Ok(properties.into_iter().collect())
 }
 
-fn security(properties: &BTreeMap<String, String>) -> Result<Option<ClientSecurity>, BackupError> {
+fn security(
+    properties: &BTreeMap<String, String>,
+) -> Result<Option<ClientSecurity>, CommandConfigError> {
     let protocol = match properties
         .get("security.protocol")
         .map_or("PLAINTEXT", String::as_str)
@@ -96,7 +114,9 @@ fn security(properties: &BTreeMap<String, String>) -> Result<Option<ClientSecuri
     }))
 }
 
-fn tls_config(properties: &BTreeMap<String, String>) -> Result<TlsConnectorConfig, BackupError> {
+fn tls_config(
+    properties: &BTreeMap<String, String>,
+) -> Result<TlsConnectorConfig, CommandConfigError> {
     for key in ["ssl.truststore.type", "ssl.keystore.type"] {
         if let Some(kind) = properties.get(key)
             && kind != "PEM"
@@ -130,7 +150,9 @@ fn tls_config(properties: &BTreeMap<String, String>) -> Result<TlsConnectorConfi
     Ok(tls)
 }
 
-fn sasl_credentials(properties: &BTreeMap<String, String>) -> Result<SaslCredentials, BackupError> {
+fn sasl_credentials(
+    properties: &BTreeMap<String, String>,
+) -> Result<SaslCredentials, CommandConfigError> {
     let mechanism = required(properties, "sasl.mechanism")?;
     let options = properties
         .get("sasl.jaas.config")
@@ -220,15 +242,15 @@ fn jaas_options(value: &str) -> BTreeMap<String, String> {
     options
 }
 
-fn required(values: &BTreeMap<String, String>, key: &str) -> Result<String, BackupError> {
+fn required(values: &BTreeMap<String, String>, key: &str) -> Result<String, CommandConfigError> {
     values
         .get(key)
         .cloned()
-        .ok_or_else(|| BackupError::InvalidArgument(format!("command config is missing {key}")))
+        .ok_or_else(|| CommandConfigError::Invalid(format!("command config is missing {key}")))
 }
 
-fn invalid<T>(message: &str) -> Result<T, BackupError> {
-    Err(BackupError::InvalidArgument(format!(
+fn invalid<T>(message: &str) -> Result<T, CommandConfigError> {
+    Err(CommandConfigError::Invalid(format!(
         "invalid command config: {message}"
     )))
 }

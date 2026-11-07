@@ -33,11 +33,13 @@ krabka_macros::parsed_cli_entrypoint!({
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client = krabka_macros::connect_cli_client!(
-        &cli.bootstrap_server,
-        "krabka-barrier",
-        EXIT_UNREACHABLE
-    );
+    let client = match cli.connection.connect("krabka-barrier").await {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("{error}");
+            return EXIT_UNREACHABLE;
+        }
+    };
     dispatch(&client, cli.command).await
 }
 

@@ -9,6 +9,7 @@
 
 use {
     clap::{Parser, Subcommand},
+    krabka_cli_connection::ConnectionArgs,
     krabka_units::{Time, parse},
 };
 
@@ -16,14 +17,21 @@ use {
 ///
 /// Shared by the binary and by [`crate::run_from_args`], so both accept
 /// exactly the same flags.
-#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-barrier",
     version,
     about = "Define barrier groups, trigger cuts, and verify a cut against the log"
 )]
-pub struct Cli {}
+pub struct Cli {
+    /// Where the cluster is.
+    #[command(flatten)]
+    pub connection: ConnectionArgs,
+
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// The subcommands, one per barrier api.
 #[derive(Subcommand)]
