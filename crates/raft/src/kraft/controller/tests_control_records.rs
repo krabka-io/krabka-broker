@@ -260,6 +260,29 @@ fn leader_change_batch_encodes_control_record_payload() {
     assert2::assert!(granting_voters == vec![1, 2, 3]);
 }
 
+/// The `LeaderChange` control record value, as the 1.x leader writes it to
+/// the metadata log: `LeaderChangeMessage` v0 for leader 2 and voters 1 to 3.
+/// The bytes are those the encoder wrote before its result was checked.
+#[test]
+fn leader_change_batch_value_matches_the_persisted_bytes() {
+    const GOLDEN: &[u8] = &[
+        0x00, 0x00, // version 0
+        0x00, 0x00, 0x00, 0x02, // leader id 2
+        0x04, // voters: compact array of 3
+        0x00, 0x00, 0x00, 0x01, 0x00, //
+        0x00, 0x00, 0x00, 0x02, 0x00, //
+        0x00, 0x00, 0x00, 0x03, 0x00, //
+        0x04, // granting voters: compact array of 3
+        0x00, 0x00, 0x00, 0x01, 0x00, //
+        0x00, 0x00, 0x00, 0x02, 0x00, //
+        0x00, 0x00, 0x00, 0x03, 0x00, //
+        0x00, // no tagged fields
+    ];
+    let voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
+    let batch = leader_change_batch(7, NodeId(2), &voters);
+    check!(batch.records[0].value.as_deref() == Some(GOLDEN));
+}
+
 /// A reconfiguration is refused before it is proposed when this node is
 /// not the leader, or when the quorum cannot support the change.
 ///
