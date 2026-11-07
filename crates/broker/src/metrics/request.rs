@@ -258,8 +258,8 @@ mod tests {
         super::*,
         crate::handlers::{
             ALTER_BARRIER_GROUPS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
-            KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY, TRIGGER_BARRIER_API_KEY,
-            WRITE_BARRIER_MARKERS_API_KEY,
+            DESCRIBE_BREAK_GLASS_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR, LIST_BARRIER_CUTS_API_KEY,
+            TRIGGER_BARRIER_API_KEY, WRITE_BARRIER_MARKERS_API_KEY,
         },
         assert2::assert,
         krabka_units::{micros, millis},
@@ -398,6 +398,15 @@ mod tests {
 
         for (api_key, want) in cases {
             assert!(api_key_label_name(api_key) == want, "api_key {api_key}");
+        }
+    }
+
+    /// Every registered krabka-private RPC carries its own label, so its
+    /// traffic never shares the `Unknown` series with garbage.
+    #[test]
+    fn no_registered_krabka_private_api_key_folds_under_unknown() {
+        for api_key in ALTER_BARRIER_GROUPS_API_KEY..=DESCRIBE_BREAK_GLASS_API_KEY {
+            assert!(api_key_label_name(api_key) != UNKNOWN_LABEL, "api_key {api_key}");
         }
     }
 
