@@ -2,7 +2,8 @@
 //! decision changes. A seeded ACL record commits through raft and is then
 //! applied into the metadata image the request path reads, so a test that
 //! asserts on the decision immediately after the seed would race that gap;
-//! these helpers absorb it and return the final response.
+//! these helpers absorb it and return the first response that carries the
+//! decision. A poll that never sees it panics at its deadline.
 
 use {
     crate::{
@@ -29,9 +30,9 @@ use {
 
 /// Retry `drive_produce_as_plain` against `topic`/partition-0 until the
 /// per-partition `error_code` is no longer `TOPIC_AUTHORIZATION_FAILED`,
-/// that is, until the ACL submit reaches the metadata image, or until a
-/// 10 s deadline elapses. The happy-path Produce test uses this to absorb
-/// the raft commit-then-apply gap. It returns the final response.
+/// that is, until the ACL submit reaches the metadata image. It panics if a
+/// 10 s deadline elapses first. The happy-path Produce test uses this to
+/// absorb the raft commit-then-apply gap.
 pub async fn retry_produce_until_allowed(
     addr: SocketAddr,
     user: &str,
@@ -62,17 +63,29 @@ pub async fn retry_produce_until_allowed(
         .await
 }
 
-/// Retry `drive_metadata_as_plain` until `topic` appears in the
-/// response, that is, until the Allow Describe ACL is applied, or until a
-/// 10 s deadline elapses. This helper forwards `req_topics` unchanged to the
-/// inner `MetadataRequest::topics`, so callers can poll either the fetch-all
-/// path or the named-topic path.
-pub async fn retry_metadata_until_topic_visible(
+/// Whether `response` has a row for `topic` that carries `error_code`.
+///
+/// A row's presence alone is not the decision: a named request returns a
+/// denied topic by name with `TOPIC_AUTHORIZATION_FAILED`.
+pub fn topic_row_reports(response: &MetadataResponse, topic: &str, error_code: i16) -> bool {
+    response
+        .topics
+        .iter()
+        .any(|entry| entry.name.as_deref() == Some(topic) && entry.error_code == error_code)
+}
+
+/// Retry `drive_metadata_as_plain` until the response has a row for `topic`
+/// with `error_code`, that is, until the ACL decision the caller expects is
+/// applied. It panics if a 10 s deadline elapses first. This helper forwards
+/// `req_topics` unchanged to the inner `MetadataRequest::topics`, so callers
+/// can poll either the fetch-all path or the named-topic path.
+pub async fn retry_metadata_until_topic_row(
     addr: SocketAddr,
     user: &str,
     password: &[u8],
     topic: &str,
     req_topics: Option<Vec<String>>,
+    error_code: i16,
 ) -> Result<MetadataResponse, io::Error> {
     let req = topic_metadata_request(req_topics.as_ref().map(|names| {
         names
@@ -89,24 +102,24 @@ pub async fn retry_metadata_until_topic_visible(
             })
             .await
         })
-        .ready(|response| {
-            response
-                .topics
-                .iter()
-                .any(|entry| entry.name.as_deref() == Some(topic))
-        })
+        .ready(|response| topic_row_reports(response, topic, error_code))
         .call()
         .await
 }
 
-/// Ask for one named topic as Alice, retaining the commit/application retry.
-pub async fn named_metadata_as_alice(addr: SocketAddr, topic: &str) -> MetadataResponse {
-    retry_metadata_until_topic_visible(
+/// Ask for one named topic as Alice until its row carries `error_code`.
+pub async fn named_metadata_as_alice(
+    addr: SocketAddr,
+    topic: &str,
+    error_code: i16,
+) -> MetadataResponse {
+    retry_metadata_until_topic_row(
         addr,
         "alice",
         b"wonderland",
         topic,
         Some(vec![topic.to_owned()]),
+        error_code,
     )
     .await
     .expect("Metadata must round-trip")
@@ -114,8 +127,8 @@ pub async fn named_metadata_as_alice(addr: SocketAddr, topic: &str) -> MetadataR
 
 /// Retry `drive_join_group_as_plain` against `group_id` with an empty
 /// `member_id` until the response is no longer `GROUP_AUTHORIZATION_FAILED`,
-/// that is, until the Allow Read ACL is applied, or until a 10 s deadline
-/// elapses. The next code in the success ladder is
+/// that is, until the Allow Read ACL is applied. It panics if a 10 s deadline
+/// elapses first. The next code in the success ladder is
 /// `MEMBER_ID_REQUIRED (79)`. The caller then sends the generated
 /// `member_id` to complete the join.
 pub async fn retry_join_group_until_allowed(
