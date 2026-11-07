@@ -24,7 +24,12 @@ impl BrokerHandle {
         // boundary: integration tests compare it against raw offset literals.
         self.broker
             .share_coordinator
-            .read_summary(group, topic_id, partition)
+            .read_summary_checked(
+                &self.broker.controller.current_image(),
+                group,
+                topic_id,
+                partition,
+            )
             .await
             .ok()
             .flatten()

@@ -237,13 +237,11 @@ mod tests {
             )
             .await,
         );
+        let state = write_state_story.state.as_ref().expect("initialized state");
         write_state_story.summary.set(
-            write_state_story
-                .state
-                .as_ref()
-                .expect("initialized state")
+            state
                 .coordinator
-                .read_summary("share-group", TOPIC, 4)
+                .read_summary_checked(&state.image, "share-group", TOPIC, 4)
                 .await
                 .ok()
                 .flatten(),

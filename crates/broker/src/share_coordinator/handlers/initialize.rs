@@ -231,7 +231,12 @@ mod tests {
             initialize_state_story
                 .state()
                 .coordinator
-                .read_summary(key_group, topic, input.partition)
+                .read_summary_checked(
+                    &initialize_state_story.state().image,
+                    key_group,
+                    topic,
+                    input.partition,
+                )
                 .await
                 .ok()
                 .flatten(),
