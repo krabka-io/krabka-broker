@@ -31,6 +31,16 @@ fn message_for_record(record: ParsedRecord, magic: Magic) -> Message {
     }
 }
 
+/// Write one `MessageSet` entry: the offset, the message size, then the
+/// message.
+fn put_framed<B: BufMut>(buf: &mut B, offset: i64, message: &Message) {
+    buf.put_i64(offset);
+    // Safe: legacy messages are well-bounded; capping at i32::MAX is
+    // sufficient for any realistic batch.
+    buf.put_i32(i32::try_from(message.encoded_len()).unwrap_or(i32::MAX));
+    message.encode_into(buf);
+}
+
 /// Encode a flat `MessageSet` of magic `magic` into `buf`.
 ///
 /// This function writes one outer message per record. Use it to emit an
@@ -41,14 +51,8 @@ pub fn encode_flat_message_set<B: BufMut, I: IntoIterator<Item = ParsedRecord>>(
     buf: &mut B,
 ) {
     for r in records {
-        let offset = r.offset;
-        let msg = message_for_record(r, magic);
-        let msg_len = msg.encoded_len();
-        buf.put_i64(offset.0);
-        // Safe: legacy messages are well-bounded; capping at i32::MAX is
-        // sufficient for any realistic batch.
-        buf.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
-        msg.encode_into(buf);
+        let offset = r.offset.0;
+        put_framed(buf, offset, &message_for_record(r, magic));
     }
 }
 
@@ -93,11 +97,11 @@ pub fn encode_compressed_message_set<B: BufMut>(
                 LegacyRecordsError::Malformed("relative inner offset exceeds i64".into())
             })?,
         };
-        let msg = message_for_record(r.clone(), magic);
-        let msg_len = msg.encoded_len();
-        inner.put_i64(inner_offset);
-        inner.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
-        msg.encode_into(&mut inner);
+        put_framed(
+            &mut inner,
+            inner_offset,
+            &message_for_record(r.clone(), magic),
+        );
     }
 
     // Compress.
@@ -122,7 +126,6 @@ pub fn encode_compressed_message_set<B: BufMut>(
         key: None,
         value: Some(compressed),
     };
-    let wrapper_len = wrapper.encoded_len();
 
     // Wrapper offset: v0 = 0 (per Kafka convention pre-KIP-32),
     // v1 = absolute offset of last inner record.
@@ -130,9 +133,7 @@ pub fn encode_compressed_message_set<B: BufMut>(
         Magic::V0 => 0,
         Magic::V1 => last.offset.0,
     };
-    buf.put_i64(wrapper_offset);
-    buf.put_i32(i32::try_from(wrapper_len).unwrap_or(i32::MAX));
-    wrapper.encode_into(buf);
+    put_framed(buf, wrapper_offset, &wrapper);
     Ok(())
 }
 
