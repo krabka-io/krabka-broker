@@ -27,12 +27,26 @@ pub(super) fn classify_join_response(resp: &AddRaftVoterResponse) -> JoinOutcome
     }
 }
 
+/// Which server the join loop asks after a failed attempt against a target
+/// that came from the bootstrap list (`from_bootstrap`) or from the local
+/// quorum state. Only a bootstrap target advances the loop to the next
+/// bootstrap server; the next attempt asks whichever leader the quorum state
+/// then names, if it names one.
+pub(super) fn next_attempt(from_bootstrap: bool) -> &'static str {
+    if from_bootstrap {
+        "the next bootstrap server"
+    } else {
+        "the leader the local quorum state names"
+    }
+}
+
 /// Log the leader's `AddRaftVoter` reply at the appropriate level. None of the
 /// outcomes terminate the loop — the `voters().contains` check at the top of
 /// `run` is the sole exit — so this is purely diagnostic.
 pub(super) fn log_join_outcome(
     self_id: krabka_raft::NodeId,
     target: &str,
+    next: &'static str,
     resp: &AddRaftVoterResponse,
 ) {
     match classify_join_response(resp) {
@@ -48,13 +62,15 @@ pub(super) fn log_join_outcome(
         }
         JoinOutcome::NotLeader => {
             // Not the leader. The error message may name the current leader,
-            // but it isn't a routable address — fall back to rotating across
-            // the configured bootstrap servers.
+            // but it isn't a routable address. The loop asks the leader its
+            // own quorum state names, or the next bootstrap server when it
+            // knows none, which `next` says.
             tracing::debug!(
                 node_id = self_id.0,
                 server = %target,
                 msg = ?resp.error_message,
-                "auto-join target is not the leader; trying next bootstrap server"
+                next,
+                "auto-join target is not the leader; retrying"
             );
         }
         JoinOutcome::TimedOut => {
@@ -108,5 +124,13 @@ mod tests {
             };
             assert2::check!(classify_join_response(&response) == expected);
         }
+    }
+
+    /// A refused or failed attempt moves to the next bootstrap server only
+    /// when the target was a bootstrap server.
+    #[test]
+    fn next_attempt_names_what_the_join_loop_asks_next() {
+        assert2::check!(next_attempt(true) == "the next bootstrap server");
+        assert2::check!(next_attempt(false) == "the leader the local quorum state names");
     }
 }
