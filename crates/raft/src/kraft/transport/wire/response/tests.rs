@@ -407,7 +407,10 @@ fn kafka_fetch_refusal(fetch_refusal: &RefusedFetch, id: i32, endpoint: bool) {
         Vec::new()
     };
     let expected = kafka_empty_fetch_response(id, 5, endpoints);
-    check!(fetch_refusal.encoded == encode_body(&expected, FETCH_VERSION));
+    check!(
+        fetch_refusal.encoded.as_ref()
+            == Some(&encode_body(&expected, FETCH_VERSION).expect("the body encodes"))
+    );
 }
 
 scenarios!("tests/features/migrated/src/kraft/transport/wire/response/tests.feature", fixtures = [fetch_refusal: RefusedFetch]);

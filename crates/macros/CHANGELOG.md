@@ -6,7 +6,7 @@ release that contains `krabka-macros`.
 
 ## [Unreleased]
 
-### Changed
+### Changed (breaking)
 
 - `quorum_epoch_encoder!` now requires the declared function to return
   `Option<Bytes>`, not `Bytes`, and the generated body returns what the

@@ -870,10 +870,7 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         ..leader_answer(NodeId(2), 7)
     })
     .encode();
-    let mut sends = record_peer_sends(
-        &mut engine,
-        fetch_response.clone().expect("the body encodes"),
-    );
+    let mut sends = record_peer_sends(&mut engine, fetch_response.expect("the body encodes"));
 
     check_sent_fetch(&engine, &mut sends, SentFetch {
         fetch_epoch: 7,
