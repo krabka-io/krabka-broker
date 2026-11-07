@@ -362,7 +362,7 @@ mod tests {
         super::*,
         crate::{
             metadata_source::MetadataSource as _,
-            metrics::{ConsumerGroupLabel, ReplicaLagLabel},
+            metrics::{ConsumerGroupLabel, RemoteTierPath, ReplicaLagLabel},
             test_support::FakeMetadataSource,
         },
         assert2::{assert, check},
@@ -447,8 +447,8 @@ mod tests {
         });
     }
 
-    /// Touch every family that carries a [`TopicLabel`], plus the
-    /// topic-and-reason schema-rejection family.
+    /// Touch every family that carries a [`TopicLabel`], the remote-tier
+    /// ones included, plus the topic-and-reason schema-rejection family.
     fn create_topic_series(metrics: &BrokerMetrics, topic: &Arc<str>) {
         metrics.record_produce(topic, 512);
         metrics.record_produce_messages(topic, 4);
@@ -467,6 +467,17 @@ mod tests {
         metrics.track_topic_series(&TopicLabel {
             topic: Arc::clone(topic),
         });
+        for path in [
+            RemoteTierPath::Copy,
+            RemoteTierPath::Fetch,
+            RemoteTierPath::Delete,
+        ] {
+            metrics.record_remote_request(path, topic);
+            metrics.record_remote_error(path, topic);
+            metrics.record_remote_bytes(path, topic, 1_024);
+        }
+        metrics.set_remote_copy_lag(topic, 2, 2_048);
+        metrics.set_remote_delete_lag(topic, 1, 1_024);
         for reason in RejectReason::LABELS {
             metrics.record_schema_validation_rejection(topic, reason);
         }
