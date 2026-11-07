@@ -91,7 +91,7 @@ krabka-guard -b broker-1:9092 freeze clear \
 | --- | --- | --- |
 | `freeze set` | scope, `--reason <text>`, signing flags | Freeze a topic or a topic-name prefix. The broker takes an unsigned freeze unless `freeze.require_signature` is on. |
 | `freeze list` | `--scope <name>`, `--verify-signatures`, `--operator-keys <path>` | Print the live registry entries. `--verify-signatures` needs `--operator-keys`, a TOML file that carries the `[[operator_keys]]` table, which can be the broker's own `broker.toml`. |
-| `freeze clear` | scope, `--proposal <uuid>`, `--reason <text>` (default empty), signing flags | Lift a freeze. The scope must name the entry exactly: a freeze on `--prefix tenant-a.` is not lifted by naming one topic under it. |
+| `freeze clear` | scope, `--proposal <uuid>`, `--reason <text>` (default empty), signing flags | Lift a freeze. The scope must name the entry exactly: a freeze on `--prefix tenant-a.` is not lifted by naming one topic under it. A scope with no live entry is refused with `INVALID_REQUEST` (42), exit `1`, and the proposal stays unspent. |
 
 The scope is exactly one of `--topic <name>` and `--prefix <prefix>`. A
 literal scope names one topic. A prefixed scope names every topic whose name
@@ -107,7 +107,7 @@ broker checks it against both the connection and the `[[operator_keys]]` entry.
 
 | Subcommand | Flags | What it does |
 | --- | --- | --- |
-| `break-glass propose` | `--action <action>`, `--target <name>`, `--reason <text>`, `--ttl <time>` | Open a proposal. The broker caps `--ttl` at `break_glass.proposal_ttl`, and uses that value when the flag is omitted. |
+| `break-glass propose` | `--action <action>`, `--target <name>`, `--reason <text>`, `--ttl <time>` | Open a proposal. The broker caps `--ttl` at `break_glass.proposal_ttl`, and uses that value when the flag is omitted. The tool refuses `--ttl 0` as a likely mistake: omit the flag to take the cap. |
 | `break-glass approve` | `--proposal <uuid>`, `--sign-with <path>`, `--key-id <id>` | Add one approval. The broker refuses the proposer, a principal outside `break_glass.approvers`, and a principal that already approved. |
 | `break-glass withdraw` | `--proposal <uuid>` | Withdraw a proposal, so nothing can spend it. |
 | `break-glass list` | `--pending`, `--proposal <uuid>` | Print the proposals and their approvals. `--pending` drops consumed, withdrawn, and expired proposals. |
@@ -137,6 +137,7 @@ and `krabka-barrier`. Code `3` keeps the meaning `krabka-barrier` gives it.
 | `3` | The registry names an operator key this machine does not hold, so the tool could not check it. |
 | `4` | The action needs a break-glass approval that does not exist. Go and get a second person. |
 | `5` | A signature did not verify, or the broker needed one and did not get it. |
+| `64` | The command line does not parse (`EX_USAGE`), for example an unknown flag or a `--ttl` of zero. clap's message is on stderr, and nothing was sent. `--help` and `--version` exit `0`. |
 
 ## Documentation
 

@@ -223,6 +223,13 @@ fn documentation(input: TokenStream) -> Result<TokenStream, ParseError> {
     }
 }
 
+/// `run_from_args`, which parses `argv` and hands the result to the caller's
+/// `run`.
+///
+/// A parse error prints clap's message and returns the caller's `EXIT_USAGE`,
+/// so the code is the tool's own choice rather than clap's `2`. clap reports
+/// `--help` and `--version` as errors too, with exit code `0`, and those print
+/// to stdout and return `0`.
 pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
     let docs = documentation(input)?;
     Ok(moxy::template! {
@@ -232,7 +239,15 @@ pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseErr
             I: IntoIterator<Item = T>,
             T: Into<::std::ffi::OsString> + Clone,
         {
-            run(Cli::parse_from(argv)).await
+            match Cli::try_parse_from(argv) {
+                Ok(cli) => run(cli).await,
+                Err(error) => {
+                    // A stream that refuses clap's message leaves the exit
+                    // code as the whole report.
+                    _ = error.print();
+                    if error.exit_code() == 0 { 0 } else { EXIT_USAGE }
+                }
+            }
         }
     })
 }

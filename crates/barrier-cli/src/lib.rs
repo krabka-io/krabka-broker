@@ -38,3 +38,10 @@ const EXIT_REFUSED: i32 = 1;
 const EXIT_UNREACHABLE: i32 = 2;
 /// The exit code for a cut whose log does not match what it claims.
 const EXIT_MISMATCH: i32 = 3;
+/// The exit code for a command line the tool cannot parse.
+///
+/// It is `EX_USAGE` from BSD's `sysexits.h`, and `krabka-guard` gives it the
+/// same meaning. A typo in a flag must not read as [`EXIT_UNREACHABLE`], which
+/// a runbook takes to mean "look at the broker". `--help` and `--version`
+/// exit `0`.
+const EXIT_USAGE: i32 = 64;

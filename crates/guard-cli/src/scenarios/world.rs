@@ -29,6 +29,8 @@ pub struct GuardScenario {
     pub trust_file: Given<PathBuf>,
     /// The broker answer a When hands the tool.
     pub answer: Given<BrokerAnswer>,
+    /// The line the tool printed on stderr for a thaw, if any.
+    pub stderr: Option<String>,
 }
 
 #[rstest::fixture]
@@ -42,6 +44,7 @@ pub fn guard() -> GuardScenario {
         outcome: Given::new("outcome", "When <operator> tries to <action>"),
         trust_file: Given::new("trust_file", "Given the operator's machine holds <keys>"),
         answer: Given::new("answer", "When the broker answers a request with <answer>"),
+        stderr: None,
     }
 }
 

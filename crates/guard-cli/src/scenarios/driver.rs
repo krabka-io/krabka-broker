@@ -7,7 +7,10 @@
 
 use {
     super::params::{KeySource, Lifetime, LocalKeys, Operator, Outcome, Scope},
-    crate::{cli::Cli, command::dispatch},
+    crate::{
+        cli::Cli,
+        command::{dispatch, set_freeze_report_of},
+    },
     clap::Parser as _,
     krabka_broker::{
         Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper,
@@ -35,6 +38,14 @@ use {
     },
     tempfile::TempDir,
 };
+
+/// What the tool reported for one freeze or thaw.
+pub struct Reported {
+    /// The outcome its exit code names.
+    pub outcome: Outcome,
+    /// The line it printed on stderr, if any.
+    pub stderr: Option<String>,
+}
 
 /// The reason every freeze and thaw in the scenarios gives. No rule depends
 /// on its text.
@@ -242,7 +253,7 @@ impl Cluster {
         scope: &Scope,
         proposal: uuid::Uuid,
         signing: Signing,
-    ) -> Outcome {
+    ) -> Reported {
         let proposal = proposal.to_string();
         let mut args = vec![
             "freeze",
@@ -256,7 +267,38 @@ impl Cluster {
         ];
         let flags = self.signing_flags(operator, signing);
         args.extend(flags.iter().map(String::as_str));
-        self.guard(operator, &args).await
+        self.guard_set_freeze(operator, &args).await
+    }
+
+    /// Run a freeze or a thaw as `operator`, and keep the line it prints on
+    /// stderr beside the outcome.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `args` name a command that sets no freeze.
+    pub async fn guard_set_freeze(&self, operator: Operator, args: &[&str]) -> Reported {
+        let mut command_line = vec!["krabka-guard", "--bootstrap-server", "scenario"];
+        command_line.extend_from_slice(args);
+        let Ok(cli) = Cli::try_parse_from(command_line) else {
+            return Reported {
+                outcome: Outcome::CommandLineRefused,
+                stderr: None,
+            };
+        };
+        let client = self.client(operator).await;
+        match set_freeze_report_of(&client, cli.command)
+            .await
+            .expect("a freeze or a thaw")
+        {
+            Ok(report) => Reported {
+                outcome: Outcome::from_exit_code(report.exit),
+                stderr: report.stderr,
+            },
+            Err(failure) => Reported {
+                outcome: Outcome::from_exit_code(failure.exit_code()),
+                stderr: Some(failure.message().to_owned()),
+            },
+        }
     }
 
     /// The `--sign-with`, `--key-id` and `--principal` flags for `signing`.

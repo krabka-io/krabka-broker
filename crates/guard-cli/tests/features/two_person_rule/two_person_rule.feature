@@ -47,12 +47,18 @@ Feature: A break-glass proposal needs two different people
         | within the cap     | 30m         | 30 minutes |
         | above the cap      | 2h          | 1 hour     |
         | no lifetime given  | the default | 1 hour     |
-        | zero takes the cap | 0           | 1 hour     |
 
   Rule: A lifetime needs a unit
 
     Scenario: A lifetime with no unit is refused before it reaches the broker
       When alice tries to propose deleting the doomed topic for 30
+      Then the tool refuses the command line
+      And the cluster holds no proposal
+
+  Rule: A lifetime of zero is a likely mistake, so the tool refuses it
+
+    Scenario: A zero lifetime is refused before it reaches the broker
+      When alice tries to propose deleting the doomed topic for 0
       Then the tool refuses the command line
       And the cluster holds no proposal
 

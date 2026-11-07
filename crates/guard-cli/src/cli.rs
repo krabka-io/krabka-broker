@@ -11,7 +11,7 @@ use {
     super::failure::Failure,
     clap::{Args, Parser, Subcommand, ValueEnum},
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
-    krabka_units::{Time, parse},
+    krabka_units::{Time, convert::TimeExt as _, parse},
     std::path::{Path, PathBuf},
 };
 
@@ -124,8 +124,9 @@ pub enum BreakGlassCommand {
         /// How long the proposal stays open. Takes any time unit, so `30m`,
         /// `1h` and `90s` all work, and a number with no unit is refused. The
         /// broker caps it at `break_glass.proposal_ttl`. Omit to take that
-        /// value.
-        #[arg(long, value_parser = parse_time)]
+        /// value. Zero is refused as a likely mistake, and so is anything
+        /// shorter than a millisecond.
+        #[arg(long, value_parser = parse_ttl)]
         ttl: Option<Time>,
     },
     /// Add one approval to a proposal.
@@ -284,6 +285,24 @@ pub fn pattern_name(pattern_type: i8) -> &'static str {
 /// crate's rule and it is the right one here: `--ttl 30` from someone who meant
 /// minutes would otherwise open a proposal for thirty milliseconds.
 fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
+
+/// Parse `--ttl`: a time argument of at least one millisecond.
+///
+/// The request carries the lifetime in whole milliseconds, and zero there asks
+/// the broker for `break_glass.proposal_ttl`. `--ttl 0`, or a lifetime that
+/// rounds down to zero, would take that cap without saying so, which is far
+/// more likely a mistake than a request for the cap. Omitting the flag is how
+/// an operator asks for it.
+fn parse_ttl(raw: &str) -> Result<Time, String> {
+    let ttl = parse_time(raw)?;
+    if ttl.millis_i64() < 1 {
+        return Err(format!(
+            "{raw:?} is under one millisecond, and the broker reads a zero lifetime as \
+             break_glass.proposal_ttl; omit --ttl to take that cap"
+        ));
+    }
+    Ok(ttl)
+}
 
 /// Parse a proposal id.
 fn parse_uuid(raw: &str) -> Result<uuid::Uuid, String> {

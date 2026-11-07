@@ -49,8 +49,9 @@ async fn record_thaw(
 ) {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster().await;
-    let outcome = cluster.thaw(operator, scope, proposal, signing).await;
-    guard.outcome.set(outcome);
+    let reported = cluster.thaw(operator, scope, proposal, signing).await;
+    guard.outcome.set(reported.outcome);
+    guard.stderr = reported.stderr;
 }
 
 /// Thaws carry the acting operator's own signature.
@@ -151,7 +152,7 @@ async fn has_lifted(guard: &mut GuardScenario, operator: Operator, scope: Scope)
         let thawed = cluster
             .thaw(operator, &scope, proposal, own_signature(operator))
             .await;
-        assert!(thawed == Outcome::Success);
+        assert!(thawed.outcome == Outcome::Success);
         proposal
     }
     .await;
@@ -189,6 +190,18 @@ async fn registry_holds_unsigned_freeze(
         ..DescribedTopicFreeze::default()
     }];
     assert!(registry == expected);
+}
+
+/// The broker's refusal and the tool's own words both name the scope, so an
+/// operator reads that they asked for the wrong scope, not that a broker failed.
+#[then("the tool explains that the registry holds no freeze on {scope}")]
+fn tool_explains_no_freeze(guard: &GuardScenario, scope: Scope) {
+    let target = thaw_target(&scope);
+    let expected = format!(
+        "error 42 (the registry holds no freeze at this exact scope, so there is nothing to \
+         thaw): {target} has no live freeze entry, so there is nothing to thaw"
+    );
+    assert!(guard.stderr.as_deref() == Some(expected.as_str()));
 }
 
 #[then("the registry still holds the freeze on {scope}")]

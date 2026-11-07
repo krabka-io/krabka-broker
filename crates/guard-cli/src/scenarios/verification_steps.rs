@@ -4,7 +4,7 @@
 
 use {
     super::{
-        driver::Signing,
+        driver::{self, Signing},
         params::{BrokerAnswer, KeySource, LocalKeys, Operator, Outcome, RegistryContents, Scope},
         world::GuardScenario,
     },
@@ -82,4 +82,20 @@ fn tool_exits_with(guard: &GuardScenario, code: i32) {
 #[then("the operator reads {explanation}")]
 fn operator_reads(guard: &GuardScenario, explanation: String) {
     assert!(code_name(guard.answer.get().code()) == explanation);
+}
+
+/// The bootstrap address for a command line that never reaches a broker.
+const NO_BROKER: &str = "127.0.0.1:1";
+
+/// The shipped entry point runs, so its parse step decides the outcome.
+#[when("an operator runs the tool with a flag it does not know")]
+async fn runs_with_unknown_flag(guard: &mut GuardScenario) {
+    let outcome = driver::run_binary(NO_BROKER, &["freeze", "list", "--no-such-flag"]).await;
+    guard.outcome.set(outcome);
+}
+
+#[when("an operator asks the tool for help")]
+async fn asks_for_help(guard: &mut GuardScenario) {
+    let outcome = driver::run_binary(NO_BROKER, &["--help"]).await;
+    guard.outcome.set(outcome);
 }

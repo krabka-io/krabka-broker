@@ -60,6 +60,8 @@ freeze entry:
 
 A thaw is a record whose `frozen` flag is false, so `DescribeTopicFreezes` returns no entry for a thawed scope. The record removes the entry from the registry and stays in the metadata log. The log keeps the name of the person who lifted the freeze. This follows the sentinel pattern that a zero feature level and an empty topic-config map already use. It is also why there is no separate delete record.
 
+A thaw of a scope with no live entry is refused with `INVALID_REQUEST` (42) before any record is built, so the break-glass proposal it names stays unspent. The operator named the wrong scope, and a coordinator code would send them looking for a broker fault. A thaw that loses a race to another writer, and reaches the controller after the entry went, gets the same answer.
+
 ### The API Keys
 
 | Key | Request | Purpose | Authorization |
@@ -194,8 +196,9 @@ krabka-guard break-glass list [--pending]
 | 3 | The tool looked, and what it found does not match what it was told. |
 | 4 | The action needs an approval that does not exist. |
 | 5 | A signature did not verify. |
+| 64 | The command line does not parse (`EX_USAGE`). Nothing was sent. |
 
-Codes 0 to 3 keep the meanings that `krabka-barrier` gives them, code 3 included.
+Codes 0 to 3 keep the meanings that `krabka-barrier` gives them, code 3 included. Code 64 means the same in both tools. A usage error does not exit 2, because a runbook reads 2 as "look at the broker".
 
 Code 3 is reserved rather than reused. `krabka-barrier` already exits 3 for a cut that does not match the log, and an operator runbook branches on `$?` without knowing which krabka tool answered it. One number has to mean one thing across both tools, so the two codes this feature adds take 4 and 5 rather than displacing it.
 

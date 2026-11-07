@@ -4,7 +4,8 @@
 use {
     super::{applied_image::Overlay, offsets::assigned_record_offset},
     crate::{
-        DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
+        DelegationTokenMutation, OffsetReservation, SubmitChangeResult,
+        error::{FreezeRefusal, RaftError},
         kraft::types::Epoch,
     },
     krabka_ids::Offset,
@@ -253,10 +254,24 @@ impl MutationAdmission<'_> {
                             return Err(RaftError::UncommittedTail);
                         }
                         decision => {
-                            return Err(RaftError::ChangeRejected(format!(
-                                "topic-freeze mutation {:?}:{} rejected: {decision:?}",
-                                freeze.pattern_type, freeze.scope
-                            )));
+                            let key = format!("{:?}:{}", freeze.pattern_type, freeze.scope);
+                            return Err(match decision {
+                                krabka_verified::FreezeReplacementDecision::Missing => {
+                                    RaftError::FreezeRefused {
+                                        key,
+                                        refusal: FreezeRefusal::Missing,
+                                    }
+                                }
+                                krabka_verified::FreezeReplacementDecision::Stale => {
+                                    RaftError::FreezeRefused {
+                                        key,
+                                        refusal: FreezeRefusal::Stale,
+                                    }
+                                }
+                                other => RaftError::ChangeRejected(format!(
+                                    "topic-freeze mutation {key} rejected: {other:?}"
+                                )),
+                            });
                         }
                     }
                     freeze_in_batch = true;

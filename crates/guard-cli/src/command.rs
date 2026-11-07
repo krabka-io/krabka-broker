@@ -6,6 +6,8 @@
 //! for a step that stopped before a broker answered, and an exit code for one
 //! that a broker answered.
 
+#[cfg(test)]
+use super::report::{SetFreezeReport, set_freeze_report};
 use {
     super::{
         cli::{Action, BreakGlassCommand, Command, FreezeCommand, FreezeSigningArgs, ScopeArgs},
@@ -51,17 +53,22 @@ pub async fn dispatch(
                 scope,
                 reason,
                 signing,
-            } => set_freeze(client, &scope, reason, &signing, FreezeChange::Freeze).await,
+            } => {
+                let change = FreezeChange::Freeze;
+                let (response, frozen) =
+                    set_freeze(client, &scope, reason, &signing, change).await?;
+                Ok(report_set_freeze(&response, frozen))
+            }
             FreezeCommand::Clear {
                 scope,
                 proposal,
                 reason,
                 signing,
             } => {
-                set_freeze(client, &scope, reason, &signing, FreezeChange::Thaw {
-                    proposal,
-                })
-                .await
+                let change = FreezeChange::Thaw { proposal };
+                let (response, frozen) =
+                    set_freeze(client, &scope, reason, &signing, change).await?;
+                Ok(report_set_freeze(&response, frozen))
             }
             FreezeCommand::List {
                 scope,
@@ -111,7 +118,41 @@ impl FreezeChange {
     }
 }
 
-/// Set or lift one freeze.
+/// The report a freeze or a thaw prints, unprinted, or `None` for any other
+/// command.
+///
+/// A scenario reads the line an operator would read through this, from the
+/// same request and the same report the binary uses.
+#[cfg(test)]
+pub async fn set_freeze_report_of(
+    client: &krabka_client_core::Client,
+    command: Command,
+) -> Option<Result<SetFreezeReport, Failure>> {
+    let Command::Freeze { command } = command else {
+        return None;
+    };
+    let (scope, reason, signing, change) = match command {
+        FreezeCommand::Set {
+            scope,
+            reason,
+            signing,
+        } => (scope, reason, signing, FreezeChange::Freeze),
+        FreezeCommand::Clear {
+            scope,
+            proposal,
+            reason,
+            signing,
+        } => (scope, reason, signing, FreezeChange::Thaw { proposal }),
+        FreezeCommand::List { .. } => return None,
+    };
+    Some(
+        set_freeze(client, &scope, reason, &signing, change)
+            .await
+            .map(|(response, frozen)| set_freeze_report(&response, frozen)),
+    )
+}
+
+/// Set or lift one freeze, and return the broker's answer and the direction.
 ///
 /// The two directions share this because they share a request. `frozen` and the
 /// proposal are what separate them, and both are inside the signed bytes, so a
@@ -122,7 +163,7 @@ async fn set_freeze(
     reason: String,
     signing: &FreezeSigningArgs,
     change: FreezeChange,
-) -> Result<i32, Failure> {
+) -> Result<(api::SetTopicFreezeResponse, bool), Failure> {
     let scope = scope.resolve()?;
     let set_at_ms = now_ms();
     let frozen = change.frozen();
@@ -163,7 +204,7 @@ async fn set_freeze(
         ..api::SetTopicFreezeRequest::default()
     };
     let response = client.send(request).await.map_err(Failure::from)?;
-    Ok(report_set_freeze(&response, frozen))
+    Ok((response, frozen))
 }
 
 /// Read the registry, and prove it when the operator asks.
@@ -203,7 +244,9 @@ async fn propose(
         action: action.wire(),
         target,
         reason,
-        // Zero asks the broker for `break_glass.proposal_ttl`.
+        // Zero asks the broker for `break_glass.proposal_ttl`. The parser
+        // refuses a `--ttl` below a millisecond, so only an omitted flag
+        // sends it.
         ttl_ms: ttl.map_or(0, Time::millis_i64),
         ..bg::ProposeBreakGlassRequest::default()
     };

@@ -8,7 +8,7 @@
 
 use {
     crate::{
-        EXIT_REFUSED, EXIT_UNREACHABLE,
+        EXIT_REFUSED, EXIT_UNREACHABLE, EXIT_USAGE,
         cli::{Cli, Command},
         console::Console,
         report::{report_alter, report_describe, report_list, report_trigger, report_verify},
@@ -27,11 +27,8 @@ krabka_macros::parsed_cli_entrypoint!({
     /// `0` means the broker accepted the request. `1` means it refused one, and the
     /// reason is on stderr. `2` means the broker could not be reached, so nothing
     /// is known about the outcome. `3` means a cut does not match the log.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `argv` does not parse, which for a caller passing a literal
-    /// argument list is a bug in that list rather than a runtime condition.
+    /// `64` means the command line did not parse, and clap's message is on
+    /// stderr. `--help` and `--version` print and return `0`.
 });
 
 /// The `timeout_ms` that asks the broker for its own default. The broker reads
