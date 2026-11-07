@@ -420,7 +420,11 @@ fn print_configuration(store_configuration_scenario: &mut StoreConfigurationScen
 
 #[rstest_bdd_macros::when("the broker resolves the backend configuration")]
 fn resolve_configuration(store_configuration_scenario: &mut StoreConfigurationScenario) {
-    let resolved = store_configuration_scenario.configuration.get().s3().clone();
+    let resolved = store_configuration_scenario
+        .configuration
+        .get()
+        .s3()
+        .clone();
     store_configuration_scenario.resolved.set(resolved);
 }
 
