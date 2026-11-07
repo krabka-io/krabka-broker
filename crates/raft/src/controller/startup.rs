@@ -6,16 +6,16 @@
 #[cfg(target_os = "wasi")]
 use std::future;
 use {
-    super::{
-        ControllerHandle, checkpoint::load_latest_checkpoint,
-        feature_check::unsupported_feature_level,
-    },
+    super::{ControllerHandle, feature_check::unsupported_feature_level},
     crate::{
         config::{
             BootstrapMode, ControllerConfig, UnstableFeatureVersions, metadata_partition_dir,
         },
         error::RaftError,
-        kraft::{Activation, KraftController, KraftOpenConfig, core::QuorumTimeouts},
+        kraft::{
+            Activation, KraftController, KraftOpenConfig,
+            controller::checkpoint::load_latest_checkpoint, core::QuorumTimeouts,
+        },
         network::{OutboundDialer, PlaintextDialer, RealPeerSender},
         server,
         snapshot::SnapshotReader,
@@ -82,8 +82,11 @@ impl Controller {
         // do under `metadata.log.dir`.
         let data_dir = metadata_partition_dir(&config.log_dir);
         let log_exists = metadata_log_nonempty(&data_dir);
-        let snapshot_voters = load_latest_checkpoint(&data_dir)
-            .and_then(|(_, bytes)| SnapshotReader::read(&bytes).ok())
+        // A checkpoint that cannot be read or decoded stops the start here,
+        // before it can pass for "no voters" and change the bootstrap mode.
+        let snapshot_voters = load_latest_checkpoint(&data_dir)?
+            .map(|bytes| SnapshotReader::read(&bytes))
+            .transpose()?
             .and_then(|snapshot| snapshot.control_state.map(|state| state.voters))
             .unwrap_or_default();
         let voters = if config.initial_voters.is_empty() {
@@ -558,6 +561,65 @@ mod tests {
         assert2::check!(
             message == format!("unable to bind the controller listener to {addr}: {source}")
         );
+    }
+
+    /// How a test damages the latest checkpoint before a start.
+    #[derive(Clone, Copy, Debug)]
+    enum DamagedCheckpoint {
+        /// A record batch cut off after a few bytes.
+        Truncated,
+        /// Bytes that are no record batch this build reads, as a checkpoint
+        /// that a later version wrote can be.
+        Unreadable,
+        /// A directory where the file should be, so the read fails with an
+        /// I/O error.
+        NotAFile,
+    }
+
+    /// A latest checkpoint that the controller cannot read or decode fails the
+    /// start with the read's own error. Before the fix, start-up read it as
+    /// "no voters" and reported a misleading bootstrap-mode error, or bound
+    /// the listener first.
+    #[yare::parameterized(
+        truncated = { DamagedCheckpoint::Truncated, false },
+        truncated_auto_join = { DamagedCheckpoint::Truncated, true },
+        unreadable = { DamagedCheckpoint::Unreadable, false },
+        unreadable_auto_join = { DamagedCheckpoint::Unreadable, true },
+        not_a_file = { DamagedCheckpoint::NotAFile, false },
+        not_a_file_auto_join = { DamagedCheckpoint::NotAFile, true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_damaged_checkpoint_fails_the_start_with_its_read_error(
+        damage: DamagedCheckpoint,
+        auto_join: bool,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let data_dir = metadata_partition_dir(dir.path());
+        fs::create_dir_all(&data_dir).unwrap();
+        let checkpoint = data_dir.join("00000000000000000010-0000000001.checkpoint");
+        match damage {
+            DamagedCheckpoint::Truncated => fs::write(&checkpoint, [0, 0, 0, 0, 0, 0]).unwrap(),
+            DamagedCheckpoint::Unreadable => fs::write(&checkpoint, [0xff; 96]).unwrap(),
+            DamagedCheckpoint::NotAFile => fs::create_dir(&checkpoint).unwrap(),
+        }
+        let expected = match load_latest_checkpoint(&data_dir) {
+            Ok(bytes) => SnapshotReader::read(&bytes.expect("a checkpoint"))
+                .expect_err("the damaged checkpoint decodes")
+                .to_string(),
+            Err(error) => error.to_string(),
+        };
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Bootstrap,
+            initial_voters: krabka_metadata::VoterSet::from_voters(iter::empty()),
+            auto_join,
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+
+        let Err(error) = Controller::start(cfg).await else {
+            panic!("a controller started on a damaged checkpoint");
+        };
+
+        assert2::assert!(error.to_string() == expected);
     }
 
     #[tokio::test]
