@@ -130,7 +130,7 @@ fn decode_into(
                 && let Some(inner) = out.get_mut(start_len..)
                 && let Some(last) = inner.last()
             {
-                let base_abs = i128::from(offset) - i128::from(last.offset.0);
+                let base_abs = wrapper_base_offset(offset, last.offset.0)?;
                 for rec in inner {
                     let absolute = base_abs + i128::from(rec.offset.0);
                     rec.offset = Offset(i64::try_from(absolute).map_err(|_| {
@@ -141,6 +141,23 @@ fn decode_into(
         }
     }
     Ok(())
+}
+
+/// The amount a v1 wrapper adds to each relative inner offset.
+///
+/// Kafka's `DeepRecordsIterator` takes the inner offsets as they are when
+/// the wrapper offset is 0, which some librdkafka versions send on produce.
+/// It rejects any other wrapper offset below the last inner offset.
+fn wrapper_base_offset(wrapper: i64, last_inner: i64) -> Result<i128, LegacyRecordsError> {
+    if wrapper == 0 {
+        return Ok(0);
+    }
+    if wrapper < last_inner {
+        return Err(LegacyRecordsError::Malformed(format!(
+            "wrapper offset {wrapper} is below the last inner offset {last_inner}"
+        )));
+    }
+    Ok(i128::from(wrapper) - i128::from(last_inner))
 }
 
 #[cfg(test)]
