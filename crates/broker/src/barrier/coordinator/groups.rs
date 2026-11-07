@@ -347,15 +347,10 @@ mod tests {
     use {
         super::*,
         crate::{
-            barrier::{
-                coordinator::test_support::{Fixture, GROUP, fixture_with_coordinator, spec},
-                test_support::topic_records,
-            },
+            barrier::coordinator::test_support::{Fixture, GROUP, fixture_with_coordinator, spec},
             coordinator::unified::persistence::MAX_STRING_BYTES,
-            metadata_source::MetadataSource,
         },
         assert2::assert,
-        krabka_metadata::NodeId,
     };
 
     #[tokio::test]
@@ -479,16 +474,8 @@ mod tests {
     async fn a_group_that_this_broker_does_not_coordinate_is_refused() {
         let fixture = Fixture::new();
         let coordinator = fixture.coordinator().await;
-        // Node 2 takes every state partition.
-        fixture.source.set_records(
-            &[
-                topic_records(STATE_TOPIC, 4, NodeId(2)),
-                topic_records("orders", 2, NodeId(1)),
-            ]
-            .concat(),
-        );
-        coordinator
-            .refresh_leader_partitions(&fixture.source.current_image())
+        fixture
+            .hand_state_partitions_to_another_broker(&coordinator)
             .await;
 
         let created = coordinator.create_group(GROUP, spec().call()).await;

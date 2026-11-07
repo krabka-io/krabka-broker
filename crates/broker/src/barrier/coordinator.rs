@@ -548,10 +548,7 @@ mod tests {
         let fixture = Fixture::new();
         let coordinator = fixture.coordinator().await;
         fixture
-            .source
-            .set_records(&topic_records("orders", 2, NodeId(1)));
-        coordinator
-            .refresh_leader_partitions(&fixture.source.current_image())
+            .replace_metadata(&coordinator, &topic_records("orders", 2, NodeId(1)))
             .await;
 
         let triggered = coordinator.trigger_injection(GROUP, None).await;
@@ -565,15 +562,8 @@ mod tests {
     async fn a_group_whose_state_partition_another_broker_leads_is_not_coordinated_here() {
         let fixture = Fixture::new();
         let coordinator = fixture.coordinator().await;
-        fixture.source.set_records(
-            &[
-                topic_records(STATE_TOPIC, 4, NodeId(2)),
-                topic_records("orders", 2, NodeId(1)),
-            ]
-            .concat(),
-        );
-        coordinator
-            .refresh_leader_partitions(&fixture.source.current_image())
+        fixture
+            .hand_state_partitions_to_another_broker(&coordinator)
             .await;
 
         let triggered = coordinator.trigger_injection(GROUP, None).await;

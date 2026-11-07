@@ -33,7 +33,6 @@ use {
     },
     rstest_bdd_macros::{given, then, when},
     std::{
-        collections::BTreeMap,
         ops::RangeInclusive,
         slice,
         time::{Duration, Instant},
@@ -87,13 +86,11 @@ impl Cluster {
             .await
             .expect("admin connect")
             .create_topics(
-                &[CreateTopicSpec {
-                    name: topic.to_owned(),
-                    partitions,
-                    replicas: 1,
-                    configs: BTreeMap::default(),
-                    replica_assignments: BTreeMap::new(),
-                }],
+                &[CreateTopicSpec::builder()
+                    .name(topic)
+                    .partitions(partitions)
+                    .replicas(1)
+                    .build()],
                 TopicMutationOptions::with_timeout(krabka_units::secs(10)),
             )
             .await
