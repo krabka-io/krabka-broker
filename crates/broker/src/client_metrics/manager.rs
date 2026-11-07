@@ -12,6 +12,7 @@
 
 use {
     crate::{api_catalog::UnstableApiVersions, codes},
+    krabka_java_regex::MatchError,
     krabka_metadata::MetadataImage,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
@@ -78,20 +79,26 @@ struct ClientInstance {
 }
 
 impl ClientInstance {
+    /// Kafka's `createClientInstance`, which matches `attrs` against every
+    /// subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`MatchError`] when a `match` pattern runs past the backtrack limit.
     fn new(
         subscriptions: &Subscriptions,
         attrs: ClientAttributes,
         default_interval_ms: i32,
         subscription_version: u64,
         now: Instant,
-    ) -> Self {
-        let subscription = subscriptions.compute(&attrs, default_interval_ms);
+    ) -> Result<Self, MatchError> {
+        let subscription = subscriptions.compute(&attrs, default_interval_ms)?;
         let subscription_id = subscription_id(&subscription, attrs.client_instance_id);
         // `interval.ms` is validated in [100, 3_600_000], and the default is
         // positive, so the interval is always positive.
         let push_interval =
             Duration::from_millis(u64::from(subscription.push_interval_ms.unsigned_abs()));
-        Self {
+        Ok(Self {
             attrs,
             subscription_version,
             subscription,
@@ -102,7 +109,7 @@ impl ClientInstance {
             last_seen: now,
             terminating: false,
             last_error: codes::NONE,
-        }
+        })
     }
 
     /// Kafka's `maybeUpdateGetRequestTimestamp`.
@@ -204,26 +211,34 @@ impl State {
     /// Kafka's `ClientMetricsManager.clientInstance`: the instance for `attrs`,
     /// created when this broker holds none, and created again with its first
     /// attributes when the subscriptions changed since it was built.
+    ///
+    /// # Errors
+    ///
+    /// [`MatchError`] when matching the attributes runs past the backtrack
+    /// limit. Nothing is stored then, as when Kafka's `createClientInstance`
+    /// throws: no new instance, and an instance due a rebuild keeps its old
+    /// subscription, so the next request tries the rebuild again.
     fn client_instance(
         &mut self,
         image: &MetadataImage,
         attrs: &ClientAttributes,
         now: Instant,
-    ) -> &mut ClientInstance {
+    ) -> Result<&mut ClientInstance, MatchError> {
         self.observe_subscriptions(image);
         let version = self.subscription_version;
         let default_interval_ms = self.default_interval_ms;
         let id = attrs.client_instance_id;
         let inst = match self.instances.entry(id) {
             Entry::Vacant(slot) => {
-                self.connections.insert(attrs.connection_id.clone(), id);
-                slot.insert(ClientInstance::new(
+                let inst = ClientInstance::new(
                     &self.subscriptions,
                     attrs.clone(),
                     default_interval_ms,
                     version,
                     now,
-                ))
+                )?;
+                self.connections.insert(attrs.connection_id.clone(), id);
+                slot.insert(inst)
             }
             Entry::Occupied(slot) => {
                 let inst = slot.into_mut();
@@ -234,20 +249,20 @@ impl State {
                         connection_id: attrs.connection_id.clone(),
                         ..inst.attrs.clone()
                     };
-                    self.connections.insert(attrs.connection_id.clone(), id);
                     *inst = ClientInstance::new(
                         &self.subscriptions,
                         first_attrs,
                         default_interval_ms,
                         version,
                         now,
-                    );
+                    )?;
+                    self.connections.insert(attrs.connection_id.clone(), id);
                 }
                 inst
             }
         };
         inst.last_seen = now;
-        inst
+        Ok(inst)
     }
 
     /// [`ClientMetricsManager::get_subscription`] under the state lock.
@@ -266,7 +281,11 @@ impl State {
                 }
             };
         }
-        let inst = self.client_instance(image, &attrs, now);
+        let Ok(inst) = self.client_instance(image, &attrs, now) else {
+            return SubscriptionDecision::Reject {
+                error_code: codes::UNKNOWN_SERVER_ERROR,
+            };
+        };
 
         // Kafka's `validateGetRequest`: the timestamp check runs first and
         // moves the timestamp only when it passes. A client that the last push
@@ -301,7 +320,11 @@ impl State {
         max_payload_len: usize,
         now: Instant,
     ) -> PushDecision {
-        let inst = self.client_instance(image, attrs, now);
+        let Ok(inst) = self.client_instance(image, attrs, now) else {
+            return PushDecision::Reject {
+                error_code: codes::UNKNOWN_SERVER_ERROR,
+            };
+        };
 
         let error_code = if inst.terminating {
             codes::INVALID_REQUEST
@@ -393,6 +416,12 @@ impl ClientMetricsManager {
     /// Kafka's `processGetTelemetrySubscriptionRequest`. A zero
     /// `attrs.client_instance_id` asks for a new id, and the assignment
     /// carries the id the broker used either way.
+    ///
+    /// A `match` pattern that runs past the backtrack limit against the
+    /// client's attributes rejects the request with `UNKNOWN_SERVER_ERROR`,
+    /// Kafka's answer when building the client instance throws. It is not read
+    /// as no match, which could leave the client out of a subscription Java
+    /// gives it.
     pub(crate) fn get_subscription(
         &self,
         image: &MetadataImage,
@@ -417,6 +446,10 @@ impl ClientMetricsManager {
     /// id check, then `validatePushRequest`, then the terminating flag. The
     /// flag follows 4.3.1 (every push sets it) unless `push.unstable` is
     /// enabled, which follows trunk (only an accepted push sets it).
+    ///
+    /// A push that must build the client instance rejects with
+    /// `UNKNOWN_SERVER_ERROR` where matching runs past the backtrack limit, as
+    /// [`Self::get_subscription`] does.
     pub(crate) fn authorize_push(
         &self,
         image: &MetadataImage,
@@ -481,7 +514,7 @@ impl ClientMetricsManager {
 mod tests {
     use {
         super::{
-            test_support::{all_metrics_img, attrs, expect_assignment},
+            test_support::{ConfigEntry, all_metrics_img, apply_config, attrs, expect_assignment},
             *,
         },
         crate::{
@@ -841,6 +874,91 @@ mod tests {
                 "step {name}"
             );
         }
+    }
+
+    /// The attributes of a client whose id backtracks [`SLOW_MATCH`] past the
+    /// limit.
+    fn slow_client() -> ClientAttributes {
+        ClientAttributes {
+            client_id: "x".repeat(25),
+            ..attrs()
+        }
+    }
+
+    /// A `match` that backtracks past the limit on 25 `x`.
+    const SLOW_MATCH: &str = "client_id=(x+x+)+(?!z)y";
+
+    fn add_slow_subscription(img: &mut MetadataImage) {
+        apply_config(img, "slow", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "match",
+                value: SLOW_MATCH,
+            },
+        ]);
+    }
+
+    /// A client whose attributes run a `match` past the backtrack limit is
+    /// rejected with `UNKNOWN_SERVER_ERROR` on both requests, and the broker
+    /// keeps no instance, and no connection, for it.
+    #[test]
+    fn a_match_past_the_backtrack_limit_rejects_the_client() {
+        let mut img = MetadataImage::new(Uuid::nil());
+        add_slow_subscription(&mut img);
+        let rejected = KafkaErrorCode(codes::UNKNOWN_SERVER_ERROR);
+        let rows = [
+            ("get", Step::Get, reject_get(rejected)),
+            (
+                "push",
+                Step::Push(push(TelemetrySubscriptionId::default())),
+                reject_push(rejected),
+            ),
+        ];
+        for (name, step, expected) in rows {
+            let m = manager();
+            let outcome = run()
+                .m(&m)
+                .img(&img)
+                .attrs(&slow_client())
+                .step(step)
+                .call();
+            let kept = {
+                let state = m.state.lock().unwrap_or_else(PoisonError::into_inner);
+                (state.instances.len(), state.connections.len())
+            };
+            assert!((outcome, kept) == (expected, (0, 0)), "{name}");
+        }
+    }
+
+    /// An instance due a rebuild whose new match runs past the limit keeps its
+    /// old subscription, as Kafka's cache does when `createClientInstance`
+    /// throws, and every request tries the rebuild again until the
+    /// subscriptions change.
+    #[test]
+    fn a_rebuild_past_the_backtrack_limit_keeps_the_old_instance() {
+        let m = manager();
+        let before = all_metrics_img("60000");
+        let mut after = before.clone();
+        add_slow_subscription(&mut after);
+        let client = slow_client();
+        let start = Instant::now();
+        let old = expect_assignment(m.get_subscription_at(&before, &client, start));
+        let rejected = reject_get(KafkaErrorCode(codes::UNKNOWN_SERVER_ERROR));
+        for later in [1, 2] {
+            let at = start + Duration::from_secs(later);
+            assert!(run().m(&m).img(&after).attrs(&client).now(at).call() == rejected);
+        }
+        let kept = m
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .instances
+            .get(&client.client_instance_id)
+            .map(|inst| (inst.subscription_id, inst.subscription_version));
+        assert!(kept == Some((old.subscription_id, 1)));
     }
 
     /// A zero id asks for a new one, and any other id is kept (#665).
