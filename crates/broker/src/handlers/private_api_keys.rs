@@ -57,7 +57,7 @@ pub const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 pub struct KrabkaPrivateApi {
     /// The wire `api_key`.
     pub api_key: ApiKeyCode,
-    /// The RPC name, as a metric label and in logs.
+    /// The RPC name, used as its metric label.
     pub name: &'static str,
 }
 
