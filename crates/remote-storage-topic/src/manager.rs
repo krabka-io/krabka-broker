@@ -266,7 +266,7 @@ impl TopicBasedRemoteLogMetadataManager {
         // Let the snapshotter observe cancellation and stop touching
         // `applied` before we take the final consistent capture.
         if let Some(h) = handle {
-            let _ = h.await;
+            join_snapshotter(h).await;
         }
         if let Err(e) = self.write_snapshot() {
             warn!(error = ?e, "topic-based RLMM: final snapshot flush failed");
@@ -293,5 +293,34 @@ impl Drop for TopicBasedRemoteLogMetadataManager {
         if let Some(handle) = snapshotter {
             handle.abort();
         }
+    }
+}
+
+/// Wait for the snapshotter task to end, and log it when it panicked or was
+/// cancelled, so a shutdown does not pass for clean after the periodic
+/// snapshots stopped. Returns whether the task ended normally.
+async fn join_snapshotter(handle: JoinHandle<()>) -> bool {
+    match handle.await {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(%error, "topic-based RLMM: snapshotter task failed");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::join_snapshotter, assert2::check};
+
+    #[tokio::test]
+    async fn a_snapshotter_that_ends_normally_joins_cleanly() {
+        check!(join_snapshotter(tokio::spawn(async {})).await);
+    }
+
+    #[tokio::test]
+    async fn a_panicked_snapshotter_is_reported_at_shutdown() {
+        let handle = tokio::spawn(async { panic!("snapshotter panicked mid-capture") });
+        check!(!join_snapshotter(handle).await);
     }
 }
