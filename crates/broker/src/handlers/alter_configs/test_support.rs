@@ -8,10 +8,10 @@
 #[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
-    super::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, handle},
+    super::handle,
     crate::{
         authorizer::Authorizer,
-        handlers::test_support::metadata_topic_record,
+        handlers::{config_alter::ConfigResourceType, test_support::metadata_topic_record},
         test_support::{
             broker_registration, start_broker_with_authorizer as start_broker, string_pairs,
         },
@@ -68,7 +68,7 @@ pub(super) fn topic_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    scoped_resource(RESOURCE_TYPE_TOPIC, resource_name, configs)
+    scoped_resource(ConfigResourceType::Topic.to_wire(), resource_name, configs)
 }
 
 pub(super) fn image_with_topic(name: &str) -> krabka_metadata::MetadataImage {
@@ -125,21 +125,25 @@ pub(super) fn group_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    scoped_resource(super::RESOURCE_TYPE_GROUP, resource_name, configs)
+    scoped_resource(ConfigResourceType::Group.to_wire(), resource_name, configs)
 }
 
 pub(super) fn client_metrics_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    scoped_resource(super::RESOURCE_TYPE_CLIENT_METRICS, resource_name, configs)
+    scoped_resource(
+        ConfigResourceType::ClientMetrics.to_wire(),
+        resource_name,
+        configs,
+    )
 }
 
 pub(super) fn broker_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    scoped_resource(RESOURCE_TYPE_BROKER, resource_name, configs)
+    scoped_resource(ConfigResourceType::Broker.to_wire(), resource_name, configs)
 }
 
 pub(super) async fn drive_one(

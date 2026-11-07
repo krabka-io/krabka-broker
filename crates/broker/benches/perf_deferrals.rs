@@ -25,10 +25,22 @@
 //! note is about, which makes the reported saving an upper bound on what the
 //! refactor could deliver.
 //!
-//! The numbers this suite produced, and the keep-or-fix call each one settled,
-//! are recorded at the two PERF notes themselves: `encode_response` in
-//! `network::dispatch::response`, and the `encoded_len` walk in
-//! `replicator::response`. Both came out "keep".
+//! The framing numbers, and the keep-or-fix call they settled, are recorded at
+//! the PERF note on `encode_response` in `network::dispatch::response`. Both
+//! calls came out "keep".
+//!
+//! The sizing numbers are recorded here, because the PERF note in
+//! `replicator::response` sits inside the replicate loop. Over the batch
+//! shapes a producer actually writes, the walk costs 0.01% of the append for
+//! one 100 KiB record, about 1% for 100 x 1 KiB, and about 4% for 1000 x 100 B.
+//! Even the worst shape's 4% sits inside the append's own run-to-run spread,
+//! so the walk is not separable from noise in production. The `bench` job of
+//! the `ci` workflow measures those three figures on the nightly schedule and
+//! prints them in its job summary; the latest scheduled `ci` run is the
+//! reproducible reading, and its `criterion-baseline` artifact holds the
+//! samples. Revisit the call only if the replicator's shape mix moves to very
+//! wide batches of tiny records, where the walk is a per-record cost and the
+//! append is not.
 
 use {
     assert2::assert,

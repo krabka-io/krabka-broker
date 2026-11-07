@@ -10,10 +10,7 @@ use {
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer, authorize_topics},
         broker::Broker,
         codes::{self, GROUP_AUTHORIZATION_FAILED, UNSUPPORTED_VERSION},
-        handlers::describe_configs::{
-            RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-            RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-        },
+        handlers::config_alter::{ConfigResourceAcl, ConfigResourceType},
     },
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::primitives::uuid::Uuid,
@@ -32,45 +29,30 @@ pub fn config_resource_refusal(
     (kind, name): (i8, &str),
     broker_logger_supported: bool,
 ) -> Option<(i16, String)> {
-    let (resource_type, resource_name, code, message) = match kind {
-        RESOURCE_TYPE_TOPIC => (
-            ResourceType::Topic,
-            name,
-            codes::TOPIC_AUTHORIZATION_FAILED,
-            "Topic authorization failed.",
-        ),
-        RESOURCE_TYPE_GROUP => (
-            ResourceType::Group,
-            name,
-            codes::GROUP_AUTHORIZATION_FAILED,
-            "Group authorization failed.",
-        ),
-        kind if matches!(kind, RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS)
-            || (broker_logger_supported && kind == RESOURCE_TYPE_BROKER_LOGGER) =>
-        {
-            (
-                ResourceType::Cluster,
-                acl_wire::CLUSTER_RESOURCE_NAME,
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                "Cluster authorization failed.",
-            )
-        }
-        other => {
-            return Some((
-                codes::INVALID_REQUEST,
-                format!("Unknown resource type {other}"),
-            ));
-        }
+    let Some(acl) = ConfigResourceType::from_wire(kind)
+        .filter(|kind| broker_logger_supported || *kind != ConfigResourceType::BrokerLogger)
+        .map(ConfigResourceType::acl)
+    else {
+        return Some((
+            codes::INVALID_REQUEST,
+            format!("Unknown resource type {kind}"),
+        ));
     };
+    let ConfigResourceAcl {
+        resource_type,
+        failure_code,
+        failure_message,
+        ..
+    } = acl;
     acl_denied(
         authorizer,
         image,
         ctx,
         resource_type,
-        resource_name,
+        acl.resource_name(name),
         AclOperation::AlterConfigs,
     )
-    .then(|| (code, message.to_owned()))
+    .then(|| (failure_code, failure_message.to_owned()))
 }
 
 pub fn acl_denied(

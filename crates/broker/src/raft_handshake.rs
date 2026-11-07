@@ -23,14 +23,7 @@ use {
         RaftHandshakeError, RaftListenerHandshake,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{
-        collections::HashMap,
-        sync::{
-            Arc,
-            atomic::{AtomicI64, AtomicU64},
-        },
-        time::Duration,
-    },
+    std::{collections::HashMap, sync::Arc, time::Duration},
     tokio::sync::OnceCell,
     tokio_rustls::{TlsAcceptor, server::TlsStream},
 };
@@ -47,6 +40,7 @@ use {
         SslPrincipalMapper,
         authorizer::Authorizer,
         network::auth::{GssapiConfig, subject_dn_rfc2253},
+        oauth_jwks::JwksSnapshotState,
     },
 };
 
@@ -87,8 +81,7 @@ pub struct BrokerRaftHandshake {
     pub gssapi: Option<GssapiConfig>,
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
     /// Same publication metadata as the shared JWKS refresher and data listener.
-    pub oauthbearer_jwks_cache_generation: Arc<AtomicU64>,
-    pub oauthbearer_jwks_last_successful_fetch_ms: Arc<AtomicI64>,
+    pub oauthbearer_jwks_snapshot: JwksSnapshotState,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
     /// Kafka's `delegation.token.secret.key`: the key that recomputes a

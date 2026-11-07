@@ -10,7 +10,7 @@ use {
     super::{DistributedQuorum, ShardObservability, WalShardEngine, strict_majority},
     krabka_ids::Offset,
     krabka_kraft_core::NodeId,
-    krabka_verified::{consensus, wal},
+    krabka_verified::{LeaderVote, WatermarkInputs, consensus, wal},
     std::{
         collections::HashMap,
         sync::{PoisonError, atomic::Ordering},
@@ -194,17 +194,19 @@ impl WalShardEngine {
         // if this internal boundary receives an inconsistent range. The
         // result is then the greatest of the current watermark, the log
         // start, and the voters' durable majority frontier, and it advances
-        // the watermark only when it passes `current`. `leader_counts` is
-        // `false` because the leader already votes in `voter_durable_ends`
+        // the watermark only when it passes `current`. The leader's vote is
+        // excluded because the leader already votes in `voter_durable_ends`
         // with its durable offset; the leader end is only the bound.
         let floor = current.0.max(log_start.0).min(leader_end.0);
         let durable = Offset(consensus::recompute_high_watermark(
-            leader_end.0,
+            WatermarkInputs {
+                log_end: leader_end.0,
+                epoch_start_offset: floor,
+                current_hwm: floor,
+            },
             &voter_durable_ends,
             strict_majority(quorum.voters.len()),
-            floor,
-            floor,
-            false,
+            LeaderVote::Excluded,
         ));
         let offset_changed = offset > previous;
         if durable <= current {

@@ -1,5 +1,6 @@
 //! Quorum-backed diskless WAL implementation.
 
+mod durable_file;
 pub mod engine;
 pub mod follower;
 pub mod log_view;

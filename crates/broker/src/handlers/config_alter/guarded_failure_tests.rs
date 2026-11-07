@@ -2,7 +2,7 @@
 //! guarded alter gave up, for each controller failure that ends the retry.
 
 use {
-    super::{RESOURCE_TYPE_TOPIC, guarded_resource_outcome, resource_refusal},
+    super::{ConfigResourceType, guarded_resource_outcome, resource_refusal},
     crate::{
         codes,
         handlers::submit_failure::test_support::{guarded_failure, guarded_not_controller_rows},
@@ -26,12 +26,12 @@ use {
 #[tokio::test(start_paused = true)]
 async fn a_failed_alter_carries_kafkas_not_controller_message() {
     let legacy = alter_configs_request::AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_TOPIC,
+        resource_type: ConfigResourceType::Topic.to_wire(),
         resource_name: "orders".to_owned(),
         ..Default::default()
     };
     let incremental = incremental_alter_configs_request::AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_TOPIC,
+        resource_type: ConfigResourceType::Topic.to_wire(),
         resource_name: "orders".to_owned(),
         ..Default::default()
     };
@@ -43,7 +43,7 @@ async fn a_failed_alter_carries_kafkas_not_controller_message() {
         check!(
             legacy_row
                 == alter_configs_response::AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_TOPIC,
+                    resource_type: ConfigResourceType::Topic.to_wire(),
                     resource_name: "orders".to_owned(),
                     error_code: case.error_code,
                     error_message: error_message.clone(),
@@ -58,7 +58,7 @@ async fn a_failed_alter_carries_kafkas_not_controller_message() {
         check!(
             incremental_row
                 == incremental_alter_configs_response::AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_TOPIC,
+                    resource_type: ConfigResourceType::Topic.to_wire(),
                     resource_name: "orders".to_owned(),
                     error_code: case.error_code,
                     error_message,

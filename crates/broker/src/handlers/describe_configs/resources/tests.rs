@@ -96,7 +96,7 @@ fn untuned() -> StaticBrokerConfigs<'static> { super::static_broker::kafka_defau
 /// names, because the JVM `AdminClient` routes it there and the broker
 /// refuses to answer for anyone else.
 fn serving_node_for(resource_type: i8, resource_name: &str) -> krabka_metadata::NodeId {
-    if resource_type == RESOURCE_TYPE_BROKER {
+    if resource_type == ConfigResourceType::Broker.to_wire() {
         resource_name
             .parse::<u64>()
             .map_or(SERVING_NODE, krabka_metadata::NodeId)
@@ -130,7 +130,7 @@ fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceRes
 /// `image` with the topic a `TOPIC` resource names registered in it.
 fn with_topic(image: &MetadataImage, resource_type: i8, name: &str) -> MetadataImage {
     let mut image = image.clone();
-    if resource_type == RESOURCE_TYPE_TOPIC && image.topic(name).is_none() {
+    if resource_type == ConfigResourceType::Topic.to_wire() && image.topic(name).is_none() {
         image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: name.into(),
             topic_id: Uuid::from_u128(0x70),
@@ -154,7 +154,7 @@ fn idle_window_serving<'a>(
     overrides: &'a BTreeMap<String, krabka_units::Time>,
 ) -> ServingConfig<'a> {
     ServingConfig {
-        node: serving_node_for(RESOURCE_TYPE_BROKER, resource_name),
+        node: serving_node_for(ConfigResourceType::Broker.to_wire(), resource_name),
         static_broker: StaticBrokerConfigs {
             connections_max_idle: Some(krabka_units::secs(30)),
             connections_max_idle_overrides: overrides,
@@ -280,7 +280,7 @@ fn broker_logger_resource_names_this_node_or_is_refused() {
 
     let result = describe_with_loggers(
         &image,
-        RESOURCE_TYPE_BROKER_LOGGER,
+        ConfigResourceType::BrokerLogger.to_wire(),
         "7",
         None,
         VALUES_ONLY,
@@ -299,7 +299,7 @@ fn broker_logger_resource_names_this_node_or_is_refused() {
 
     let refused = describe_with_loggers(
         &image,
-        RESOURCE_TYPE_BROKER_LOGGER,
+        ConfigResourceType::BrokerLogger.to_wire(),
         "8",
         None,
         VALUES_ONLY,
@@ -323,7 +323,7 @@ pub(super) fn describe_topic(
 ) -> DescribeConfigsResult {
     describe(
         image,
-        RESOURCE_TYPE_TOPIC,
+        ConfigResourceType::Topic.to_wire(),
         topic,
         configuration_keys,
         EVERYTHING,
@@ -451,7 +451,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
             == krabka_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: NONE,
                 error_message: None,
-                resource_type: RESOURCE_TYPE_TOPIC,
+                resource_type: ConfigResourceType::Topic.to_wire(),
                 resource_name: "orders".to_owned(),
                 configs: vec![
                     // Set nowhere, so the key reports its default beneath
@@ -699,7 +699,7 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
 
     let result = describe(
         &image,
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "2",
         Some(vec![
             LEADER_THROTTLED_RATE_KEY.to_owned(),
@@ -759,7 +759,13 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
         value: "1024",
     }]);
 
-    let result = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
+    let result = describe(
+        &image,
+        ConfigResourceType::Broker.to_wire(),
+        "",
+        None,
+        EVERYTHING,
+    );
 
     assert!(
         result.configs
@@ -789,7 +795,7 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_node_id() {
     // from the static configuration, `STATIC_BROKER_CONFIG`, read-only.
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "7",
         Some(vec![NODE_ID.to_owned()]),
         VALUES_ONLY,
@@ -821,7 +827,7 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     // to the head of the response, and the idle window after it.
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "7",
         None,
         VALUES_ONLY,
@@ -917,7 +923,7 @@ fn the_static_expiry_keys_belong_to_a_named_broker_alone() {
     ] {
         let result = describe(
             &image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             resource_name,
             Some(vec![
                 config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
@@ -978,7 +984,7 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             filter.map(|keys| keys.iter().map(|key| (*key).to_owned()).collect());
         let result = describe(
             &image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "2",
             configuration_keys,
             VALUES_ONLY,
@@ -1012,10 +1018,10 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
     ));
 
     for (resource_type, resource_name) in [
-        (RESOURCE_TYPE_TOPIC, "orders"),
-        (RESOURCE_TYPE_BROKER, "2"),
-        (RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
-        (RESOURCE_TYPE_GROUP, "streams-1"),
+        (ConfigResourceType::Topic.to_wire(), "orders"),
+        (ConfigResourceType::Broker.to_wire(), "2"),
+        (ConfigResourceType::ClientMetrics.to_wire(), "sub-1"),
+        (ConfigResourceType::Group.to_wire(), "streams-1"),
     ] {
         let unfiltered = describe(&image, resource_type, resource_name, None, EVERYTHING);
         let empty_filter = describe(
@@ -1050,7 +1056,7 @@ fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
         }]);
         let result = describe(
             &image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(vec![row.name.to_owned()]),
             VALUES_ONLY,
@@ -1075,7 +1081,7 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
         }]);
         let result = describe(
             &image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(vec![key.to_owned()]),
             VALUES_ONLY,
@@ -1109,7 +1115,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
             static_broker: untuned(),
         },
         &image,
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "2",
         None,
         EVERYTHING,
@@ -1122,7 +1128,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
                 error_message: Some(
                     "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
                 ),
-                resource_type: RESOURCE_TYPE_BROKER,
+                resource_type: ConfigResourceType::Broker.to_wire(),
                 resource_name: "2".to_owned(),
                 configs: Vec::new(),
             })
@@ -1144,7 +1150,7 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
             static_broker: untuned(),
         },
         &image,
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "",
         None,
         VALUES_ONLY,
@@ -1177,10 +1183,10 @@ fn config_description() -> ConfigDescriptionScenario {
 }
 fn described_resource_kind(kind: &str) -> i8 {
     match kind {
-        "topic" => RESOURCE_TYPE_TOPIC,
-        "client_metrics" => RESOURCE_TYPE_CLIENT_METRICS,
-        "group" => RESOURCE_TYPE_GROUP,
-        "broker" => RESOURCE_TYPE_BROKER,
+        "topic" => ConfigResourceType::Topic.to_wire(),
+        "client_metrics" => ConfigResourceType::ClientMetrics.to_wire(),
+        "group" => ConfigResourceType::Group.to_wire(),
+        "broker" => ConfigResourceType::Broker.to_wire(),
         _ => panic!("unknown described resource type: {kind}"),
     }
 }
@@ -1208,19 +1214,19 @@ fn described_resource_identity(
 )]
 fn stable_group_config_defaults(config_description: &mut ConfigDescriptionScenario) {
     config_description.image = Some(MetadataImage::new(Uuid::nil()));
-    config_description.kind = RESOURCE_TYPE_GROUP;
+    config_description.kind = ConfigResourceType::Group.to_wire();
     config_description.name = "streams-1".into();
 }
 #[rstest_bdd_macros::given("broker 1 has no dynamic configuration overrides")]
 fn named_broker_defaults(config_description: &mut ConfigDescriptionScenario) {
     config_description.image = Some(MetadataImage::new(Uuid::nil()));
-    config_description.kind = RESOURCE_TYPE_BROKER;
+    config_description.kind = ConfigResourceType::Broker.to_wire();
     config_description.name = "1".into();
 }
 #[rstest_bdd_macros::given("group g overrides streams.session.timeout.ms with 60000")]
 fn overridden_group_timeout(config_description: &mut ConfigDescriptionScenario) {
     config_description.image = Some(group_config_image("streams.session.timeout.ms", "60000"));
-    config_description.kind = RESOURCE_TYPE_GROUP;
+    config_description.kind = ConfigResourceType::Group.to_wire();
     config_description.name = "g".into();
 }
 #[rstest_bdd_macros::given(
@@ -1231,7 +1237,7 @@ fn stored_broker_key(
     key: String,
     value: String,
 ) {
-    config_description.kind = RESOURCE_TYPE_BROKER;
+    config_description.kind = ConfigResourceType::Broker.to_wire();
     config_description.key = key;
     config_description.stored_images = [("", DEFAULT_BROKER_CONFIG_NODE_ID), ("1", SERVING_NODE)]
         .into_iter()
@@ -1267,7 +1273,11 @@ fn describe_stable_group_defaults(config_description: &mut ConfigDescriptionScen
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     config_description.results.push(describe_one(
         config_description.image.as_ref().unwrap(),
-        &resource_request(RESOURCE_TYPE_GROUP, &config_description.name, None),
+        &resource_request(
+            ConfigResourceType::Group.to_wire(),
+            &config_description.name,
+            None,
+        ),
         ServingBroker {
             node: krabka_metadata::NodeId(1),
             static_broker: untuned(),
@@ -1298,7 +1308,7 @@ fn describe_stored_broker_key(config_description: &mut ConfigDescriptionScenario
     for (name, image) in &config_description.stored_images {
         config_description.results.push(describe(
             image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             name,
             Some(vec![config_description.key.clone()]),
             VALUES_ONLY,
@@ -1532,7 +1542,7 @@ fn a_client_metrics_subscription_reports_all_three_keys_typed() {
 
     let result = describe(
         &image,
-        RESOURCE_TYPE_CLIENT_METRICS,
+        ConfigResourceType::ClientMetrics.to_wire(),
         "sub-1",
         None,
         EVERYTHING,
@@ -1572,7 +1582,13 @@ fn a_group_reports_its_override_above_the_streams_default() {
         .map(|(_, value)| value.clone())
         .expect("streams.num.standby.replicas has a default");
 
-    let result = describe(&image, RESOURCE_TYPE_GROUP, "streams-1", None, EVERYTHING);
+    let result = describe(
+        &image,
+        ConfigResourceType::Group.to_wire(),
+        "streams-1",
+        None,
+        EVERYTHING,
+    );
     let entry = entry_named(&result, KEY_NUM_STANDBY_REPLICAS);
 
     check!(entry.value == Some("2".to_owned()));
@@ -1603,16 +1619,19 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     let settings = static_settings(&config);
     let group = describe_at(
-        settings_for((RESOURCE_TYPE_GROUP, "streams-1"), &settings),
+        settings_for(
+            (ConfigResourceType::Group.to_wire(), "streams-1"),
+            &settings,
+        ),
         &image,
-        RESOURCE_TYPE_GROUP,
+        ConfigResourceType::Group.to_wire(),
         "streams-1",
         None,
         EVERYTHING,
     );
     let subscription = describe(
         &image,
-        RESOURCE_TYPE_CLIENT_METRICS,
+        ConfigResourceType::ClientMetrics.to_wire(),
         "sub-1",
         None,
         EVERYTHING,
@@ -1690,19 +1709,19 @@ fn the_streams_assignor_is_described_only_under_unstable_api_versions() {
     for (unstable, resource_type, resource_name, expected) in [
         (
             UnstableApiVersions::Disabled,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             vec![],
         ),
         (
             UnstableApiVersions::Disabled,
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             "g",
             vec![group_entry.clone()],
         ),
         (
             UnstableApiVersions::Enabled,
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group.to_wire(),
             "g",
             vec![group_entry],
         ),
@@ -1724,7 +1743,7 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
 
     let image = with_topic(
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_TOPIC,
+        ConfigResourceType::Topic.to_wire(),
         "orders",
     );
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
@@ -1759,14 +1778,14 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
         (UnstableApiVersions::Disabled, true),
         (UnstableApiVersions::Enabled, true),
     ] {
-        let topic = names(RESOURCE_TYPE_TOPIC, "orders", unstable);
+        let topic = names(ConfigResourceType::Topic.to_wire(), "orders", unstable);
         for key in trunk_topic_keys {
             check!(
                 topic.iter().any(|name| name == key) == served,
                 "{key} {unstable:?}"
             );
         }
-        let broker = names(RESOURCE_TYPE_BROKER, "1", unstable);
+        let broker = names(ConfigResourceType::Broker.to_wire(), "1", unstable);
         for key in trunk_broker_keys {
             check!(
                 broker.iter().any(|name| name == key) == served,
@@ -1774,8 +1793,16 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
             );
         }
     }
-    let strict = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Disabled);
-    let trunk = names(RESOURCE_TYPE_TOPIC, "orders", UnstableApiVersions::Enabled);
+    let strict = names(
+        ConfigResourceType::Topic.to_wire(),
+        "orders",
+        UnstableApiVersions::Disabled,
+    );
+    let trunk = names(
+        ConfigResourceType::Topic.to_wire(),
+        "orders",
+        UnstableApiVersions::Enabled,
+    );
     check!(trunk == strict);
 }
 
@@ -1808,7 +1835,7 @@ fn an_unhandled_resource_type_is_refused() {
 fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "1",
         Some(vec![
             config_keys::OFFSETS_RETENTION_MINUTES.to_owned(),
@@ -1866,7 +1893,7 @@ fn an_untuned_broker_reports_both_retention_keys_at_their_default() {
 fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
     let result = describe_at(
         ServingConfig {
-            node: serving_node_for(RESOURCE_TYPE_BROKER, "1"),
+            node: serving_node_for(ConfigResourceType::Broker.to_wire(), "1"),
             static_broker: StaticBrokerConfigs {
                 offsets_retention: Some(krabka_units::minutes(60)),
                 offsets_retention_check_interval: None,
@@ -1874,7 +1901,7 @@ fn a_retuned_retention_knob_reports_the_static_layer_above_the_default() {
             },
         },
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "1",
         Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
         EVERYTHING,
@@ -1923,11 +1950,11 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
     let described = |static_broker| {
         describe_at(
             ServingConfig {
-                node: serving_node_for(RESOURCE_TYPE_BROKER, "1"),
+                node: serving_node_for(ConfigResourceType::Broker.to_wire(), "1"),
                 static_broker,
             },
             &MetadataImage::new(Uuid::nil()),
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(vec![config_keys::OFFSETS_RETENTION_MINUTES.to_owned()]),
             EVERYTHING,
@@ -1994,7 +2021,7 @@ fn idle_documentation() -> String {
 fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "7",
         None,
         VALUES_ONLY,
@@ -2040,7 +2067,7 @@ fn idle_window_is_reported_only_for_a_named_broker(resource_name: &str, named: b
     let result = describe_at(
         idle_window_serving(resource_name, &overrides),
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         resource_name,
         named.then(|| {
             vec![
@@ -2213,7 +2240,13 @@ fn a_broker_reports_its_topic_default_keys_typed() {
         name: "min.insync.replicas",
         value: "2",
     }]);
-    let cluster = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
+    let cluster = describe(
+        &image,
+        ConfigResourceType::Broker.to_wire(),
+        "",
+        None,
+        EVERYTHING,
+    );
     let entry = entry_named(&cluster, "min.insync.replicas");
     check!(
         (
@@ -2235,7 +2268,13 @@ fn a_broker_reports_its_topic_default_keys_typed() {
         )
     );
 
-    let named = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
+    let named = describe(
+        &image,
+        ConfigResourceType::Broker.to_wire(),
+        "1",
+        None,
+        EVERYTHING,
+    );
     let entry = entry_named(&named, "message.max.bytes");
     check!(
         (entry.value.as_deref(), entry.config_source, entry.read_only)
@@ -2260,9 +2299,9 @@ fn a_named_broker_reports_the_static_values_it_holds() {
         "broker.rack" => "rack-1".to_owned(),
     };
     let result = describe_at(
-        settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
+        settings_for((ConfigResourceType::Broker.to_wire(), "1"), &settings),
         &MetadataImage::new(Uuid::nil()),
-        RESOURCE_TYPE_BROKER,
+        ConfigResourceType::Broker.to_wire(),
         "1",
         None,
         EVERYTHING,
@@ -2334,9 +2373,9 @@ fn a_named_broker_reports_an_authentication_limit_the_operator_named() {
         file.apply_to(&mut config).expect("apply runtime config");
         let settings = static_settings(&config);
         let result = describe_at(
-            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
+            settings_for((ConfigResourceType::Broker.to_wire(), "1"), &settings),
             &MetadataImage::new(Uuid::nil()),
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(vec![sasl.to_owned(), delay.to_owned()]),
             EVERYTHING,
@@ -2373,9 +2412,9 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
         .value("1048576")
         .call();
     let result = describe_at(
-        settings_for((RESOURCE_TYPE_TOPIC, "orders"), &settings),
-        &with_topic(&image, RESOURCE_TYPE_TOPIC, "orders"),
-        RESOURCE_TYPE_TOPIC,
+        settings_for((ConfigResourceType::Topic.to_wire(), "orders"), &settings),
+        &with_topic(&image, ConfigResourceType::Topic.to_wire(), "orders"),
+        ConfigResourceType::Topic.to_wire(),
         "orders",
         None,
         EVERYTHING,
@@ -2527,8 +2566,8 @@ fn a_topic_and_a_named_broker_report_the_log_roll_ms_the_node_runs() {
         };
         actual.push((
             label,
-            chain(RESOURCE_TYPE_TOPIC, "orders", "segment.ms"),
-            chain(RESOURCE_TYPE_BROKER, "1", "log.roll.ms"),
+            chain(ConfigResourceType::Topic.to_wire(), "orders", "segment.ms"),
+            chain(ConfigResourceType::Broker.to_wire(), "1", "log.roll.ms"),
         ));
         expected.push((label, topic_chain, broker_chain));
     }
@@ -2554,7 +2593,7 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
             config_value: Some(value.into()),
         }));
     }
-    let image = with_topic(&image, RESOURCE_TYPE_TOPIC, "orders");
+    let image = with_topic(&image, ConfigResourceType::Topic.to_wire(), "orders");
     let keys = Some(vec!["min.insync.replicas".to_owned()]);
     let expected = |node_value: &str, node_source, synonyms| {
         (Some(node_value.to_owned()), node_source, synonyms)
@@ -2591,7 +2630,7 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
                 static_broker: untuned(),
             },
             &image,
-            RESOURCE_TYPE_TOPIC,
+            ConfigResourceType::Topic.to_wire(),
             "orders",
             keys.clone(),
             EVERYTHING,
@@ -2655,8 +2694,8 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
             EVERYTHING,
         )
     };
-    let group = described(RESOURCE_TYPE_GROUP, "g");
-    let broker = described(RESOURCE_TYPE_BROKER, "1");
+    let group = described(ConfigResourceType::Group.to_wire(), "g");
+    let broker = described(ConfigResourceType::Broker.to_wire(), "1");
     let chain = |result: &DescribeConfigsResult, key: &str| {
         let entry = entry_named(result, key);
         SynonymChain::of(entry)
@@ -2927,9 +2966,9 @@ fn a_named_broker_reports_the_static_layer_of_the_partition_verification_key() {
         }
 
         let described = describe_at(
-            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
+            settings_for((ConfigResourceType::Broker.to_wire(), "1"), &settings),
             &image,
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(vec![KEY.to_owned()]),
             EVERYTHING,
@@ -3124,7 +3163,13 @@ fn dlq_broker_config_discovery_precedence_and_reset() {
                     config_value: value.map(str::to_owned),
                 }));
             }
-            let result = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
+            let result = describe(
+                &image,
+                ConfigResourceType::Broker.to_wire(),
+                "1",
+                None,
+                EVERYTHING,
+            );
             let entry = result
                 .configs
                 .iter()

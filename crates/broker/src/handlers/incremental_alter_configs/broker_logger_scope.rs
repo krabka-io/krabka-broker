@@ -22,7 +22,7 @@
 //! also what makes `--dry-run` (`validate_only`) meaningful here.
 
 use {
-    super::{OP_DELETE, OP_SET},
+    super::{ConfigOperation, ListOperation},
     crate::codes,
     krabka_protocol::owned::{
         incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
@@ -30,12 +30,6 @@ use {
     },
     krabka_telemetry::{LogLevel, LogLevelController, ROOT_LOGGER, VALID_LOG_LEVELS},
 };
-
-/// `AlterConfigOp.OpType::APPEND`, one of the two list operations a level is
-/// not.
-const OP_APPEND: i8 = 2;
-/// `AlterConfigOp.OpType::SUBTRACT`.
-const OP_SUBTRACT: i8 = 3;
 
 #[cfg(test)]
 mod tests;
@@ -122,8 +116,8 @@ fn validate_config<'a>(
     levels: &LogLevelController,
 ) -> Result<LoggerChange<'a>, (i16, String)> {
     let target = config.name.as_str();
-    match config.config_operation {
-        OP_SET => {
+    match ConfigOperation::from(config.config_operation) {
+        ConfigOperation::Set => {
             logger_must_exist(target, levels)?;
             // A missing value renders as `null`, which is what the JVM's
             // string concatenation puts in the same message.
@@ -139,7 +133,7 @@ fn validate_config<'a>(
             };
             Ok(LoggerChange::Set { target, level })
         }
-        OP_DELETE => {
+        ConfigOperation::Delete => {
             logger_must_exist(target, levels)?;
             if target == ROOT_LOGGER {
                 return Err((
@@ -149,25 +143,24 @@ fn validate_config<'a>(
             }
             Ok(LoggerChange::Clear { target })
         }
-        op => Err((
+        ConfigOperation::Append => Err(list_operation_refusal(ListOperation::Append)),
+        ConfigOperation::Subtract => Err(list_operation_refusal(ListOperation::Subtract)),
+        ConfigOperation::Unknown(op) => Err((
             codes::INVALID_REQUEST,
-            operation_refusal(op).unwrap_or_else(|| {
-                format!("Unknown operation type {op} is not allowed for the BROKER_LOGGER resource")
-            }),
+            format!("Unknown operation type {op} is not allowed for the BROKER_LOGGER resource"),
         )),
     }
 }
 
 /// The refusal for the two list-valued operations, which a level is not.
-fn operation_refusal(op: i8) -> Option<String> {
-    let name = match op {
-        OP_APPEND => "APPEND",
-        OP_SUBTRACT => "SUBTRACT",
-        _ => return None,
-    };
-    Some(format!(
-        "{name} operation is not allowed for the BROKER_LOGGER resource"
-    ))
+fn list_operation_refusal(operation: ListOperation) -> (i16, String) {
+    (
+        codes::INVALID_REQUEST,
+        format!(
+            "{} operation is not allowed for the BROKER_LOGGER resource",
+            operation.kafka_name()
+        ),
+    )
 }
 
 /// A level may only be written to a logger this node actually has, which is

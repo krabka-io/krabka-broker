@@ -26,7 +26,7 @@
 //! `docs/superpowers/specs/2026-06-14-krabka-fetch-hwm-visibility-model-design.md`.
 
 use {
-    super::{FetchWatermarks, Offset, compute_visibility_window},
+    super::{FetchWatermarks, Offset, compute_visibility_window, fetch_reader},
     assert2::assert,
     stateright::{Checker, Model, Property},
 };
@@ -164,8 +164,7 @@ impl Model for VisModel {
             }
             VisAction::Fetch(is_follower, read_committed, fetch_offset) => {
                 let w = compute_visibility_window(
-                    is_follower,
-                    read_committed,
+                    fetch_reader(is_follower, read_committed),
                     FetchWatermarks {
                         log_start: Offset(last.log_start),
                         hw: Offset(last.hw),

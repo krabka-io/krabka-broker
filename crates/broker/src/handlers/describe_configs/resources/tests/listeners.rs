@@ -293,9 +293,9 @@ fn a_named_broker_reports_the_listener_keys_of_its_roles() {
     for (label, config, expected) in cases {
         let settings = static_settings(&config);
         let described = describe_at(
-            settings_for((RESOURCE_TYPE_BROKER, "1"), &settings),
+            settings_for((ConfigResourceType::Broker.to_wire(), "1"), &settings),
             &MetadataImage::new(Uuid::nil()),
-            RESOURCE_TYPE_BROKER,
+            ConfigResourceType::Broker.to_wire(),
             "1",
             Some(LISTENER_KEYS.map(str::to_owned).to_vec()),
             SYNONYMS_ONLY,

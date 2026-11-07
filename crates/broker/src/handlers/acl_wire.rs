@@ -40,13 +40,49 @@ pub type OperationCode = i8;
 pub type PermissionTypeCode = i8;
 
 /// Wire byte for `UNKNOWN` (0). Every ACL enum axis shares it.
-const WIRE_UNKNOWN: i8 = 0;
+pub const WIRE_UNKNOWN: i8 = 0;
 /// Wire byte for `ANY` (1), a filter wildcard and never a concrete value.
 /// Every ACL enum axis shares it.
-const WIRE_ANY: i8 = 1;
+pub const WIRE_ANY: i8 = 1;
 /// Wire byte for `PatternType::MATCH` (2, KIP-290), a filter-only
 /// wildcard that matches both literal and prefixed patterns.
-const WIRE_PATTERN_MATCH: i8 = 2;
+pub const WIRE_PATTERN_MATCH: i8 = 2;
+
+/// Concrete `ResourceType` bytes, from Kafka's
+/// `org.apache.kafka.common.resource.ResourceType`.
+pub const WIRE_RESOURCE_TOPIC: i8 = 2;
+pub const WIRE_RESOURCE_GROUP: i8 = 3;
+pub const WIRE_RESOURCE_CLUSTER: i8 = 4;
+pub const WIRE_RESOURCE_TRANSACTIONAL_ID: i8 = 5;
+pub const WIRE_RESOURCE_DELEGATION_TOKEN: i8 = 6;
+pub const WIRE_RESOURCE_USER: i8 = 7;
+
+/// Concrete `PatternType` bytes, from Kafka's
+/// `org.apache.kafka.common.resource.PatternType`.
+pub const WIRE_PATTERN_LITERAL: i8 = 3;
+pub const WIRE_PATTERN_PREFIXED: i8 = 4;
+
+/// Concrete `AclOperation` bytes, from Kafka's
+/// `org.apache.kafka.common.acl.AclOperation`.
+pub const WIRE_OPERATION_ALL: i8 = 2;
+pub const WIRE_OPERATION_READ: i8 = 3;
+pub const WIRE_OPERATION_WRITE: i8 = 4;
+pub const WIRE_OPERATION_CREATE: i8 = 5;
+pub const WIRE_OPERATION_DELETE: i8 = 6;
+pub const WIRE_OPERATION_ALTER: i8 = 7;
+pub const WIRE_OPERATION_DESCRIBE: i8 = 8;
+pub const WIRE_OPERATION_CLUSTER_ACTION: i8 = 9;
+pub const WIRE_OPERATION_DESCRIBE_CONFIGS: i8 = 10;
+pub const WIRE_OPERATION_ALTER_CONFIGS: i8 = 11;
+pub const WIRE_OPERATION_IDEMPOTENT_WRITE: i8 = 12;
+pub const WIRE_OPERATION_CREATE_TOKENS: i8 = 13;
+pub const WIRE_OPERATION_DESCRIBE_TOKENS: i8 = 14;
+pub const WIRE_OPERATION_TWO_PHASE_COMMIT: i8 = 15;
+
+/// Concrete `AclPermissionType` bytes, from Kafka's
+/// `org.apache.kafka.common.acl.AclPermissionType`.
+pub const WIRE_PERMISSION_DENY: i8 = 2;
+pub const WIRE_PERMISSION_ALLOW: i8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireAclError {
@@ -59,12 +95,12 @@ pub enum WireAclError {
 /// `CreateAcls` uses this function, because its resource must be concrete.
 pub fn resource_type_concrete(b: ResourceTypeCode) -> Result<ResourceType, WireAclError> {
     match b {
-        2 => Ok(ResourceType::Topic),
-        3 => Ok(ResourceType::Group),
-        4 => Ok(ResourceType::Cluster),
-        5 => Ok(ResourceType::TransactionalId),
-        6 => Ok(ResourceType::DelegationToken),
-        7 => Ok(ResourceType::User),
+        WIRE_RESOURCE_TOPIC => Ok(ResourceType::Topic),
+        WIRE_RESOURCE_GROUP => Ok(ResourceType::Group),
+        WIRE_RESOURCE_CLUSTER => Ok(ResourceType::Cluster),
+        WIRE_RESOURCE_TRANSACTIONAL_ID => Ok(ResourceType::TransactionalId),
+        WIRE_RESOURCE_DELEGATION_TOKEN => Ok(ResourceType::DelegationToken),
+        WIRE_RESOURCE_USER => Ok(ResourceType::User),
         WIRE_UNKNOWN | WIRE_ANY => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
     }
@@ -73,12 +109,12 @@ pub fn resource_type_concrete(b: ResourceTypeCode) -> Result<ResourceType, WireA
 #[must_use]
 pub fn resource_type_to_wire(rt: ResourceType) -> ResourceTypeCode {
     match rt {
-        ResourceType::Topic => 2,
-        ResourceType::Group => 3,
-        ResourceType::Cluster => 4,
-        ResourceType::TransactionalId => 5,
-        ResourceType::DelegationToken => 6,
-        ResourceType::User => 7,
+        ResourceType::Topic => WIRE_RESOURCE_TOPIC,
+        ResourceType::Group => WIRE_RESOURCE_GROUP,
+        ResourceType::Cluster => WIRE_RESOURCE_CLUSTER,
+        ResourceType::TransactionalId => WIRE_RESOURCE_TRANSACTIONAL_ID,
+        ResourceType::DelegationToken => WIRE_RESOURCE_DELEGATION_TOKEN,
+        ResourceType::User => WIRE_RESOURCE_USER,
     }
 }
 
@@ -86,8 +122,8 @@ pub fn resource_type_to_wire(rt: ResourceType) -> ResourceTypeCode {
 /// `CreateAcls` uses this function, because its pattern must be concrete.
 pub fn pattern_type_concrete(b: PatternTypeCode) -> Result<PatternType, WireAclError> {
     match b {
-        3 => Ok(PatternType::Literal),
-        4 => Ok(PatternType::Prefixed),
+        WIRE_PATTERN_LITERAL => Ok(PatternType::Literal),
+        WIRE_PATTERN_PREFIXED => Ok(PatternType::Prefixed),
         WIRE_UNKNOWN..=WIRE_PATTERN_MATCH => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
     }
@@ -96,8 +132,8 @@ pub fn pattern_type_concrete(b: PatternTypeCode) -> Result<PatternType, WireAclE
 #[must_use]
 pub fn pattern_type_to_wire(pt: PatternType) -> PatternTypeCode {
     match pt {
-        PatternType::Literal => 3,
-        PatternType::Prefixed => 4,
+        PatternType::Literal => WIRE_PATTERN_LITERAL,
+        PatternType::Prefixed => WIRE_PATTERN_PREFIXED,
     }
 }
 
@@ -105,20 +141,20 @@ pub fn pattern_type_to_wire(pt: PatternType) -> PatternTypeCode {
 /// `CreateAcls` uses this function, because its operation must be concrete.
 pub fn operation_concrete(b: OperationCode) -> Result<AclOperation, WireAclError> {
     match b {
-        2 => Ok(AclOperation::All),
-        3 => Ok(AclOperation::Read),
-        4 => Ok(AclOperation::Write),
-        5 => Ok(AclOperation::Create),
-        6 => Ok(AclOperation::Delete),
-        7 => Ok(AclOperation::Alter),
-        8 => Ok(AclOperation::Describe),
-        9 => Ok(AclOperation::ClusterAction),
-        10 => Ok(AclOperation::DescribeConfigs),
-        11 => Ok(AclOperation::AlterConfigs),
-        12 => Ok(AclOperation::IdempotentWrite),
-        13 => Ok(AclOperation::CreateTokens),
-        14 => Ok(AclOperation::DescribeTokens),
-        15 => Ok(AclOperation::TwoPhaseCommit),
+        WIRE_OPERATION_ALL => Ok(AclOperation::All),
+        WIRE_OPERATION_READ => Ok(AclOperation::Read),
+        WIRE_OPERATION_WRITE => Ok(AclOperation::Write),
+        WIRE_OPERATION_CREATE => Ok(AclOperation::Create),
+        WIRE_OPERATION_DELETE => Ok(AclOperation::Delete),
+        WIRE_OPERATION_ALTER => Ok(AclOperation::Alter),
+        WIRE_OPERATION_DESCRIBE => Ok(AclOperation::Describe),
+        WIRE_OPERATION_CLUSTER_ACTION => Ok(AclOperation::ClusterAction),
+        WIRE_OPERATION_DESCRIBE_CONFIGS => Ok(AclOperation::DescribeConfigs),
+        WIRE_OPERATION_ALTER_CONFIGS => Ok(AclOperation::AlterConfigs),
+        WIRE_OPERATION_IDEMPOTENT_WRITE => Ok(AclOperation::IdempotentWrite),
+        WIRE_OPERATION_CREATE_TOKENS => Ok(AclOperation::CreateTokens),
+        WIRE_OPERATION_DESCRIBE_TOKENS => Ok(AclOperation::DescribeTokens),
+        WIRE_OPERATION_TWO_PHASE_COMMIT => Ok(AclOperation::TwoPhaseCommit),
         WIRE_UNKNOWN | WIRE_ANY => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
     }
@@ -127,20 +163,20 @@ pub fn operation_concrete(b: OperationCode) -> Result<AclOperation, WireAclError
 #[must_use]
 pub fn operation_to_wire(op: AclOperation) -> OperationCode {
     match op {
-        AclOperation::All => 2,
-        AclOperation::Read => 3,
-        AclOperation::Write => 4,
-        AclOperation::Create => 5,
-        AclOperation::Delete => 6,
-        AclOperation::Alter => 7,
-        AclOperation::Describe => 8,
-        AclOperation::ClusterAction => 9,
-        AclOperation::DescribeConfigs => 10,
-        AclOperation::AlterConfigs => 11,
-        AclOperation::IdempotentWrite => 12,
-        AclOperation::CreateTokens => 13,
-        AclOperation::DescribeTokens => 14,
-        AclOperation::TwoPhaseCommit => 15,
+        AclOperation::All => WIRE_OPERATION_ALL,
+        AclOperation::Read => WIRE_OPERATION_READ,
+        AclOperation::Write => WIRE_OPERATION_WRITE,
+        AclOperation::Create => WIRE_OPERATION_CREATE,
+        AclOperation::Delete => WIRE_OPERATION_DELETE,
+        AclOperation::Alter => WIRE_OPERATION_ALTER,
+        AclOperation::Describe => WIRE_OPERATION_DESCRIBE,
+        AclOperation::ClusterAction => WIRE_OPERATION_CLUSTER_ACTION,
+        AclOperation::DescribeConfigs => WIRE_OPERATION_DESCRIBE_CONFIGS,
+        AclOperation::AlterConfigs => WIRE_OPERATION_ALTER_CONFIGS,
+        AclOperation::IdempotentWrite => WIRE_OPERATION_IDEMPOTENT_WRITE,
+        AclOperation::CreateTokens => WIRE_OPERATION_CREATE_TOKENS,
+        AclOperation::DescribeTokens => WIRE_OPERATION_DESCRIBE_TOKENS,
+        AclOperation::TwoPhaseCommit => WIRE_OPERATION_TWO_PHASE_COMMIT,
     }
 }
 
@@ -148,8 +184,8 @@ pub fn operation_to_wire(op: AclOperation) -> OperationCode {
 /// `CreateAcls` uses this function, because its permission must be concrete.
 pub fn permission_concrete(b: PermissionTypeCode) -> Result<PermissionType, WireAclError> {
     match b {
-        2 => Ok(PermissionType::Deny),
-        3 => Ok(PermissionType::Allow),
+        WIRE_PERMISSION_DENY => Ok(PermissionType::Deny),
+        WIRE_PERMISSION_ALLOW => Ok(PermissionType::Allow),
         WIRE_UNKNOWN | WIRE_ANY => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
     }
@@ -158,8 +194,8 @@ pub fn permission_concrete(b: PermissionTypeCode) -> Result<PermissionType, Wire
 #[must_use]
 pub fn permission_to_wire(pt: PermissionType) -> PermissionTypeCode {
     match pt {
-        PermissionType::Deny => 2,
-        PermissionType::Allow => 3,
+        PermissionType::Deny => WIRE_PERMISSION_DENY,
+        PermissionType::Allow => WIRE_PERMISSION_ALLOW,
     }
 }
 
