@@ -37,6 +37,8 @@ fn size_of_slice(slice: &[u8]) -> ByteSize {
 /// Returns `Truncated` if an entry header or an entry body stops early.
 /// Returns `NegativeLength` if an entry carries a negative `message_size`.
 /// Returns `NestedCompression` if a compressed wrapper holds another compressed wrapper.
+/// Returns `InconsistentMagic` if an inner message has a different magic than its wrapper.
+/// Returns `Malformed` if a nonzero v1 wrapper offset is below its last inner offset.
 /// Returns the error from `Message::decode_from` for a malformed or corrupt message frame.
 /// Returns a compression error if the wrapper value does not decompress within the default policy.
 pub fn decode_message_set<B: Buf>(
@@ -66,16 +68,18 @@ pub fn decode_message_set_with_policy<B: Buf>(
     let mut region = vec![0u8; set_size_bytes];
     buf.copy_to_slice(&mut region);
     let mut out = Vec::new();
-    decode_into(
-        &region, &mut out, /* allow_compression = */ true, policy,
-    )?;
+    decode_into(&region, &mut out, None, policy)?;
     Ok(out)
 }
 
+/// Decodes the entries in `bytes` into `out`.
+///
+/// `wrapper` is the magic of the compressed wrapper that `bytes` came out
+/// of, or `None` at the top level of a message set.
 fn decode_into(
     bytes: &[u8],
     out: &mut Vec<ParsedRecord>,
-    allow_compression: bool,
+    wrapper: Option<Magic>,
     policy: RecordDecompressionPolicy,
 ) -> Result<(), LegacyRecordsError> {
     let mut cur = bytes;
@@ -99,6 +103,16 @@ fn decode_into(
             });
         }
         let msg = Message::decode_from(&mut cur, size)?;
+        // Kafka validates produce data with `ensureMatchingMagic`: every
+        // inner message carries the magic of its wrapper.
+        if let Some(outer) = wrapper
+            && outer != msg.magic
+        {
+            return Err(LegacyRecordsError::InconsistentMagic {
+                outer: outer.as_i8(),
+                inner: msg.magic.as_i8(),
+            });
+        }
         let codec = compression_from_attrs(msg.attributes)?;
         if codec == CompressionType::None {
             out.push(ParsedRecord {
@@ -108,7 +122,7 @@ fn decode_into(
                 value: msg.value,
             });
         } else {
-            if !allow_compression {
+            if wrapper.is_some() {
                 return Err(LegacyRecordsError::NestedCompression);
             }
             let inner_compressed = msg.value.ok_or_else(|| {
@@ -121,7 +135,7 @@ fn decode_into(
 
             // Parse the inner set (no nested compression allowed).
             let start_len = out.len();
-            decode_into(&inner_bytes, out, false, policy)?;
+            decode_into(&inner_bytes, out, Some(msg.magic), policy)?;
 
             // KIP-32 anchors the last relative inner offset at the wrapper
             // offset. Retained records can have gaps after compaction.
