@@ -15,7 +15,7 @@
 //! [`crate::config_keys::validate_diskless_unchanged`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET},
+    super::{ConfigOperation, ListOperation, MergeOperation},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -36,7 +36,7 @@ use {
 /// current value (or its default) split on commas, with each item of the
 /// operation's value added when absent or removed.
 pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
-    operation: i8,
+    operation: ListOperation,
     current: Option<&str>,
     default: Option<&str>,
     value: &str,
@@ -50,12 +50,17 @@ pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
         trimmed => trimmed.split(',').collect(),
     };
     for item in items {
-        if operation == OP_APPEND {
-            if !parts.contains(&item) {
-                parts.push(item);
+        match operation {
+            ListOperation::Append => {
+                if !parts.contains(&item) {
+                    parts.push(item);
+                }
             }
-        } else if let Some(at) = parts.iter().position(|part| *part == item) {
-            parts.remove(at);
+            ListOperation::Subtract => {
+                if let Some(at) = parts.iter().position(|part| *part == item) {
+                    parts.remove(at);
+                }
+            }
         }
     }
     parts.join(",")
@@ -63,17 +68,15 @@ pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
 
 /// Kafka's refusal of an APPEND or SUBTRACT on a key that is not a `LIST`.
 pub(in crate::handlers::incremental_alter_configs) fn not_a_list(
-    operation: i8,
+    operation: ListOperation,
     key: &str,
 ) -> (i16, String) {
-    let verb = if operation == OP_APPEND {
-        "APPEND"
-    } else {
-        "SUBTRACT"
-    };
     (
         codes::INVALID_CONFIG,
-        format!("Can't {verb} to key {key} because its type is not LIST."),
+        format!(
+            "Can't {} to key {key} because its type is not LIST.",
+            operation.kafka_name()
+        ),
     )
 }
 
@@ -98,16 +101,16 @@ pub(super) fn topic_config_record(
             ));
         }
         let value = config.value.as_deref().unwrap_or_default();
-        match config.config_operation {
-            OP_SET => {
+        match ConfigOperation::from(config.config_operation).merge() {
+            MergeOperation::Set => {
                 merged.insert(config.name.clone(), value.to_owned());
             }
             // A DELETE of a key the topic does not hold changes nothing, and
             // Kafka writes no record for it, whatever the key is.
-            OP_DELETE => {
+            MergeOperation::Delete => {
                 merged.remove(&config.name);
             }
-            operation => {
+            MergeOperation::List(operation) => {
                 let row = registry::lookup(ConfigScope::Topic, &config.name)
                     .filter(|row| row.is_alterable() && row.config_type == ConfigType::List)
                     .ok_or_else(|| not_a_list(operation, &config.name))?;
@@ -155,12 +158,9 @@ mod tests {
         super::*,
         crate::{
             handlers::{
-                incremental_alter_configs::{
-                    OP_SUBTRACT,
-                    test_support::{
-                        AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
-                        make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
-                    },
+                incremental_alter_configs::test_support::{
+                    AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
+                    make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
                 },
                 test_support::{check_config_result, diskless_turned_on_refusal},
             },
@@ -188,24 +188,29 @@ mod tests {
     /// empty item), and SUBTRACT is `List.remove(Object)`, which removes the
     /// first occurrence only.
     #[rstest::rstest]
-    #[case::append_with_a_trailing_comma(OP_APPEND, Some("delete"), "compact,", "delete,compact")]
-    #[case::append_of_only_commas(OP_APPEND, Some("delete"), ",,", "delete")]
-    #[case::append_of_an_empty_value(OP_APPEND, Some("delete"), "", "delete,")]
-    #[case::append_from_the_default(OP_APPEND, None, "compact", "delete,compact")]
+    #[case::append_with_a_trailing_comma(
+        ListOperation::Append,
+        Some("delete"),
+        "compact,",
+        "delete,compact"
+    )]
+    #[case::append_of_only_commas(ListOperation::Append, Some("delete"), ",,", "delete")]
+    #[case::append_of_an_empty_value(ListOperation::Append, Some("delete"), "", "delete,")]
+    #[case::append_from_the_default(ListOperation::Append, None, "compact", "delete,compact")]
     #[case::subtract_removes_one_occurrence(
-        OP_SUBTRACT,
+        ListOperation::Subtract,
         Some("delete,compact,delete"),
         "delete",
         "compact,delete"
     )]
     #[case::subtract_with_a_trailing_comma(
-        OP_SUBTRACT,
+        ListOperation::Subtract,
         Some("delete,compact"),
         "delete,",
         "compact"
     )]
     fn a_list_op_merges_as_kafkas_controller_does(
-        #[case] operation: i8,
+        #[case] operation: ListOperation,
         #[case] current: Option<&str>,
         #[case] value: &str,
         #[case] expected: &str,
@@ -224,7 +229,7 @@ mod tests {
         )]);
         let unknown = |name: &str, value: &str| AlterableConfig {
             name: name.into(),
-            config_operation: 9,
+            config_operation: ConfigOperation::Unknown(9).into(),
             value: Some(value.into()),
             ..Default::default()
         };
@@ -285,13 +290,13 @@ mod tests {
                 ),
                 ("an APPEND of the key", AlterableConfig {
                     name: key.into(),
-                    config_operation: 2,
+                    config_operation: ConfigOperation::Append.into(),
                     value: Some("true".into()),
                     ..Default::default()
                 }),
                 ("a SUBTRACT of the key", AlterableConfig {
                     name: key.into(),
-                    config_operation: 3,
+                    config_operation: ConfigOperation::Subtract.into(),
                     value: Some("true".into()),
                     ..Default::default()
                 }),

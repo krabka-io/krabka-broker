@@ -4,7 +4,7 @@
 //! per-key config structures that each scope handler consumes.
 
 use {
-    super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC},
+    super::{ConfigOperation, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC},
     crate::{handlers::test_support::metadata_topic_record, test_support::broker_registration},
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
@@ -30,7 +30,7 @@ pub(super) fn make_resource(name: &str, configs: Vec<AlterableConfig>) -> AlterC
 pub(super) fn make_set_cfg(key: &str, value: &str) -> AlterableConfig {
     AlterableConfig {
         name: key.into(),
-        config_operation: OP_SET,
+        config_operation: ConfigOperation::Set.into(),
         value: Some(value.into()),
         ..Default::default()
     }
@@ -39,7 +39,7 @@ pub(super) fn make_set_cfg(key: &str, value: &str) -> AlterableConfig {
 pub(super) fn make_del_cfg(key: &str) -> AlterableConfig {
     AlterableConfig {
         name: key.into(),
-        config_operation: OP_DELETE,
+        config_operation: ConfigOperation::Delete.into(),
         value: None,
         ..Default::default()
     }

@@ -6,7 +6,7 @@
 
 use {
     super::{
-        OP_DELETE, OP_SET,
+        ConfigOperation, MergeOperation,
         topic_scope::{merge_list_op, not_a_list},
     },
     crate::{
@@ -33,14 +33,14 @@ pub(super) fn group_record(
         .unwrap_or_default();
     for cfg in &resource.configs {
         let value = cfg.value.as_deref().unwrap_or_default();
-        match cfg.config_operation {
-            OP_SET => {
+        match ConfigOperation::from(cfg.config_operation).merge() {
+            MergeOperation::Set => {
                 merged.insert(cfg.name.clone(), value.to_owned());
             }
-            OP_DELETE => {
+            MergeOperation::Delete => {
                 merged.remove(&cfg.name);
             }
-            operation => {
+            MergeOperation::List(operation) => {
                 let key = kafka_group_key(&cfg.name, unstable)
                     .filter(|key| key.config_type == ConfigType::List)
                     .ok_or_else(|| not_a_list(operation, &cfg.name))?;
@@ -231,7 +231,7 @@ mod tests {
     fn an_unknown_operation_reaching_the_builder_reads_as_subtract() {
         let resource = make_scoped_resource(RESOURCE_TYPE_GROUP, "g", vec![AlterableConfig {
             name: KEY_SESSION_TIMEOUT_MS.into(),
-            config_operation: 9,
+            config_operation: ConfigOperation::Unknown(9).into(),
             value: Some("1".into()),
             ..Default::default()
         }]);

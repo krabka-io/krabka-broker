@@ -80,13 +80,91 @@ use {
     },
     std::{iter, mem},
 };
-const OP_SET: i8 = 0;
-const OP_DELETE: i8 = 1;
-const OP_APPEND: i8 = 2;
-const OP_SUBTRACT: i8 = 3;
+/// A config's `config_operation` byte, as Kafka's `AlterConfigOp.OpType`
+/// reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigOperation {
+    /// `SET` (0): set or replace the value.
+    Set,
+    /// `DELETE` (1): remove the override.
+    Delete,
+    /// `APPEND` (2): add items to a `LIST` key.
+    Append,
+    /// `SUBTRACT` (3): remove items from a `LIST` key.
+    Subtract,
+    /// A code `AlterConfigOp.OpType.forId` does not know.
+    Unknown(i8),
+}
 
-/// Whether `AlterConfigOp.OpType.forId` knows `operation`.
-const fn is_known_operation(operation: i8) -> bool { matches!(operation, OP_SET..=OP_SUBTRACT) }
+impl From<i8> for ConfigOperation {
+    fn from(code: i8) -> Self {
+        match code {
+            0 => Self::Set,
+            1 => Self::Delete,
+            2 => Self::Append,
+            3 => Self::Subtract,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<ConfigOperation> for i8 {
+    fn from(operation: ConfigOperation) -> Self {
+        match operation {
+            ConfigOperation::Set => 0,
+            ConfigOperation::Delete => 1,
+            ConfigOperation::Append => 2,
+            ConfigOperation::Subtract => 3,
+            ConfigOperation::Unknown(code) => code,
+        }
+    }
+}
+
+impl ConfigOperation {
+    /// Whether `AlterConfigOp.OpType.forId` knows this operation.
+    const fn is_known(self) -> bool { !matches!(self, Self::Unknown(_)) }
+
+    /// What a TOPIC, GROUP or BROKER record builder merges for this
+    /// operation.
+    ///
+    /// The handler answers an unknown code before any of those builders runs
+    /// (see `reaches_unknown_operation` and the broker scope's
+    /// `unknown_operation_error`), so none reaches one through it. Called
+    /// directly, a builder reads an unknown code as SUBTRACT.
+    const fn merge(self) -> MergeOperation {
+        match self {
+            Self::Set => MergeOperation::Set,
+            Self::Delete => MergeOperation::Delete,
+            Self::Append => MergeOperation::List(ListOperation::Append),
+            Self::Subtract | Self::Unknown(_) => MergeOperation::List(ListOperation::Subtract),
+        }
+    }
+}
+
+/// The step a record builder applies to one key of the map it merges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeOperation {
+    Set,
+    Delete,
+    List(ListOperation),
+}
+
+/// The two operations that merge items into, or out of, a `LIST` key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListOperation {
+    Append,
+    Subtract,
+}
+
+impl ListOperation {
+    /// Kafka's `OpType` name, as its refusals print it.
+    const fn kafka_name(self) -> &'static str {
+        match self {
+            Self::Append => "APPEND",
+            Self::Subtract => "SUBTRACT",
+        }
+    }
+}
 
 krabka_macros::decoded_dispatch! {
     /// Keep logger changes on this node and validate broker keys against local settings.
@@ -263,7 +341,7 @@ fn reaches_unknown_operation(
                 && resource
                     .configs
                     .iter()
-                    .any(|config| !is_known_operation(config.config_operation))
+                    .any(|config| !ConfigOperation::from(config.config_operation).is_known())
                 && config_resource_refusal(
                     broker.config.authorizer.as_ref(),
                     &image,
@@ -314,7 +392,8 @@ fn validate_resource_shape(
         resource.configs.iter().map(|config| {
             (
                 config.name.as_str(),
-                config.config_operation != OP_DELETE && config.value.is_none(),
+                ConfigOperation::from(config.config_operation) != ConfigOperation::Delete
+                    && config.value.is_none(),
             )
         }),
     )
@@ -692,7 +771,7 @@ mod tests {
                 make_scoped_resource(RESOURCE_TYPE_BROKER, "", unknown()),
                 make_scoped_resource(RESOURCE_TYPE_GROUP, "workers", vec![]),
                 make_scoped_resource(RESOURCE_TYPE_TOPIC, "keys", vec![
-                    config(RETENTION_MS, OP_SET, Some("1")),
+                    config(RETENTION_MS, ConfigOperation::Set.into(), Some("1")),
                     config(RETENTION_MS, 4, Some("2")),
                 ]),
                 make_scoped_resource(RESOURCE_TYPE_GROUP, "nulls", vec![config(
