@@ -65,7 +65,6 @@ Feature: An archive store is built from the operator's backend configuration
 
   Rule: A bucket-backed store needs a bucket name
 
-    @inprogress
     Scenario Outline: A bucket-backed store with an empty bucket name is refused
       Given an operator has configured the <backend> backend with an empty bucket name
       When the broker attempts to build the archive store
