@@ -79,7 +79,7 @@ pub fn api_name(api_key: i16) -> &'static str {
 mod tests {
     use {
         super::*,
-        crate::test_support::peer,
+        crate::{handlers::private_api_keys::KRABKA_PRIVATE_APIS, test_support::peer},
         assert2::check,
         std::{fmt::Debug, mem, sync},
         tracing::subscriber,
@@ -92,10 +92,21 @@ mod tests {
         api_versions = { 18, "ApiVersions" },
         alter_user_scram_credentials = { 51, "AlterUserScramCredentials" },
         create_acls = { 30, "CreateAcls" },
+        get_replica_log_info = { 1020, "GetReplicaLogInfo" },
         unknown = { 9999, "Unknown" },
+        unknown_private = { 1000, "Unknown" },
     )]
     fn api_name_known_and_unknown(api_key: i16, want: &str) {
         assert2::assert!(api_name(api_key) == want, "api key {api_key}");
+    }
+
+    /// A krabka-private RPC's span carries the name from the shared table,
+    /// the same name its request metrics use, not `Unknown`.
+    #[test]
+    fn krabka_private_api_spans_follow_the_shared_table() {
+        for api in KRABKA_PRIVATE_APIS {
+            assert2::assert!(api_name(api.api_key) == api.name, "{api:?}");
+        }
     }
 
     #[test]
