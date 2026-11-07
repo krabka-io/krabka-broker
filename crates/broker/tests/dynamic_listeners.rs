@@ -31,14 +31,14 @@ use {
     },
     std::{
         io::ErrorKind,
-        net::SocketAddr,
+        net::{Ipv4Addr, SocketAddr},
         path::Path,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
     tokio::{
         io::AsyncReadExt as _,
-        net::{TcpListener, TcpStream},
+        net::{TcpSocket, TcpStream},
         time,
     },
 };
@@ -52,10 +52,31 @@ const PROPAGATION: Duration = Duration::from_secs(10);
 const LISTENERS: &str = "listeners";
 const PROTOCOL_MAP: &str = "listener.security.protocol.map";
 
-/// A loopback address no socket holds: bound and dropped at once.
-async fn free_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    listener.local_addr().expect("local address")
+/// A loopback port held for a listener the broker adds later, and its
+/// address.
+///
+/// A port bound and dropped at once is free again at once: on a busy host
+/// any `bind("127.0.0.1:0")` -- another scenario's broker in this binary, or
+/// another test binary's -- can be handed it before the broker applies the
+/// alter. The added listener's bind then fails, which the broker logs and
+/// leaves closed as Kafka's `addListeners` does, and the port answers as the
+/// other socket's listener: a PLAINTEXT one serves `ApiVersions` and answers
+/// `SaslHandshake` with `ILLEGAL_SASL_STATE` and no mechanisms.
+///
+/// A socket that is bound but not listening keeps the port out of both
+/// `bind(0)` and `connect()`'s ephemeral pick, and refuses connections as a
+/// closed port does. Under `SO_REUSEADDR`, which mio also sets on the
+/// listener the broker binds, it lets that one listener bind the port.
+fn reserve_port() -> (TcpSocket, SocketAddr) {
+    let socket = TcpSocket::new_v4().expect("reservation socket");
+    socket
+        .set_reuseaddr(true)
+        .expect("SO_REUSEADDR on the reservation socket");
+    socket
+        .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .expect("reserve a loopback port");
+    let address = socket.local_addr().expect("reserved address");
+    (socket, address)
 }
 
 /// Whether a new connection to `addr` answers an `ApiVersions` round trip.
@@ -210,6 +231,9 @@ struct ListenerChange {
     broker: Option<ListenerBroker>,
     directory: Option<TempDir>,
     restarted: Option<BrokerHandle>,
+    /// Holds the added listener's port for the whole scenario, across a
+    /// removal and a restart, so no other socket can take it.
+    reservation: Option<TcpSocket>,
     added_address: Option<SocketAddr>,
     held: Option<TcpStream>,
     alteration: Option<AlterConfigsResourceResponse>,
@@ -225,6 +249,7 @@ fn listeners() -> ListenerChange {
         broker: None,
         directory: None,
         restarted: None,
+        reservation: None,
         added_address: None,
         held: None,
         alteration: None,
@@ -245,7 +270,7 @@ async fn static_broker(listeners: &mut ListenerChange) {
 )]
 async fn add(listeners: &mut ListenerChange, name: String, protocol: String, mechanisms: String) {
     let broker = listeners.broker.as_ref().unwrap();
-    let address = free_addr().await;
+    let (reservation, address) = reserve_port();
     let configured_listeners = format!("{},{name}://{address}", broker.static_listeners);
     let configured_protocols = format!("{},{name}:{protocol}", broker.static_protocols);
     let mechanism_key = format!(
@@ -272,6 +297,7 @@ async fn add(listeners: &mut ListenerChange, name: String, protocol: String, mec
         ));
     }
     listeners.alteration = Some(broker.alter(configs).await);
+    listeners.reservation = Some(reservation);
     listeners.added_address = Some(address);
 }
 
