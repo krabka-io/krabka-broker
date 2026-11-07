@@ -3743,6 +3743,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-bdd"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "krabka-bdd-macros",
+ "rstest",
+ "rstest-bdd",
+ "rstest-bdd-harness",
+ "rstest-bdd-macros",
+ "rust-embed",
+ "tokio",
+]
+
+[[package]]
+name = "krabka-bdd-macros"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "gherkin",
+ "moxy",
+ "rstest",
+]
+
+[[package]]
 name = "krabka-bench-driver"
 version = "1.1.5"
 dependencies = [
@@ -4170,6 +4194,7 @@ dependencies = [
  "compio",
  "crc32c",
  "derive_more",
+ "krabka-bdd",
  "krabka-compression",
  "krabka-ids",
  "krabka-macros",

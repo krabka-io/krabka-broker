@@ -1,0 +1,25 @@
+[package]
+name = "krabka-bdd-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Proc macros behind krabka-bdd: the house-style lint over Gherkin features and the StepParam derive"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+gherkin = { workspace = true }
+moxy = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+rstest = { workspace = true }
