@@ -9,10 +9,10 @@ use {
         kraft::{
             controller::{
                 checkpoint::{
-                    CheckpointChunk, CheckpointFile, checkpoint_id_is_newer, latest_checkpoint_id,
-                    load_checkpoint_by_id, load_latest_checkpoint, open_checkpoint,
-                    parse_checkpoint_name, retain_latest_checkpoint, retain_recent_checkpoints,
-                    write_checkpoint,
+                    CheckpointChunk, CheckpointFile, checkpoint_id_is_newer, checkpoint_name,
+                    latest_checkpoint_id, load_checkpoint_by_id, load_latest_checkpoint,
+                    open_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+                    retain_recent_checkpoints, write_checkpoint,
                 },
                 records::decode_control_record,
                 test_support::{
@@ -209,6 +209,18 @@ fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replace
     want: bool,
 ) {
     assert2::assert!(checkpoint_id_is_newer(candidate, current) == want);
+}
+
+/// A checkpoint's file name is on disk: the end offset in twenty digits and
+/// the epoch in ten, so a 1.x broker finds every checkpoint an earlier one
+/// wrote.
+#[yare::parameterized(
+    zero = { (0, 0), "00000000000000000000-0000000000.checkpoint" },
+    small = { (10, 2), "00000000000000000010-0000000002.checkpoint" },
+    largest = { (i64::MAX, i32::MAX), "09223372036854775807-2147483647.checkpoint" },
+)]
+fn a_checkpoint_name_is_the_fixed_width_offset_and_epoch(id: SnapshotId, name: &str) {
+    assert2::assert!(checkpoint_name(id.0, id.1) == name);
 }
 
 #[test]
