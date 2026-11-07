@@ -136,6 +136,10 @@ impl GroupCoordinator {
         self.respawn_seeds.contains_key(group_id)
     }
 
+    /// Forget the respawn seed a stopped actor left for `group_id`, when the
+    /// group has no successor on this broker.
+    pub(crate) fn drop_respawn_seed(&self, group_id: &str) { self.respawn_seeds.remove(group_id); }
+
     /// The live actor of `group_id`, respawned first when a stopped actor
     /// left it a respawn seed, or `None` when no actor serves the group.
     ///
@@ -503,7 +507,7 @@ async fn run_actor(
     // to stop. An actor that stopped after a failed write meanwhile leaves no
     // successor on a broker that no longer coordinates the group.
     if !coordinator.groups.contains_key(&group.group_id) {
-        coordinator.respawn_seeds.remove(&group.group_id);
+        coordinator.drop_respawn_seed(&group.group_id);
     }
     // An actor that left a respawn seed hands its commits still
     // replicating to the next actor, which publishes them as they commit.
