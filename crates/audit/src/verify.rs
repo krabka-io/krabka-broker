@@ -32,6 +32,10 @@ mod walk;
 mod tests;
 
 /// Trusted public keys, keyed by `key_id`.
+///
+/// Every checkpoint names the `key_id` that signed it, so a partition that
+/// spans a key rotation verifies under a set that holds the key of each
+/// epoch. Collect `(key_id, public_key)` pairs into one to trust several.
 #[derive(Debug, Default)]
 pub struct TrustedKeys {
     keys: HashMap<String, Vec<u8>>,
@@ -40,13 +44,47 @@ pub struct TrustedKeys {
 impl TrustedKeys {
     #[must_use]
     pub fn single(key_id: String, public_key: Vec<u8>) -> Self {
-        let mut keys = HashMap::new();
-        keys.insert(key_id, public_key);
-        Self { keys }
+        let mut trusted = Self::default();
+        trusted.insert(key_id, public_key);
+        trusted
+    }
+
+    /// Pair each key id with the public key at the same position.
+    ///
+    /// # Errors
+    /// Returns [`AuditError::Key`] when the two lists differ in length, so a
+    /// key is never trusted under another epoch's key id.
+    pub fn paired(key_ids: Vec<String>, public_keys: Vec<Vec<u8>>) -> Result<Self, AuditError> {
+        if key_ids.len() != public_keys.len() {
+            return Err(AuditError::Key(format!(
+                "{} key id(s) but {} public key(s): each key id pairs with the public key at \
+                 the same position",
+                key_ids.len(),
+                public_keys.len()
+            )));
+        }
+        Ok(key_ids.into_iter().zip(public_keys).collect())
+    }
+
+    /// Trust `public_key` for checkpoints signed under `key_id`, replacing
+    /// any key already trusted under that id.
+    pub fn insert(&mut self, key_id: String, public_key: Vec<u8>) {
+        self.keys.insert(key_id, public_key);
     }
 
     #[must_use]
     pub fn get(&self, key_id: &str) -> Option<&[u8]> { self.keys.get(key_id).map(Vec::as_slice) }
+}
+
+impl FromIterator<(String, Vec<u8>)> for TrustedKeys {
+    /// A later pair replaces an earlier one with the same `key_id`.
+    fn from_iter<I: IntoIterator<Item = (String, Vec<u8>)>>(pairs: I) -> Self {
+        let mut trusted = Self::default();
+        for (key_id, public_key) in pairs {
+            trusted.insert(key_id, public_key);
+        }
+        trusted
+    }
 }
 
 /// First detected break in the chain or signatures.

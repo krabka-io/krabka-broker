@@ -89,12 +89,18 @@ and writes no row.
 
 `krabka-audit verify` reads an audit partition directory offline. It
 recomputes the chain with the writer's primitives and checks every checkpoint
-signature against a trusted key. It does no recovery and no truncation, so
-tail corruption stays visible.
+signature against the trusted key for the `key_id` the checkpoint names. It
+does no recovery and no truncation, so tail corruption stays visible.
+
+A partition that spans a rotation of the audit key holds checkpoints under
+each key id. Trust every one of them: repeat `--key-id` and `--public-key`,
+paired by position.
 
 ```sh
 krabka-audit verify \
   --partition-dir /var/lib/krabka/__krabka_audit-0 \
+  --key-id audit-2025 \
+  --public-key /etc/krabka/keys/audit-2025.pub \
   --key-id audit-2026 \
   --public-key /etc/krabka/keys/audit-2026.pub
 ```
@@ -102,8 +108,8 @@ krabka-audit verify \
 | Flag | Description |
 | --- | --- |
 | `--partition-dir <path>` | The audit partition directory, for example `<log_dir>/__krabka_audit-0`. |
-| `--key-id <id>` | The `key_id` the trusted public key belongs to. It is the `[audit.signing] key_id` the broker signs with. |
-| `--public-key <path>` | The trusted Ed25519 public key, as raw 32 bytes. |
+| `--key-id <id>` | A `key_id` to trust: an `[audit.signing] key_id` the broker has signed with. Required, and repeatable once per key. |
+| `--public-key <path>` | The Ed25519 public key, as raw 32 bytes, for the `--key-id` at the same position. Give exactly one per `--key-id`; the tool exits `1` when the counts differ. |
 
 The exit code is `0` when the chain is continuous, every signature is valid,
 and a signed checkpoint covers every record. It is `1` for a break in the chain,
