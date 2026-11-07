@@ -729,18 +729,6 @@ mod resolution_tests {
         assert!(problem.as_deref() == expected);
     }
 
-    const fn step(line: u32, keyword: StepKeyword, text: &'static str) -> StepSpec {
-        StepSpec {
-            line,
-            keyword,
-            star: false,
-            written: keyword.as_str(),
-            text,
-            docstring: None,
-            table: None,
-        }
-    }
-
     const fn scenario(
         feature_path: &'static str,
         scenario: &'static str,
@@ -770,18 +758,19 @@ mod resolution_tests {
     }
 
     static PLAIN_STEPS: [StepSpec; 2] = [
-        step(4, StepKeyword::Given, "a log has 3 segments"),
-        step(5, StepKeyword::When, "the cleaner runs"),
+        StepSpec::plain(4, StepKeyword::Given, "a log has 3 segments"),
+        StepSpec::plain(5, StepKeyword::When, "the cleaner runs"),
     ];
     static JOURNEY_STEPS: [StepSpec; 2] = [
-        step(11, StepKeyword::Given, "a log has 7 segments"),
-        step(12, StepKeyword::When, "the cleaner runs"),
+        StepSpec::plain(11, StepKeyword::Given, "a log has 7 segments"),
+        StepSpec::plain(12, StepKeyword::When, "the cleaner runs"),
     ];
     static BROKEN_STEPS: [StepSpec; 2] = [
-        step(3, StepKeyword::Given, "a topic exists"),
-        step(4, StepKeyword::Given, "the runner flips heads coins"),
+        StepSpec::plain(3, StepKeyword::Given, "a topic exists"),
+        StepSpec::plain(4, StepKeyword::Given, "the runner flips heads coins"),
     ];
-    static UNWRITTEN_STEPS: [StepSpec; 1] = [step(21, StepKeyword::Given, "an unwritten step")];
+    static UNWRITTEN_STEPS: [StepSpec; 1] =
+        [StepSpec::plain(21, StepKeyword::Given, "an unwritten step")];
 
     static PLAIN: ScenarioSpec = scenario("f.feature", "Plain", 3, None, &[], &PLAIN_STEPS);
     static JOURNEY: ScenarioSpec = scenario(

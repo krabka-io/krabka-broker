@@ -70,18 +70,6 @@ fn fails_if_reached() {
     panic!("a step after a skip ran");
 }
 
-const fn step(line: u32, keyword: StepKeyword, text: &'static str) -> StepSpec {
-    StepSpec {
-        line,
-        keyword,
-        star: false,
-        written: keyword.as_str(),
-        text,
-        docstring: None,
-        table: None,
-    }
-}
-
 const fn scenario(name: &'static str, line: u32, steps: &'static [StepSpec]) -> ScenarioSpec {
     ScenarioSpec {
         feature_path: FEATURE,
@@ -97,23 +85,23 @@ const fn scenario(name: &'static str, line: u32, steps: &'static [StepSpec]) -> 
 }
 
 static PASSING_STEPS: [StepSpec; 3] = [
-    step(4, StepKeyword::Given, "the runner counter starts at 2"),
+    StepSpec::plain(4, StepKeyword::Given, "the runner counter starts at 2"),
     StepSpec {
         star: true,
         written: "*",
-        ..step(
+        ..StepSpec::plain(
             5,
             StepKeyword::Given,
             "the runner counter is doubled after a pause",
         )
     },
-    step(6, StepKeyword::Then, "the runner counter is 4"),
+    StepSpec::plain(6, StepKeyword::Then, "the runner counter is 4"),
 ];
 static PASSING: ScenarioSpec = scenario("Every step passes", 3, &PASSING_STEPS);
 
 static FAILING_STEPS: [StepSpec; 2] = [
-    step(11, StepKeyword::Given, "the runner counter starts at 1"),
-    step(12, StepKeyword::Then, "the runner counter is 5"),
+    StepSpec::plain(11, StepKeyword::Given, "the runner counter starts at 1"),
+    StepSpec::plain(12, StepKeyword::Then, "the runner counter is 5"),
 ];
 static FAILING_ROW: ScenarioSpec = ScenarioSpec {
     rule: Some("A failing step names where it failed"),
@@ -126,8 +114,8 @@ static FAILING_ROW: ScenarioSpec = ScenarioSpec {
 };
 
 static ATTEMPT_STEPS: [StepSpec; 2] = [
-    step(19, StepKeyword::When, "the runner attempts to parse x"),
-    step(
+    StepSpec::plain(19, StepKeyword::When, "the runner attempts to parse x"),
+    StepSpec::plain(
         20,
         StepKeyword::Then,
         "the runner attempt failed with invalid digit",
@@ -135,15 +123,18 @@ static ATTEMPT_STEPS: [StepSpec; 2] = [
 ];
 static ATTEMPT: ScenarioSpec = scenario("An attempt reaches a later Then", 18, &ATTEMPT_STEPS);
 
-static AMBIGUOUS_STEPS: [StepSpec; 1] =
-    [step(23, StepKeyword::Given, "the runner flips heads coins")];
+static AMBIGUOUS_STEPS: [StepSpec; 1] = [StepSpec::plain(
+    23,
+    StepKeyword::Given,
+    "the runner flips heads coins",
+)];
 static AMBIGUOUS: ScenarioSpec = scenario(
     "A step matches two definitions equally well",
     22,
     &AMBIGUOUS_STEPS,
 );
 
-static UNDEFINED_STEPS: [StepSpec; 1] = [step(
+static UNDEFINED_STEPS: [StepSpec; 1] = [StepSpec::plain(
     26,
     StepKeyword::Given,
     "no definition matches this runner step",
@@ -151,12 +142,12 @@ static UNDEFINED_STEPS: [StepSpec; 1] = [step(
 static UNDEFINED: ScenarioSpec = scenario("A step matches no definition", 25, &UNDEFINED_STEPS);
 
 static SKIP_STEPS: [StepSpec; 2] = [
-    step(
+    StepSpec::plain(
         30,
         StepKeyword::Given,
         "the runner skips because no broker is running",
     ),
-    step(31, StepKeyword::Then, "the runner fails if it is reached"),
+    StepSpec::plain(31, StepKeyword::Then, "the runner fails if it is reached"),
 ];
 static SKIP_ALLOWED: ScenarioSpec = ScenarioSpec {
     tags: &["allow_skipped"],
@@ -167,8 +158,8 @@ static SKIP_NOT_ALLOWED: ScenarioSpec =
     scenario("A step skips the rest of the scenario", 29, &SKIP_STEPS);
 
 static IN_PROGRESS_STEPS: [StepSpec; 2] = [
-    step(35, StepKeyword::Given, "the runner counter starts at 1"),
-    step(36, StepKeyword::Then, "the runner counter is 4"),
+    StepSpec::plain(35, StepKeyword::Given, "the runner counter starts at 1"),
+    StepSpec::plain(36, StepKeyword::Then, "the runner counter is 4"),
 ];
 static IN_PROGRESS_FAILING: ScenarioSpec = ScenarioSpec {
     tags: &["inprogress"],

@@ -61,3 +61,20 @@ pub struct StepSpec {
     /// The data table, if any, header row first.
     pub table: Option<&'static [&'static [&'static str]]>,
 }
+
+impl StepSpec {
+    /// A step written with its own keyword, with no doc string or table, for
+    /// a scenario built by hand rather than by `scenarios!`.
+    #[must_use]
+    pub const fn plain(line: u32, keyword: StepKeyword, text: &'static str) -> Self {
+        Self {
+            line,
+            keyword,
+            star: false,
+            written: keyword.as_str(),
+            text,
+            docstring: None,
+            table: None,
+        }
+    }
+}

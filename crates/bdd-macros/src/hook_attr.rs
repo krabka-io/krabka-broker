@@ -268,6 +268,14 @@ mod tests {
         assert!(error.to_string() == message);
     }
 
+    /// The wrapper's signature, which every expansion shares.
+    const SIGNATURE: &str = "(
+        scenario: &'a ::krabka_bdd::ScenarioSpec,
+        outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
+    ) -> ::core::pin::Pin<
+        ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
+    >";
+
     #[test]
     fn registers_a_before_hook() {
         let expanded = expand(
@@ -275,32 +283,27 @@ mod tests {
             &tokens(r#"tags = "@docker", order = 10"#),
             &tokens("async fn start(scenario: &ScenarioSpec) {}"),
         );
-        let expected = tokens(
+        let expected = tokens(&format!(
             r#"
-            const _: () = {
-                fn __krabka_bdd_hook_start<'a>(
-                    scenario: &'a ::krabka_bdd::ScenarioSpec,
-                    outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
-                ) -> ::core::pin::Pin<
-                    ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
-                > {
+            const _: () = {{
+                fn __krabka_bdd_hook_start<'a>{SIGNATURE} {{
                     let _ = outcome;
                     ::std::boxed::Box::pin(start(scenario))
-                }
+                }}
 
-                ::krabka_bdd::__private::inventory::submit! {
-                    ::krabka_bdd::__private::Hook {
+                ::krabka_bdd::__private::inventory::submit! {{
+                    ::krabka_bdd::__private::Hook {{
                         phase: ::krabka_bdd::__private::HookPhase::BeforeScenario,
                         tags: ::core::option::Option::Some("@docker"),
                         order: 10,
                         file: ::core::file!(),
                         line: ::core::line!(),
                         run: __krabka_bdd_hook_start,
-                    }
-                }
-            };
+                    }}
+                }}
+            }};
             "#,
-        );
+        ));
         assert!(
             expanded
                 .map(|tokens| tokens.to_token_stream().to_string())
@@ -316,35 +319,30 @@ mod tests {
             &TokenStream::new(),
             &tokens("async fn stop(scenario: &ScenarioSpec, outcome: &Outcome) {}"),
         );
-        let expected = tokens(
+        let expected = tokens(&format!(
             "
-            const _: () = {
-                fn __krabka_bdd_hook_stop<'a>(
-                    scenario: &'a ::krabka_bdd::ScenarioSpec,
-                    outcome: ::core::option::Option<&'a ::krabka_bdd::Outcome>,
-                ) -> ::core::pin::Pin<
-                    ::std::boxed::Box<dyn ::core::future::Future<Output = ()> + 'a>,
-                > {
-                    ::std::boxed::Box::pin(async move {
-                        if let ::core::option::Option::Some(outcome) = outcome {
+            const _: () = {{
+                fn __krabka_bdd_hook_stop<'a>{SIGNATURE} {{
+                    ::std::boxed::Box::pin(async move {{
+                        if let ::core::option::Option::Some(outcome) = outcome {{
                             stop(scenario, outcome).await;
-                        }
-                    })
-                }
+                        }}
+                    }})
+                }}
 
-                ::krabka_bdd::__private::inventory::submit! {
-                    ::krabka_bdd::__private::Hook {
+                ::krabka_bdd::__private::inventory::submit! {{
+                    ::krabka_bdd::__private::Hook {{
                         phase: ::krabka_bdd::__private::HookPhase::AfterScenario,
                         tags: ::core::option::Option::None,
                         order: 0,
                         file: ::core::file!(),
                         line: ::core::line!(),
                         run: __krabka_bdd_hook_stop,
-                    }
-                }
-            };
+                    }}
+                }}
+            }};
             ",
-        );
+        ));
         assert!(
             expanded
                 .map(|tokens| tokens.to_token_stream().to_string())

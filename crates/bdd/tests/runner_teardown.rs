@@ -118,19 +118,7 @@ fn step_skips() {
     skip!("nothing to tear down");
 }
 
-const fn step(line: u32, keyword: StepKeyword, text: &'static str) -> StepSpec {
-    StepSpec {
-        line,
-        keyword,
-        star: false,
-        written: keyword.as_str(),
-        text,
-        docstring: None,
-        table: None,
-    }
-}
-
-const READY: StepSpec = step(5, StepKeyword::Given, "the teardown world is ready");
+const READY: StepSpec = StepSpec::plain(5, StepKeyword::Given, "the teardown world is ready");
 
 const fn scenario(
     name: &'static str,
@@ -154,15 +142,15 @@ const fn scenario(
 static PASSES: ScenarioSpec = scenario("The scenario passes", 4, &["teardown"], &[READY]);
 static FAILS: ScenarioSpec = scenario("A step fails", 8, &["teardown"], &[
     READY,
-    step(10, StepKeyword::When, "the teardown step fails"),
+    StepSpec::plain(10, StepKeyword::When, "the teardown step fails"),
 ]);
 static PANICS: ScenarioSpec = scenario("A step panics", 13, &["teardown"], &[
     READY,
-    step(15, StepKeyword::When, "the teardown step panics"),
+    StepSpec::plain(15, StepKeyword::When, "the teardown step panics"),
 ]);
 static SKIPS: ScenarioSpec = scenario("A step skips", 18, &["teardown", "allow_skipped"], &[
     READY,
-    step(20, StepKeyword::When, "the teardown step skips"),
+    StepSpec::plain(20, StepKeyword::When, "the teardown step skips"),
 ]);
 /// A copy of [`PANICS`] under another name, so its hook entries stay apart.
 static PANICS_AGAIN: ScenarioSpec = ScenarioSpec {
