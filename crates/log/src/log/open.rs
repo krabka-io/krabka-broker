@@ -49,29 +49,6 @@ pub(super) struct RecoveredBatchOffsets {
     pub(super) advanced_to: Offset,
 }
 
-/// Work performed while reconstructing the in-memory ranges of transactions
-/// that survived producer-state recovery as open.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct PendingStampRecoveryStats {
-    #[cfg(test)]
-    pub(super) batches: usize,
-    #[cfg(test)]
-    pub(super) bytes: usize,
-}
-
-impl PendingStampRecoveryStats {
-    fn record(&mut self, batch: &RecordBatch) {
-        #[cfg(test)]
-        {
-            self.batches = self.batches.saturating_add(1);
-            self.bytes = self.bytes.saturating_add(batch.encoded_batch_len());
-        }
-        // Only a test build counts; the others take the arguments and drop
-        // them.
-        let _ = (self, batch);
-    }
-}
-
 /// The sequence and offset a producer's entry ends at after one data batch.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct ProducerTail {
@@ -422,7 +399,7 @@ impl Log {
         if end.0 > range.log_start {
             producer_snapshot::write(&*self.io, &self.dir, end, &self.producer_state)?;
         }
-        let _ = self.rebuild_pending_stamp_ranges()?;
+        self.rebuild_pending_stamp_ranges(|_| {})?;
         self.refresh_lso()?;
         Ok(())
     }
@@ -475,10 +452,16 @@ impl Log {
         Ok(())
     }
 
-    fn rebuild_pending_stamp_ranges(&mut self) -> Result<PendingStampRecoveryStats, LogError> {
+    /// Rebuild the stamp ranges of the transactions that survived
+    /// producer-state recovery as open, from the earliest of their first
+    /// offsets. `on_batch` sees each batch the walk reads.
+    fn rebuild_pending_stamp_ranges(
+        &mut self,
+        mut on_batch: impl FnMut(&RecordBatch),
+    ) -> Result<(), LogError> {
         self.pending_stamp_ranges.clear();
         if self.pending.is_empty() {
-            return Ok(PendingStampRecoveryStats::default());
+            return Ok(());
         }
         // The snapshot tells us exactly which transactions remain open and
         // where each began. Nothing before the earliest surviving beginning
@@ -496,7 +479,6 @@ impl Log {
             .max(local_start);
         let end = self.log_end_offset();
         let mut is_first_read = true;
-        let mut stats = PendingStampRecoveryStats::default();
         while next < end {
             let slice = self.read(next, krabka_units::mebibytes(1))?;
             if slice.batches.is_empty() {
@@ -508,7 +490,7 @@ impl Log {
                 let cursor = Self::replay_cursor(is_first_read && index == 0, next, batch);
                 let RecoveredBatchOffsets { last, advanced_to } =
                     Self::recovered_batch_offsets(cursor, end, batch)?;
-                stats.record(batch);
+                on_batch(batch);
                 match control_batch_kind(batch) {
                     // A barrier marker closes no transaction, so it clears no
                     // stamp range. The append path reaches the same result.
@@ -535,7 +517,7 @@ impl Log {
             }
             is_first_read = false;
         }
-        Ok(stats)
+        Ok(())
     }
 
     fn recovered_batch_offsets(
