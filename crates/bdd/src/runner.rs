@@ -103,6 +103,7 @@ pub fn run(scenario: &'static ScenarioSpec, fixtures: Fixtures, flavor: Flavor) 
 /// runtime's context entered, as rstest-bdd runs it: it can `tokio::spawn`
 /// onto the scenario's runtime, and it can `block_on` a runtime of its own.
 /// The fixtures are dropped before the runtime.
+#[must_use]
 pub fn run_outcome(scenario: &'static ScenarioSpec, fixtures: Fixtures, flavor: Flavor) -> Outcome {
     let runtime = flavor.build();
     let outcome = run_with(
