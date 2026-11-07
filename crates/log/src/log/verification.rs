@@ -233,19 +233,11 @@ impl Log {
         if producer_id.get() < 0 {
             return None;
         }
-        self.producers
-            .entries
-            .get(&producer_id)?
-            .find_duplicate_batch(
-                self.producers
-                    .earlier_batches
-                    .get(&producer_id)
-                    .into_iter()
-                    .flatten()
-                    .copied(),
-                producer_epoch,
-                (base_sequence, last_offset_delta),
-            )
+        self.producers.find_duplicate_batch(
+            producer_id,
+            producer_epoch,
+            (base_sequence, last_offset_delta),
+        )
     }
 
     /// Drop the verification state after a transactional append, as Kafka's

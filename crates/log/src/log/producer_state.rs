@@ -7,6 +7,7 @@
 
 use {
     super::{
+        active_producers::ActiveProducer,
         control::{
             TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
             transaction_marker_flags,
@@ -15,8 +16,9 @@ use {
         verification::VerificationState,
     },
     crate::{
+        compact::ProducerLastRecord,
         error::LogError,
-        producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
+        producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer},
     },
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::RecordBatch,
@@ -70,6 +72,72 @@ impl ProducerStateManager {
         }
         self.verifications
             .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
+    }
+
+    /// Every producer's entry as an [`ActiveProducer`], in producer id order.
+    pub(super) fn active_producers(&self) -> Vec<ActiveProducer> {
+        let mut producers: Vec<ActiveProducer> = self
+            .entries
+            .values()
+            .map(|entry| ActiveProducer {
+                producer_id: entry.producer_id,
+                producer_epoch: entry.producer_epoch,
+                last_sequence: entry.last_sequence,
+                last_timestamp: entry.timestamp,
+                coordinator_epoch: entry.coordinator_epoch,
+                current_txn_start_offset: entry.current_txn_first_offset,
+            })
+            .collect();
+        producers.sort_unstable_by_key(|producer| producer.producer_id);
+        producers
+    }
+
+    /// Every producer's last data offset, if any, and its epoch.
+    pub(super) fn last_records(&self) -> HashMap<ProducerId, ProducerLastRecord> {
+        self.entries
+            .values()
+            .map(|entry| {
+                let last_record = ProducerLastRecord {
+                    last_data_offset: entry.last_batch().map(|batch| batch.last_offset),
+                    producer_epoch: entry.producer_epoch,
+                };
+                (entry.producer_id, last_record)
+            })
+            .collect()
+    }
+
+    /// Every producer's entry with the batches it retains before its last.
+    pub(super) fn recovered(&self) -> Vec<RecoveredProducer> {
+        self.entries
+            .values()
+            .map(|entry| RecoveredProducer {
+                entry: *entry,
+                earlier: self
+                    .earlier_batches
+                    .get(&entry.producer_id)
+                    .map_or_default(|earlier| earlier.iter().copied().collect()),
+            })
+            .collect()
+    }
+
+    /// The retained batch of `producer_id` that a batch at `producer_epoch`
+    /// with this sequence range repeats. Kafka's
+    /// `ProducerStateEntry.findDuplicateBatch`.
+    pub(super) fn find_duplicate_batch(
+        &self,
+        producer_id: ProducerId,
+        producer_epoch: i16,
+        (base_sequence, last_offset_delta): (i32, i32),
+    ) -> Option<ProducerBatchMetadata> {
+        self.entries.get(&producer_id)?.find_duplicate_batch(
+            self.earlier_batches
+                .get(&producer_id)
+                .into_iter()
+                .flatten()
+                .copied(),
+            producer_epoch,
+            (base_sequence, last_offset_delta),
+        )
     }
 
     /// Record a control batch of `producer_id`, which is not negative, in

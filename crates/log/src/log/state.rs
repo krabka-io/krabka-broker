@@ -648,20 +648,7 @@ impl Log {
     /// reopen they are the batches the replay past the loaded snapshot
     /// rebuilt.
     #[must_use]
-    pub fn recovered_producers(&self) -> Vec<RecoveredProducer> {
-        self.producers
-            .entries
-            .values()
-            .map(|entry| RecoveredProducer {
-                entry: *entry,
-                earlier: self
-                    .producers
-                    .earlier_batches
-                    .get(&entry.producer_id)
-                    .map_or_default(|earlier| earlier.iter().copied().collect()),
-            })
-            .collect()
-    }
+    pub fn recovered_producers(&self) -> Vec<RecoveredProducer> { self.producers.recovered() }
 
     /// Close all segments, first taking a producer-state snapshot at the log
     /// end as Kafka's `UnifiedLog.close` does. A snapshot that cannot be

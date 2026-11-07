@@ -48,23 +48,7 @@ impl Log {
     /// a replicated append and a reopen all update the same state, so a
     /// leader and its followers give the same answer at the same log end.
     #[must_use]
-    pub fn active_producers(&self) -> Vec<ActiveProducer> {
-        let mut producers: Vec<ActiveProducer> = self
-            .producers
-            .entries
-            .values()
-            .map(|entry| ActiveProducer {
-                producer_id: entry.producer_id,
-                producer_epoch: entry.producer_epoch,
-                last_sequence: entry.last_sequence,
-                last_timestamp: entry.timestamp,
-                coordinator_epoch: entry.coordinator_epoch,
-                current_txn_start_offset: entry.current_txn_first_offset,
-            })
-            .collect();
-        producers.sort_unstable_by_key(|producer| producer.producer_id);
-        producers
-    }
+    pub fn active_producers(&self) -> Vec<ActiveProducer> { self.producers.active_producers() }
 
     /// The last record of every producer that this log holds state for. A
     /// compaction pass keeps that record, so that the producer state
@@ -79,17 +63,7 @@ impl Log {
     pub(crate) fn last_records_of_active_producers(
         &self,
     ) -> HashMap<ProducerId, ProducerLastRecord> {
-        self.producers
-            .entries
-            .values()
-            .map(|entry| {
-                let last_record = ProducerLastRecord {
-                    last_data_offset: entry.last_batch().map(|batch| batch.last_offset),
-                    producer_epoch: entry.producer_epoch,
-                };
-                (entry.producer_id, last_record)
-            })
-            .collect()
+        self.producers.last_records()
     }
 
     /// Remove every producer that has no open transaction and whose last
