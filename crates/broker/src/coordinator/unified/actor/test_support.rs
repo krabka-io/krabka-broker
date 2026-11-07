@@ -268,6 +268,51 @@ pub(super) async fn last_classic_metadata(log: &InMemoryOffsetsLog) -> GroupMeta
     panic!("classic metadata record not found")
 }
 
+/// How long a test waits for an actor before it fails instead of hanging.
+const PROMPT: Duration = Duration::from_secs(5);
+
+/// The group that a reload of `log` builds, as bootstrap replay applies the
+/// last group-metadata record.
+pub(super) async fn reloaded_classic_view(log: &InMemoryOffsetsLog) -> super::ClassicView {
+    use crate::coordinator::{
+        bootstrap::apply_group_metadata, unified::classic_state::ClassicGroup,
+    };
+
+    let mut reloaded = ClassicGroup::new("g");
+    apply_group_metadata(&mut reloaded, last_classic_metadata(log).await, 0);
+    super::views::build_classic_view(&reloaded)
+}
+
+/// The live actor that serves group `g`, once one does.
+pub(super) async fn live_actor(coordinator: &GroupCoordinator) -> Arc<GroupActorHandle> {
+    tokio::time::timeout(PROMPT, async {
+        loop {
+            match coordinator.find("g") {
+                Some(handle) if !handle.tx.is_closed() => return handle,
+                _ => tokio::time::sleep(Duration::from_millis(1)).await,
+            }
+        }
+    })
+    .await
+    .expect("a live actor serves the group")
+}
+
+/// Waits until `log` ends at `end_offset`, then passes the write timeout of
+/// every write in it. The records stay in the log and may still commit.
+pub(super) async fn time_out_appended_writes(log: &InMemoryOffsetsLog, end_offset: i64) {
+    tokio::time::timeout(PROMPT, log.until_log_end(end_offset))
+        .await
+        .expect("the write is appended");
+    log.time_out_uncommitted();
+}
+
+/// `true` once the actor behind `handle` stops, within [`PROMPT`].
+pub(super) async fn actor_stops(handle: &GroupActorHandle) -> bool {
+    tokio::time::timeout(PROMPT, handle.tx.closed())
+        .await
+        .is_ok()
+}
+
 /// A coordinator whose metadata image holds one topic `t` with `partitions`
 /// partitions, so the reconciler can resolve a `t` subscription to real
 /// topic-id/partitions and compute a target assignment.

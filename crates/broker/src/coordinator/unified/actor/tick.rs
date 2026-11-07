@@ -183,33 +183,30 @@ mod tests {
         super::*,
         crate::{
             codes,
-            coordinator::{
-                bootstrap::apply_group_metadata,
-                unified::{
-                    ClientIdentity, GroupCoordinator,
-                    actor::{
-                        ClassicView, GroupActorHandle, GroupActorMessage, GroupKindTag,
-                        PendingRecords, RegexResolution, SyncResult,
-                        test_support::{
-                            actor_services_with, bidirectional_coordinator,
-                            classic_member_for_topic, completing_classic_group,
-                            coordinator_with_log, empty_metadata, join_native_consumer,
-                            last_classic_metadata, log_has_classic_group_metadata_write,
-                            make_coordinator, parked_follower, rpc, subscribed_member,
-                        },
-                        views::build_classic_view,
+            coordinator::unified::{
+                ClientIdentity, GroupCoordinator,
+                actor::{
+                    ClassicView, GroupActorHandle, GroupActorMessage, GroupKindTag, PendingRecords,
+                    RegexResolution, SyncResult,
+                    test_support::{
+                        actor_services_with, bidirectional_coordinator, classic_member_for_topic,
+                        completing_classic_group, coordinator_with_log, empty_metadata,
+                        join_native_consumer, last_classic_metadata, live_actor,
+                        log_has_classic_group_metadata_write, make_coordinator, parked_follower,
+                        reloaded_classic_view, rpc, subscribed_member,
                     },
-                    classic_state::{ClassicGroup, GroupState as ClassicGroupState},
-                    config::NextGenConfig,
-                    consumer_state::GroupState,
-                    group::GroupKind,
-                    migration,
-                    offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
-                    persistence_next_gen::GroupMetadataValue,
-                    reconciler::ReconcileInput,
-                    regex_resolver::no_topic_regex_resolver,
-                    test_support::{check_two_members_expired, expired_session_last_seen},
+                    views::build_classic_view,
                 },
+                classic_state::{ClassicGroup, GroupState as ClassicGroupState},
+                config::NextGenConfig,
+                consumer_state::GroupState,
+                group::GroupKind,
+                migration,
+                offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
+                persistence_next_gen::GroupMetadataValue,
+                reconciler::ReconcileInput,
+                regex_resolver::no_topic_regex_resolver,
+                test_support::{check_two_members_expired, expired_session_last_seen},
             },
         },
         assert2::{assert, check},
@@ -297,7 +294,7 @@ mod tests {
             members: Vec::new(),
         };
         check!(build_classic_view(group.as_classic().unwrap()) == expired);
-        check!(reloaded_view(&log).await == expired);
+        check!(reloaded_classic_view(&log).await == expired);
     }
 
     #[tokio::test]
@@ -870,14 +867,6 @@ mod tests {
         PendingSync,
     }
 
-    /// The group that a reload of `log` builds, as bootstrap replay applies
-    /// the last group-metadata record.
-    async fn reloaded_view(log: &InMemoryOffsetsLog) -> ClassicView {
-        let mut reloaded = ClassicGroup::new("g");
-        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await, 0);
-        build_classic_view(&reloaded)
-    }
-
     /// A timer empties the group, and its group-metadata write times out
     /// after the record reached the log, so the record may still commit. The
     /// actor stops, as Kafka's `CoordinatorRuntime` keeps a timed-out write's
@@ -933,7 +922,7 @@ mod tests {
         let stopped = timeout(PROMPT, stopping.tx.closed()).await.is_ok();
         log.release_commits();
 
-        let reloaded = reloaded_view(&log).await;
+        let reloaded = reloaded_classic_view(&log).await;
         check!(
             reloaded
                 == ClassicView {
@@ -976,20 +965,6 @@ mod tests {
         clock
             .advance(tick_interval)
             .expect("manual time moves forward");
-    }
-
-    /// The live actor that serves group `g`, once one does.
-    async fn live_actor(coord: &GroupCoordinator) -> Arc<GroupActorHandle> {
-        timeout(PROMPT, async {
-            loop {
-                match coord.find("g") {
-                    Some(handle) if !handle.tx.is_closed() => return handle,
-                    _ => sleep(Duration::from_millis(1)).await,
-                }
-            }
-        })
-        .await
-        .expect("a live actor serves the group")
     }
 
     /// The consumer-group write whose failure stops the actor.
