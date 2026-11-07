@@ -68,13 +68,13 @@ pub enum BootstrapRecordsError {
 }
 
 /// Encodes one record as the wincode bytes that a frame of the file holds.
-pub(crate) fn encode_bootstrap_record(record: &MetadataRecord) -> Result<Vec<u8>, String> {
+pub fn encode_bootstrap_record(record: &MetadataRecord) -> Result<Vec<u8>, String> {
     <SerdeCompat<MetadataRecord>>::serialize(record).map_err(|e| format!("serialize record: {e}"))
 }
 
 /// Lays out already encoded records as the file: the version header, then
 /// each blob behind its `u32` little-endian length.
-pub(crate) fn frame_bootstrap_records(blobs: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+pub fn frame_bootstrap_records(blobs: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     let mut bytes = BOOTSTRAP_RECORDS_VERSION.to_be_bytes().to_vec();
     for blob in blobs {
         let len = u32::try_from(blob.len())

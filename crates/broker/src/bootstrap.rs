@@ -12,8 +12,8 @@
 use {
     crate::{NodeId, error::BrokerError},
     krabka_format::{
-        BOOTSTRAP_RECORDS, BootstrapRecordsError, BootstrapRecordsVersionError, ClusterId,
-        DirectoryId, META_PROPERTIES, MetaProperties, decode_bootstrap_records,
+        BOOTSTRAP_RECORDS, BootstrapRecordsError, ClusterId, DirectoryId, META_PROPERTIES,
+        MetaProperties, decode_bootstrap_records,
     },
     krabka_metadata::MetadataRecord,
     std::{
@@ -287,7 +287,7 @@ pub fn initial_voters(records: &[MetadataRecord]) -> krabka_metadata::VoterSet {
 /// # Errors
 /// Returns [`BrokerError::BootstrapFile`] when the file cannot be read, when
 /// its version header is missing or unknown (the source is a
-/// [`BootstrapRecordsVersionError`]), or when a record is truncated or does
+/// [`krabka_format::BootstrapRecordsVersionError`]), or when a record is truncated or does
 /// not decode.
 pub fn load_bootstrap_records(log_dir: &Path) -> Result<Vec<MetadataRecord>, BrokerError> {
     let path = log_dir.join(BOOTSTRAP_RECORDS);
@@ -316,7 +316,7 @@ mod tests {
         super::*,
         crate::test_support::write_bootstrap_records,
         assert2::{assert, check},
-        krabka_format::BOOTSTRAP_RECORDS_VERSION,
+        krabka_format::{BOOTSTRAP_RECORDS_VERSION, BootstrapRecordsVersionError},
         krabka_metadata::ScramCredentialRecord,
         krabka_security::SaslMechanism,
         std::{
@@ -525,12 +525,13 @@ mod tests {
 
     impl Source {
         fn of(source: &(dyn error::Error + Send + Sync + 'static)) -> Self {
-            if let Some(version) = source.downcast_ref::<BootstrapRecordsVersionError>() {
-                Self::Version(version.clone())
-            } else if let Some(io) = source.downcast_ref::<io::Error>() {
-                Self::Io(io.to_string())
-            } else {
-                Self::Message(source.to_string())
+            match (
+                source.downcast_ref::<BootstrapRecordsVersionError>(),
+                source.downcast_ref::<io::Error>(),
+            ) {
+                (Some(version), _) => Self::Version(version.clone()),
+                (None, Some(io)) => Self::Io(io.to_string()),
+                (None, None) => Self::Message(source.to_string()),
             }
         }
     }
