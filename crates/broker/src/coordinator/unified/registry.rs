@@ -93,13 +93,19 @@ impl RegisteredActor for StreamsGroupActorHandle {
     }
 }
 
-/// The live actor that `map` holds for `group_id`, or a fresh one from
-/// `spawn` when the entry is absent or its actor has exited.
+/// What `map` holds for `group_id` when `kept` answers for it, or else a
+/// fresh actor from `spawn` registered in its place and answered through
+/// `spawned`.
 ///
-/// The entry guard is held from the live-or-closed decision until the fresh
+/// `kept` sees the registered actor, or `None` for an absent entry, and
+/// returns the answer that leaves the entry as it is, or `None` to replace
+/// it.
+///
+/// The entry guard is held from the keep-or-replace decision until the fresh
 /// actor is registered, so racing callers agree on one actor and only that
 /// caller spawns one. The fresh actor is hydrated with what `seed` returns
-/// before it is registered, so the seed is the first message it reads.
+/// before it is registered, so the seed is the first message it reads and a
+/// concurrent lookup that finds it queues behind the seed.
 ///
 /// The guard is a write lock on the shard of `map` that holds `group_id`,
 /// and the lock is not reentrant. So `seed`, which reads the seed caches, runs
@@ -107,80 +113,96 @@ impl RegisteredActor for StreamsGroupActorHandle {
 /// released. The seed is used only when the entry under the guard still holds
 /// the actor (or the absence) seen before `seed` ran. Otherwise another
 /// caller replaced it meanwhile, its actor may have made newer writes, and the
-/// lookup and `seed` run again. Under the guard run only an atomic
-/// `is_closed` read, `spawn`, a non-blocking `try_seed` and the insert. Every
-/// `spawn` this module passes clones `Arc`s, builds an mpsc channel and hands
-/// an `async fn` future, unpolled, to `tokio::spawn`. None of that touches a
-/// registry map, takes a lock a registry caller holds, blocks or awaits.
+/// lookup and `seed` run again. Under the guard run only `kept`, `spawn`, a
+/// non-blocking `try_seed` and the insert. Every `kept` this module passes
+/// reads `is_closed` atomically or compares pointers, and every `spawn` clones
+/// `Arc`s, builds an mpsc channel and hands an `async fn` future, unpolled, to
+/// `tokio::spawn`. None of that touches a registry map, takes a lock a
+/// registry caller holds, blocks or awaits.
+fn spawn_unless_kept<H: RegisteredActor, S: BuildHasher + Clone, R>(
+    map: &DashMap<String, Arc<H>, S>,
+    group_id: &str,
+    kept: impl Fn(Option<&Arc<H>>) -> Option<R>,
+    spawn: impl FnOnce() -> H,
+    seed: impl Fn() -> Option<H::Seed>,
+    spawned: impl FnOnce(Arc<H>) -> R,
+) -> R {
+    let (entry, cached) = loop {
+        let observed = map.get(group_id).map(|h| Arc::clone(h.value()));
+        if let Some(answer) = kept(observed.as_ref()) {
+            return answer;
+        }
+        let cached = seed();
+        let entry = map.entry(group_id.into());
+        let current = match &entry {
+            Entry::Occupied(entry) => Some(entry.get()),
+            Entry::Vacant(_) => None,
+        };
+        if let Some(answer) = kept(current) {
+            return answer;
+        }
+        let unchanged = match (current, &observed) {
+            (Some(current), Some(observed)) => Arc::ptr_eq(current, observed),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if unchanged {
+            break (entry, cached);
+        }
+    };
+    let fresh = Arc::new(spawn());
+    let undelivered = cached.and_then(|cached| fresh.try_seed(cached).err());
+    entry.insert(Arc::clone(&fresh));
+    if let Some(error) = undelivered {
+        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
+    }
+    spawned(fresh)
+}
+
+/// The live actor that `map` holds for `group_id`, or a fresh one from
+/// `spawn`, hydrated with what `seed` returns, when the entry is absent or
+/// its actor has exited. See [`spawn_unless_kept`].
 fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
     map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
     spawn: impl FnOnce() -> H,
     seed: impl Fn() -> Option<H::Seed>,
 ) -> Arc<H> {
-    let (entry, cached) = loop {
+    spawn_unless_kept(
+        map,
+        group_id,
         // Dead-actor detection: a closed mpsc sender means the actor exited
         // (typically after a log-write failure), and the entry is replaced.
-        let observed = match map.get(group_id) {
-            Some(h) if !h.value().is_closed() => return Arc::clone(h.value()),
-            found => found.map(|h| Arc::clone(h.value())),
-        };
-        let cached = seed();
-        let entry = map.entry(group_id.into());
-        let unchanged = match (&entry, &observed) {
-            (Entry::Occupied(entry), _) if !entry.get().is_closed() => {
-                return Arc::clone(entry.get());
-            }
-            (Entry::Occupied(entry), Some(observed)) => Arc::ptr_eq(entry.get(), observed),
-            (Entry::Vacant(_), None) => true,
-            (Entry::Occupied(_), None) | (Entry::Vacant(_), Some(_)) => false,
-        };
-        if unchanged {
-            break (entry, cached);
-        }
-    };
-    let spawned = Arc::new(spawn());
-    let undelivered = cached.and_then(|cached| spawned.try_seed(cached).err());
-    entry.insert(Arc::clone(&spawned));
-    if let Some(error) = undelivered {
-        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
-    }
-    spawned
+        |found| found.filter(|h| !h.is_closed()).cloned(),
+        spawn,
+        seed,
+        identity,
+    )
 }
 
 /// Replaces `closed`, the exited actor that `map` held for `group_id`, with a
 /// fresh one from `spawn`, hydrated with what `seed` returns, only while `map`
 /// still holds `closed`. A group removed since answers `None`, and an actor
-/// that replaced `closed` since is returned as it is.
-///
-/// As in [`get_or_spawn`], `seed` runs before the entry guard is taken, and
-/// the fresh actor holds its seed before it is registered, so a concurrent
-/// lookup that finds it queues behind the seed. The actor exited before the
-/// caller saw it closed, so the seed read after that holds its last writes.
+/// that replaced `closed` since is returned as it is. See
+/// [`spawn_unless_kept`].
 fn respawn_registered<H: RegisteredActor, S: BuildHasher + Clone>(
     map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
     closed: &Arc<H>,
     spawn: impl FnOnce() -> H,
-    seed: impl FnOnce() -> Option<H::Seed>,
+    seed: impl Fn() -> Option<H::Seed>,
 ) -> Option<Arc<H>> {
-    let cached = seed();
-    let (respawned, undelivered) = match map.entry(group_id.into()) {
-        Entry::Vacant(_) => return None,
-        Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
-            return Some(Arc::clone(entry.get()));
-        }
-        Entry::Occupied(mut entry) => {
-            let respawned = Arc::new(spawn());
-            let undelivered = cached.and_then(|cached| respawned.try_seed(cached).err());
-            entry.insert(Arc::clone(&respawned));
-            (respawned, undelivered)
-        }
-    };
-    if let Some(error) = undelivered {
-        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
-    }
-    Some(respawned)
+    spawn_unless_kept(
+        map,
+        group_id,
+        |found| match found {
+            Some(found) if Arc::ptr_eq(found, closed) => None,
+            other => Some(other.cloned()),
+        },
+        spawn,
+        seed,
+        Some,
+    )
 }
 
 /// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
@@ -306,14 +328,16 @@ impl GroupCoordinator {
         get_or_spawn(
             &self.streams_groups,
             group_id,
-            || {
-                StreamsGroupActorHandle::spawn(
-                    group_id.into(),
-                    Arc::clone(&self.streams_config),
-                    Arc::clone(self),
-                )
-            },
+            || self.spawn_streams(group_id),
             || self.cached_streams_seed(group_id),
+        )
+    }
+
+    fn spawn_streams(self: &Arc<Self>, group_id: &str) -> StreamsGroupActorHandle {
+        StreamsGroupActorHandle::spawn(
+            group_id.into(),
+            Arc::clone(&self.streams_config),
+            Arc::clone(self),
         )
     }
 
@@ -357,13 +381,7 @@ impl GroupCoordinator {
             &self.streams_groups,
             group_id,
             closed,
-            || {
-                StreamsGroupActorHandle::spawn(
-                    group_id.into(),
-                    Arc::clone(&self.streams_config),
-                    Arc::clone(self),
-                )
-            },
+            || self.spawn_streams(group_id),
             || self.cached_streams_seed(group_id),
         )
     }
