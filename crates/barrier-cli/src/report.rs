@@ -9,7 +9,7 @@
 use {
     crate::{
         EXIT_MISMATCH, EXIT_REFUSED, broker_codes::BARRIER_INJECTION_IN_PROGRESS,
-        verify::VerifyOutcome,
+        console::Console, verify::VerifyOutcome,
     },
     krabka_protocol::krabka::{
         barrier,
@@ -41,23 +41,23 @@ pub fn described_error(code: i16, message: Option<&str>) -> String {
     }
 }
 
-fn report_refused(code: i16, message: Option<&str>) -> i32 {
-    eprintln!("{}", described_error(code, message));
+fn report_refused(console: &mut Console<'_>, code: i16, message: Option<&str>) -> i32 {
+    console.err(described_error(code, message));
     EXIT_REFUSED
 }
 
 /// One line per altered group.
-pub fn report_alter(response: &AlterBarrierGroupsResponse) -> i32 {
+pub fn report_alter(response: &AlterBarrierGroupsResponse, console: &mut Console<'_>) -> i32 {
     let mut exit = 0;
     for result in &response.results {
         if result.error_code == 0 {
-            println!("{}\tok", result.group);
+            console.out(format!("{}\tok", result.group));
         } else {
-            eprintln!(
+            console.err(format!(
                 "{}\t{}",
                 result.group,
                 described_error(result.error_code, result.error_message.as_deref())
-            );
+            ));
             exit = EXIT_REFUSED;
         }
     }
@@ -65,119 +65,119 @@ pub fn report_alter(response: &AlterBarrierGroupsResponse) -> i32 {
 }
 
 /// One block per described group.
-pub fn report_describe(response: &DescribeBarrierGroupsResponse) -> i32 {
+pub fn report_describe(response: &DescribeBarrierGroupsResponse, console: &mut Console<'_>) -> i32 {
     let mut exit = 0;
     for group in &response.groups {
         if group.error_code != 0 {
-            eprintln!("{}\t{}", group.group, code_name(group.error_code));
+            console.err(format!("{}\t{}", group.group, code_name(group.error_code)));
             exit = EXIT_REFUSED;
             continue;
         }
-        println!("group           {}", group.group);
-        println!("topics          {}", group.topics.join(", "));
-        println!(
+        console.out(format!("group           {}", group.group));
+        console.out(format!("topics          {}", group.topics.join(", ")));
+        console.out(format!(
             "interval        {}",
             if group.interval_ms < 0 {
                 "on demand only".to_owned()
             } else {
                 format!("{}ms", group.interval_ms)
             }
-        );
-        println!("retained cuts   {}", group.retained_cuts);
+        ));
+        console.out(format!("retained cuts   {}", group.retained_cuts));
         // The broker spells "never injected" as 0 and allocates 1 for the
         // first cut, while the wire field's own default is -1. Either way no
         // real epoch is at or below zero, so both read as none.
-        println!(
+        console.out(format!(
             "last epoch      {}",
             if group.last_epoch <= 0 {
                 "none yet".to_owned()
             } else {
                 group.last_epoch.to_string()
             }
-        );
-        println!("coordinator     {}", group.coordinator_id);
-        println!();
+        ));
+        console.out(format!("coordinator     {}", group.coordinator_id));
+        console.out("");
     }
     exit
 }
 
 /// The epoch a trigger produced, and the offsets it took.
-pub fn report_trigger(response: &TriggerBarrierResponse) -> i32 {
+pub fn report_trigger(response: &TriggerBarrierResponse, console: &mut Console<'_>) -> i32 {
     if response.error_code != 0 {
-        return report_refused(response.error_code, response.error_message.as_deref());
+        return report_refused(console, response.error_code, response.error_message.as_deref());
     }
-    println!("epoch  {}", response.epoch);
-    println!("status {}", status_name(response.status));
+    console.out(format!("epoch  {}", response.epoch));
+    console.out(format!("status {}", status_name(response.status)));
     for topic in &response.topics {
         for partition in &topic.partitions {
-            println!(
+            console.out(format!(
                 "{}\t{}\t{}",
                 topic.topic, partition.partition, partition.offset
-            );
+            ));
         }
     }
     // A partial cut is a published outcome, not a failure: the epoch is
     // consumed and the markers that did land cannot be withdrawn. Naming the
     // gaps is what lets a reader skip the epoch deterministically.
     for missing in &response.missing {
-        eprintln!("no marker: {}\t{}", missing.topic, missing.partition);
+        console.err(format!("no marker: {}\t{}", missing.topic, missing.partition));
     }
     0
 }
 
 /// One line per partition of each retained cut.
-pub fn report_list(response: &ListBarrierCutsResponse) -> i32 {
+pub fn report_list(response: &ListBarrierCutsResponse, console: &mut Console<'_>) -> i32 {
     if response.error_code != 0 {
-        return report_refused(response.error_code, response.error_message.as_deref());
+        return report_refused(console, response.error_code, response.error_message.as_deref());
     }
     for cut in &response.cuts {
-        println!(
+        console.out(format!(
             "epoch {} {} triggered {} completed {}",
             cut.epoch,
             status_name(cut.status),
             cut.triggered_at,
             cut.completed_at
-        );
+        ));
         for topic in &cut.topics {
             for partition in &topic.partitions {
-                println!(
+                console.out(format!(
                     "  {}\t{}\t{}",
                     topic.topic, partition.partition, partition.offset
-                );
+                ));
             }
         }
         for missing in &cut.missing {
-            println!("  {}\t{}\tno marker", missing.topic, missing.partition);
+            console.out(format!("  {}\t{}\tno marker", missing.topic, missing.partition));
         }
     }
     0
 }
 
 /// What a verify found.
-pub fn report_verify(outcome: &VerifyOutcome) -> i32 {
+pub fn report_verify(outcome: &VerifyOutcome, console: &mut Console<'_>) -> i32 {
     for checked in &outcome.checked {
-        println!("{}\t{}\t{}\tok", checked.0, checked.1, checked.2);
+        console.out(format!("{}\t{}\t{}\tok", checked.0, checked.1, checked.2));
     }
     if outcome.mismatches.is_empty() {
-        println!(
+        console.out(format!(
             "cut {} verified: {} markers are in the log",
             outcome.epoch,
             outcome.checked.len()
-        );
+        ));
         return 0;
     }
     for mismatch in &outcome.mismatches {
-        eprintln!(
+        console.err(format!(
             "{}\t{}\t{}\t{}",
             mismatch.topic, mismatch.partition, mismatch.offset, mismatch.reason
-        );
+        ));
     }
-    eprintln!(
+    console.err(format!(
         "cut {} does not match the log: {} of {} offsets are wrong",
         outcome.epoch,
         outcome.mismatches.len(),
         outcome.checked.len() + outcome.mismatches.len()
-    );
+    ));
     EXIT_MISMATCH
 }
 
@@ -189,6 +189,9 @@ fn status_name(status: i8) -> &'static str {
         "partial"
     }
 }
+
+#[cfg(test)]
+mod scenarios;
 
 #[cfg(test)]
 mod tests {

@@ -3716,8 +3716,10 @@ name = "krabka-barrier"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "bon",
  "bytes",
  "clap",
+ "krabka-bdd",
  "krabka-broker",
  "krabka-client-admin",
  "krabka-client-core",
@@ -3725,6 +3727,10 @@ dependencies = [
  "krabka-macros",
  "krabka-protocol",
  "krabka-units 0.8.0",
+ "rstest",
+ "rstest-bdd",
+ "rstest-bdd-harness",
+ "rstest-bdd-macros",
  "tempfile",
  "tokio",
  "tracing",
