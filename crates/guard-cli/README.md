@@ -81,7 +81,7 @@ principals:
 ```sh
 # Alice opens the proposal. The tool prints its id.
 krabka-guard -b broker-1:9092 break-glass propose \
-  --action thaw-topic-freeze --target orders \
+  --action thaw-topic-freeze --target literal:orders \
   --reason "cutover complete" --ttl 30m
 
 # Bob approves it.
@@ -131,7 +131,10 @@ verification and exits `5`.
 `--action` is one of `thaw-topic-freeze`, `unclean-elect-leaders`,
 `unclean-recovery`, `unregister-broker`, `cancel-reassignment`,
 `delete-topic`, and `delete-records`. `--target` is a topic, a broker id, or a
-partition, depending on the action.
+partition, depending on the action. A `thaw-topic-freeze` target names the freeze
+with its pattern type, as `literal:<topic>` or `prefixed:<prefix>`. A bare topic
+name matches no freeze, so the thaw that spends it reports a missing approval.
+
 
 A `<time>` value takes any unit the broker configuration takes: `ns`, `us`,
 `ms`, `s`, `m`, `h`, `d`, and their long forms. The tool refuses a number with

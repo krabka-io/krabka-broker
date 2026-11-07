@@ -52,6 +52,8 @@ pub mod signing;
 pub mod verify;
 
 #[cfg(test)]
+mod scenarios;
+#[cfg(test)]
 mod tests;
 
 pub use self::{

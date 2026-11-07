@@ -333,8 +333,10 @@ fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
 /// Decode a `KrabkaSubmitChangeResponse` from the leader's `resp_body` and map
 /// its transport `error_code` into the caller's `Result`:
 /// - `0` → applied (`Ok`).
-/// - `2` → the leader rejected at apply-time (topic already exists). The wire
-///   carries only a code; the topic name is what the caller had in hand.
+/// - `2` → the leader rejected the change
+///   ([`RaftError::ForwardedChangeRejected`]). The leader sends this code for
+///   any metadata validation failure and for a body it could not decode, and
+///   the wire carries no reason, so it does not say that a topic exists.
 /// - [`crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL`] → the leader refused a
 ///   compare-and-set until its tail commits ([`RaftError::UncommittedTail`]).
 /// - [`crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED`] → the leader denied
@@ -366,9 +368,7 @@ pub fn translate_submit_change_response(
             &resp.result,
         )
         .map_err(RaftError::from),
-        2 => Err(RaftError::Metadata(
-            krabka_metadata::MetadataError::TopicExists(String::new()),
-        )),
+        2 => Err(RaftError::ForwardedChangeRejected),
         SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
         PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
         PRIVATE_UNSUPPORTED_VERSION => {
@@ -408,7 +408,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum SubmitResponseExpectation {
         Applied,
-        TopicExists,
+        ForwardedChangeRejected,
         UncommittedTail,
         ClusterAuthorizationFailed,
         UnsupportedVersion,
@@ -636,7 +636,20 @@ mod tests {
 
     #[yare::parameterized(
         applied = { 0, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::Applied },
-        topic_exists = { 2, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::TopicExists },
+        rejected = {
+            2,
+            -1,
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            SubmitResponseExpectation::ForwardedChangeRejected,
+        },
+        token_rejected = {
+            2,
+            -1,
+            API_KEY_DELEGATION_TOKEN_MUTATION,
+            0,
+            SubmitResponseExpectation::ForwardedChangeRejected,
+        },
         uncommitted_tail = {
             SUBMIT_CHANGE_UNCOMMITTED_TAIL,
             -1,
@@ -699,10 +712,9 @@ mod tests {
                 let error = result.expect_err("response is an error");
                 let matches = match expected {
                     SubmitResponseExpectation::Applied => unreachable!(),
-                    SubmitResponseExpectation::TopicExists => matches!(
-                        error,
-                        RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
-                    ),
+                    SubmitResponseExpectation::ForwardedChangeRejected => {
+                        matches!(error, RaftError::ForwardedChangeRejected)
+                    }
                     SubmitResponseExpectation::UncommittedTail => {
                         matches!(error, RaftError::UncommittedTail)
                     }
