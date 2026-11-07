@@ -1,20 +1,22 @@
-//! A scenario-state slot that a Given step fills and later steps read.
+//! A scenario-state slot that an earlier step fills and later steps read.
 
 use std::fmt;
 
-/// One piece of scenario state that a Given step fills and later steps read.
+/// One piece of scenario state that an earlier step fills and later steps read.
 ///
 /// It replaces the `Option<T>` field plus `.expect("x requested")` that step
 /// fixtures otherwise repeat. A read of an unset slot panics with a message
-/// that names the field and the step that fills it, so a scenario that leaves
-/// out a Given step fails with a pointer to the missing step.
+/// that names the field and the step that fills it, keyword included, so a
+/// scenario that leaves out its Given step fails with a pointer to the missing
+/// step. Most slots are filled by a Given; a slot that holds what the When did
+/// names its When step the same way.
 ///
 /// # Examples
 ///
 /// ```
 /// use {assert2::assert, krabka_bdd::Given};
 ///
-/// let mut policy = Given::new("policy", "a log has cleanup policy <policy>");
+/// let mut policy = Given::new("policy", "Given a log has cleanup policy <policy>");
 /// assert!(!policy.is_set());
 /// policy.set("delete");
 /// assert!(*policy.get() == "delete");
@@ -28,8 +30,9 @@ pub struct Given<T> {
 impl<T> Given<T> {
     /// Creates an empty slot.
     ///
-    /// `field` names the state in panic messages. `step` is the text of the
-    /// Given step that fills it, such as `a log has cleanup policy <policy>`.
+    /// `field` names the state in panic messages. `step` is the step that
+    /// fills it, with its keyword, such as
+    /// `Given a log has cleanup policy <policy>`.
     #[must_use]
     pub const fn new(field: &'static str, step: &'static str) -> Self {
         Self {
@@ -87,13 +90,28 @@ impl<T> Given<T> {
         };
         value
     }
+
+    /// Moves the stored value out and leaves the slot unset, for a step that
+    /// hands the value on, such as joining a task or sending on a channel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no step has set the slot.
+    #[must_use]
+    #[track_caller]
+    pub fn take(&mut self) -> T {
+        let Some(value) = self.value.take() else {
+            unset_panic(self.field, self.step);
+        };
+        value
+    }
 }
 
 #[track_caller]
 fn unset_panic(field: &str, step: &str) -> ! {
     panic!(
-        "scenario state `{field}` is not set: the scenario needs a Given step like `{step}` \
-         before this step"
+        "scenario state `{field}` is not set: the scenario needs the step `{step}` before \
+         this one"
     )
 }
 
@@ -117,11 +135,11 @@ mod tests {
         std::panic::{UnwindSafe, catch_unwind},
     };
 
-    const EXPECTED_PANIC: &str = "scenario state `policy` is not set: the scenario needs a \
-                                  Given step like `a log has cleanup policy <policy>` before \
-                                  this step";
+    const EXPECTED_PANIC: &str = "scenario state `policy` is not set: the scenario needs the \
+                                  step `Given a log has cleanup policy <policy>` before this \
+                                  one";
 
-    fn slot() -> Given<String> { Given::new("policy", "a log has cleanup policy <policy>") }
+    fn slot() -> Given<String> { Given::new("policy", "Given a log has cleanup policy <policy>") }
 
     fn panic_message(run: impl FnOnce() + UnwindSafe) -> String {
         let payload = catch_unwind(run).expect_err("the read should panic");
@@ -147,6 +165,14 @@ mod tests {
     }
 
     #[test]
+    fn take_moves_the_value_out_and_unsets_the_slot() {
+        let mut policy = slot();
+        policy.set("delete".to_owned());
+        assert!(policy.take() == "delete");
+        assert!(!policy.is_set());
+    }
+
+    #[test]
     fn get_mut_changes_the_stored_value() {
         let mut policy = slot();
         policy.set("delete".to_owned());
@@ -166,6 +192,7 @@ mod tests {
     #[case::get(|| { let _ = slot().get().len(); })]
     #[case::get_mut(|| { let _ = slot().get_mut().len(); })]
     #[case::into_inner(|| { let _ = slot().into_inner(); })]
+    #[case::take(|| { let _ = slot().take(); })]
     fn reading_an_unset_slot_names_the_field_and_step(#[case] read: fn()) {
         assert!(panic_message(read) == EXPECTED_PANIC);
     }
@@ -176,7 +203,7 @@ mod tests {
         policy.set("delete".to_owned());
         assert!(
             format!("{policy:?}")
-                == r#"Given { field: "policy", step: "a log has cleanup policy <policy>", value: Some("delete") }"#
+                == r#"Given { field: "policy", step: "Given a log has cleanup policy <policy>", value: Some("delete") }"#
         );
     }
 }
