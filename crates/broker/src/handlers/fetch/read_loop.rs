@@ -418,8 +418,7 @@ pub(super) async fn execute_pending_reads(
     }
     // Boxed like the long poll below: the pass's state stays off the
     // connection task's future, which the fetch handler's future sits in.
-    state.checked_image =
-        Box::pin(first_read_pass(broker, &mut pending, &mut state, phases)).await;
+    state.checked_image = Box::pin(first_read_pass(broker, &mut pending, &mut state, phases)).await;
     let long_poll_active = if should_park(&state, &pending) {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));

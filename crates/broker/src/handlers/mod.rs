@@ -115,8 +115,8 @@ macro_rules! raw_request_handler {
         ) -> DispatchResult $body
     };
 }
-pub(crate) use raw_request_handler;
 pub use self::leader_hint::LeaderHint;
+pub(crate) use raw_request_handler;
 
 pub mod context;
 pub use context::{RequestContext, TelemetryContext};
