@@ -150,6 +150,11 @@ fn get_or_spawn<H: RegisteredActor, S: BuildHasher + Clone>(
 /// fresh one from `spawn`, hydrated with what `seed` returns, only while `map`
 /// still holds `closed`. A group removed since answers `None`, and an actor
 /// that replaced `closed` since is returned as it is.
+///
+/// As in [`get_or_spawn`], `seed` runs before the entry guard is taken, and
+/// the fresh actor holds its seed before it is registered, so a concurrent
+/// lookup that finds it queues behind the seed. The actor exited before the
+/// caller saw it closed, so the seed read after that holds its last writes.
 fn respawn_registered<H: RegisteredActor, S: BuildHasher + Clone>(
     map: &DashMap<String, Arc<H>, S>,
     group_id: &str,
@@ -157,19 +162,21 @@ fn respawn_registered<H: RegisteredActor, S: BuildHasher + Clone>(
     spawn: impl FnOnce() -> H,
     seed: impl FnOnce() -> Option<H::Seed>,
 ) -> Option<Arc<H>> {
-    let respawned = match map.entry(group_id.into()) {
+    let cached = seed();
+    let (respawned, undelivered) = match map.entry(group_id.into()) {
         Entry::Vacant(_) => return None,
         Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
             return Some(Arc::clone(entry.get()));
         }
         Entry::Occupied(mut entry) => {
             let respawned = Arc::new(spawn());
+            let undelivered = cached.and_then(|cached| respawned.try_seed(cached).err());
             entry.insert(Arc::clone(&respawned));
-            respawned
+            (respawned, undelivered)
         }
     };
-    if let Some(seed) = seed() {
-        let _ = respawned.try_seed(seed);
+    if let Some(error) = undelivered {
+        tracing::warn!(group_id, %error, "dropped the seed of a respawned group actor");
     }
     Some(respawned)
 }
@@ -821,6 +828,28 @@ mod tests {
                 .is_some_and(|r| Arc::ptr_eq(r.value(), &answer))
         );
         assert!(answer.seeds() == vec![2]);
+    }
+
+    /// A lookup that runs while a closed actor is respawned, as a heartbeat or
+    /// a delete on another task may, can be handed the fresh actor only once
+    /// that actor holds its seed, so the seed is the first message it reads.
+    #[test]
+    fn a_respawned_actor_reads_its_seed_before_a_concurrent_lookups_request() {
+        let map = DashMap::new();
+        let closed = Arc::new(FakeActor::closed());
+        map.insert("g".to_owned(), Arc::clone(&closed));
+        let seed = || {
+            if let Some(found) = map.get("g") {
+                found.value().request();
+            }
+            Some(7)
+        };
+
+        let fresh = respawn_registered(&map, "g", &closed, FakeActor::default, seed)
+            .expect("a respawned actor");
+
+        check!(map.get("g").is_some_and(|r| Arc::ptr_eq(r.value(), &fresh)));
+        assert!(fresh.received() == vec![Received::Seed(7)]);
     }
 
     /// A hasher that sends every key to the same `DashMap` shard, so a test
