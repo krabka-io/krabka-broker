@@ -801,7 +801,7 @@ connections_max_idle = "5s"
         expected: QuotaWindows,
     ) {
         let actual = file_outcome(source, quota_windows);
-        assert!(actual == Ok(expected));
+        assert2::assert!(actual == Ok(expected));
     }
 
     /// Kafka declares each window key `atLeast(1)`, so a zero, a negative or
@@ -819,7 +819,7 @@ connections_max_idle = "5s"
 
         let actual = file_outcome(&source, quota_windows);
 
-        assert!(
+        assert2::assert!(
             actual
                 == Err(format!(
                     "invalid config: server_properties `{key}` must be a positive integer, got `{value}`"
