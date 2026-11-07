@@ -7,8 +7,9 @@
 //! `LocalLeaderEndPoint.buildFetch` and
 //! `ReplicaAlterLogDirsThread.processPartitionData` do. While the measured
 //! rate is above the bound, the pass reads nothing. Otherwise it reads a whole
-//! `read_chunk`, appends it, and records the bytes it read. A future log that
-//! is already caught up costs no quota. The pass also re-bases the future log
+//! `read_chunk`, appends it, and records the bytes it read. The quota is asked
+//! first, so a caught-up future log is not promoted while it is exceeded. The
+//! pass also re-bases the future log
 //! when retention advances the source start.
 
 use {
@@ -36,6 +37,15 @@ pub(super) fn catch_up(
     read_chunk: ByteSize,
     throttle: &ReplicationQuota,
 ) -> Result<CatchUpProgress, BrokerError> {
+    // Kafka builds no fetch at all this round while the quota is exceeded
+    // (`LocalLeaderEndPoint.buildFetch`), so not even a caught-up future log
+    // is seen to be caught up, and its promotion waits for the quota.
+    if throttle.quota_exceeded() {
+        return Ok(CatchUpProgress {
+            caught_up: false,
+            throttled: true,
+        });
+    }
     // Snapshot both source bounds under one lock so a retention update cannot
     // produce an internally inconsistent start/end pair.
     // The move copies local files, so the floor that bounds it is the local
@@ -56,15 +66,6 @@ pub(super) fn catch_up(
         return Ok(CatchUpProgress {
             caught_up: true,
             throttled: false,
-        });
-    }
-
-    // Kafka builds no fetch for the partition this round while the quota is
-    // exceeded (`LocalLeaderEndPoint.buildFetch`).
-    if throttle.quota_exceeded() {
-        return Ok(CatchUpProgress {
-            caught_up: false,
-            throttled: true,
         });
     }
 
@@ -130,15 +131,14 @@ mod tests {
         super::*,
         crate::{
             future_log::test_support::{
-                OpenedFutureLog, append_records, fixture_partition, open_future_log,
-                source_fixture,
+                OpenedFutureLog, append_records, fixture_partition, open_future_log, source_fixture,
             },
             test_support::PartitionRecordsSetup,
             throttle::ReplicationQuota,
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_units::{ByteRate, bytes, bytes_per_sec, convert::ByteRateExt as _, mebibytes},
+        krabka_units::{ByteRate, bytes_per_sec, convert::ByteRateExt as _, mebibytes},
         qubit_clock::ManualMonotonicClock,
         std::{path::Path, sync::PoisonError},
         tempfile::tempdir,
@@ -241,8 +241,11 @@ mod tests {
         let progress = catch_up(&part, &future, mebibytes(1), &throttle).expect("catch up");
 
         assert!(
-            (progress_flags(&progress), future_leo(&future), throttle.measured_rate())
-                == ((false, true), Offset(0), bytes_per_sec(10 * 1024))
+            (
+                progress_flags(&progress),
+                future_leo(&future),
+                throttle.measured_rate()
+            ) == ((false, true), Offset(0), bytes_per_sec(10 * 1024))
         );
     }
 
@@ -268,8 +271,15 @@ mod tests {
             .sum();
         let copied = i64::try_from(copied).expect("copied bytes");
         assert!(
-            (progress_flags(&progress), future_leo(&future), throttle.measured_rate())
-                == ((false, false), Offset(2), ByteRate::from_bytes_per_sec(copied))
+            (
+                progress_flags(&progress),
+                future_leo(&future),
+                throttle.measured_rate()
+            ) == (
+                (false, false),
+                Offset(2),
+                ByteRate::from_bytes_per_sec(copied)
+            )
         );
         assert!(throttle.quota_exceeded());
     }
@@ -299,6 +309,30 @@ mod tests {
                 progress_flags(&second),
                 future_leo(&future),
             ) == ((false, false), Offset(2), (false, true), Offset(2))
+        );
+    }
+
+    /// Kafka asks the move quota before it fetches at all, so a future log
+    /// that has caught up is not reported caught up, and so not promoted,
+    /// while the quota is exceeded. Once the quota reopens it is.
+    #[tokio::test]
+    async fn a_caught_up_move_waits_for_an_exceeded_quota() {
+        let fixture = source_fixture().count(1).call();
+        let _primary = fixture.primary;
+        let OpenedFutureLog { log: future, .. } = open_future_log(fixture.target.path());
+        let throttle = frozen_quota();
+        catch_up(&fixture.partition, &future, mebibytes(1), &throttle).expect("copy");
+        throttle.set_bound(Some(bytes_per_sec(1)));
+
+        let exceeded =
+            catch_up(&fixture.partition, &future, mebibytes(1), &throttle).expect("exceeded pass");
+        throttle.set_bound(None);
+        let reopened =
+            catch_up(&fixture.partition, &future, mebibytes(1), &throttle).expect("reopened pass");
+
+        assert!(
+            (progress_flags(&exceeded), progress_flags(&reopened))
+                == ((false, true), (true, false))
         );
     }
 }
