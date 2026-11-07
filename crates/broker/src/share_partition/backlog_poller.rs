@@ -118,28 +118,45 @@ impl BacklogPoller {
                     continue;
                 };
                 for partition in partitions {
-                    let spso = self
-                        .persister
-                        .read_state_summary(&group_id, topic_id, partition)
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
-                    let PartitionOffsets {
-                        high_watermark: hwm,
-                        log_start,
-                    } = self.offsets(image, &topic, partition).await?;
+                    let backlog = self
+                        .sample_partition(image, &group_id, topic_id, &topic, partition)
+                        .await?;
                     snapshot.insert(
                         ShareGroupLabel {
                             group_id: group_id.clone(),
                             topic: topic.clone(),
                             partition,
                         },
-                        effective_backlog(hwm, spso, log_start),
+                        backlog,
                     );
                 }
             }
         }
         Ok(snapshot)
+    }
+
+    /// The effective backlog of one share-group partition, from its
+    /// share-partition start offset (`-1` when it has no share state), high
+    /// watermark and log start offset. See [`effective_backlog`].
+    async fn sample_partition(
+        &self,
+        image: &krabka_metadata::MetadataImage,
+        group_id: &str,
+        topic_id: uuid::Uuid,
+        topic: &str,
+        partition: i32,
+    ) -> Result<i64, String> {
+        let spso = self
+            .persister
+            .read_state_summary(group_id, topic_id, partition)
+            .await
+            .map_err(|error| error.to_string())?
+            .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
+        let PartitionOffsets {
+            high_watermark: hwm,
+            log_start,
+        } = self.offsets(image, topic, partition).await?;
+        Ok(effective_backlog(hwm, spso, log_start))
     }
 
     async fn offsets(
