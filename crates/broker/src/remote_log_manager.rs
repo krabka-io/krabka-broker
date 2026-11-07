@@ -135,15 +135,13 @@ async fn disable_and_delete_remote(
     )
     .await;
 
-    let local_start = {
-        let Some(log) = lock_log_or_skip(partition) else {
-            return;
-        };
-        log.local_log_start_offset()
-    };
+    // One hold of the lock for the read and the write: a local-retention pass
+    // or a truncation between two holds could move the local start, and the
+    // stale value would become the global floor.
     let Some(mut log) = lock_log_or_skip(partition) else {
         return;
     };
+    let local_start = log.local_log_start_offset();
     if let Err(error) = log.set_log_start_offset(local_start) {
         warn!(topic = %tp.topic, partition = tp.partition, %error,
               "remote-log-manager: failed to raise the log start offset after disabling tiering");
