@@ -76,7 +76,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-remote-storage-topic/1.1.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage-topic/1.1.6")]
 
 pub mod error;
 pub mod kafka_log;

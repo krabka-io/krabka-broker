@@ -23,6 +23,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-11-02
+
 ### Added
 
 - Native Streams topology storage callbacks expose bounded operation/result counters and duration histograms for set, get and delete. See [native storage telemetry](docs/streams-topology-description-storage.md#native-callback-telemetry).
@@ -2659,7 +2661,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.6
 [1.1.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.5
 [1.1.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.4
 [1.1.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.3
