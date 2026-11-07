@@ -164,8 +164,8 @@ impl GroupCoordinator {
     /// It respawns only while the registry still holds the stopped actor. An
     /// unload takes the group out of the registry before it drops the seed,
     /// so a respawn in between, from the stopping actor's own exit or from a
-    /// request already routed, would bring the group back on a broker that no
-    /// longer coordinates it.
+    /// lookup through this function, would bring the group back on a broker
+    /// that no longer coordinates it.
     #[must_use]
     pub(crate) fn live_or_respawned(
         self: &Arc<Self>,
