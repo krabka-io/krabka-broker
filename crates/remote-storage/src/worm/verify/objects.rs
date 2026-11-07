@@ -59,39 +59,45 @@ pub(super) async fn check_objects(
         .filter(|key| object_is_in_manifest_segment(key, manifest, None))
         .count();
     let mut keys = HashSet::new();
-    let mut unique_keys = true;
-    let mut coordinates_match = true;
-    let mut all_present = true;
-    let mut sizes_match = true;
-    let mut digests_match = true;
-    let mut first_duplicate = None;
-    let mut first_coordinate = None;
-    let mut first_missing = None;
-    let mut first_size = None;
-    let mut first_digest = None;
+    let mut duplicate = FirstFailure::default();
+    let mut coordinate = FirstFailure::default();
+    let mut missing = FirstFailure::default();
+    let mut wrong_size = FirstFailure::default();
+    let mut wrong_digest = FirstFailure::default();
 
     for object in &manifest.body.objects {
         if !keys.insert(object.key.as_str()) {
-            unique_keys = false;
-            first_duplicate.get_or_insert_with(|| object.key.clone());
+            duplicate.record(|| {
+                format!(
+                    "object `{}` is named more than once by the manifest",
+                    object.key
+                )
+            });
         }
 
         let coordinate_matches =
             object_is_in_manifest_segment(&object.key, manifest, Some(&object.suffix));
         if !coordinate_matches {
-            coordinates_match = false;
-            first_coordinate.get_or_insert_with(|| object.key.clone());
+            coordinate.record(|| {
+                format!(
+                    "object `{}` does not match the manifest segment coordinates or suffix",
+                    object.key
+                )
+            });
         }
 
         match listing.get(&object.key).copied() {
             None => {
-                all_present = false;
-                first_missing.get_or_insert_with(|| object.key.clone());
+                missing.record(|| {
+                    format!(
+                        "object `{}` named by the manifest is missing from the archive",
+                        object.key
+                    )
+                });
             }
             Some(size) => {
                 if size != object.size_bytes {
-                    sizes_match = false;
-                    first_size.get_or_insert_with(|| {
+                    wrong_size.record(|| {
                         format!(
                             "object `{}` is {size} bytes, the manifest records a size of {} bytes",
                             object.key, object.size_bytes
@@ -101,9 +107,8 @@ pub(super) async fn check_objects(
                 if depth == VerifyDepth::Deep {
                     let digest = object_digest(store, &object.key, None).await?;
                     if digest != object.sha256 {
-                        digests_match = false;
                         let pinned = pinned_version_note(store, object).await;
-                        first_digest.get_or_insert_with(|| {
+                        wrong_digest.record(|| {
                             format!(
                                 "object `{}` hashes to {digest}, the manifest records {}{pinned}",
                                 object.key, object.sha256
@@ -117,43 +122,54 @@ pub(super) async fn check_objects(
 
     let object_count = u64::try_from(manifest.body.objects.len()).unwrap_or(u64::MAX);
     let listed_count = u64::try_from(listed_count).unwrap_or(u64::MAX);
+    // `worm_object_set_decision` names a failed check only when that check's
+    // fact is false, and each fact is false only once its failure is recorded.
     let reason = match worm_object_set_decision(WormObjectSetFacts {
         object_count,
         listed_count,
         identity: WormObjectIdentityFacts {
-            unique_keys,
-            coordinates_match,
+            unique_keys: duplicate.passed(),
+            coordinates_match: coordinate.passed(),
         },
         availability: WormObjectAvailabilityFacts {
-            all_present,
-            sizes_match,
+            all_present: missing.passed(),
+            sizes_match: wrong_size.passed(),
         },
         digests: WormDigestFacts {
             require_digests: depth == VerifyDepth::Deep,
-            digests_match,
+            digests_match: wrong_digest.passed(),
         },
     }) {
         WormObjectSetDecision::Empty => Some("manifest names no segment objects".to_owned()),
-        WormObjectSetDecision::DuplicateKey => Some(format!(
-            "object `{}` is named more than once by the manifest",
-            first_duplicate.unwrap_or_default()
-        )),
-        WormObjectSetDecision::CoordinateMismatch => Some(format!(
-            "object `{}` does not match the manifest segment coordinates or suffix",
-            first_coordinate.unwrap_or_default()
-        )),
-        WormObjectSetDecision::MissingObject => Some(format!(
-            "object `{}` named by the manifest is missing from the archive",
-            first_missing.unwrap_or_default()
-        )),
+        WormObjectSetDecision::DuplicateKey => duplicate.into_reason(),
+        WormObjectSetDecision::CoordinateMismatch => coordinate.into_reason(),
+        WormObjectSetDecision::MissingObject => missing.into_reason(),
         WormObjectSetDecision::CountMismatch => Some(format!(
             "manifest names {object_count} objects, but the archive holds {listed_count} objects for this segment"
         )),
-        WormObjectSetDecision::SizeMismatch => first_size,
-        WormObjectSetDecision::DigestMismatch => first_digest,
+        WormObjectSetDecision::SizeMismatch => wrong_size.into_reason(),
+        WormObjectSetDecision::DigestMismatch => wrong_digest.into_reason(),
         WormObjectSetDecision::Admit => None,
     };
     Ok(reason)
+}
+
+/// The first failure one object-set check found, as its reason text.
+///
+/// Every object is checked, but only the first failure is reported, so a
+/// later failure leaves the recorded reason as it is.
+#[derive(Default)]
+struct FirstFailure(Option<String>);
+
+impl FirstFailure {
+    /// Records `reason` unless an earlier failure was recorded already.
+    fn record(&mut self, reason: impl FnOnce() -> String) { self.0.get_or_insert_with(reason); }
+
+    /// No failure was recorded.
+    fn passed(&self) -> bool { self.0.is_none() }
+
+    /// The first recorded failure.
+    fn into_reason(self) -> Option<String> { self.0 }
 }
 
 /// Streams one object and returns its `SHA-256`.
