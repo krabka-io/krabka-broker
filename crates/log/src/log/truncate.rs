@@ -230,7 +230,7 @@ impl Log {
         // Kafka's `rebuildProducerState` skips the replay when there were no
         // producers and no unreplicated transactions before the truncation:
         // cutting the log cannot create any.
-        if !self.producer_state.is_empty() || !self.unreplicated.is_empty() {
+        if !self.producers.entries.is_empty() || !self.unreplicated.is_empty() {
             self.rebuild_producer_and_transaction_state()?;
         }
         // Kafka's `UnifiedLog.truncateTo` rebuilds the producer state and
@@ -238,7 +238,7 @@ impl Log {
         self.take_producer_snapshot()?;
         // A verification started against the discarded tail proves nothing
         // about the retained log. A reopen starts without one too.
-        self.verification_states.clear();
+        self.producers.verifications.clear();
         let new_end = self.log_end_offset();
         // Every cached visibility frontier is clamped to the actual retained
         // batch prefix, which can end before a cut that lands inside a batch.

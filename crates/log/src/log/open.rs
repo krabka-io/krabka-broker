@@ -15,6 +15,7 @@ use {
             control_batch_kind, transaction_marker_flags,
         },
         pending_transactions::PendingTransactions,
+        producer_state::ProducerStateManager,
     },
     crate::{
         config::LogConfig,
@@ -226,11 +227,9 @@ impl Log {
             clean_prefix_segments: 0,
             lso,
             pending: PendingTransactions::default(),
-            verification_states: HashMap::new(),
             unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
-            producer_state: HashMap::new(),
-            earlier_batches: HashMap::new(),
+            producers: ProducerStateManager::default(),
             active_txn_index,
             sealed_txn_indexes,
             stamp_source: None,
@@ -343,8 +342,8 @@ impl Log {
         let snapshot = producer_snapshot::reload(&self.dir, range)?;
         let snapshot_offset = snapshot.as_ref().map(|loaded| loaded.offset.0);
         if let Some(LoadedSnapshot { state, .. }) = snapshot {
-            self.producer_state = state;
-            for (&producer_id, entry) in &self.producer_state {
+            self.producers.entries = state;
+            for (&producer_id, entry) in &self.producers.entries {
                 if let Some(first_offset) = entry.current_txn_first_offset {
                     self.pending.insert(producer_id, first_offset);
                 }
@@ -378,7 +377,12 @@ impl Log {
                 self.apply_recovered_batch_state(batch)?;
                 let covered: Vec<_> = boundaries.range(..=advanced_to).copied().collect();
                 for boundary in covered {
-                    producer_snapshot::write(&*self.io, &self.dir, boundary, &self.producer_state)?;
+                    producer_snapshot::write(
+                        &*self.io,
+                        &self.dir,
+                        boundary,
+                        &self.producers.entries,
+                    )?;
                     let _ = boundaries.remove(&boundary);
                 }
             }
@@ -397,7 +401,7 @@ impl Log {
         // `write` keeps a snapshot already at `end`, which a replay boundary
         // or the loaded snapshot put there with this same state.
         if end.0 > range.log_start {
-            producer_snapshot::write(&*self.io, &self.dir, end, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, end, &self.producers.entries)?;
         }
         self.rebuild_pending_stamp_ranges(|_| {})?;
         self.refresh_lso()?;
@@ -550,13 +554,14 @@ impl Log {
         }
         if batch.attributes.is_control_batch() {
             let entry = self
-                .producer_state
+                .producers
+                .entries
                 .entry(producer_id)
                 .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, batch.producer_epoch));
             if entry.producer_epoch != batch.producer_epoch {
                 // Kafka clears the retained data-batch metadata when an end
                 // marker advances the producer epoch (transaction version 2).
-                self.earlier_batches.remove(&producer_id);
+                self.producers.earlier_batches.remove(&producer_id);
                 entry.last_sequence = -1;
                 entry.last_offset = Offset(-1);
                 entry.offset_delta = 0;
@@ -609,10 +614,11 @@ impl Log {
             return Ok(());
         };
         let entry = self
-            .producer_state
+            .producers
+            .entries
             .entry(producer_id)
             .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
-        let mut earlier = self.earlier_batches.remove(&producer_id);
+        let mut earlier = self.producers.earlier_batches.remove(&producer_id);
         entry.add_data_batch(&mut earlier, producer_epoch, ProducerBatchMetadata {
             last_sequence,
             last_offset,
@@ -620,7 +626,7 @@ impl Log {
             timestamp,
         });
         if let Some(earlier) = earlier {
-            self.earlier_batches.insert(producer_id, earlier);
+            self.producers.earlier_batches.insert(producer_id, earlier);
         }
         if is_transactional && entry.current_txn_first_offset.is_none() {
             entry.current_txn_first_offset = Some(base_offset);

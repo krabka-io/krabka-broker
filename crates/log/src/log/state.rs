@@ -59,11 +59,11 @@ impl Log {
     /// Empty the volatile state before a hard reset or a durable producer-state reload.
     pub(super) fn clear_producer_and_transaction_state(&mut self) {
         self.pending.clear();
-        self.verification_states.clear();
+        self.producers.verifications.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
-        self.producer_state.clear();
-        self.earlier_batches.clear();
+        self.producers.entries.clear();
+        self.producers.earlier_batches.clear();
     }
 
     /// Directory this log was opened against. The broker's intra-broker
@@ -394,7 +394,7 @@ impl Log {
         // snapshot offset to 0, so `takeSnapshot` writes one at any base above
         // 0.
         if new_base.0 > 0 {
-            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producers.entries)?;
         }
         self.reap_deleted_files(SystemTime::now())
     }
@@ -411,7 +411,7 @@ impl Log {
         let log_end = self.log_end_offset();
         if log_end.0 > self.producer_reload_range(log_end).log_start {
             self.sync()?;
-            producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producers.entries)?;
         }
         Ok(())
     }
@@ -615,7 +615,8 @@ impl Log {
     #[must_use]
     pub fn transaction_marker_state(&self, producer_id: ProducerId) -> TransactionMarkerState {
         let (producer_epoch, coordinator_epoch) = self
-            .producer_state
+            .producers
+            .entries
             .get(&producer_id)
             .map_or((-1, -1), |entry| {
                 (entry.producer_epoch, entry.coordinator_epoch)
@@ -633,14 +634,14 @@ impl Log {
     /// value after a live append equals the value that a reopen rebuilds.
     #[must_use]
     pub fn producer_state_entry(&self, producer_id: ProducerId) -> Option<ProducerSnapshotEntry> {
-        self.producer_state.get(&producer_id).copied()
+        self.producers.entries.get(&producer_id).copied()
     }
 
     /// Producer state restored from the newest valid Kafka-compatible
     /// snapshot and the uncovered local log tail.
     #[must_use]
     pub fn producer_state_snapshot(&self) -> Vec<ProducerSnapshotEntry> {
-        self.producer_state.values().copied().collect()
+        self.producers.entries.values().copied().collect()
     }
 
     /// Every producer's state with the batches it appended before its last
@@ -650,11 +651,13 @@ impl Log {
     /// rebuilt.
     #[must_use]
     pub fn recovered_producers(&self) -> Vec<RecoveredProducer> {
-        self.producer_state
+        self.producers
+            .entries
             .values()
             .map(|entry| RecoveredProducer {
                 entry: *entry,
                 earlier: self
+                    .producers
                     .earlier_batches
                     .get(&entry.producer_id)
                     .map_or_default(|earlier| earlier.iter().copied().collect()),

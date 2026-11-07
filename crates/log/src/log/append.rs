@@ -641,9 +641,10 @@ impl Log {
             let permit = self
                 .rollover_flusher
                 .reserve(producer_snapshot::allocation_size(
-                    self.producer_state.len(),
+                    self.producers.entries.len(),
                 )?)?;
-            let snapshot = producer_snapshot::prepare(&self.dir, new_base, &self.producer_state)?;
+            let snapshot =
+                producer_snapshot::prepare(&self.dir, new_base, &self.producers.entries)?;
             let files = self
                 .active
                 .as_ref()
@@ -661,7 +662,7 @@ impl Log {
         if !buffered {
             self.rollover_flusher.finish()?;
             self.active_segment_flush()?;
-            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producers.entries)?;
         }
         // Sealing writes the segment's last time-index entry, which can fail,
         // so it runs before the segment leaves `self.active`.
