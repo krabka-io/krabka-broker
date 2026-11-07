@@ -91,14 +91,20 @@ impl Failure {
     pub fn new(scenario: &'static ScenarioSpec, location: Location, message: String) -> Self {
         Self {
             scenario,
-            first: Problem { location, message },
+            first: Problem {
+                location,
+                message: readable(&message),
+            },
             also: Vec::new(),
         }
     }
 
     /// Adds a later problem, such as a panicking `after` hook.
     pub fn push(&mut self, location: Location, message: String) {
-        self.also.push(Problem { location, message });
+        self.also.push(Problem {
+            location,
+            message: readable(&message),
+        });
     }
 
     /// The scenario that failed.
@@ -113,6 +119,15 @@ impl Failure {
     /// undefined or ambiguous step listing.
     #[must_use]
     pub fn message(&self) -> &str { &self.first.message }
+}
+
+/// `message` without the Unicode isolation marks (U+2068, U+2069) that
+/// rstest-bdd's Fluent localization puts around every interpolated value.
+fn readable(message: &str) -> String {
+    message
+        .chars()
+        .filter(|character| !matches!(character, '\u{2068}' | '\u{2069}'))
+        .collect()
 }
 
 fn write_message(f: &mut Formatter<'_>, message: &str) -> fmt::Result {
@@ -265,5 +280,13 @@ mod tests {
     )]
     fn display_renders_the_diagnostic(#[case] failure: Failure, #[case] expected: &str) {
         assert!(failure.to_string() == expected);
+    }
+
+    #[test]
+    fn messages_drop_the_localization_isolation_marks() {
+        assert!(
+            readable("Step failed at index \u{2068}1\u{2069}: \u{2068}Then\u{2069}")
+                == "Step failed at index 1: Then"
+        );
     }
 }

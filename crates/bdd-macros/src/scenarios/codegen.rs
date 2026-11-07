@@ -63,7 +63,7 @@ impl Runtime {
             Self::MultiThread {
                 workers: Some(workers),
             } => {
-                let workers = number(workers);
+                let workers = number(&workers);
                 moxy::template! { flavor = "multi_thread", worker_threads = {{ workers }} }
             }
         }
@@ -78,7 +78,7 @@ pub fn expansion(
     plans: &[Plan],
     tracked: &[String],
 ) -> TokenStream {
-    let base = Ident::new(base);
+    let base = Ident::new(format!("{base}_scenarios"));
     let tracked: Vec<LitStr> = tracked.iter().map(|path| lit(path)).collect();
     let features: Vec<TokenStream> = plans
         .iter()
@@ -130,12 +130,14 @@ fn feature_module(arguments: &Arguments, plan: &Plan) -> TokenStream {
     for (rule_module, scenarios) in rules.into_values() {
         let content = outline_modules(arguments, plan, &scenarios);
         body.push(match rule_module {
-            Some(name) => wrap(name, &content),
+            Some(name) => wrap(&format!("rule_{name}"), &content),
             None => content,
         });
     }
+    // The suffix keeps a feature named after a fixture from shadowing the
+    // fixture's `name::default()` that rstest calls.
     wrap(
-        &plan.module,
+        &format!("{}_feature", plan.module),
         &moxy::template! { @for part in &body { {{ part }} } },
     )
 }
@@ -186,13 +188,13 @@ fn wrap(name: &str, content: &TokenStream) -> TokenStream {
 /// One generated test with its static spec.
 fn test_fn(arguments: &Arguments, plan: &Plan, scenario: &PlannedScenario) -> TokenStream {
     let name = Ident::new(&scenario.test_name);
-    let spec_name = Ident::new(&format!(
+    let spec_name = Ident::new(format!(
         "__KRABKA_BDD_SPEC_{}",
         scenario.test_name.trim_start_matches('_').to_uppercase()
     ));
     let spec = spec(plan, scenario);
     let runtime = arguments.runtime.test_arguments();
-    let ignore = ignore_reason(&scenario.tags).map(|reason| lit(reason));
+    let ignore = ignore_reason(&scenario.tags).map(lit);
     let params: Vec<TokenStream> = arguments
         .fixtures
         .iter()
@@ -253,7 +255,7 @@ fn spec(plan: &Plan, scenario: &PlannedScenario) -> TokenStream {
     let feature = lit(&plan.feature);
     let rule = optional(scenario.rule.as_deref());
     let name = lit(&scenario.scenario);
-    let line = number(scenario.line);
+    let line = number(&scenario.line);
     let row = scenario.row.as_ref().map_or_else(
         || moxy::template! { ::core::option::Option::None },
         |row| {
@@ -284,7 +286,7 @@ fn spec(plan: &Plan, scenario: &PlannedScenario) -> TokenStream {
 }
 
 fn row_spec(row: &PlannedRow) -> TokenStream {
-    let line = number(row.line);
+    let line = number(&row.line);
     let case = lit(&row.case);
     let values: Vec<(LitStr, LitStr)> = row
         .values
@@ -301,7 +303,7 @@ fn row_spec(row: &PlannedRow) -> TokenStream {
 }
 
 fn step_spec(step: &PlannedStep) -> TokenStream {
-    let line = number(step.line);
+    let line = number(&step.line);
     let keyword = Ident::new(match step.keyword {
         Keyword::Given => "Given",
         Keyword::When => "When",
@@ -355,7 +357,7 @@ fn optional(text: Option<&str>) -> TokenStream {
 }
 
 /// An unsuffixed integer literal.
-fn number(value: impl ToString) -> TokenStream { value.to_string().parse().unwrap_or_default() }
+fn number(value: &impl ToString) -> TokenStream { value.to_string().parse().unwrap_or_default() }
 
 #[cfg(test)]
 mod tests {
