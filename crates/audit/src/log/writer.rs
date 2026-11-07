@@ -234,15 +234,32 @@ impl AuditWriter {
     )]
     async fn write_chained(&mut self, event: &AuditEvent, durable: bool) -> Result<(), AuditError> {
         self.write_pending_loss_marker(durable).await?;
-        let mut record = AuditRecord::from_event(event, &self.product);
-        let seq = self.chain.next_seq();
-        let prev = self.chain.head();
-        tracing::Span::current().record("seq", seq);
-        record.push_chain_headers(seq, &prev);
+        let record = AuditRecord::from_event(event, &self.product);
+        tracing::Span::current().record("seq", self.chain.next_seq());
+        self.append_chained(record, durable).await
+    }
+
+    /// Stamp `record` with the next chain position, write it, and advance the
+    /// chain only once the write succeeded.
+    ///
+    /// That order is the chain invariant: a record that did not land must not
+    /// move the head the next record is stamped against.
+    async fn append_chained(
+        &mut self,
+        mut record: AuditRecord,
+        durable: bool,
+    ) -> Result<(), AuditError> {
+        stamp(&self.chain, &mut record);
         self.write_or_spool(&record, durable).await?;
+        self.advance(&record);
+        Ok(())
+    }
+
+    /// Extend the chain over a record that landed, and count it towards the
+    /// next checkpoint.
+    fn advance(&mut self, record: &AuditRecord) {
         let _ = self.chain.extend(&record.value);
         self.since_checkpoint += 1;
-        Ok(())
     }
 
     /// Persist one explicit marker for all fail-open records lost so far.
@@ -251,15 +268,14 @@ impl AuditWriter {
             let pending_losses = Arc::clone(&self.pending_losses);
             let marker = pending_losses.persist_with(|batch| {
                 let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
-                marker.push_chain_headers(self.chain.next_seq(), &self.chain.head());
+                stamp(&self.chain, &mut marker);
                 spool.append_loss_marker(&marker)?;
                 Ok(marker)
             })?;
             if let Some(marker) = marker {
                 self.stats.inc_spooled();
                 self.stats.set_depth(spool.count(), spool.size());
-                let _ = self.chain.extend(&marker.value);
-                self.since_checkpoint += 1;
+                self.advance(&marker);
                 self.spooling = true;
             }
             return Ok(());
@@ -268,13 +284,8 @@ impl AuditWriter {
         let Some(batch) = self.pending_losses.snapshot() else {
             return Ok(());
         };
-        let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
-        let seq = self.chain.next_seq();
-        let prev = self.chain.head();
-        marker.push_chain_headers(seq, &prev);
-        self.write_or_spool(&marker, durable).await?;
-        let _ = self.chain.extend(&marker.value);
-        self.since_checkpoint += 1;
+        let marker = AuditRecord::records_lost(batch.count, batch.generation);
+        self.append_chained(marker, durable).await?;
         self.pending_losses.commit(batch);
         Ok(())
     }
@@ -299,6 +310,15 @@ impl AuditWriter {
             Err(_) => self.stats.inc_dropped(),
         }
     }
+}
+
+/// Stamp `record` with the `seq` and `prev_hash` headers of the position
+/// `chain` would give it next.
+///
+/// It takes the chain rather than the writer so that the spool path can stamp
+/// a marker while it holds the spool borrowed.
+fn stamp(chain: &ChainState, record: &mut AuditRecord) {
+    record.push_chain_headers(chain.next_seq(), &chain.head());
 }
 
 /// Names the checkpoint cadence in the timer-failure logs.
