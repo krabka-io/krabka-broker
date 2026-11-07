@@ -25,6 +25,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka-guard` and `krabka-barrier` reach TLS and SASL listeners. Both take `--command-config <file>`, the Kafka client properties file that `kafka-topics --command-config` and `krabka-backup` take, with `security.protocol`, PEM `ssl.*` trust and client identity, `sasl.mechanism` (`PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`) and `sasl.jaas.config`. Until now both tools connected in PLAINTEXT only, so neither reached a TLS or SASL listener, and the only principal a signed freeze's `--principal` could name was the one a PLAINTEXT connection gets. The three tools now read the file with one parser, in the new workspace-private `krabka-cli-connection` crate. A file that cannot be read, or whose properties conflict, ends `krabka-guard` and `krabka-barrier` with exit code `2`, as a broker that refuses the login does. See [`krabka-cli-connection`](crates/cli-connection/README.md).
+
 - `krabka-bdd` and `krabka-bdd-macros`, a BDD layer over rstest-bdd. `krabka_bdd::scenarios!` lints features against the [Gherkin style guide](docs/style_guides/gherkin_style_guide.md#krabka-bdd) at compile time, fails a test on undefined and ambiguous steps, and can run scenarios on a multi-thread Tokio runtime. `#[derive(StepParam)]` and `Given<T>` replace hand-matched placeholders and `Option` scenario state. The `krabka-log` `log_policy` feature is the first to use it.
 
 - Native Streams topology storage callbacks expose bounded operation/result counters and duration histograms for set, get and delete. See [native storage telemetry](docs/streams-topology-description-storage.md#native-callback-telemetry).
@@ -38,6 +40,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 ### Changed
 
 - GSSAPI (Kerberos) runs on upstream `sspi` 0.23.1 again, through krabka-protocol [`361a093`](https://github.com/krabka-io/krabka-protocol/pull/91), instead of the `krabka-sspi` 0.23.0 fork. `krabka-sspi` 0.23.0 does not build against `picky-krb` 0.13.1, so every lock file refresh broke the build. The lock file takes `picky` 7.0.0-rc.27 and `picky-krb` 0.13.1. The RUSTSEC-2023-0071 review and `aspect check-rustsec-2023-0071` now name `sspi` 0.23.1 and `picky` 7.0.0-rc.27.
+
+### Removed
+
+- `krabka-macros` drops the `#[bootstrap_cli_fields]` attribute and the `connect_cli_client!` macro, which only the operator CLIs used. They flatten `krabka_cli_connection::ConnectionArgs` instead. Removing public macros breaks the `krabka-macros` API, so the release that carries it is at least a minor version, 1.2.0.
 
 ### Fixed
 

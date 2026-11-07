@@ -11,7 +11,6 @@ use {
             newest_metadata_checkpoint,
         },
         cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
-        connection::SecurityArgs,
         diskless::capture_projection,
         error::BackupError,
         manifest::{
@@ -22,6 +21,7 @@ use {
         report::{BackupEvent, OperationReport},
     },
     krabka_audit::FileEd25519Signer,
+    krabka_cli_connection::SecurityArgs,
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, AdminError, ConfigResource, DescribeConfigsOptions,
         TopicMetadata, groups::ListGroupsOptions,
