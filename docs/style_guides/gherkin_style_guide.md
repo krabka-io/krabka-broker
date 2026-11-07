@@ -24,7 +24,7 @@ Every illustrative scenario follows the six BRIEF principles.
 - **Real data where it matters.** For each value, ask "would the outcome change if this value changed?" If yes, keep the real value. If no, replace it with a descriptive phrase or drop it. Readers assume every number matters and search for why.
 - **Intention revealing.** Steps say what the actor wants to achieve, not how the code does it. Write "a producer appends a batch past the segment size", not "call `Log::append` with 1025 bytes".
 - **Essential.** Delete every step, value and assertion that does not illustrate this scenario's rule. Do not restate defaults. A scenario with no `Given` is fine.
-- **Focused.** One rule per scenario. Group the scenarios for a rule under a `Rule:` heading. See [Rule blocks](#rule-blocks) for the current tool gap.
+- **Focused.** One rule per scenario. Group the scenarios for a rule under a `Rule:` heading. See [Rule blocks](#rule-blocks).
 - **Brief.** Aim for five steps or fewer.
 
 ## Phrasing
@@ -74,7 +74,7 @@ Feature: Producers are fenced by epoch
       Then the append is accepted
 ```
 
-> **Tool gap.** `krabka_bdd::scenarios!` runs scenarios under a `Rule:`. The plain `rstest_bdd_macros::scenarios!` and `#[scenario]`, at the fork revision the root `Cargo.toml` pins, skip them without an error, so do not use `Rule:` in a feature that those macros still run. Move the feature to `krabka_bdd::scenarios!` instead.
+Scenarios under a `Rule:` run like any other. Their steps run in the order feature `Background`, rule `Background`, scenario steps, and they inherit the rule's tags. `krabka_bdd::scenarios!` puts each rule's tests in a `rule_<name>` module; the plain `rstest_bdd_macros::scenarios!` names them `{feature}_{rule}_{scenario}`, and `#[scenario(name = ..)]` finds them too.
 
 ## Scenario outlines and tables
 
@@ -129,14 +129,24 @@ Krabka runs scenarios with [rstest-bdd](https://docs.rs/rstest-bdd), through [kr
 
 ### rstest-bdd gaps to know
 
-These hold for the plain `rstest_bdd_macros::scenarios!` and `#[scenario]`, at the fork revision the root `Cargo.toml` pins. `krabka_bdd::scenarios!` closes every one of them.
+These describe the plain `rstest_bdd_macros::scenarios!` and `#[scenario]`, at the fork the root `Cargo.toml` pins. The fork fixes most of upstream's silent failures; its `KRABKA_PATCHES.md`, on branch `deps/rstest-bdd-0.6-fixture-guards`, lists each patch. What it changes for a scenario author:
 
-- Scenarios under `Rule:` do not run. See [Rule blocks](#rule-blocks).
-- A tag can only filter scenarios out (`tags = "not @formulated"`). Nothing marks them `#[ignore]`.
-- Outline rows get test names `case_1`, `case_2` and so on, not the `case` column.
-- Each `async` step runs on a throwaway current-thread runtime, so a task one step spawns dies before the next step. A harness polls an `async` step once.
-- The scenario body, and with it any teardown, runs only when every step passed. A skipped step counts as a pass.
-- When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily.
+- Outline rows are named after their first column: `case_1_<case>`, with the `Examples:` name as a prefix when it has one. A value that starts with a digit gets `v_`, and an empty value becomes `row`.
+- A row whose cells are all empty is a real case.
+- An `Examples` block's tags apply to its rows, `@allow_skipped` included.
+- A `scenarios!` call that finds no scenarios is a compile error.
+- An unknown `<placeholder>` stays as literal text.
+- A `*` step after a `When` or `Then` continues that keyword.
+- A failing step's panic names the feature file and line, the rule, the scenario, the outline row and the step as written.
+- `ignore_tags = "<tag expression>"` marks matching scenarios `#[ignore]` instead of dropping them, so `--ignored` still runs them. Tags may contain `:` and `.`.
+
+What is still open there, and what `krabka_bdd::scenarios!` does instead:
+
+- Each `async` step runs on a throwaway current-thread runtime, so a task one step spawns dies before the next, and a harness polls an `async` step once. krabka-bdd runs every step on the scenario's one runtime.
+- The scenario body, and with it any teardown, runs only when every step passed, and a skipped step counts as a pass. krabka-bdd's after hooks always run, and a skip fails without `@allow_skipped`.
+- When several step definitions match a step, rstest-bdd runs the most specific one and breaks ties arbitrarily. krabka-bdd fails the scenario and lists them.
+- Placeholder values bind to a step function's parameters by position, not by name, so reordering the parameters still compiles and silently swaps the values. `#[krabka_bdd::given]` and its siblings reject a parameter order that differs from the placeholder order.
+- An unknown `<placeholder>` is not reported. krabka-bdd's lint rejects it (`unknown-placeholder`).
 - Cargo does not see a new `.feature` file in a directory that `scenarios!` reads until the Rust file that calls the macro changes. After you add a feature file, touch that file. Edits to an existing file are tracked. Bazel is not affected, because the `compile_data` glob is a build input. This one also holds for `krabka_bdd::scenarios!`.
 
 ## krabka-bdd

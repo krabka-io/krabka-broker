@@ -33,7 +33,12 @@ pub(super) fn header<'a>(record: &'a Record, key: &str) -> Option<&'a [u8]> {
         .and_then(|h| h.value.as_deref())
 }
 
-fn broke(state: &WalkState, offset: i64, seq: Option<Seq>, reason: &str) -> VerifyReport {
+pub(super) fn broke(
+    state: &WalkState,
+    offset: i64,
+    seq: Option<Seq>,
+    reason: &str,
+) -> VerifyReport {
     VerifyReport {
         records: state.records,
         checkpoints: state.checkpoints,
@@ -42,6 +47,7 @@ fn broke(state: &WalkState, offset: i64, seq: Option<Seq>, reason: &str) -> Veri
             offset,
             seq,
             reason: reason.to_owned(),
+            byte_position: None,
         }),
         losses: state.losses.clone(),
         // unanchored_records is 0 when ok=false; the count is not meaningful

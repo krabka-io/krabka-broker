@@ -31,6 +31,7 @@ use {
 
 mod format;
 mod ids;
+pub mod java_properties;
 mod meta_properties;
 
 pub use self::{
