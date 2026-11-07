@@ -434,25 +434,8 @@ async fn replicate_v2_batches(
         }
         // Capture byte count before the move into replicate_batch
         // so the metrics update only fires on a successful append.
-        // PERF — measured; decision: KEEP. `encoded_len()` is
-        // computed here for the metric and again inside the append
-        // path; threading a single computation through would save
-        // the re-walk, but that changes the writer API
-        // (cross-file). `benches/perf_deferrals.rs` times the walk
-        // against the `replicate_batch` it precedes, over the
-        // batch shapes a producer actually writes: 0.01% of the
-        // append for one 100 KiB record, ~1% for 100 x 1 KiB, ~4%
-        // for 1000 x 100 B. Even that worst shape's ~4% sits
-        // inside the append's own run-to-run spread, so the
-        // re-walk is not separable from noise in production.
-        // Those three figures are what the `bench` job of the `ci`
-        // workflow measures on the nightly schedule and prints in
-        // its job summary; the latest scheduled `ci` run in the
-        // Actions tab is the reproducible reading, and its
-        // `criterion-baseline` artifact holds the samples.
-        // Revisit only if the replicator's shape mix moves to very
-        // wide batches of tiny records, where the walk is a
-        // per-record cost and the append is not.
+        // PERF: the append path walks the batch again. Measured at
+        // <=4% of the append and kept; see `benches/perf_deferrals.rs`.
         let batch_bytes = batch.encoded_batch_len();
         if let Err(e) = part.replicate_batch(batch).await {
             warn!(error = %e, topic = %cfg.topic, partition = cfg.partition.get(),
