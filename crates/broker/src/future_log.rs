@@ -88,8 +88,27 @@ pub struct FutureLogState {
 /// open the same future directory, and the registry would keep only the
 /// second move, so the first replicator task would run on where no cancel or
 /// shutdown could stop it.
+///
+/// Kafka holds the lock for a whole request, so the handler takes it once and
+/// passes the [`MoveGuard`] to every `start_move` call of that request.
 #[derive(Debug, Default)]
 pub struct MoveLock(async_sync::Mutex<()>);
+
+impl MoveLock {
+    /// Wait until no other move start holds the lock, then take it.
+    pub async fn lock(&self) -> MoveGuard<'_> {
+        MoveGuard {
+            _guard: self.0.lock().await,
+        }
+    }
+}
+
+/// Proof that the holder has the broker's [`MoveLock`]. The lock is released
+/// when the guard drops.
+#[derive(Debug)]
+pub struct MoveGuard<'a> {
+    _guard: async_sync::MutexGuard<'a, ()>,
+}
 
 /// Why a [`start_move`] or [`resume_move`] call could not be honoured.
 /// The handler translates these to the wire error codes

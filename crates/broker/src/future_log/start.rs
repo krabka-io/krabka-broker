@@ -7,7 +7,7 @@
 
 use {
     super::{
-        FutureLogState, MoveError, MoveLock, MovePolicy, canonicalize_or_self,
+        FutureLogState, MoveError, MoveGuard, MovePolicy, canonicalize_or_self,
         cleanup::cancel_move,
         configured_log_dir, future_dir_name_too_long,
         replicator::{ReplicatorTask, replicator_loop},
@@ -35,11 +35,12 @@ use {
 /// returns `Ok(())` without spawning a second task. If its target differs,
 /// the old task and future log are removed before the replacement starts.
 ///
-/// The call holds `move_lock` throughout, so no other move can start between
-/// the check for a move in flight and the registration of a new one.
+/// The caller holds the broker's [`MoveLock`](super::MoveLock) for the whole call, as the
+/// `_move_guard` shows, so no other move can start between the check for a
+/// move in flight and the registration of a new one.
 #[bon::builder]
 pub async fn start_move(
-    move_lock: &MoveLock,
+    _move_guard: &MoveGuard<'_>,
     partitions: &Arc<PartitionRegistry>,
     future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
     all_log_dirs: &[PathBuf],
@@ -50,7 +51,6 @@ pub async fn start_move(
     target_log_dir: &Path,
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
-    let _serialized = move_lock.0.lock().await;
     let (topic, partition) = topic_partition;
     // (0) Kafka refuses a move whose future directory name would pass 255
     //     characters before it looks at the destination.
@@ -227,7 +227,7 @@ mod tests {
     use {
         super::*,
         crate::future_log::{
-            shutdown_moves,
+            MoveLock, shutdown_moves,
             test_support::{
                 PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
                 test_policy,
@@ -251,7 +251,7 @@ mod tests {
     ) -> Result<(), MoveError> {
         // The existing start_move API takes one topic/partition pair.
         start_move()
-            .move_lock(&MoveLock::default())
+            .move_guard(&MoveLock::default().lock().await)
             .partitions(partitions)
             .future_logs(future_logs)
             .all_log_dirs(dirs)
@@ -543,7 +543,7 @@ mod tests {
                 let move_lock = Arc::clone(&move_lock);
                 tokio::spawn(async move {
                     start_move()
-                        .move_lock(&move_lock)
+                        .move_guard(&move_lock.lock().await)
                         .partitions(&partitions)
                         .future_logs(&future_logs)
                         .all_log_dirs(&log_dirs)
