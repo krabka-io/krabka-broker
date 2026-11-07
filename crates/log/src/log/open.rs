@@ -35,7 +35,7 @@ use {
         collections::{BTreeMap, BTreeSet, HashMap},
         fs,
         path::Path,
-        sync::{Arc, PoisonError, RwLock, atomic::AtomicU64},
+        sync::{Arc, RwLock, atomic::AtomicU64},
         time::Instant,
     },
     tracing::{field, instrument},
@@ -340,10 +340,7 @@ impl Log {
         let local_start = self.local_log_start_offset();
         ProducerReloadRange {
             log_start: krabka_verified::producer_snapshot_reload_log_start(
-                self.config
-                    .read()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remote_storage_enable,
+                self.config().remote_storage_enable,
                 self.established_log_start().map(|start| start.0),
                 local_start.0,
             ),

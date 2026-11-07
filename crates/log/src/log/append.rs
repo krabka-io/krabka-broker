@@ -22,12 +22,7 @@ use {
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_protocol::records::{RecordBatch, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _},
-    std::{
-        mem,
-        path::PathBuf,
-        sync::{Arc, PoisonError},
-        time::SystemTime,
-    },
+    std::{mem, path::PathBuf, sync::Arc, time::SystemTime},
     tracing::{field, instrument},
 };
 
@@ -98,7 +93,7 @@ impl Log {
             segment_allocation,
             tail_sizes,
         ) = {
-            let cfg = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let cfg = self.config();
             (
                 cfg.segment_size,
                 cfg.segment_roll_interval,
@@ -244,7 +239,7 @@ impl Log {
     /// holds a record whose delivery time is strictly after `delivery_ms`.
     pub(super) fn reject_backwards_schedule(&self, delivery_ms: i64) -> Result<(), LogError> {
         let monotonic = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             config.delivery_policy == DeliveryPolicy::Scheduled
                 && config.schedule_order == ScheduleOrder::Monotonic
         };
@@ -293,12 +288,7 @@ impl Log {
     /// The broker clock reading this append stamps, or `None` on a
     /// `CreateTime` partition, which stamps nothing.
     pub(super) fn log_append_time_stamp(&self) -> Option<i64> {
-        let log_append_time = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .message_timestamp_type
-            == TimestampType::LogAppendTime;
+        let log_append_time = self.config().message_timestamp_type == TimestampType::LogAppendTime;
         log_append_time.then(|| retention::now_ms(SystemTime::now()))
     }
 
@@ -497,9 +487,7 @@ impl Log {
             StoredBytes::Verbatim(bytes)
         } else {
             let level = self
-                .config
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
+                .config()
                 .compression_level(batch.attributes.compression());
             let mut bytes = BytesMut::with_capacity(batch.encoded_batch_len());
             batch.encode_with_compression_level(&mut bytes, level)?;
@@ -645,12 +633,7 @@ impl Log {
         self.rollover_flusher.check()?;
         let new_base = self.log_end_offset();
         tracing::Span::current().record("new_base", new_base.0);
-        let buffered = !self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .flush_on_append
-            && !cfg!(target_os = "wasi");
+        let buffered = !self.config().flush_on_append && !cfg!(target_os = "wasi");
         #[cfg(not(target_os = "wasi"))]
         let flush = if buffered {
             // Reserve both retained bytes and encoding scratch space before

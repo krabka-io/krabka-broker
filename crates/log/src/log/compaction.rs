@@ -23,10 +23,7 @@ use {
     krabka_units::prelude::{
         ByteSize, ByteSizeExt as _, Ratio, RatioExt as _, Time, TimeExt as _, fraction,
     },
-    std::{
-        collections::BTreeSet,
-        sync::{Arc, PoisonError},
-    },
+    std::{collections::BTreeSet, sync::Arc},
     tracing::instrument,
 };
 
@@ -198,7 +195,7 @@ impl Log {
     #[must_use]
     pub fn compaction_due(&self, now: SystemTime, last_stable_offset: Offset) -> bool {
         let (min_lag, max_lag, min_ratio) = {
-            let cfg = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let cfg = self.config();
             (
                 cfg.min_compaction_lag,
                 cfg.max_compaction_lag,
@@ -427,7 +424,7 @@ impl Log {
         }
 
         let (index_interval, delete_retention, min_lag, segment_bytes, record_limit) = {
-            let cfg_guard = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let cfg_guard = self.config();
             if !cfg_guard.cleanup_policy.contains_compact() {
                 return Ok(None);
             }
@@ -616,13 +613,7 @@ impl Log {
             rewrite,
         } in &rewrites
         {
-            if self
-                .config
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .file_delete_delay
-                <= krabka_units::Time::ZERO
-            {
+            if self.config().file_delete_delay <= krabka_units::Time::ZERO {
                 atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
             } else {
                 let io = Arc::clone(&self.io);

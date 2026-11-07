@@ -23,7 +23,7 @@ use {
     std::{
         iter,
         path::Path,
-        sync::{PoisonError, atomic::Ordering},
+        sync::{PoisonError, RwLockReadGuard, atomic::Ordering},
         time::{Instant, SystemTime},
     },
     tracing::instrument,
@@ -116,14 +116,7 @@ impl Log {
     pub fn reported_log_start(&self) -> Offset {
         match self.established_log_start() {
             Some(start) => start,
-            None if self
-                .config
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remote_storage_enable =>
-            {
-                Offset(0)
-            }
+            None if self.config().remote_storage_enable => Offset(0),
             None => self.start_offset,
         }
     }
@@ -268,12 +261,7 @@ impl Log {
     /// fetch response, so it only reads.
     #[must_use]
     pub fn differs_from_leader_log_start(&self, leader_start: Offset) -> bool {
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remote_storage_enable
-        {
+        if self.config().remote_storage_enable {
             self.established_log_start() != Some(leader_start)
         } else {
             leader_start > self.start_offset
@@ -310,13 +298,7 @@ impl Log {
     /// and [`LogError::Io`] if the log-start checkpoint cannot be written or
     /// a raise fails.
     pub fn follow_leader_log_start(&mut self, leader_start: Offset) -> Result<Offset, LogError> {
-        if !self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remote_storage_enable
-            || leader_start > self.start_offset
-        {
+        if !self.config().remote_storage_enable || leader_start > self.start_offset {
             return self.trim_to_offset(leader_start);
         }
         if leader_start < 0 {
@@ -551,7 +533,7 @@ impl Log {
         verbatim: Option<&VerbatimBatch>,
     ) -> bool {
         let (flushes, segment_size, roll_interval, index_size) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             let storage_may_block = match config.segment_allocation {
                 SegmentAllocation::Preallocate => {
                     verbatim.is_none_or(|batch| !self.can_queue_verbatim(batch, &config))
@@ -718,15 +700,16 @@ impl Log {
         *self.config.write().unwrap_or_else(PoisonError::into_inner) = new;
     }
 
+    /// Read the current config. A writer that panicked left a whole value
+    /// behind, so a poisoned lock is read through.
+    pub(super) fn config(&self) -> RwLockReadGuard<'_, LogConfig> {
+        self.config.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Snapshot the current config. This allocates a clone, which is cheap
     /// because `LogConfig` is small and `Clone`.
     #[must_use]
-    pub fn config_snapshot(&self) -> LogConfig {
-        self.config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
+    pub fn config_snapshot(&self) -> LogConfig { self.config().clone() }
 
     /// Replace the log's I/O implementation for fault-injection tests.
     ///

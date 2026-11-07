@@ -19,7 +19,7 @@ use {
         collections::hash_map::RandomState,
         hash::BuildHasher,
         mem,
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::{Duration, Instant, SystemTime},
     },
 };
@@ -144,7 +144,7 @@ impl Log {
         now: SystemTime,
         elapsed: Instant,
     ) -> Option<Duration> {
-        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+        let config = self.config();
         let flush = if self.unflushed_messages == 0 {
             None
         } else if config
@@ -171,9 +171,7 @@ impl Log {
 
     pub(super) fn jittered_roll_interval(&mut self, interval: Time) -> Time {
         let bound = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+            .config()
             .segment_jitter
             .millis_i64_trunc()
             .min(interval.millis_i64_trunc());
@@ -208,11 +206,7 @@ impl Log {
         self.unflushed_messages = self
             .unflushed_messages
             .saturating_add(u64::try_from(delta).unwrap_or(0) + 1);
-        let threshold = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .flush_messages;
+        let threshold = self.config().flush_messages;
         if force {
             // Durable sidecars must not precede records in pending rollover jobs.
             self.rollover_flusher.finish()?;
@@ -244,7 +238,7 @@ impl Log {
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
         let (window, budget) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             let window = if config.flush_on_append {
                 0
             } else {
@@ -316,11 +310,7 @@ impl Log {
     /// The page-cache budget in bytes, as configured.
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn page_cache_budget(&self) -> Option<u64> {
-        self.config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .page_cache_budget
-            .map(ByteSizeExt::bytes_u64)
+        self.config().page_cache_budget.map(ByteSizeExt::bytes_u64)
     }
 
     /// Start the write-back pacing over for the segment that is active now,
@@ -339,7 +329,7 @@ impl Log {
 
     pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {
         let due = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             self.unflushed_messages > 0
                 && (config
                     .flush_messages
@@ -357,13 +347,7 @@ impl Log {
     }
 
     pub(super) fn retire_segment(&mut self, base: Offset, now: SystemTime) -> Result<(), LogError> {
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .file_delete_delay
-            <= Time::ZERO
-        {
+        if self.config().file_delete_delay <= Time::ZERO {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
         self.retire_files(base, now, &SegmentFile::RETIRED_WITH_SEGMENT, DirSync::Now)
@@ -376,11 +360,7 @@ impl Log {
         files: &[SegmentFile],
         sync: DirSync,
     ) -> Result<(), LogError> {
-        let delay = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .file_delete_delay;
+        let delay = self.config().file_delete_delay;
         let delay = Duration::from_millis(u64::try_from(delay.millis_i64_trunc()).unwrap_or(0));
         let deadline = now
             .checked_add(delay)
