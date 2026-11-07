@@ -110,9 +110,6 @@ impl Log {
         for producer_id in expired {
             self.producer_state.remove(&producer_id);
             self.earlier_batches.remove(&producer_id);
-            // Kafka keeps the coordinator epoch in the `ProducerStateEntry`,
-            // so it goes with the expired producer.
-            self.coordinator_epochs.remove(&producer_id);
         }
         self.verification_states
             .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);

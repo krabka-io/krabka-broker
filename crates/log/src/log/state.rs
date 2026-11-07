@@ -48,7 +48,6 @@ impl Log {
         self.verification_states.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
-        self.coordinator_epochs.clear();
         self.producer_state.clear();
         self.earlier_batches.clear();
     }
@@ -619,15 +618,12 @@ impl Log {
     /// Missing generations use Kafka's `-1` sentinel.
     #[must_use]
     pub fn transaction_marker_state(&self, producer_id: ProducerId) -> (i16, i32, bool) {
-        let producer_epoch = self
+        let (producer_epoch, coordinator_epoch) = self
             .producer_state
             .get(&producer_id)
-            .map_or(-1, |entry| entry.producer_epoch);
-        let coordinator_epoch = self
-            .coordinator_epochs
-            .get(&producer_id)
-            .copied()
-            .unwrap_or(-1);
+            .map_or((-1, -1), |entry| {
+                (entry.producer_epoch, entry.coordinator_epoch)
+            });
         (
             producer_epoch,
             coordinator_epoch,

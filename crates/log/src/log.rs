@@ -238,11 +238,6 @@ pub struct Log {
     /// ordinary records never inherit another transaction's commit stamp.
     pending_stamp_ranges: HashMap<ProducerId, Vec<OffsetRange>>,
 
-    /// Last transaction-coordinator epoch observed in a durable commit or
-    /// abort marker for each producer. The marker value carries this field,
-    /// so log recovery can rebuild it without a separate sidecar.
-    coordinator_epochs: HashMap<ProducerId, i32>,
-
     /// Producer sequence, epoch, and transaction metadata persisted in
     /// Kafka-compatible `.snapshot` files at segment boundaries.
     producer_state: HashMap<ProducerId, ProducerSnapshotEntry>,

@@ -252,7 +252,6 @@ impl Log {
             verification_states: HashMap::new(),
             unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
-            coordinator_epochs: HashMap::new(),
             producer_state: HashMap::new(),
             earlier_batches: HashMap::new(),
             active_txn_index,
@@ -375,10 +374,6 @@ impl Log {
                 if let Some(first_offset) = entry.current_txn_first_offset {
                     self.pending.insert(producer_id, first_offset);
                 }
-                if entry.coordinator_epoch >= 0 {
-                    self.coordinator_epochs
-                        .insert(producer_id, entry.coordinator_epoch);
-                }
             }
         }
         let mut next = krabka_verified::producer_snapshot_replay_start(range, snapshot_offset)
@@ -475,11 +470,6 @@ impl Log {
                     first_offset,
                     Offset(batch.base_offset + i64::from(batch.last_offset_delta)),
                 );
-            }
-            if (is_abort || is_commit)
-                && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
-            {
-                self.coordinator_epochs.insert(producer_id, epoch);
             }
         } else if batch.attributes.is_transactional() {
             self.pending
