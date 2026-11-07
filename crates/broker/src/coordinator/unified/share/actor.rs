@@ -11,6 +11,8 @@
 //! protocol, the handle, and the `tokio::select!` loop — while each request
 //! path and each persistence concern lives in its own submodule.
 
+#[cfg(test)]
+use crate::task_util::spawn_dropping_mailbox;
 use {
     krabka_protocol::owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -121,6 +123,14 @@ impl ShareGroupActorHandle {
         let (tx, task) = spawn_mailbox(config.actor_mailbox_capacity, |rx| {
             actor_loop(group_id, config, metadata, coordinator, rx)
         });
+        Self { tx, _task: task }
+    }
+
+    /// A stand-in actor that takes every message and drops it unanswered, as
+    /// an actor does when it stops with requests still in its mailbox.
+    #[cfg(test)]
+    pub(crate) fn dropping_replies() -> Self {
+        let (tx, task) = spawn_dropping_mailbox();
         Self { tx, _task: task }
     }
 }

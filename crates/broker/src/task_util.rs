@@ -20,6 +20,17 @@ pub fn spawn_mailbox<M, F: Future<Output = ()> + Send + 'static>(
     (tx, tokio::spawn(run(rx)))
 }
 
+/// Start a stand-in actor that takes every message and drops it unanswered,
+/// as an actor does when it stops with requests still in its mailbox.
+#[cfg(test)]
+pub fn spawn_dropping_mailbox<M: Send + 'static>() -> (mpsc::Sender<M>, JoinHandle<()>) {
+    spawn_mailbox(8, |mut rx: mpsc::Receiver<M>| async move {
+        while let Some(message) = rx.recv().await {
+            drop(message);
+        }
+    })
+}
+
 /// Why an [`ask`] got no reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskError {
