@@ -257,7 +257,7 @@ async fn unload_partition(
     // Offset-only groups have a classic actor but no protocol-type record.
     // Include every live actor and seed map so losing an offsets partition
     // cannot leave any stale coordinator state reachable on the old leader.
-    // That takes in the respawn seeds: one can outlive its actor's entry.
+    // Respawn seeds too: one can outlive its actor's entry.
     let mut known_group_ids = HashSet::new();
     known_group_ids.extend(
         coordinator
@@ -467,9 +467,9 @@ mod tests {
         check!(metrics.consumer_group_lag.get(&label).is_none());
     }
 
-    /// A respawn seed can outlive its group's actor entry: a streams delete
-    /// or the offset-retention reaper can drop the closed handle of an actor
-    /// that stopped after a failed write and left the seed. Losing the
+    /// A respawn seed can outlive its group's actor entry: the streams
+    /// offset-retention reaper can drop the closed handle of an offset-home
+    /// actor that stopped after a failed write and left the seed. Losing the
     /// offsets partition must drop that seed too, or a later term on this
     /// broker would respawn the group from it instead of from the log.
     #[tokio::test]
