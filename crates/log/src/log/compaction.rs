@@ -606,6 +606,9 @@ impl Log {
                     .is_some_and(|index| !index.on_disk())
             })
             .collect();
+        // Only a stamped log keeps `.stampindex` files, and it holds an index
+        // for each of its segments.
+        let with_stamp_index: BTreeSet<Offset> = self.stamp_indexes.keys().copied().collect();
         let mut new_segments: Vec<Segment> = Vec::with_capacity(rewrites.len());
         for GroupRewrite {
             group_bases,
@@ -629,6 +632,9 @@ impl Log {
                     if !without_txn_file.contains(&base) {
                         files.push("txnindex");
                     }
+                    if with_stamp_index.contains(&base) {
+                        files.push("stampindex");
+                    }
                     if replaces_producer_snapshot(base, rewrite.new_base_offset) {
                         files.push("snapshot");
                     }
@@ -648,9 +654,15 @@ impl Log {
             let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
             for base in group_bases {
                 self.sealed_txn_indexes.remove(base);
+                self.stamp_indexes.remove(base);
             }
             self.sealed_txn_indexes
                 .insert(rewrite.new_base_offset, txn_index);
+            // The swap retired the consumed segments' stamp ranges with their
+            // files, so the output starts with none, as a reopen finds it. It
+            // still takes an index, for a commit marker that stamps a
+            // transaction whose data it now holds.
+            self.reopen_active_stamp_index(rewrite.new_base_offset, new_seg.stamp_index_path())?;
             new_segments.push(new_seg);
         }
 
@@ -682,6 +694,8 @@ mod job_tests;
 mod producer_tests;
 #[cfg(test)]
 mod replication_tests;
+#[cfg(test)]
+mod stamp_tests;
 #[cfg(test)]
 mod transaction_tests;
 

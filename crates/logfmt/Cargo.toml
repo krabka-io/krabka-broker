@@ -23,4 +23,13 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
+bon = { workspace = true }
+# No `version`: `krabka-bdd` is not published, so cargo drops it from the
+# published manifest. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+# Parses the RFC 3339 timestamp the scenarios read back.
+time = { workspace = true, features = ["parsing"] }
 yare = { workspace = true }

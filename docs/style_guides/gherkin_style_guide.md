@@ -152,7 +152,7 @@ What is still open:
 krabka_bdd::scenarios!("tests/features/log_policy", fixtures = [log_policy: LogPolicyScenario]);
 ```
 
-It takes the arguments of `rstest_bdd_macros::scenarios!`. Before it expands, it lints every `.feature` file under the directory against this guide. Each finding is a compile error of the form `path:line:col: rule-id: message. Fix: hint`. A clean directory expands to rstest-bdd's `scenarios!` and to one more test, `<dir>_steps::every_step_matches_one_definition`. That test resolves every step of every scenario the call runs, with outline rows substituted, against the step definitions in the test binary. It fails on a step that matches no definition and on a step that matches more than one, and lists the `file:line` of each match. It leaves out the scenarios that `ignore_tags` names, by default `@formulated or @inprogress`.
+It takes the arguments of `rstest_bdd_macros::scenarios!`. Before it expands, it lints every `.feature` file under the directory against this guide. Each finding is a compile error of the form `path:line:col: rule-id: message. Fix: hint`. A clean directory expands to rstest-bdd's `scenarios!` and to one more test, `<dir>_steps::every_step_matches_one_definition`. That test resolves every step of every scenario the call runs, with outline rows substituted, against the step definitions in the test binary. It fails on a step that matches no definition and on a step that matches more than one, and lists the `file:line` of each match. It leaves out the scenarios that `ignore_tags` names, by default `@formulated or @inprogress`, and rstest-bdd marks the same scenarios `#[ignore]`, so the gating run skips them and `cargo test -- --ignored` runs them.
 
 | Rule id | Flags | Fix |
 | :--- | :--- | :--- |

@@ -37,6 +37,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- GSSAPI (Kerberos) runs on upstream `sspi` 0.23.1 again, through krabka-protocol [`361a093`](https://github.com/krabka-io/krabka-protocol/pull/91), instead of the `krabka-sspi` 0.23.0 fork. `krabka-sspi` 0.23.0 does not build against `picky-krb` 0.13.1, so every lock file refresh broke the build. The lock file takes `picky` 7.0.0-rc.27 and `picky-krb` 0.13.1. The RUSTSEC-2023-0071 review and `aspect check-rustsec-2023-0071` now name `sspi` 0.23.1 and `picky` 7.0.0-rc.27.
 - `krabka-verified` kernels take typed arguments in place of flags and parallel slices. `fetch_visibility` takes a `FetchReader` (`Follower`, or `Consumer` with an `Isolation`) in place of `is_follower` and `read_committed`. `recompute_high_watermark` takes a `WatermarkInputs` with the leader's `log_end`, `epoch_start_offset` and `current_hwm`, and a `LeaderVote` in place of `leader_counts`. `stamp_ranges_valid`, `stamp_range_insertion_index`, `exact_stamp_range_index` and `covering_stamp_range_index` take `&[StampRange]` in place of `bases` and `lasts`. Every kernel returns what it returned before.
 
 ### Fixed
