@@ -6,13 +6,16 @@ Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of
 
 ## Overview
 
-Krabka's crates illustrate Kafka behavior with Gherkin scenarios that run through [rstest-bdd](https://docs.rs/rstest-bdd). `krabka-bdd` replaces the `rstest_bdd_macros::scenarios!` call that binds a feature directory to its step definitions. It is a dev-dependency only and is not published. The macros live in [`krabka-bdd-macros`](../bdd-macros/README.md).
+Krabka's crates illustrate Kafka behavior with Gherkin scenarios. rstest-bdd keeps the step registry and the step definitions; `krabka-bdd` reads the features, generates one test per scenario and per Examples row, and runs the steps on one Tokio runtime per scenario. It is a dev-dependency only and is not published. The macros live in [`krabka-bdd-macros`](../bdd-macros/README.md) and the feature model in [`krabka-bdd-model`](../bdd-model/README.md).
 
 ## Features
 
-- `scenarios!` — lints every feature under a directory at compile time against the [Gherkin style guide](../../docs/style_guides/gherkin_style_guide.md#krabka-bdd), then runs it with rstest-bdd.
-- A generated test per `scenarios!` call that fails on undefined and ambiguous steps, naming each matching definition's `file:line`.
-- `runtime = "tokio-multi-thread"` — runs each scenario on a multi-thread Tokio runtime, so a task spawned in a Given keeps running between steps.
+- `scenarios!` — lints every feature under a directory at compile time against the [Gherkin style guide](../../docs/style_guides/gherkin_style_guide.md#krabka-bdd), then generates the tests. `Rule:` scenarios run, rows are named after their `case` cell, `@formulated` and `@manual` scenarios are ignored, and `@inprogress` ones are expected to fail.
+- The runner: `async` steps that really await, strict resolution of undefined and ambiguous steps, a `World` and tag-scoped `#[before]` / `#[after]` hooks that always run, and one diagnostic per failure naming the feature line, rule, Examples row and step.
+- A registry check per test binary: undefined, ambiguous and journey-only steps fail; unused step definitions are listed.
+- `runtime = "tokio-multi-thread"` — worker threads, so a task spawned in a Given keeps running between steps.
+- `#[given]`, `#[when]`, `#[then]`, `#[step]` — Cucumber expressions, several expressions per step, and checks on placeholder order and return type.
+- `Attempt<T, E>` — the result of an "attempts to" step, for a later Then to check.
 - `#[derive(StepParam)]` — `FromStr` and `Display` over the step words of a unit-variant enum.
 - `Given<T>` — a scenario-state slot whose unset read names the step that should have filled it.
 
@@ -36,7 +39,7 @@ fn world() -> World {
     World { policy: krabka_bdd::Given::new("policy", "Given a log has cleanup policy <policy>") }
 }
 
-#[rstest_bdd_macros::given("a log has cleanup policy {policy}")]
+#[krabka_bdd::given("a log has cleanup policy {policy}")]
 fn log_has_cleanup_policy(world: &mut World, policy: CleanupPolicy) {
     world.policy.set(policy);
 }
@@ -44,7 +47,7 @@ fn log_has_cleanup_policy(world: &mut World, policy: CleanupPolicy) {
 krabka_bdd::scenarios!("tests/features/log_policy", fixtures = [world: World]);
 ```
 
-A crate that uses it lists `krabka-bdd`, `rstest`, `rstest-bdd` and `rstest-bdd-macros` as dev-dependencies, and also `rstest-bdd-harness` when it uses the multi-thread runtime. A published crate gives `krabka-bdd` a `path` and no `version`, so `cargo publish` drops it.
+A crate that uses it lists `krabka-bdd`, `rstest`, `rstest-bdd` and `rstest-bdd-macros` as dev-dependencies. A published crate gives `krabka-bdd` a `path` and no `version`, so `cargo publish` drops it.
 
 ## Documentation
 

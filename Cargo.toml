@@ -241,9 +241,6 @@ proptest = "1"
 gherkin = { version = "0.16", default-features = false, features = ["parser"] }
 rstest = "0.28"
 rstest-bdd = "0.6"
-# The `HarnessAdapter` and `AttributePolicy` traits that `krabka-bdd`'s
-# multi-thread Tokio harness implements.
-rstest-bdd-harness = "0.6"
 rstest-bdd-macros = "0.6"
 # The pattern compiler `krabka-bdd-macros` validates expanded step patterns with.
 rstest-bdd-patterns = "0.6"

@@ -93,7 +93,7 @@ impl Failure {
             scenario,
             first: Problem {
                 location,
-                message: readable(&message),
+                message: readable(message),
             },
             also: Vec::new(),
         }
@@ -103,7 +103,7 @@ impl Failure {
     pub fn push(&mut self, location: Location, message: String) {
         self.also.push(Problem {
             location,
-            message: readable(&message),
+            message: readable(message),
         });
     }
 
@@ -123,11 +123,9 @@ impl Failure {
 
 /// `message` without the Unicode isolation marks (U+2068, U+2069) that
 /// rstest-bdd's Fluent localization puts around every interpolated value.
-fn readable(message: &str) -> String {
+fn readable(mut message: String) -> String {
+    message.retain(|character| !matches!(character, '\u{2068}' | '\u{2069}'));
     message
-        .chars()
-        .filter(|character| !matches!(character, '\u{2068}' | '\u{2069}'))
-        .collect()
 }
 
 fn write_message(f: &mut Formatter<'_>, message: &str) -> fmt::Result {
@@ -285,7 +283,7 @@ mod tests {
     #[test]
     fn messages_drop_the_localization_isolation_marks() {
         assert!(
-            readable("Step failed at index \u{2068}1\u{2069}: \u{2068}Then\u{2069}")
+            readable("Step failed at index \u{2068}1\u{2069}: \u{2068}Then\u{2069}".to_owned())
                 == "Step failed at index 1: Then"
         );
     }
