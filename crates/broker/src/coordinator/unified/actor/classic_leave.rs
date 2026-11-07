@@ -10,7 +10,7 @@ use {
     super::{
         ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
         downgrade::{FenceFailure, fence_or_downgrade},
-        persistence::flush_classic_metadata,
+        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
         retention::append_tombstones,
         waiters::settle_removed_classic_waiters,
     },
@@ -39,13 +39,30 @@ use {
 #[cfg(test)]
 mod tests;
 
+/// What a classic `LeaveGroup` turn answers, and the actor's keep-running
+/// flag after it.
+pub(super) struct LeaveTurn {
+    pub(super) result: Result<Vec<MemberResponse>, ErrorCode>,
+    pub(super) keep_running: bool,
+}
+
+impl LeaveTurn {
+    /// A turn after which the actor keeps running.
+    fn running(result: Result<Vec<MemberResponse>, ErrorCode>) -> Self {
+        Self {
+            result,
+            keep_running: true,
+        }
+    }
+}
+
 pub(super) async fn handle_classic_leave_message(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
     services: ActorServices<'_>,
     request: &LeaveGroupRequest,
     version: i16,
-) -> Result<Vec<MemberResponse>, ErrorCode> {
+) -> LeaveTurn {
     if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
         let before_members: Vec<String> = state.members.keys().cloned().collect();
@@ -64,45 +81,58 @@ pub(super) async fn handle_classic_leave_message(
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id,
                     "classic LeaveGroup refused because the generation is exhausted");
-                return Err(codes::INVALID_REQUEST);
+                return LeaveTurn::running(Err(codes::INVALID_REQUEST));
             };
             state.generation_id = generation_id;
             if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+                // A write that never reached the log restores the group. One
+                // that may still commit stops the actor, which leaves the
+                // group a reload of the log builds to its replacement.
+                let written = written_classic_state(state, &error);
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id, %error,
                     "classic LeaveGroup log write failed");
-                return Err(write_failure_code(&error));
+                let result = Err(write_failure_code(&error));
+                let Some(written) = written else {
+                    return LeaveTurn::running(result);
+                };
+                leave_written_classic_group(group, written, services.coordinator);
+                return LeaveTurn {
+                    result,
+                    keep_running: false,
+                };
             }
         }
         settle_removed_classic_waiters(state, previous.state, &removed, parked);
-        return Ok(responses);
+        return LeaveTurn::running(Ok(responses));
     }
 
     let Some(state) = group.as_consumer_mut() else {
-        return Err(codes::UNKNOWN_MEMBER_ID);
+        return LeaveTurn::running(Err(codes::UNKNOWN_MEMBER_ID));
     };
     let ConsumerLeave { responses, removed } =
         resolve_consumer_classic_leave(state, request, version);
     if removed.is_empty() {
-        return Ok(responses);
+        return LeaveTurn::running(Ok(responses));
     }
     // Kafka's `consumerGroupFenceMembers`: the members leave in one batch, or
     // the group downgrades in their place when only classic members remain.
-    fence_or_downgrade(group, services, &removed)
-        .await
-        .map_err(|failure| match failure {
-            FenceFailure::Downgrade(error) => {
-                tracing::warn!(group_id = %group.group_id, %error,
+    let fenced =
+        fence_or_downgrade(group, services, &removed)
+            .await
+            .map_err(|failure| match failure {
+                FenceFailure::Downgrade(error) => {
+                    tracing::warn!(group_id = %group.group_id, %error,
                     "hosted classic LeaveGroup downgrade log write failed");
-                write_failure_code(&error)
-            }
-            FenceFailure::Fence(error) => {
-                tracing::warn!(group_id = %group.group_id, %error,
+                    write_failure_code(&error)
+                }
+                FenceFailure::Fence(error) => {
+                    tracing::warn!(group_id = %group.group_id, %error,
                     "hosted classic LeaveGroup log write failed");
-                write_failure_code(&error)
-            }
-        })?;
-    Ok(responses)
+                    write_failure_code(&error)
+                }
+            });
+    LeaveTurn::running(fenced.map(|_| responses))
 }
 
 /// What a classic `LeaveGroup` request does to a consumer-kind group: the

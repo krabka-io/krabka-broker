@@ -69,10 +69,10 @@ async fn reply_classic_leave(
     reply: oneshot::Sender<LeaveResult>,
 ) -> bool {
     let consumer_kind = group.is_consumer();
-    let result = handle_classic_leave_message(group, parked, services, request, version).await;
-    let failed = consumer_kind && result.is_err();
-    let _ = reply.send(classic_leave_result(version, result));
-    !failed || leave_written_consumer_group(group, services.coordinator)
+    let turn = handle_classic_leave_message(group, parked, services, request, version).await;
+    let failed = consumer_kind && turn.result.is_err();
+    let _ = reply.send(classic_leave_result(version, turn.result));
+    turn.keep_running && (!failed || leave_written_consumer_group(group, services.coordinator))
 }
 
 pub(super) async fn handle_actor_message(
@@ -134,8 +134,7 @@ pub(super) async fn handle_actor_message(
             .await
         }
         GroupActorMessage::ClassicSync { req, reply } => {
-            handle_classic_sync_message(group, parked, services, req, reply).await;
-            true
+            handle_classic_sync_message(group, parked, services, req, reply).await
         }
         GroupActorMessage::ClassicHeartbeat { req, reply } => {
             let code = handle_classic_heartbeat_message(group, &req);

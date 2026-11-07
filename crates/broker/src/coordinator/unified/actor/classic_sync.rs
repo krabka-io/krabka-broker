@@ -8,7 +8,8 @@
 
 use {
     super::{
-        ActorServices, ParkedWaiters, SyncResult, persistence::flush_classic_metadata,
+        ActorServices, ParkedWaiters, SyncResult,
+        persistence::{flush_classic_metadata, leave_written_classic_group, written_classic_state},
         waiters::drain_parked_followers,
     },
     crate::{
@@ -22,13 +23,14 @@ use {
     tokio::sync::oneshot,
 };
 
+/// Answers a classic `SyncGroup` and returns the actor's keep-running flag.
 pub(super) async fn handle_classic_sync_message(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
     services: ActorServices<'_>,
     request: SyncGroupRequest,
     reply: oneshot::Sender<SyncResult>,
-) {
+) -> bool {
     let Some(state) = group.as_classic_mut() else {
         let result = match group.as_consumer_mut() {
             Some(state) => {
@@ -49,7 +51,7 @@ pub(super) async fn handle_classic_sync_message(
             },
         };
         let _ = reply.send(result);
-        return;
+        return true;
     };
     let previous = state.clone();
     match classic_ops::handle_sync(state, &request) {
@@ -61,6 +63,11 @@ pub(super) async fn handle_classic_sync_message(
         }
         classic_ops::SyncAction::LeaderInstalled(result) => {
             if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+                // A write that never reached the log restores the group. One
+                // that may still commit stops the actor, which leaves the
+                // group a reload of the log builds, the assignment installed,
+                // to its replacement.
+                let written = written_classic_state(state, &error);
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id, %error,
                     "classic SyncGroup log write failed");
@@ -75,12 +82,17 @@ pub(super) async fn handle_classic_sync_message(
                 for (_, follower) in parked.followers.drain() {
                     let _ = follower.send(failure());
                 }
-                return;
+                let Some(written) = written else {
+                    return true;
+                };
+                leave_written_classic_group(group, written, services.coordinator);
+                return false;
             }
             let _ = reply.send(result);
             drain_parked_followers(state, &mut parked.followers);
         }
     }
+    true
 }
 
 #[cfg(test)]
@@ -91,9 +103,10 @@ mod tests {
             actor::{
                 DescribeMember, GroupActorMessage, JoinResult,
                 test_support::{
-                    RejoinedClassic, decode_assignment, last_classic_metadata, make_coordinator,
-                    make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
-                    seed_completing_classic, upgrade_and_rejoin_classic, upgrade_coordinator,
+                    RejoinedClassic, actor_stops, decode_assignment, last_classic_metadata,
+                    live_actor, make_coordinator, make_coordinator_with_topic_policy,
+                    reloaded_classic_view, rpc, seed_and_upgrade, seed_completing_classic,
+                    time_out_appended_writes, upgrade_and_rejoin_classic, upgrade_coordinator,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
@@ -386,5 +399,53 @@ mod tests {
                 .is_empty()
         );
         check!(log.batches().await.len() == batches_before);
+    }
+
+    /// The leader installs the assignment, and its write times out after the
+    /// record reached the log, so the record may still commit. The leader and
+    /// the parked follower hear the append error, and the actor stops, as
+    /// Kafka's `CoordinatorRuntime` keeps a timed-out write's records and a
+    /// reload builds the group from them. Its replacement serves the group the
+    /// log holds: `Stable`, with the assignment. A reverted actor would keep
+    /// the group in `CompletingRebalance` with no assignment once the record
+    /// commits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sync_whose_write_may_still_commit_respawns_the_persisted_group() {
+        let (coord, log) = make_coordinator();
+        let seeded = seed_completing_classic(&coord, &["m1", "m2"]);
+        let follower = rpc::begin_classic_sync(&seeded.handle, SyncGroupRequest {
+            group_id: "g".into(),
+            member_id: "m2".into(),
+            generation_id: seeded.generation,
+            ..Default::default()
+        })
+        .await;
+        log.hold_commits();
+        let leader = rpc::begin_classic_sync(
+            &seeded.handle,
+            rpc::assignment_sync_request(
+                seeded.generation,
+                "m1",
+                Bytes::from_static(b"assignment"),
+            ),
+        )
+        .await;
+        time_out_appended_writes(&log, 1).await;
+
+        let failure = SyncResult {
+            error_code: codes::COORDINATOR_NOT_AVAILABLE,
+            ..SyncResult::default()
+        };
+        check!(leader.await.unwrap() == failure);
+        check!(follower.await.unwrap() == failure);
+        check!(
+            actor_stops(&seeded.handle).await,
+            "the actor stops after the uncertain write"
+        );
+        log.release_commits();
+        let reloaded = reloaded_classic_view(&log).await;
+        check!(reloaded.state == ClassicGroupState::Stable);
+        let live = live_actor(&coord).await;
+        check!(rpc::classic_inspect(&live).await == reloaded);
     }
 }
