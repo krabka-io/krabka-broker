@@ -1,6 +1,18 @@
 # Native versus JVM extension compatibility assessment (2026-11-08)
 
-## Verified architecture and boundary
+## Subsequent implementation
+
+The isolated assignor prototype is now implemented as an opt-in broker adapter:
+[`tools/jvm-assignor/README.md`](../../tools/jvm-assignor/README.md),
+[`streams/jvm_assignor.rs`](../../crates/broker/src/coordinator/unified/streams/jvm_assignor.rs).
+It executes released Java/JAR assignors via nonblocking async jobs and consumes
+only exact-input-matching results through the existing actor rollback/retry path.
+This supersedes the assessment's assignor-only "no worker" statement below;
+topology-storage and DLQ Java adapters are still absent. The original assessment
+is retained to explain the native/JVM boundary, not as the latest support matrix.
+See [implementation receipt](../jvm-assignor-bridge-20261108/receipt.json).
+
+## Verified architecture and boundary (pre-bridge assessment)
 
 This is a source-and-released-signature assessment, not a JVM loader implementation.
 

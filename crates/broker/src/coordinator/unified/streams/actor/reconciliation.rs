@@ -398,3 +398,7 @@ mod custom_assignor_tests {
         assert!(actor.state.dirty);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "jvm_tests.rs"]
+mod jvm_tests;
