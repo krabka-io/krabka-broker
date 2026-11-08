@@ -11,7 +11,7 @@ use {
     crate::{
         error::LogError,
         io::{IoTarget, LogIo},
-        name::producer_snapshot_path,
+        name::{SegmentFile, producer_snapshot_path},
         recovery::swap::{
             cleaned_path, promote_log, promote_sidecars, remove_if_present,
             remove_replaced_segment, swap_path,
@@ -95,9 +95,15 @@ pub fn atomic_swap_retiring(
 ) -> Result<(), LogError> {
     let base = rewrite.new_base_offset.0;
     let sidecars = [
-        (Some(&rewrite.index_swap), "index"),
-        (Some(&rewrite.timeindex_swap), "timeindex"),
-        (rewrite.txnindex_swap.as_ref(), "txnindex"),
+        (Some(&rewrite.index_swap), SegmentFile::Index.extension()),
+        (
+            Some(&rewrite.timeindex_swap),
+            SegmentFile::TimeIndex.extension(),
+        ),
+        (
+            rewrite.txnindex_swap.as_ref(),
+            SegmentFile::TxnIndex.extension(),
+        ),
     ];
 
     // Step 1: fsync the survivor files. Open with write access so
@@ -122,7 +128,11 @@ pub fn atomic_swap_retiring(
         }
     }
     io.sync_dir(dir)?;
-    stage(io, &rewrite.log_swap, &swap_path(dir, base, "log"))?;
+    stage(
+        io,
+        &rewrite.log_swap,
+        &swap_path(dir, base, SegmentFile::Log.extension()),
+    )?;
     io.sync_dir(dir)?;
 
     // Step 3: delete the consumed segments. Only now may they go, and they

@@ -3,7 +3,10 @@
 
 use {
     super::*,
-    crate::metrics::{QuotaEntityLabel, test_support::encode_metrics},
+    crate::{
+        metrics::{QuotaEntityLabel, test_support::encode_metrics},
+        quota::QuotaType,
+    },
     assert2::check,
     krabka_metadata::EntityKey,
     krabka_units::{millis, secs},
@@ -25,7 +28,7 @@ struct AliceFixture {
 fn alice_fixture() -> AliceFixture {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create("producer_byte_rate", &key("alice", "app"), 1024.0));
+    drop(buckets.get_or_create(QuotaType::Produce, &key("alice", "app"), 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -86,7 +89,7 @@ fn a_user_bucket_releases_the_series_of_its_own_key() {
     let buckets = QuotaBuckets::new();
     let metrics = BrokerMetrics::new();
     let user: EntityKey = vec![("user".into(), Some("alice".into()))];
-    drop(buckets.get_or_create("producer_byte_rate", &user, 1024.0));
+    drop(buckets.get_or_create(QuotaType::Produce, &user, 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -99,26 +102,4 @@ fn a_user_bucket_releases_the_series_of_its_own_key() {
     check!(throttle_series(&metrics).len() == 1);
 
     sweep_and_check_expired(&buckets, &metrics);
-}
-
-/// Kafka charges every quota under its own config key, and the series is
-/// labelled by the `QuotaType` that key names; a sweep that could not make
-/// that trip would leave the label set behind.
-#[yare::parameterized(
-    producer = { "producer_byte_rate", QuotaType::Produce },
-    consumer = { "consumer_byte_rate", QuotaType::Fetch },
-    request = { "request_percentage", QuotaType::Request },
-    controller_mutation = { "controller_mutation_rate", QuotaType::ControllerMutation },
-    connection_creation = { "connection_creation_rate", QuotaType::ConnectionCreation },
-)]
-fn every_quota_key_a_bucket_is_created_under_names_a_quota_type(
-    config_key: &'static str,
-    want: QuotaType,
-) {
-    check!(QuotaType::from_config_key(config_key) == Some(want));
-}
-
-#[test]
-fn an_unknown_quota_config_key_has_no_type() {
-    check!(QuotaType::from_config_key("not_a_quota") == None);
 }

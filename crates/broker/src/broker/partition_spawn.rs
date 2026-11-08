@@ -11,7 +11,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::{
             Partition, PartitionRuntimeConfig, ReplicationTarget, WriterGate, WriterMessage,
-            empty_marker_materialization, unreported_leader_log_start,
+            empty_marker_materialization, unchecked_log_start, unreported_leader_log_start,
         },
         partition_writer::{
             WriterIdentity, WriterPolicy, WriterServices, WriterSignals, WriterStorage, run_gated,
@@ -369,6 +369,7 @@ pub fn try_spawn_partition_with_replication_target(
         replication_target,
         diskless,
         reported_leader_log_start: unreported_leader_log_start(),
+        log_start_checked_epoch: unchecked_log_start(),
         writer_handle: Arc::new(Mutex::new(Some(writer))),
     }))
 }

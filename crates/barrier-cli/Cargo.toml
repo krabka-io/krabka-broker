@@ -24,12 +24,13 @@ path = "src/main.rs"
 [dependencies]
 # The barrier control-record decoder and type live with the log's control records.
 krabka-log = { version = "1.1.5", path = "../log" }
+# `--bootstrap-server` and `--command-config`, shared with every operator CLI.
+krabka-cli-connection = { path = "../cli-connection" }
 krabka-client-core = { version = "0.8.0" }
 krabka-protocol = { version = "0.8.0" }
 krabka-units = { workspace = true }
 
-# `string` lets `Cli::try_parse_with_env` hand clap an owned default.
-clap = { workspace = true, features = ["string"] }
+clap = { workspace = true }
 bytes = { workspace = true }
 # `cli_main!` writes the binary's `main`.
 krabka-macros = { version = "1.1.5", path = "../macros" }

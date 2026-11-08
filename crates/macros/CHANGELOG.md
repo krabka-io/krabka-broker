@@ -12,14 +12,14 @@ release that contains `krabka-macros`.
   `Option<Bytes>`, not `Bytes`, and the generated body returns what the
   caller's `encode_body` returns. An encoder that fails no longer yields a
   truncated body.
-- `#[bootstrap_cli_fields]` no longer puts a clap `env` attribute on
-  `--bootstrap-server`. It adds `Cli::try_parse_with_env(argv, env)` instead,
-  which reads `KRABKA_BOOTSTRAP_SERVER` through the lookup the caller passes,
-  so a test can supply its own environment. A caller that parses with
-  `Cli::parse_from` no longer gets the fallback.
 
 ### Added
 
 - `bootstrap_cli_entrypoint!`, the `run_from_args` of a tool whose `Cli`
-  carries `#[bootstrap_cli_fields]`. It parses with
-  `Cli::try_parse_with_env` over the process environment.
+  flattens `krabka_cli_connection::ConnectionArgs`. It parses with
+  `krabka_cli_connection::try_parse_with_env` over the process environment,
+  so `KRABKA_BOOTSTRAP_SERVER` still stands in for `--bootstrap-server`.
+
+### Removed
+
+- The `#[bootstrap_cli_fields]` attribute and the `connect_cli_client!` macro. The operator CLIs, their only users, now flatten the `ConnectionArgs` flag group of the workspace-private `krabka-cli-connection` crate. Removing public macros breaks the crate's API, so the release that carries this is at least a minor version, 1.2.0.

@@ -44,8 +44,7 @@ use {
             },
             submit_failure::{GuardedFailure, classify_guarded},
         },
-        metrics::QuotaType,
-        quota::throttle_time_ms,
+        quota::{QuotaType, throttle_time_ms},
     },
     krabka_metadata::MetadataError,
     krabka_protocol::{

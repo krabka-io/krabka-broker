@@ -1458,17 +1458,6 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
     cli_support::argv_entrypoint(meta, item)
 }
 
-/// Add bootstrap-server and subcommand fields before deriving a CLI parser,
-/// and `Cli::try_parse_with_env`, which falls back to `KRABKA_BOOTSTRAP_SERVER`
-/// through an environment lookup the caller passes.
-#[moxy::attribute(name = "bootstrap_cli_fields")]
-pub fn bootstrap_cli_fields(
-    meta: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, ParseError> {
-    cli_support::bootstrap_cli_fields(meta, item)
-}
-
 /// Generate a duration-parser check over each caller's literal cases.
 ///
 /// # Errors
@@ -1500,8 +1489,8 @@ pub fn parsed_cli_entrypoint(tokens: TokenStream) -> Result<TokenStream, ParseEr
 }
 
 /// Generate the `run_from_args` of a CLI whose `Cli` carries
-/// `#[bootstrap_cli_fields]`, reading `KRABKA_BOOTSTRAP_SERVER` from the process
-/// environment.
+/// flattens `krabka_cli_connection::ConnectionArgs`, reading
+/// `KRABKA_BOOTSTRAP_SERVER` from the process environment.
 ///
 /// # Errors
 ///
@@ -1539,16 +1528,6 @@ pub fn bootstrap_parser_fixture(tokens: TokenStream) -> Result<TokenStream, Pars
 #[cfg_attr(not(test), moxy::function)]
 pub fn snapshot_node_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     cli_support::snapshot_node_fixture(tokens)
-}
-
-/// Connect a CLI client with the caller's identity and refusal exit code.
-///
-/// # Errors
-///
-/// Rejects input outside this macro's syntax.
-#[cfg_attr(not(test), moxy::function)]
-pub fn connect_cli_client(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    cli_support::connect_cli_client(tokens)
 }
 
 /// Generate the temporary metadata and data directories used by format tests.
@@ -2163,7 +2142,7 @@ mod export_contract_tests {
         name: &'static str,
         expand: Expand,
     }
-    const FUNCTION_MACROS: [FunctionMacro; 85] = [
+    const FUNCTION_MACROS: [FunctionMacro; 84] = [
         FunctionMacro {
             name: "dispatch_table",
             expand: dispatch_table,
@@ -2375,10 +2354,6 @@ mod export_contract_tests {
         FunctionMacro {
             name: "snapshot_node_fixture",
             expand: snapshot_node_fixture,
-        },
-        FunctionMacro {
-            name: "connect_cli_client",
-            expand: connect_cli_client,
         },
         FunctionMacro {
             name: "format_directories_fixture",

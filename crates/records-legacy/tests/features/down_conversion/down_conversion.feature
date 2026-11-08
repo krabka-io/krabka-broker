@@ -3,6 +3,9 @@ Feature: v2 record batches down-convert to legacy message sets
   A consumer on Fetch v0 or v1 reads magic 0 messages, and one on Fetch v2
   or v3 reads magic 1 messages. The broker down-converts each stored v2
   record batch for them, as Apache Kafka's RecordsUtil.downConvert does.
+  RecordsUtil.downConvert skips a control batch and then refuses a zstd
+  batch, because a legacy message cannot name zstd, and the broker answers
+  that partition with UNSUPPORTED_COMPRESSION_TYPE.
   The legacy layouts are in message_format/message_format.feature and
   compressed_wrappers/compressed_wrappers.feature.
 
@@ -49,6 +52,13 @@ Feature: v2 record batches down-convert to legacy message sets
       Given a v2 batch of three uncompressed records
       When the broker down-converts the batch to magic 1
       Then the legacy message set is three uncompressed messages
+
+  Rule: A zstd batch is not down-converted
+
+    Scenario: A zstd batch is refused as an unsupported compression type
+      Given a v2 batch compressed with zstd
+      When the broker down-converts the batch to magic 1
+      Then the down-conversion is refused with UNSUPPORTED_COMPRESSION_TYPE
 
   Rule: A LogAppendTime batch down-converts with its log append time
 

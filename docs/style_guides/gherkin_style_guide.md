@@ -223,6 +223,31 @@ Do not use alternation to hide inconsistent business terms: if two words mean th
 
 `krabka_bdd::Given<T>` is one slot of scenario state. `Given::new("policy", "Given a log has cleanup policy <policy>")` names the field and the step that fills it, keyword included. `get`, `get_mut`, `take` and `into_inner` on an unset slot panic with both names, so a scenario that lost its `Given` says which one.
 
+### Test data
+
+Data tables carry the examples a rule needs. krabka-bdd reads them strictly, so a misspelled column fails instead of being ignored.
+
+- **Data Table Accessor.** `#[derive(krabka_bdd::TableRow)]` on a struct makes each field a column: the field name with `_` as a space, or `#[column("leader epoch")]`. `krabka_bdd::table::rows::<T>(&datatable)` reads a table with a header row, and `table::vertical::<T>(&datatable)` reads `| field | value |` rows into one value. An unknown column fails, naming the closest known one ("did you mean `partition`?"); a missing, empty or unparsable cell fails naming its row and column. An `Option` field is an optional column, and `-` is its empty marker.
+- **Data Table Assertion.** `krabka_bdd::assert_table!(actual, &datatable)` compares only the columns the expected table has, and one failure shows every differing cell, every missing row and every unexpected row, with a table diff. It says so when only the order differs.
+- **Validation Tester.** `#[derive(krabka_bdd::Overrides)]` gives a struct `apply(field, value)`, and `krabka_bdd::overrides::apply_table(&mut value, &datatable)` applies a table of them. Start from a valid default instance, apply the scenario's overrides, then validate: each scenario names only the fields its rule is about. Values reach `FromStr` as written, so an invalid value is easy to set.
+- **Domain Default, Default Instance and Object Mother.** Keep one `defaults` module per domain area in a crate's test support. It hands out bon builders with valid defaults, such as `a_topic_request()`, and named mothers for common shapes, such as `a_durable_topic_request()`. A step overrides only what its rule needs. `crates/bdd/tests/validation_tester.rs` shows the pattern.
+
+### Scenario state
+
+- **Scenario context.** `#[derive(krabka_bdd::ScenarioContext)]` on a struct of `Given<T>` fields, each marked `#[introduced_by("Given a topic with {n} partitions")]`, generates `the_<field>()`, `the_<field>_mut()` and `set_<field>()` accessors and a `Default`. An unset read names the field and its introducing step. Every scenario gets a fresh context from its rstest fixture; never keep scenario state in a static.
+- **Introduce and Refer.** `krabka_bdd::Ref<T>` keeps the entities a scenario introduces. "a topic" calls `introduce`, "the topic" calls `the`, and `introduce_named` / `named` handle "the topic orders". A read of an entity no step introduced names the step that should have.
+- **Entity Selector.** `Ref::register_selector(noun, "oldest", ..)` registers a domain rule for a reference phrase, and `select(noun, "oldest")` resolves "the oldest segment" or "the latest leader epoch" against the introduced entities. An unknown selector lists the registered ones.
+
+### Layers
+
+A step definition holds testing decisions only. A **driver** holds what call to make, named in domain terms. The **infrastructure** below it holds the plumbing: clients, brokers, files.
+
+- **Test Driver.** Implement `krabka_bdd::Driver` for the type the steps talk to, and pass it to the steps as a fixture.
+- **Test Action.** Each operation is a `krabka_bdd::Action<D>`. `krabka_bdd::act(&mut driver, action)` runs it inside a `bdd.action` tracing span with the action's name, and records how long it took and whether it succeeded. A failed action panics: actions are destructive by default.
+- **Attempt Action.** `krabka_bdd::attempt(&mut driver, action)` runs the same action and returns an `Attempt` instead of panicking, for an "attempts to" step.
+- **Polymorphic Driver.** `scenarios!(.., driver = driver: Box<dyn TopicDriver>, drivers = [in_process, wire])` runs every scenario once per driver, each in a module named after the rstest fixture fn that builds it. Tag a scenario `@only_in_process` or `@only_wire` when only one driver can reach the behavior. For Krabka the pair is an in-process driver that calls the broker's types and a Kafka-wire driver that speaks the protocol. `crates/bdd/tests/polymorphic.rs` is the example.
+- **Stub Dependency.** `krabka_bdd::StubClock` holds the manual clocks of the `qubit-clock` seam that production code takes, so a scenario moves time with `advance` instead of sleeping. Pair a stubbed scenario with a periodic real run: the same scenario tagged `@docker`, with a `#[krabka_bdd::before(tags = "@docker")]` hook that swaps in the real clock and dependencies, run on a schedule rather than on every change.
+
 ### Open questions and shared features
 
 A `Feature:` or `Rule:` description holds two kinds of line, and the lint advises against any other text there (`description-smell`):

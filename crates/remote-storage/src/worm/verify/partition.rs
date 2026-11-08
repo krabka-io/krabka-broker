@@ -48,7 +48,13 @@ pub(super) async fn verify_partition(
         }
     }
 
-    if !selected(request, decoded.first().map(|keyed| &keyed.manifest.body)) {
+    // A filter reads the topic and partition from a decoded manifest. When
+    // every manifest was rejected there is none to read them from, so the
+    // filter cannot rule the directory out, and it is reported rather than
+    // dropped: a silent skip would read as a clean archive.
+    let scope = decoded.first().map(|keyed| &keyed.manifest.body);
+    let out_of_scope_unknown = scope.is_none() && rejected.is_some();
+    if !out_of_scope_unknown && !selected(request, scope) {
         return Ok(None);
     }
 
@@ -92,6 +98,7 @@ mod tests {
             verify_archive,
         },
         assert2::check,
+        krabka_object_store::fault::FaultKind,
     };
 
     #[tokio::test]
@@ -122,6 +129,34 @@ mod tests {
                 .unwrap()
                 .manifests()
                 == 2
+        );
+    }
+
+    #[yare::parameterized(
+        other_topic = { Some("payments"), None },
+        other_partition = { None, Some(PARTITION + 1) },
+        this_partition = { Some(TOPIC), Some(PARTITION) },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_filter_cannot_skip_a_partition_whose_every_manifest_is_missing(
+        topic: Option<&str>,
+        partition: Option<i32>,
+    ) {
+        let archive = Archive::with_failing_reads(FaultKind::NotFound).await;
+        let request = VerifyRequest {
+            topic: topic.map(str::to_owned),
+            partition,
+            ..Default::default()
+        };
+
+        let report = archive.verify_with(&request).await;
+
+        check!(!report.ok());
+        check!(
+            report
+                .first_break()
+                .map(|found| found.manifest_key.as_str())
+                == Some(archive.segments[0].manifest_key.as_str())
         );
     }
 }

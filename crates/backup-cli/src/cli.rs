@@ -5,8 +5,9 @@
 //! never introduces a second place to point at.
 
 use {
-    crate::{archive::ArchiveArgs, connection::SecurityArgs},
+    crate::archive::ArchiveArgs,
     clap::{Args, Parser, Subcommand},
+    krabka_cli_connection::SecurityArgs,
     std::path::PathBuf,
 };
 

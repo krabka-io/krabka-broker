@@ -194,10 +194,6 @@ const INVALID_OFFSET: i64 = -1;
 /// every topic that did not ask for `LogAppendTime`.
 const NO_LOG_APPEND_TIME: i64 = -1;
 
-/// Wire sentinel "leader unknown" for the KIP-951 `current_leader` hint. The
-/// handler uses it when the leader's `NodeId` does not fit the wire's `i32`.
-const NO_LEADER_ID: i32 = -1;
-
 #[tracing::instrument(
     name = "handle_produce",
     level = "info",

@@ -13,6 +13,7 @@ use {
         SchemaValidator, UNAVAILABLE_TTL_MS,
         compiled::CompiledSchema,
         references::{MAX_REFERENCE_BYTES, ReferenceSources, reference_sources_ordered},
+        registry::RegistryReads,
         reject::RejectReason,
     },
     crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util},
@@ -131,6 +132,19 @@ impl SchemaValidator {
         mode: ValidationMode,
         metrics: &BrokerMetrics,
     ) -> Result<Arc<SchemaEntry>, RejectReason> {
+        self.entry_from(&self.client, id, subject, mode, metrics)
+            .await
+    }
+
+    /// [`Self::entry`], reading a miss from `registry`.
+    async fn entry_from(
+        &self,
+        registry: &impl RegistryReads,
+        id: u32,
+        subject: &str,
+        mode: ValidationMode,
+        metrics: &BrokerMetrics,
+    ) -> Result<Arc<SchemaEntry>, RejectReason> {
         let now = time_util::epoch_millis(self.clock.now());
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
@@ -166,15 +180,18 @@ impl SchemaValidator {
         }
 
         metrics.record_schema_cache_miss();
-        let fetched = time::timeout(self.operation_timeout, self.fetch(id, subject, mode))
-            .await
-            .unwrap_or_else(|_| {
-                Err(RejectReason::RegistryUnavailable(format!(
-                    "schema registry operation exceeded {:?}",
-                    self.operation_timeout
-                )))
-            })
-            .map(Arc::new);
+        let fetched = time::timeout(
+            self.operation_timeout,
+            Self::fetch(registry, id, subject, mode),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(RejectReason::RegistryUnavailable(format!(
+                "schema registry operation exceeded {:?}",
+                self.operation_timeout
+            )))
+        })
+        .map(Arc::new);
         // A registry that could not answer is remembered only briefly, so the
         // next produce re-asks instead of inheriting a stale outage. Bounded by
         // `expire_after` so a shorter configured TTL still wins.
@@ -196,13 +213,12 @@ impl SchemaValidator {
 
     /// Ask the registry about `id`.
     async fn fetch(
-        &self,
+        registry: &impl RegistryReads,
         id: u32,
         subject: &str,
         mode: ValidationMode,
     ) -> Result<SchemaEntry, RejectReason> {
-        let bindings = self
-            .client
+        let bindings = registry
             .subject_versions_for_id(id)
             .await
             .map_err(|e| Self::fetch_error(id, &e))?;
@@ -216,8 +232,7 @@ impl SchemaValidator {
         }
 
         let body = if mode == ValidationMode::Full {
-            let fetched = self
-                .client
+            let fetched = registry
                 .schema_by_id(id)
                 .await
                 .map_err(|e| Self::fetch_error(id, &e))?;
@@ -231,7 +246,7 @@ impl SchemaValidator {
                 sources: references,
                 order: reference_order,
             } = reference_sources_ordered(
-                &self.client,
+                registry,
                 &fetched.references,
                 MAX_REFERENCE_BYTES - fetched.schema.len(),
             )
@@ -286,9 +301,15 @@ mod tests {
             response_endpoint, unavailable_ttl_ms, validator, value_check,
         },
         assert2::{assert, check},
-        krabka_schema_serde::subject::Role,
+        krabka_schema_serde::{
+            registry::{
+                FetchedSchema,
+                model::{SchemaReference, SubjectVersion},
+            },
+            subject::Role,
+        },
         krabka_units::{millis, minutes},
-        std::time::Duration,
+        std::{sync::Mutex, time::Duration},
         wiremock::{
             Mock, MockServer, ResponseTemplate,
             matchers::{method, path},
@@ -470,45 +491,159 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /// A registry whose three reads each take a set time on tokio's clock, and
+    /// which records which reads started, and when.
+    ///
+    /// Its latency is a tokio sleep and not a socket, so under paused time the
+    /// whole lookup runs in virtual time and finishes the same way on any
+    /// runner, however loaded.
+    struct TimedRegistry {
+        versions_latency: Duration,
+        schema_latency: Duration,
+        reference_latency: Duration,
+        epoch: time::Instant,
+        reads: Mutex<Vec<(&'static str, Duration)>>,
+    }
+
+    impl TimedRegistry {
+        fn new(versions: Duration, schema: Duration, reference: Duration) -> Self {
+            Self {
+                versions_latency: versions,
+                schema_latency: schema,
+                reference_latency: reference,
+                epoch: time::Instant::now(),
+                reads: Mutex::new(Vec::new()),
+            }
+        }
+
+        async fn read(&self, name: &'static str, latency: Duration) {
+            self.reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((name, self.epoch.elapsed()));
+            time::sleep(latency).await;
+        }
+
+        fn reads(&self) -> Vec<(&'static str, Duration)> {
+            self.reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    impl RegistryReads for TimedRegistry {
+        async fn subject_versions_for_id(
+            &self,
+            _id: u32,
+        ) -> Result<Vec<SubjectVersion>, SchemaSerdeError> {
+            self.read("subject_versions_for_id", self.versions_latency)
+                .await;
+            Ok(vec![SubjectVersion {
+                subject: "orders-value".into(),
+                version: 1,
+            }])
+        }
+
+        async fn schema_by_id(&self, _id: u32) -> Result<FetchedSchema, SchemaSerdeError> {
+            self.read("schema_by_id", self.schema_latency).await;
+            Ok(FetchedSchema {
+                schema: r#""string""#.into(),
+                kind: SchemaKind::Avro,
+                message_type: None,
+                references: vec![SchemaReference {
+                    name: "Leaf".into(),
+                    subject: "leaf".into(),
+                    version: 1,
+                }],
+            })
+        }
+
+        async fn schema_by_subject_version(
+            &self,
+            _subject: &str,
+            _version: i32,
+        ) -> Result<FetchedSchema, SchemaSerdeError> {
+            self.read("schema_by_subject_version", self.reference_latency)
+                .await;
+            Ok(FetchedSchema {
+                schema: r#""string""#.into(),
+                kind: SchemaKind::Avro,
+                message_type: None,
+                references: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn one_deadline_bounds_the_whole_registry_operation() {
+        // Three reads of 50 ms, 0 ms and 50 ms against an 80 ms deadline. Each
+        // read fits inside the deadline, and so does each adjacent pair, but
+        // the three together do not. Only a deadline over the whole operation
+        // rejects it: not one per read, nor one per stage of the lookup.
+        let registry = TimedRegistry::new(
+            Duration::from_millis(50),
+            Duration::ZERO,
+            Duration::from_millis(50),
+        );
+        let v = SchemaValidator::new(
+            "http://registry.invalid".into(),
+            false,
+            100,
+            minutes(1),
+            millis(80),
+        )
+        .expect("validator");
+
+        let result = v
+            .entry_from(
+                &registry,
+                KNOWN_ID,
+                "orders-value",
+                ValidationMode::Full,
+                &no_metrics(),
+            )
+            .await;
+
+        assert!(let Err(reason) = result);
+        check!(
+            reason
+                == RejectReason::RegistryUnavailable(
+                    "schema registry operation exceeded 80ms".into()
+                )
+        );
+        // The third read started at 50 ms and was cut off at the deadline, 30
+        // ms before it would have answered.
+        check!(
+            registry.reads()
+                == [
+                    ("subject_versions_for_id", Duration::ZERO),
+                    ("schema_by_id", Duration::from_millis(50)),
+                    ("schema_by_subject_version", Duration::from_millis(50)),
+                ]
+        );
+        check!(registry.epoch.elapsed() == Duration::from_millis(80));
+    }
+
+    #[tokio::test]
+    async fn a_registry_slower_than_the_deadline_is_unavailable() {
+        // The same deadline over the real HTTP client. The registry answers
+        // long after the 80 ms deadline, so either the operation deadline or
+        // the request timeout ends the read, and both mean the registry could
+        // not answer. No call count and no tight margin: nothing here races.
         let server = MockServer::start().await;
         response_endpoint(
             &server,
             &format!("/schemas/ids/{KNOWN_ID}/versions"),
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(50))
-                .set_body_json(serde_json::json!([
-                    {"subject": "orders-value", "version": 1}
-                ])),
-            Some(1),
-        )
-        .await;
-        response_endpoint(
-            &server,
-            &format!("/schemas/ids/{KNOWN_ID}"),
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "schema": r#""string""#,
-                "references": [{"name":"Leaf","subject":"leaf","version":1}]
-            })),
-            Some(1),
-        )
-        .await;
-        response_endpoint(
-            &server,
-            "/subjects/leaf/versions/1",
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(50))
-                .set_body_json(serde_json::json!({
-                    "subject": "leaf", "version": 1, "id": 7, "schema": r#""string""#
-                })),
-            Some(1),
+            ResponseTemplate::new(200).set_delay(Duration::from_secs(30)),
+            None,
         )
         .await;
         let v = SchemaValidator::new(server.uri(), false, 100, minutes(1), millis(80))
             .expect("validator");
 
-        let result = value_check(&v, ValidationMode::Full, &framed(KNOWN_ID, b"a")).await;
+        let result = value_check(&v, ValidationMode::Id, &framed(KNOWN_ID, b"a")).await;
+
         assert!(let Err(reason) = result);
         check!(reason.label() == "registry_unavailable", "{reason}");
     }

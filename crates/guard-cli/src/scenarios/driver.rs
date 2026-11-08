@@ -14,6 +14,7 @@ use {
         config::{InterBrokerCredentials, ListenerSpec},
         operator_keys::{OperatorKeyEntry, OperatorKeys},
     },
+    krabka_cli_connection::try_parse_with_env,
     krabka_client_core::{Client, SaslCredentials, security::ClientSecurity},
     krabka_protocol::{
         krabka::{
@@ -496,7 +497,8 @@ pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Outcome {
 /// A scenario cannot set a variable in its own process, because that is
 /// `unsafe` in edition 2024, so it hands the parser this map instead.
 pub async fn run_in(command_line: &[&str], environment: &BTreeMap<String, String>) -> Outcome {
-    let Ok(cli) = Cli::try_parse_with_env(command_line, |name| environment.get(name).cloned())
+    let Ok(cli) =
+        try_parse_with_env::<Cli, _, _>(command_line, |name| environment.get(name).cloned())
     else {
         return Outcome::CommandLineRefused;
     };

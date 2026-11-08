@@ -107,6 +107,50 @@ struct Resolved {
     failed: HashMap<String, Failure>,
 }
 
+/// The names of `image`'s `ip` entities other than the default one.
+fn ip_entity_names(image: &MetadataImage) -> impl Iterator<Item = &String> {
+    image
+        .client_quotas()
+        .keys()
+        .filter_map(|key| match key.as_slice() {
+            [(entity_type, Some(name))] if entity_type == "ip" => Some(name),
+            _ => None,
+        })
+}
+
+impl Resolved {
+    /// The address `name` stands for: its own, for an IP literal, or the one
+    /// it resolved to, for a host name.
+    fn address_of(&self, name: &str) -> Option<IpAddr> {
+        parse_ip_literal(name).or_else(|| self.hosts.get(name).copied())
+    }
+
+    /// See [`IpNames::update`].
+    fn reindex(&mut self, image: &MetadataImage) {
+        let mut by_address: HashMap<IpAddr, BTreeSet<String>> = HashMap::new();
+        let mut in_image = HashSet::new();
+        for name in ip_entity_names(image) {
+            in_image.insert(name.as_str());
+            if let Some(addr) = self.address_of(name) {
+                by_address.entry(addr).or_default().insert(name.clone());
+            }
+        }
+        self.hosts
+            .retain(|host, _| in_image.contains(host.as_str()));
+        self.failed
+            .retain(|host, _| in_image.contains(host.as_str()));
+        self.names = by_address;
+    }
+
+    /// The host names of `image`'s `ip` entities that have no address yet.
+    fn unresolved(&self, image: &MetadataImage) -> Vec<String> {
+        ip_entity_names(image)
+            .filter(|name| self.address_of(name).is_none())
+            .cloned()
+            .collect()
+    }
+}
+
 /// How long one host-name lookup may run before it counts as failed.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -162,37 +206,25 @@ impl IpNames {
 
     /// Rebuilds the address index from `image`'s `ip` entities, and forgets
     /// the hosts whose entity is gone, so that a record applied again resolves
-    /// again, as Kafka resolves it on every apply. Returns the host names of
-    /// the image that have no address yet, for [`Self::resolve`].
-    pub(super) fn update(&self, image: &MetadataImage) -> Vec<String> {
-        let mut resolved = self.lock();
-        let mut by_address: HashMap<IpAddr, BTreeSet<String>> = HashMap::new();
-        let mut in_image = HashSet::new();
-        let mut unresolved = Vec::new();
-        for key in image.client_quotas().keys() {
-            let [(entity_type, Some(name))] = key.as_slice() else {
-                continue;
-            };
-            if entity_type != "ip" {
-                continue;
-            }
-            in_image.insert(name.as_str());
-            match parse_ip_literal(name).or_else(|| resolved.hosts.get(name).copied()) {
-                Some(addr) => {
-                    by_address.entry(addr).or_default().insert(name.clone());
-                }
-                None => unresolved.push(name.clone()),
-            }
-        }
-        resolved
-            .hosts
-            .retain(|host, _| in_image.contains(host.as_str()));
-        resolved
-            .failed
-            .retain(|host, _| in_image.contains(host.as_str()));
-        resolved.names = by_address;
-        unresolved
+    /// again, as Kafka resolves it on every apply.
+    pub(super) fn update(&self, image: &MetadataImage) { self.lock().reindex(image); }
+
+    /// [`Self::update`]s the index from `image`, then [`Self::claim`]s the host
+    /// names of the image that still have no address, for [`Self::resolve`].
+    /// The order is the point: the rebuilt index is what decides which names
+    /// are unresolved.
+    pub(super) fn claim_due(&self, image: &MetadataImage, now: Instant) -> Vec<String> {
+        let unresolved = {
+            let mut resolved = self.lock();
+            resolved.reindex(image);
+            resolved.unresolved(image)
+        };
+        self.claim(unresolved, now)
     }
+
+    /// The host names of `image`'s `ip` entities that have no address yet.
+    #[cfg(test)]
+    fn unresolved(&self, image: &MetadataImage) -> Vec<String> { self.lock().unresolved(image) }
 
     /// Takes the host names of `unresolved` that a lookup should start for at
     /// `now`, and marks them as running until [`Self::resolve`] has been through
@@ -200,7 +232,7 @@ impl IpNames {
     /// recently to try again, is left out, so a stream of images neither
     /// stacks lookups of one name nor asks a resolver that is down again on
     /// every image.
-    pub(super) fn claim(&self, unresolved: Vec<String>, now: Instant) -> Vec<String> {
+    fn claim(&self, unresolved: Vec<String>, now: Instant) -> Vec<String> {
         let mut resolved = self.lock();
         let mut claimed = Vec::new();
         for host in unresolved {
@@ -353,9 +385,11 @@ mod tests {
         let localhost = IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]);
         let db = IpAddr::from([10, 0, 0, 9]);
 
-        let unresolved = names.update(&image);
+        names.update(&image);
+        let unresolved = names.unresolved(&image);
         names.insert_host("db", db);
-        let after_resolution = names.update(&image);
+        names.update(&image);
+        let after_resolution = names.unresolved(&image);
 
         check!(
             (
@@ -392,8 +426,9 @@ mod tests {
         let db = IpAddr::from([10, 0, 0, 9]);
 
         names.insert_host("db", db);
-        let _ = names.update(&without);
-        let unresolved_again = names.update(&with_host);
+        names.update(&without);
+        names.update(&with_host);
+        let unresolved_again = names.unresolved(&with_host);
 
         check!((unresolved_again, names.entity_names(db)) == (vec!["db".to_owned()], vec![]));
     }
@@ -408,14 +443,16 @@ mod tests {
             .key("connection_creation_rate")
             .value(1.0)
             .call();
-        let unresolved = names.update(&image);
+        names.update(&image);
+        let unresolved = names.unresolved(&image);
         names
             .resolve(
                 &names.claim(unresolved.clone(), Instant::now()),
                 system_lookup,
             )
             .await;
-        let unresolved_after = names.update(&image);
+        names.update(&image);
+        let unresolved_after = names.unresolved(&image);
 
         let listed: Vec<IpAddr> = net::lookup_host("localhost:0")
             .await
@@ -527,8 +564,7 @@ mod tests {
         let names = IpNames::default();
         let image = host_image("db");
         let address = IpAddr::from([10, 0, 0, 9]);
-        let unresolved = names.update(&image);
-        let claimed = names.claim(unresolved, Instant::now());
+        let claimed = names.claim_due(&image, Instant::now());
         hang_until_timeout(&names, &claimed).await;
 
         let retry = names.claim(db(), Instant::now() + RETRY_MAX + RETRY_BASE);
@@ -537,7 +573,8 @@ mod tests {
                 Some(address)
             })
             .await;
-        let unresolved_after = names.update(&image);
+        names.update(&image);
+        let unresolved_after = names.unresolved(&image);
 
         check!(unresolved_after.is_empty());
         check!(names.entity_names(address) == db());
@@ -568,11 +605,11 @@ mod tests {
         time::advance(Duration::from_secs(10)).await;
         let b = names.claim(vec!["b".to_owned()], Instant::now());
         hang_until_timeout(&names, &b).await;
-        let _ = names.update(&both);
+        names.update(&both);
         let earliest = names.next_retry();
-        let _ = names.update(&host_image("b"));
+        names.update(&host_image("b"));
         let after_a_left = names.next_retry();
-        let _ = names.update(&host_image("c"));
+        names.update(&host_image("c"));
         let after_both_left = names.next_retry();
 
         // `a` failed 10 ms after `start`, when its lookup timed out, and `b`
@@ -599,12 +636,11 @@ mod tests {
     #[tokio::test]
     async fn a_failed_host_whose_entity_is_gone_is_looked_up_again_at_once() {
         let names = IpNames::default();
-        let claimed = names.claim(names.update(&host_image("db")), Instant::now());
+        let claimed = names.claim_due(&host_image("db"), Instant::now());
         hang_until_timeout(&names, &claimed).await;
 
-        let _ = names.update(&host_image("other"));
-        let reapplied = names.update(&host_image("db"));
+        names.update(&host_image("other"));
 
-        check!(names.claim(reapplied, Instant::now()) == db());
+        check!(names.claim_due(&host_image("db"), Instant::now()) == db());
     }
 }

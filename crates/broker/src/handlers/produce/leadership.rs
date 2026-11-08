@@ -3,9 +3,10 @@
 //! that back them.
 
 use {
-    super::{ACKS_ALL, NO_LEADER_ID, topic_settings::topic_min_insync_replicas},
+    super::{ACKS_ALL, topic_settings::topic_min_insync_replicas},
     crate::{
         codes,
+        handlers::LeaderHint,
         log_dir_status::LogDirRegistry,
         partition::{Partition, ReplicationTarget},
         partition_registry::PartitionRegistry,
@@ -61,7 +62,7 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     };
-    let leader = current_leader_hint(record);
+    let leader: LeaderIdAndEpoch = LeaderHint::of(record).into();
     let Some(partition) = partitions.get(topic_name, krabka_ids::PartitionIndex(partition_index))
     else {
         return Err(PartitionGateError {
@@ -192,14 +193,6 @@ pub(super) fn replica_state_matches_image(
     state.current_leader_epoch == krabka_ids::LeaderEpoch(record.leader_epoch.0)
         && state.isr.len() == record.isr.len()
         && record.isr.iter().all(|node| state.isr.contains(node))
-}
-
-pub(super) fn current_leader_hint(record: &krabka_metadata::PartitionRecord) -> LeaderIdAndEpoch {
-    LeaderIdAndEpoch {
-        leader_id: i32::try_from(record.leader.0).unwrap_or(NO_LEADER_ID),
-        leader_epoch: record.leader_epoch.0,
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]

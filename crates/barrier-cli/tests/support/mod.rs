@@ -12,6 +12,7 @@
 
 use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_cli_connection::try_parse_with_env,
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, CreateTopicSpec, DeleteRecordsOp, TopicMutationOptions,
     },
@@ -221,17 +222,18 @@ impl Environment {
 /// Run the tool in process with `line` as its whole command line, reading
 /// its environment variables from `environment`.
 pub async fn run_line(line: Vec<String>, environment: &Environment) -> Transcript {
-    let cli = match krabka_barrier::Cli::try_parse_with_env(line, |name| environment.get(name)) {
-        Ok(cli) => cli,
-        Err(error) => {
-            return Transcript {
-                exit: error.exit_code(),
-                stdout: String::new(),
-                stderr: error.to_string(),
-                command_line_refused: true,
-            };
-        }
-    };
+    let cli =
+        match try_parse_with_env::<krabka_barrier::Cli, _, _>(line, |name| environment.get(name)) {
+            Ok(cli) => cli,
+            Err(error) => {
+                return Transcript {
+                    exit: error.exit_code(),
+                    stdout: String::new(),
+                    stderr: error.to_string(),
+                    command_line_refused: true,
+                };
+            }
+        };
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let exit =
         krabka_barrier::run_with(cli, &mut krabka_barrier::Console::new(&mut out, &mut err)).await;

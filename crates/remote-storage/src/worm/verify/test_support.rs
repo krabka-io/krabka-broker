@@ -20,7 +20,10 @@ use {
     bytes::Bytes,
     futures_util::stream,
     krabka_audit::signing::FileEd25519Signer,
-    krabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest},
+    krabka_object_store::{
+        ObjectOps, ObjectStoreClient, PutRequest,
+        fault::{FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp},
+    },
     object_store::{GetOptions, ObjectStore, ObjectStoreExt as _, memory::InMemory, path::Path},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::{
@@ -150,6 +153,22 @@ impl Archive {
             segments,
             public_key,
             signer,
+        }
+    }
+
+    /// A one-segment archive whose listing still names every object while every
+    /// read fails with `kind`: the store the verifier meets when objects vanish
+    /// between the listing and the read, or when it may list but not read.
+    pub(super) async fn with_failing_reads(kind: FaultKind) -> Self {
+        let backing: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let archive = Self::build_on(Arc::clone(&backing), &[1]).await;
+        let failing = FaultInjectingStore::new(
+            backing,
+            FaultPolicy::none().with(StoreOp::Get, OpFault::always(kind)),
+        );
+        Self {
+            store: Arc::new(failing),
+            ..archive
         }
     }
 

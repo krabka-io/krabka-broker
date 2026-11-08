@@ -26,12 +26,13 @@ path = "src/main.rs"
 # `FileEd25519Signer` is the signer the audit checkpoints already use. The
 # operator key trust set and signer share one crypto owner here.
 krabka-audit = { workspace = true }
+# `--bootstrap-server` and `--command-config`, shared with every operator CLI.
+krabka-cli-connection = { path = "../cli-connection" }
 krabka-client-core = { version = "0.8.0" }
 krabka-protocol = { version = "0.8.0" }
 krabka-units = { workspace = true }
 
-# `string` lets `Cli::try_parse_with_env` hand clap an owned default.
-clap = { workspace = true, features = ["string"] }
+clap = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 # `cli_main!` writes the binary's `main`.

@@ -3,8 +3,8 @@
 
 use {
     super::{driver, world::GuardScenario},
-    crate::cli::Cli,
     assert2::assert,
+    krabka_cli_connection::BOOTSTRAP_SERVER_ENV,
     rstest_bdd_macros::{given, when},
 };
 
@@ -25,20 +25,20 @@ async fn environment_names_the_broker(guard: &mut GuardScenario) {
     let bootstrap = guard.plaintext_broker().await.bootstrap();
     guard
         .environment
-        .insert(Cli::BOOTSTRAP_SERVER_ENV.to_owned(), bootstrap);
+        .insert(BOOTSTRAP_SERVER_ENV.to_owned(), bootstrap);
 }
 
 #[given("KRABKA_BOOTSTRAP_SERVER names an address where no broker listens")]
 fn environment_names_nothing(guard: &mut GuardScenario) {
     guard.environment.insert(
-        Cli::BOOTSTRAP_SERVER_ENV.to_owned(),
+        BOOTSTRAP_SERVER_ENV.to_owned(),
         UNREACHABLE_BOOTSTRAP.to_owned(),
     );
 }
 
 #[given("KRABKA_BOOTSTRAP_SERVER is not set")]
 fn environment_unset(guard: &GuardScenario) {
-    assert!(!guard.environment.contains_key(Cli::BOOTSTRAP_SERVER_ENV));
+    assert!(!guard.environment.contains_key(BOOTSTRAP_SERVER_ENV));
 }
 
 #[when("an operator lists the freezes without --bootstrap-server")]

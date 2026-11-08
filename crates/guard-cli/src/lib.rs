@@ -42,6 +42,8 @@ use self::command::dispatch;
 mod broker_codes;
 mod cli;
 mod command;
+#[cfg(test)]
+mod command_config_sasl;
 mod failure;
 mod report;
 #[cfg(test)]
@@ -94,9 +96,10 @@ krabka_macros::bootstrap_cli_entrypoint!({
     /// Without `--bootstrap-server`, it reads `KRABKA_BOOTSTRAP_SERVER`.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
-    /// reason is on stderr. `2` means the broker could not be reached, so nothing
-    /// is known about the outcome. `3` means the registry names an operator key
-    /// this machine does not hold. `4` means the action needs a break-glass
+    /// reason is on stderr. `2` means no request completed, because the broker
+    /// could not be reached or refused the login, or `--command-config` was
+    /// unusable. `3` means the registry names an operator key this machine
+    /// does not hold. `4` means the action needs a break-glass
     /// approval that does not exist. `5` means a signature did not verify.
     ///
     /// # Panics
@@ -107,8 +110,13 @@ krabka_macros::bootstrap_cli_entrypoint!({
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client =
-        krabka_macros::connect_cli_client!(&cli.bootstrap_server, "krabka-guard", EXIT_UNREACHABLE);
+    let client = match cli.connection.connect("krabka-guard").await {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("{error}");
+            return EXIT_UNREACHABLE;
+        }
+    };
     match dispatch(&client, cli.command).await {
         Ok(code) => code,
         Err(failure) => {
