@@ -708,11 +708,12 @@ const fn kafka_error(code: i16) -> KafkaError {
 #[must_use]
 pub const fn error_name(code: i16) -> &'static str { kafka_error(code).name }
 
-/// Kafka's `Errors.forCode(code).message()`: the default `error_message` that
-/// `new ApiError(error)` and the request classes' `getErrorResponse` put on
-/// a response. `NONE` answers `"NONE"`, as Kafka's does, and a code this
-/// module does not declare as a Kafka-range or trunk code answers the
-/// `UNKNOWN_SERVER_ERROR` message.
+/// Kafka's `Errors.forCode(code).message()`.
+///
+/// It is the default `error_message` that `new ApiError(error)` and the
+/// request classes' `getErrorResponse` put on a response. `NONE` answers
+/// `"NONE"`, as Kafka's does, and a code this module does not declare as a
+/// Kafka-range or trunk code answers the `UNKNOWN_SERVER_ERROR` message.
 #[must_use]
 pub const fn default_message(code: i16) -> &'static str { kafka_error(code).message }
 
