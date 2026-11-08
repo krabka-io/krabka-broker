@@ -198,4 +198,4 @@ fn quota_stays_exceeded_for(throttle: &ThrottleScenario, traffic: Traffic, milli
     );
 }
 
-krabka_bdd::scenarios!("tests/features", fixtures = [throttle: ThrottleScenario]);
+krabka_bdd::scenarios!("tests/features/replication", fixtures = [throttle: ThrottleScenario]);
