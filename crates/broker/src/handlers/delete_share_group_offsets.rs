@@ -46,10 +46,6 @@ use {
     std::sync::Arc,
 };
 
-/// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
-/// `handleDeleteShareGroupOffsetsRequest` puts on every denied topic row.
-const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
-
 pub async fn handle(
     broker: &Broker,
     req: DeleteShareGroupOffsetsRequest,
@@ -75,7 +71,9 @@ pub async fn handle(
             topic_name: rt.topic_name,
             topic_id: Uuid::default(),
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
+            error_message: Some(
+                codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED).to_owned(),
+            ),
             ..Default::default()
         })
         .collect();
@@ -266,26 +264,21 @@ const NO_OFFSETS_MESSAGE: &str = "There is no offset information to delete.";
 /// which `DeleteShareGroupOffsetsRequest.getErrorDeleteResponseData` and the
 /// failed-topic rows carry.
 fn kafka_message(error_code: i16) -> Option<&'static str> {
-    Some(match error_code {
-        codes::UNKNOWN_SERVER_ERROR => {
-            "The server experienced an unexpected error when processing the request."
-        }
-        codes::UNKNOWN_TOPIC_OR_PARTITION => "This server does not host this topic-partition.",
-        codes::COORDINATOR_LOAD_IN_PROGRESS => {
-            "The coordinator is loading and hence can't process requests."
-        }
-        codes::COORDINATOR_NOT_AVAILABLE => "The coordinator is not available.",
-        codes::NOT_COORDINATOR => "This is not the correct coordinator.",
-        codes::INVALID_GROUP_ID => "The group id is invalid.",
-        codes::GROUP_AUTHORIZATION_FAILED => "Group authorization failed.",
-        codes::UNSUPPORTED_VERSION => "The version of API is not supported.",
-        codes::NON_EMPTY_GROUP => "The group is not empty.",
-        codes::GROUP_ID_NOT_FOUND => "The group id does not exist.",
-        codes::FENCED_LEADER_EPOCH => {
-            "The leader epoch in the request is older than the epoch on the broker."
-        }
-        _ => return None,
-    })
+    matches!(
+        error_code,
+        codes::UNKNOWN_SERVER_ERROR
+            | codes::UNKNOWN_TOPIC_OR_PARTITION
+            | codes::COORDINATOR_LOAD_IN_PROGRESS
+            | codes::COORDINATOR_NOT_AVAILABLE
+            | codes::NOT_COORDINATOR
+            | codes::INVALID_GROUP_ID
+            | codes::GROUP_AUTHORIZATION_FAILED
+            | codes::UNSUPPORTED_VERSION
+            | codes::NON_EMPTY_GROUP
+            | codes::GROUP_ID_NOT_FOUND
+            | codes::FENCED_LEADER_EPOCH
+    )
+    .then(|| codes::default_message(error_code))
 }
 
 /// A top-level error response. Kafka's `getErrorResponse` sets the message
@@ -300,7 +293,7 @@ fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffset
 #[cfg(test)]
 mod tests {
     use {
-        super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level},
+        super::{handle, top_level},
         crate::{
             authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
@@ -942,7 +935,7 @@ mod tests {
                     topic_name: name.into(),
                     topic_id: Uuid::default(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
+                    error_message: Some("Topic authorization failed.".to_owned()),
                 })
             };
             let allowed_row = |name: &str, topic_id: uuid::Uuid| {
