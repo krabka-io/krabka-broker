@@ -245,18 +245,21 @@ struct Active<'a> {
     domain: &'a AdmissionDomain,
 }
 
+/// The share key that the operation under test admits.
+#[derive(Clone, Copy)]
+struct Key<'a> {
+    group: &'a str,
+    topic: [u8; 16],
+    partition: i32,
+}
+
 impl Drop for Active<'_> {
     fn drop(&mut self) { self.domain.events.borrow_mut().push("release"); }
 }
 
 impl AdmissionDomain {
-    async fn active_for_key(
-        &self,
-        group: &str,
-        topic: &[u8; 16],
-        partition: i32,
-    ) -> Result<Active<'_>, ()> {
-        assert!(group == "group" && topic[0] == 1 && partition == 2);
+    async fn active_for_key(&self, key: Key<'_>) -> Result<Active<'_>, ()> {
+        assert!(key.group == "group" && key.topic[0] == 1 && key.partition == 2);
         self.events.borrow_mut().push("key");
         self.events.borrow_mut().push("acquire");
         task::yield_now().await;
@@ -284,13 +287,7 @@ impl AdmissionDomain {
     }
 
     #[share_state_operation(active)]
-    async fn serve(
-        &self,
-        image: &str,
-        group: &str,
-        topic: [u8; 16],
-        partition: i32,
-    ) -> Result<usize, ShareStateError> {
+    async fn serve(&self, image: &str, key: Key<'_>) -> Result<usize, ShareStateError> {
         active.domain.events.borrow_mut().push("operation");
         task::yield_now().await;
         if image == "refuse" {
@@ -339,7 +336,16 @@ async fn admission_and_commit_errors_keep_the_guard_and_original_operation_bound
         committed,
         events: RefCell::new(Vec::new()),
     };
-    assert2::assert!(domain.serve(image, "group", [1; 16], 2).await == expected);
+    assert2::assert!(
+        domain
+            .serve(image, Key {
+                group: "group",
+                topic: [1; 16],
+                partition: 2,
+            })
+            .await
+            == expected
+    );
     let expected_events: &[&str] = if admitted {
         &["key", "acquire", "operation", "answer", "release"]
     } else {

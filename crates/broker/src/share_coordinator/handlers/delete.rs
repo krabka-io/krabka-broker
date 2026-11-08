@@ -4,7 +4,10 @@
 //! `__share_group_state` partition.
 
 use {
-    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp},
+        key::ShareKeyRef,
+    },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         delete_share_group_state_request::DeleteShareGroupStateRequest,
@@ -42,7 +45,7 @@ async fn delete_state(
         DeleteStateResult,
         |group_id, topic_id, pd| {
             let result = coordinator
-                .delete(image, group_id, topic_id, pd.partition)
+                .delete(image, ShareKeyRef::new(group_id, topic_id, pd.partition))
                 .await;
             let verdict = super::operation_result(result, ShareStateOp::Delete);
             PartitionResult {
@@ -133,9 +136,7 @@ mod tests {
             .coordinator
             .initialize(
                 &delete_state_story.state().image,
-                "g",
-                TOPIC,
-                0,
+                ShareKeyRef::new("g", TOPIC, 0),
                 1,
                 Offset(0),
             )
@@ -161,7 +162,11 @@ mod tests {
         let state_partition = delete_state_story
             .state()
             .coordinator
-            .state_partition_for("g", &topic, partitions.first().copied().unwrap_or(0))
+            .state_partition_for(ShareKeyRef::new(
+                "g",
+                topic,
+                partitions.first().copied().unwrap_or(0),
+            ))
             .unwrap();
         let before = logged_records(&delete_state_story.state().coordinator, state_partition).len();
         delete_state_story.observed = Some(
@@ -181,7 +186,7 @@ mod tests {
             delete_state_story
                 .state()
                 .coordinator
-                .state_for_test("g", TOPIC, 0)
+                .state_for_test(ShareKeyRef::new("g", TOPIC, 0))
                 .await
                 .is_some(),
         );

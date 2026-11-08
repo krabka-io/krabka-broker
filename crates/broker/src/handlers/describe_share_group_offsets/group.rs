@@ -167,7 +167,7 @@ mod tests {
                 describe_share_group_offsets::test_support::{image_with_topic, register_topic},
                 test_support::{self as handler_fixture_support, TopicPartitionCount},
             },
-            share_coordinator::persister_client::SharePersister,
+            share_coordinator::{key::ShareKeyRef, persister_client::SharePersister},
             test_support as broker_fixture_support,
         },
         assert2::assert,
@@ -415,7 +415,7 @@ mod tests {
         };
         register_topic(&broker, "orders", orders_id).await;
         persister
-            .initialize("g3", orders_id, 0, 1, Offset(5))
+            .initialize(ShareKeyRef::new("g3", orders_id, 0), 1, Offset(5))
             .await
             .expect("seed orders state");
 
@@ -503,7 +503,7 @@ mod tests {
             let image = image_with_topic("orders", topic_id);
             register_topic(&broker, "orders", topic_id).await;
             persister
-                .initialize("g1", topic_id, 0, 1, Offset(33))
+                .initialize(ShareKeyRef::new("g1", topic_id, 0), 1, Offset(33))
                 .await
                 .expect("seed state");
 
@@ -578,12 +578,12 @@ mod tests {
                 .call();
             register_topic(&broker, "orders", orders_id).await;
             persister
-                .initialize("g2", orders_id, 0, 1, Offset(7))
+                .initialize(ShareKeyRef::new("g2", orders_id, 0), 1, Offset(7))
                 .await
                 .expect("seed orders state");
             register_topic(&broker, "secret", secret_id).await;
             persister
-                .initialize("g2", secret_id, 0, 1, Offset(9))
+                .initialize(ShareKeyRef::new("g2", secret_id, 0), 1, Offset(9))
                 .await
                 .expect("seed secret state");
 

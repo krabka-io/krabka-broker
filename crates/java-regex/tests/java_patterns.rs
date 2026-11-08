@@ -80,7 +80,11 @@ impl Substitution {
     }
 
     fn rewrite(&self, name: &str) -> Result<String, MatchError> {
-        self.from.replace(name, &self.to, self.global)
+        if self.global {
+            self.from.replace_all(name, &self.to)
+        } else {
+            self.from.replace_first(name, &self.to)
+        }
     }
 }
 

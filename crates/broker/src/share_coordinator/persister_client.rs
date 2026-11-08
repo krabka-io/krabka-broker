@@ -128,7 +128,7 @@ impl SharePersister {
         }
     }
 
-    /// Initialize the share state for `(group, topic_id, partition)` at
+    /// Initialize the share state for `key` at
     /// `state_epoch` and `start_offset`. The call is local when this broker
     /// leads the target `__share_group_state` partition. If it does not, the
     /// client routes the call to the leader over RPC.
@@ -146,9 +146,7 @@ impl SharePersister {
     #[cfg_attr(test, mutants::skip)]
     pub(crate) async fn initialize(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         state_epoch: i32,
         start_offset: Offset,
     ) -> Result<(), BrokerError> {
@@ -156,24 +154,21 @@ impl SharePersister {
         // the lifecycle hook is the first thing to touch the topic when no
         // client has issued FindCoordinator(SHARE) yet. Mirrors how the txn
         // handlers refresh before dispatching.
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
                 .initialize(
                     &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
+                    key,
                     state_epoch,
                     start_offset,
                 )
@@ -195,7 +190,7 @@ impl SharePersister {
             .await
     }
 
-    /// Delete the share state for `(group, topic_id, partition)`. The call is
+    /// Delete the share state for `key`. The call is
     /// local when this broker leads the target `__share_group_state`
     /// partition. If it does not, the client routes the call to the leader
     /// over RPC.
@@ -203,25 +198,19 @@ impl SharePersister {
     /// # Errors
     ///
     /// As [`SharePersister::initialize`].
-    pub(crate) async fn delete(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Result<(), BrokerError> {
+    pub(crate) async fn delete(&self, key: ShareKeyRef<'_>) -> Result<(), BrokerError> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         let result = if local {
             self.share_coordinator
-                .delete(&self.controller.current_image(), group, topic_id, partition)
+                .delete(&self.controller.current_image(), key)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Delete, partition, error))
         } else {
@@ -265,7 +254,7 @@ impl SharePersister {
         } = key;
         let state_partition = self
             .share_coordinator
-            .state_partition_for(group, &topic_id, partition)
+            .state_partition_for(key)
             .ok_or_else(|| {
                 BrokerError::Share(format!(
                     "share key {group}:{topic_id}:{partition} maps to no {} partition",
@@ -348,7 +337,7 @@ impl SharePersister {
         }
     }
 
-    /// Read the durable share state for `(group, topic_id, partition)`, as
+    /// Read the durable share state for `key`, as
     /// the share-partition leader at `leader_epoch`. The call is local when
     /// this broker leads the target `__share_group_state` partition. If it
     /// does not, the client routes the call to the leader over RPC and decodes
@@ -371,31 +360,22 @@ impl SharePersister {
     // ShareFetch/ShareAcknowledge handlers drive.
     pub(crate) async fn read_state(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         leader_epoch: i32,
     ) -> Result<SharePartitionState, BrokerError> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
-                .read(
-                    &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
-                    leader_epoch,
-                )
+                .read(&self.controller.current_image(), key, leader_epoch)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Read, partition, error));
         }
@@ -433,7 +413,7 @@ impl SharePersister {
         })
     }
 
-    /// Read the share state summary for `(group, topic_id, partition)`, with
+    /// Read the share state summary for `key`, with
     /// no side effect. `Ok(None)` means the key has no state.
     ///
     /// This is Kafka's `ReadShareGroupStateSummary`, which the admin offset
@@ -445,24 +425,21 @@ impl SharePersister {
     /// As [`SharePersister::read_state`].
     pub(crate) async fn read_state_summary(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
-                .read_summary_checked(&self.controller.current_image(), group, topic_id, partition)
+                .read_summary_checked(&self.controller.current_image(), key)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::ReadSummary, partition, error));
         }
@@ -518,25 +495,19 @@ impl SharePersister {
         key: ShareKeyRef<'_>,
         request: ShareWrite,
     ) -> Result<(), BrokerError> {
+        let RoutedPartition {
+            state_partition,
+            local,
+        } = self.route(key).await?;
         let ShareKeyRef {
             group,
             topic_id,
             partition,
         } = key;
-        let RoutedPartition {
-            state_partition,
-            local,
-        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
-                .write(
-                    &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
-                    request,
-                )
+                .write(&self.controller.current_image(), key, request)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Write, partition, error));
         }
@@ -978,10 +949,13 @@ mod tests {
             local_persister("fenced").await;
 
         persister
-            .initialize("g", topic_id, 0, 5, Offset(0))
+            .initialize(ShareKeyRef::new("g", topic_id, 0), 5, Offset(0))
             .await
             .expect("first initialize");
-        let actual = match persister.initialize("g", topic_id, 0, 4, Offset(0)).await {
+        let actual = match persister
+            .initialize(ShareKeyRef::new("g", topic_id, 0), 4, Offset(0))
+            .await
+        {
             Err(BrokerError::SharePartitionState { code, message }) => Ok((code, message)),
             other => Err(format!("{other:?}")),
         };
@@ -1025,7 +999,10 @@ mod tests {
         let mut actual = Vec::new();
         for &(topic, partition, _, _) in &cases {
             actual.push(
-                match persister.read_state_summary("g", topic, partition).await {
+                match persister
+                    .read_state_summary(ShareKeyRef::new("g", topic, partition))
+                    .await
+                {
                     Err(BrokerError::SharePartitionState { code, message }) => Ok((code, message)),
                     other => Err(format!("{other:?}")),
                 },
@@ -1094,7 +1071,11 @@ mod tests {
         );
 
         let result = persister
-            .initialize("g", uuid::Uuid::from_u128(3), 0, 1, Offset(0))
+            .initialize(
+                ShareKeyRef::new("g", uuid::Uuid::from_u128(3), 0),
+                1,
+                Offset(0),
+            )
             .await;
 
         assert_dialed_with(&result, capture.server_name, "broker.internal").await;

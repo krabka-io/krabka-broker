@@ -32,6 +32,7 @@ use {
                 names_the_leader,
             },
         },
+        share_coordinator::key::ShareKeyRef,
         share_partition::group_settings::GroupShareSettings,
     },
     krabka_metadata::{AclOperation, ResourceType},
@@ -225,8 +226,9 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
             // partition for it, so the row answers UNKNOWN_TOPIC_OR_PARTITION
             // with no leader hint, exactly as for a share partition that no
             // fetch on this broker loaded. It reads no state for it.
+            let key = ShareKeyRef::new(group, topic_id, ap.partition_index);
             let cell = if mgr.topic_leader_is_self(topic_id, ap.partition_index) {
-                mgr.cached(group, topic_id, ap.partition_index)
+                mgr.cached(key)
             } else {
                 None
             };
@@ -248,7 +250,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 max_attempts: settings.delivery_count_limit,
             };
             out.error_code = mgr
-                .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
+                .apply_durably(key, &cell, &mut st, |st| {
                     apply_acknowledgements(st, &application, batches())
                 })
                 .await;

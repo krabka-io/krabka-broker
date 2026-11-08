@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 use {
+    crate::share_coordinator::key::ShareKeyRef,
     crate::{
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
@@ -230,7 +231,11 @@ async fn spso(broker: &BrokerHandle, group: &str, topic_id: WireUuid, partition_
     let shared = broker.broker_arc_for_test();
     shared
         .share_partition_leaders
-        .peek_for_test(group, share_topic_uuid(topic_id), partition_index)
+        .peek_for_test(ShareKeyRef::new(
+            group,
+            share_topic_uuid(topic_id),
+            partition_index,
+        ))
         .expect("a cached share-partition leader")
         .lock()
         .await
@@ -474,7 +479,7 @@ async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_li
     let end_offset = broker
         .broker_arc_for_test()
         .share_partition_leaders
-        .peek_for_test(group, share_topic_uuid(topic_id), 0)
+        .peek_for_test(ShareKeyRef::new(group, share_topic_uuid(topic_id), 0))
         .expect("a cached share-partition leader")
         .lock()
         .await

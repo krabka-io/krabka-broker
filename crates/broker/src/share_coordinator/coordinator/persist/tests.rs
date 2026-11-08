@@ -12,6 +12,7 @@ use {
             coordinator::test_support::{
                 ConfiguredCoordinator, NOW_MS, configured_coordinator, image_with_topic,
             },
+            key::ShareKeyRef,
             persistence::KEY_SHARE_SNAPSHOT,
         },
     },
@@ -242,7 +243,7 @@ async fn a_prune_trims_only_committed_snapshots() {
         let image = image_with_topic(uuid::Uuid::from_bytes([3; 16]), 1);
         let topic_id = uuid::Uuid::from_bytes([3; 16]);
         coord
-            .initialize(&image, "g", topic_id, 0, 0, Offset(0))
+            .initialize(&image, ShareKeyRef::new("g", topic_id, 0), 0, Offset(0))
             .await
             .expect("the first snapshot commits");
         if !committed {
@@ -257,7 +258,7 @@ async fn a_prune_trims_only_committed_snapshots() {
             );
         }
         let second = coord
-            .initialize(&image, "g", topic_id, 0, 1, Offset(5))
+            .initialize(&image, ShareKeyRef::new("g", topic_id, 0), 1, Offset(5))
             .await;
         check!(second.is_ok() == committed, "committed {committed}");
 

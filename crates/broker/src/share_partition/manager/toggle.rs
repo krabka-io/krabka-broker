@@ -42,6 +42,7 @@ mod tests {
         crate::{
             features::SHARE_VERSION,
             partition_registry::PartitionRegistry,
+            share_coordinator::key::ShareKeyRef,
             share_partition::{manager::test_support::manager_over, state::AcquisitionState},
             test_support::FakeMetadataSource,
         },
@@ -76,8 +77,11 @@ mod tests {
         );
         mgr.spawn_share_version_watcher();
         let tid = uuid::Uuid::from_bytes([31; 16]);
-        mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
-        let cells = || mgr.peek_for_test("g1", tid, 0).is_some();
+        mgr.insert_for_test(
+            ShareKeyRef::new("g1", tid, 0),
+            AcquisitionState::new(Offset(0)),
+        );
+        let cells = || mgr.peek_for_test(ShareKeyRef::new("g1", tid, 0)).is_some();
 
         // A change that keeps share groups on clears nothing.
         source.set_image(image_with_share_version(2));

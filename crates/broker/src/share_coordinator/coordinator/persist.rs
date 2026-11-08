@@ -330,8 +330,7 @@ impl ShareCoordinator {
                 .iter()
                 .filter(|e| {
                     let key = e.key();
-                    self.state_partition_for(&key.group, &key.topic_id, key.partition)
-                        == Some(state_partition)
+                    self.state_partition_for(key.as_key_ref()) == Some(state_partition)
                 })
                 .map(|e| Arc::clone(e.value()))
                 .collect();

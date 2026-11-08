@@ -32,7 +32,7 @@ use {
             ApiVersion, ErrorResponse as _, RequestContext, denied_topics, group_actor_error_code,
             group_coordinator_error, group_read_denied,
         },
-        share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
+        share_coordinator::{coordinator::message::UNKNOWN_TOPIC_OR_PARTITION, key::ShareKeyRef},
         task_util::ask,
     },
     krabka_metadata::{AclOperation, MetadataImage},
@@ -151,9 +151,11 @@ fn apply_reset_codes(
         };
         partition.error_code = error_code;
         if error_code == codes::NONE {
-            broker
-                .share_partition_leaders
-                .invalidate(gid, topic_id, partition.partition_index);
+            broker.share_partition_leaders.invalidate(ShareKeyRef::new(
+                gid,
+                topic_id,
+                partition.partition_index,
+            ));
         }
     }
 
@@ -353,7 +355,8 @@ mod tests {
                 },
             },
             share_coordinator::{
-                coordinator::ShareStateSummary, handlers::test_support::lead_share_state_partitions,
+                coordinator::ShareStateSummary,
+                handlers::test_support::lead_share_state_partitions, key::ShareKeyRef,
             },
             test_support::{
                 ControllerPeerAllowed, DenyAll, ShareApiSupport,
@@ -569,7 +572,7 @@ mod tests {
                     .group_coordinator
                     .share_persister()
                     .expect("share persister")
-                    .read_state_summary("g-acl", topic_id, 0)
+                    .read_state_summary(ShareKeyRef::new("g-acl", topic_id, 0))
                     .await
                     .expect("state summary"),
             );
@@ -686,7 +689,7 @@ mod tests {
                 .group_coordinator
                 .share_persister()
                 .expect("share persister")
-                .read_state_summary("g-acl", topic_id, 0)
+                .read_state_summary(ShareKeyRef::new("g-acl", topic_id, 0))
                 .await
                 .expect("state summary");
             assert!(share_offset_alteration.summary_before.as_slice() == [after]);
@@ -844,7 +847,7 @@ mod tests {
             .cloned()
             .expect("share persister");
         let summary = persister
-            .read_state_summary("g-new", topic_id, 0)
+            .read_state_summary(ShareKeyRef::new("g-new", topic_id, 0))
             .await
             .expect("read state")
             .expect("state present");
@@ -860,7 +863,7 @@ mod tests {
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
         let summary_after = persister
-            .read_state_summary("g-new", topic_id, 0)
+            .read_state_summary(ShareKeyRef::new("g-new", topic_id, 0))
             .await
             .expect("read state")
             .expect("state present");
@@ -1043,7 +1046,7 @@ mod tests {
             );
 
             let summary = persister
-                .read_state_summary("g-reset", topic_id, 0)
+                .read_state_summary(ShareKeyRef::new("g-reset", topic_id, 0))
                 .await
                 .expect("read state")
                 .expect("state present");

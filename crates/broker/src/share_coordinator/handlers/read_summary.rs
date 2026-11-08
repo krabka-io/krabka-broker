@@ -13,8 +13,9 @@
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
 use {
-    crate::share_coordinator::coordinator::{
-        ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET,
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET},
+        key::ShareKeyRef,
     },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
@@ -50,7 +51,7 @@ async fn read_summaries(
         ReadStateSummaryResult,
         |group_id, topic_id, pd| {
             match coordinator
-                .read_summary_checked(image, group_id, topic_id, pd.partition)
+                .read_summary_checked(image, ShareKeyRef::new(group_id, topic_id, pd.partition))
                 .await
             {
                 Ok(Some(summary)) => PartitionResult {

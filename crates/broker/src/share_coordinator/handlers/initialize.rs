@@ -4,7 +4,10 @@
 //! partition's `__share_group_state` partition.
 
 use {
-    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp},
+        key::ShareKeyRef,
+    },
     krabka_log::Offset,
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
@@ -42,9 +45,7 @@ async fn initialize_state(
             let result = coordinator
                 .initialize(
                     image,
-                    group_id,
-                    topic_id,
-                    pd.partition,
+                    ShareKeyRef::new(group_id, topic_id, pd.partition),
                     pd.state_epoch,
                     Offset(pd.start_offset),
                 )
@@ -162,9 +163,7 @@ mod tests {
             .coordinator
             .initialize(
                 &initialize_state_story.state().image,
-                "g",
-                TOPIC,
-                0,
+                ShareKeyRef::new("g", TOPIC, 0),
                 5,
                 Offset(10),
             )
@@ -197,7 +196,7 @@ mod tests {
         let state_partition = initialize_state_story
             .state()
             .coordinator
-            .state_partition_for(key_group, &topic, input.partition)
+            .state_partition_for(ShareKeyRef::new(key_group, topic, input.partition))
             .unwrap();
         let before =
             logged_records(&initialize_state_story.state().coordinator, state_partition).len();
@@ -231,7 +230,7 @@ mod tests {
             initialize_state_story
                 .state()
                 .coordinator
-                .stored_summary_for_test(key_group, topic, input.partition)
+                .stored_summary_for_test(ShareKeyRef::new(key_group, topic, input.partition))
                 .await,
         );
     }
