@@ -1,9 +1,13 @@
 #![cfg(test)]
 
+#[path = "support/reserved_port.rs"]
+mod reserved_port;
+
 use {
     assert2::assert,
     krabka_broker::config,
     krabka_protocol::owned::produce_request,
+    reserved_port::reserve_port,
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
     std::{
@@ -22,7 +26,10 @@ use {
         time::{Duration, Instant},
     },
     tempfile::TempDir,
-    tokio::runtime::{Builder, Runtime},
+    tokio::{
+        net::TcpSocket,
+        runtime::{Builder, Runtime},
+    },
 };
 
 fn broker_bin() -> PathBuf {
@@ -84,16 +91,18 @@ const STARTUP_DEADLINE: Duration = Duration::from_secs(90);
 /// The line that a node logs when its start is complete.
 const STARTED: &str = "krabka-broker started";
 
-/// A loopback port that nothing listens on and nothing else can bind while
-/// the reservation lives: a socket bound to it that never listens. A
-/// connection to the port is refused, as to a port nobody holds, and a node
-/// that tried to open it would fail to bind it.
-struct Reserved {
-    socket: socket2::Socket,
+/// A loopback port for a listener the node must leave closed: nothing listens
+/// on it and nothing else can bind it while the reservation lives. The socket
+/// bound to it never listens and, unlike a [`reserve_port`] reservation, does
+/// not set `SO_REUSEADDR`, so a connection to the port is refused, as to a
+/// port nobody holds, and a node that tried to open it would fail to bind it.
+struct ClosedPort {
+    /// Held, never read: dropping it frees the port.
+    _socket: socket2::Socket,
     addr: SocketAddr,
 }
 
-fn reserve_port() -> Reserved {
+fn reserve_closed_port() -> ClosedPort {
     let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
         .expect("create a socket");
     let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -105,46 +114,18 @@ fn reserve_port() -> Reserved {
         .ok()
         .and_then(|addr| addr.as_socket())
         .expect("a bound IPv4 socket has an address");
-    Reserved { socket, addr }
-}
-
-/// A free loopback port for a listener that must be known before the node
-/// starts, such as a controller listener that `krabka-format` writes into the
-/// voter set. The reservation is released when the node binds the port, so
-/// another process can take it first; [`start_node`] retries a node that
-/// fails to bind.
-fn free_port() -> SocketAddr {
-    let Reserved { socket, addr } = reserve_port();
-    drop(socket);
-    addr
-}
-
-/// How many times [`start_node`] tries a node whose listener another process
-/// took between [`free_port`] and the node's bind.
-const START_ATTEMPTS: usize = 5;
-
-/// The message a node exits with when its listener's port is taken.
-const ADDR_IN_USE: &str = "Address already in use";
-
-/// Run `start`, which formats and starts a node on fresh ports in a fresh log
-/// directory for each attempt it is given, until the node starts. A node that
-/// exits with [`ADDR_IN_USE`] is tried again, up to [`START_ATTEMPTS`] times:
-/// another process took a [`free_port`] before the node bound it. Any other
-/// exit fails the test.
-fn start_retrying<T>(node: &str, mut start: impl FnMut(usize) -> Result<T, Exited>) -> T {
-    let mut last = None;
-    for attempt in 0..START_ATTEMPTS {
-        match start(attempt) {
-            Ok(started) => return started,
-            Err(exit) if exit.stderr.contains(ADDR_IN_USE) => last = Some(exit),
-            Err(exit) => panic!("{node}: {exit}"),
-        }
+    ClosedPort {
+        _socket: socket,
+        addr,
     }
-    panic!(
-        "{node} could not bind its listeners in {START_ATTEMPTS} attempts: another process took \
-         a free port each time, or the node opened a port it must leave closed; last: {}",
-        last.expect("at least one attempt ran")
-    );
+}
+
+/// Wait for `process` to log its startup line, and fail the test, naming
+/// `node`, if it exits first.
+fn started(node: &str, process: Process) -> Running {
+    process
+        .wait_until_started()
+        .unwrap_or_else(|exit| panic!("{node}: {exit}"))
 }
 
 /// A running `krabka-broker` process. Dropping it kills the process, so a
@@ -374,8 +355,12 @@ struct Node {
     /// port of a client listener the node must not open.
     client: SocketAddr,
     controller: SocketAddr,
+    /// Holds the controller port of a node that opens its controller
+    /// listener, from before `krabka format` records it until the node is
+    /// dropped, so no other socket can take it before the node binds it.
+    _controller_reservation: Option<TcpSocket>,
     /// The ports the node must leave closed, held until the node is dropped.
-    _reserved: Vec<Reserved>,
+    _closed: Vec<ClosedPort>,
 }
 
 /// Format and start the node of `case`. `quorum` is the controller listener
@@ -383,55 +368,58 @@ struct Node {
 ///
 /// A listener the node opens binds port 0 where nothing needs its address in
 /// advance, which is the client listener. The controller listener of a voter
-/// goes into the formatted voter set, so it takes a [`free_port`], under
-/// [`start_retrying`]. A listener the node must not open gets a [`Reserved`]
-/// port.
+/// goes into the formatted voter set, so it takes a [`reserve_port`]
+/// reservation that the node shares under `SO_REUSEADDR`. A listener the node
+/// must not open gets a [`ClosedPort`].
 fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
-    start_retrying(&format!("{} ({})", case.roles, case.node_id), |attempt| {
-        let mut reserved = Vec::new();
-        let mut closed_port = || {
-            let port = reserve_port();
-            let addr = port.addr;
-            reserved.push(port);
-            addr
-        };
-        let client = if case.names.client {
-            "127.0.0.1:0".parse().unwrap()
-        } else {
-            closed_port()
-        };
-        let controller = if case.names.controller {
-            free_port()
-        } else {
-            closed_port()
-        };
-        let log_dir = dir.join(format!("node-{}-{attempt}", case.node_id));
-        let controller_text = controller.to_string();
-        let mut quorum_flags = vec!["--cluster-id", CLUSTER_ID];
-        if !case.joins_quorum {
-            quorum_flags.extend(["--standalone", "--controller-listener", &controller_text]);
-        }
-        format_log_dir(&log_dir, case.node_id, &quorum_flags);
-        let mut args = vec![
-            format!("--log-dir={}", log_dir.display()),
-            format!("--broker-id={}", case.node_id),
-            format!("--process-roles={}", case.roles),
-            format!("--listen-addr={client}"),
-            format!("--controller-listen-addr={controller}"),
-        ];
-        if case.joins_quorum {
-            let quorum = quorum.expect("a joining node has a quorum to join");
-            args.push(format!("--controller-quorum-voters=1@{quorum}"));
-        }
-        let running = Process::spawn(&args).wait_until_started()?;
-        let client = running.started.listen_addr.unwrap_or(client);
-        Ok(Node {
-            running,
-            client,
-            controller,
-            _reserved: reserved,
-        })
-    })
+    let mut closed = Vec::new();
+    let mut closed_port = || {
+        let port = reserve_closed_port();
+        let addr = port.addr;
+        closed.push(port);
+        addr
+    };
+    let client = if case.names.client {
+        "127.0.0.1:0".parse().unwrap()
+    } else {
+        closed_port()
+    };
+    let (controller_reservation, controller) = if case.names.controller {
+        let (reservation, controller) = reserve_port();
+        (Some(reservation), controller)
+    } else {
+        (None, closed_port())
+    };
+    let log_dir = dir.join(format!("node-{}", case.node_id));
+    let controller_text = controller.to_string();
+    let mut quorum_flags = vec!["--cluster-id", CLUSTER_ID];
+    if !case.joins_quorum {
+        quorum_flags.extend(["--standalone", "--controller-listener", &controller_text]);
+    }
+    format_log_dir(&log_dir, case.node_id, &quorum_flags);
+    let mut args = vec![
+        format!("--log-dir={}", log_dir.display()),
+        format!("--broker-id={}", case.node_id),
+        format!("--process-roles={}", case.roles),
+        format!("--listen-addr={client}"),
+        format!("--controller-listen-addr={controller}"),
+    ];
+    if case.joins_quorum {
+        let quorum = quorum.expect("a joining node has a quorum to join");
+        args.push(format!("--controller-quorum-voters=1@{quorum}"));
+    }
+    let running = started(
+        &format!("{} ({})", case.roles, case.node_id),
+        Process::spawn(&args),
+    );
+    let client = running.started.listen_addr.unwrap_or(client);
+    Node {
+        running,
+        client,
+        controller,
+        _controller_reservation: controller_reservation,
+        _closed: closed,
+    }
 }
 
 struct BrokerCommand {
@@ -442,6 +430,9 @@ struct BrokerCommand {
     output: Option<Output>,
     status: Option<ExitStatus>,
     running: Option<Running>,
+    /// Holds the config-file node's controller port from before `krabka
+    /// format` records it until the scenario ends.
+    controller_reservation: Option<TcpSocket>,
     cases: Vec<Case>,
     observed: Vec<Observed>,
     expected: Vec<Observed>,
@@ -460,6 +451,7 @@ fn command() -> BrokerCommand {
         output: None,
         status: None,
         running: None,
+        controller_reservation: None,
         cases: Vec::new(),
         observed: Vec::new(),
         expected: Vec::new(),
@@ -538,22 +530,23 @@ fn boot_config_file(command: &mut BrokerCommand) {
         .as_ref()
         .expect("a listener config directory");
     let cfg_path = command.config_path.as_ref().expect("a broker config file");
-    let running = start_retrying("the config-file node", |attempt| {
-        // KIP-853: the broker refuses to boot an unformatted log dir, so seed
-        // it first. `krabka format` creates the directory itself (it must be
-        // empty or non-existent), so don't pre-create it. The controller
-        // listener goes into the voter set, so it needs its port up front.
-        let log_dir = tmp.path().join(format!("data-{attempt}"));
-        let controller = free_port();
-        run_krabka_format(&log_dir, 1, &controller.to_string());
+    // KIP-853: the broker refuses to boot an unformatted log dir, so seed it
+    // first. `krabka format` creates the directory itself (it must be empty or
+    // non-existent), so don't pre-create it. The controller listener goes into
+    // the voter set, so it needs its port up front.
+    let log_dir = tmp.path().join("data");
+    let (reservation, controller) = reserve_port();
+    run_krabka_format(&log_dir, 1, &controller.to_string());
+    let running = started(
+        "the config-file node",
         Process::spawn(&[
             format!("--config-file={}", cfg_path.display()),
             format!("--log-dir={}", log_dir.display()),
             "--broker-id=1".to_owned(),
             format!("--controller-listen-addr={controller}"),
-        ])
-        .wait_until_started()
-    });
+        ]),
+    );
+    command.controller_reservation = Some(reservation);
     command.running = Some(running);
 }
 
@@ -766,7 +759,8 @@ fn version_returns_zero(command: BrokerCommand) { drop(command); }
 /// assert that the process binds the listener declared in the file. The
 /// address comes from the file, not from a CLI flag. The file binds port 0, so
 /// no other process can take the port first, and the startup line names the
-/// port the listener got. The controller listener takes a [`free_port`].
+/// port the listener got. The controller listener takes a [`reserve_port`]
+/// reservation, held until the scenario ends.
 #[scenario(
     path = "tests/features/migrated/tests/cli_smoke.feature",
     name = "boots with config file listener"
