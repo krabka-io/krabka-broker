@@ -24,7 +24,7 @@ use {
     std::{
         ops::Range,
         sync::{
-            Arc, PoisonError,
+            Arc,
             atomic::{AtomicU64, Ordering},
         },
     },
@@ -242,7 +242,7 @@ impl Log {
         max_size: ByteSize,
     ) -> Result<RawReadPlan, LogError> {
         let (read_buffer_cap, read_ahead_max, budget) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             (
                 config.read_buffer_cap,
                 config.read_ahead_max,
@@ -404,11 +404,7 @@ impl Log {
             });
         }
 
-        let read_buffer_cap = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .read_buffer_cap;
+        let read_buffer_cap = self.config().read_buffer_cap;
         let mut batches: Vec<RecordBatch> = Vec::new();
         let mut current_offset = offset;
         let mut remaining = max_size;

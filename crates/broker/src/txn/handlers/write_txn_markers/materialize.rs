@@ -15,7 +15,7 @@ use {
         partition::Partition,
         txn::marker::{MarkerType, build_marker_batch},
     },
-    krabka_log::Offset,
+    krabka_log::{Offset, TransactionMarkerState},
     krabka_verified::transaction::{
         TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
         TransactionMarkerRequest, transaction_marker_equal_epoch_fenced,
@@ -93,7 +93,11 @@ pub(super) async fn append_marker_and_materialize(
         .await?;
         materialization.remove(&producer_id);
     }
-    let (current_producer_epoch, current_coordinator_epoch, has_pending_transaction) = partition
+    let TransactionMarkerState {
+        producer_epoch: current_producer_epoch,
+        coordinator_epoch: current_coordinator_epoch,
+        has_open_transaction: has_pending_transaction,
+    } = partition
         .log
         .lock()
         .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?

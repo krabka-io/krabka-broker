@@ -22,6 +22,9 @@ mod codec;
 mod request;
 mod response;
 
+/// Public because the broker's diskless WAL quorum encodes its own Fetch
+/// messages and must not send partly written bytes either.
+pub use self::codec::encode_message;
 /// The versions [`PeerRequest`] encodes each peer RPC at. Public because a
 /// broker-only observer sends `FetchSnapshot` itself, and the version on its
 /// request header has to be the one the body was encoded at.
@@ -33,8 +36,8 @@ pub use self::request::{
 };
 pub(crate) use self::{
     codec::{
-        METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, encode_message, epoch_from_wire,
-        node_from_wire, uuid_from_wire,
+        METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, epoch_from_wire, node_from_wire,
+        uuid_from_wire,
     },
     request::{decode_request, parse_cluster_id},
 };
