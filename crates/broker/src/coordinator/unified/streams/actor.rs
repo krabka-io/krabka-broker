@@ -805,10 +805,7 @@ async fn handle_message(
         StreamsGroupActorMessage::Delete(reply) => {
             let result = description::delete(actor, turn).await;
             let stop = result.is_ok() || matches!(result, Err(DeleteGroupError::Internal));
-            let _ = reply.send(result);
-            if stop {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, stop);
         }
         StreamsGroupActorMessage::Convert {
             member_id,
@@ -821,18 +818,12 @@ async fn handle_message(
                 Ok(super::migration::DowngradeOutcome::Converted
                     | super::migration::DowngradeOutcome::Removed)
             ) || result.is_err();
-            let _ = reply.send(result);
-            if stop {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, stop);
         }
         StreamsGroupActorMessage::PrepareConversion(reply) => {
             let result = description::prepare_conversion(actor, turn).await;
             let failed = result.is_err();
-            let _ = reply.send(result);
-            if failed {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, failed);
         }
         StreamsGroupActorMessage::ReapExpiredOffsets {
             now_ms,
@@ -841,31 +832,29 @@ async fn handle_message(
         } => match description::reap(actor, turn, now_ms, retention_ms).await {
             Ok(outcome) => {
                 let stop = outcome.group_deleted;
-                let _ = reply.send(outcome);
-                if stop {
-                    return Step::Stop;
-                }
+                return reply_and_step(reply, outcome, stop);
             }
             Err(error) => {
                 exit_on_write_failure(&actor.state.group_id, &error);
-                let _ = reply.send(ReapOutcome::default());
-                return Step::Stop;
+                return reply_and_step(reply, ReapOutcome::default(), true);
             }
         },
         StreamsGroupActorMessage::DeleteDescription(reply) => {
             let result = description::cleanup(actor, turn, true).await;
             let failed = result.is_err();
-            let _ = reply.send(result);
-            if failed {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, failed);
         }
         StreamsGroupActorMessage::Shutdown(reply) => {
-            let _ = reply.send(());
-            return Step::Stop;
+            return reply_and_step(reply, (), true);
         }
     }
     Step::Continue
+}
+
+/// Sends `result` on `reply`, and ends the actor when the turn `stops` it.
+fn reply_and_step<T>(reply: oneshot::Sender<T>, result: T, stops: bool) -> Step {
+    let _ = reply.send(result);
+    if stops { Step::Stop } else { Step::Continue }
 }
 
 /// Logs that the actor of `group_id` exits after `error`, a failed log write,
