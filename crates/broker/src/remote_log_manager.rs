@@ -1024,7 +1024,7 @@ mod tests {
             sync::PoisonError,
             time::{Duration, SystemTime},
         },
-        tokio::{task, time},
+        tokio::time,
     };
 
     mod concurrency;
@@ -1361,8 +1361,21 @@ mod tests {
         );
     }
 
+    /// How long [`wait_for_remote_segments`] waits before it calls the run
+    /// loop stuck.
+    ///
+    /// The copies are real file writes, so a loaded runner can take seconds
+    /// over them. The deadline only has to tell a stuck loop from a slow one:
+    /// the test asserts that the loop copies, not how fast.
+    const REMOTE_COPY_DEADLINE: Duration = Duration::from_secs(30);
+
+    /// How often [`wait_for_remote_segments`] reads the metadata again. A
+    /// short sleep, not a yield, so the wait does not spin a core that the
+    /// copies need.
+    const REMOTE_COPY_POLL: Duration = Duration::from_millis(5);
+
     async fn wait_for_remote_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
-        time::timeout(Duration::from_secs(1), async {
+        time::timeout(REMOTE_COPY_DEADLINE, async {
             loop {
                 // Finished copies only: a copy still in flight when the task is
                 // told to stop is withdrawn, not published.
@@ -1375,7 +1388,7 @@ mod tests {
                 if finished >= expected {
                     break;
                 }
-                task::yield_now().await;
+                time::sleep(REMOTE_COPY_POLL).await;
             }
         })
         .await
