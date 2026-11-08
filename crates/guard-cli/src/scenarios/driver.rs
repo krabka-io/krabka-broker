@@ -500,7 +500,12 @@ impl Cluster {
 pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Run {
     let mut command_line = vec!["krabka-guard", "--bootstrap-server", bootstrap];
     command_line.extend_from_slice(args);
-    let cli = Cli::parse_from(command_line);
+    run_parsed(Cli::parse_from(command_line)).await
+}
+
+/// Run one parsed command line, connect step included, with buffers in place
+/// of its streams.
+async fn run_parsed(cli: Cli) -> Run {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let code = run_with(cli, &mut stdout, &mut stderr).await;
     Run::new(code, &stdout, &stderr)
@@ -517,7 +522,5 @@ pub async fn run_in(command_line: &[&str], environment: &BTreeMap<String, String
     else {
         return Run::command_line_refused();
     };
-    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-    let code = run_with(cli, &mut stdout, &mut stderr).await;
-    Run::new(code, &stdout, &stderr)
+    run_parsed(cli).await
 }
