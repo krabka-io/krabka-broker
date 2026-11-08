@@ -271,14 +271,7 @@ async fn unload_partition(
         if let Some((_, handle)) = coordinator.streams_groups.remove(&group_id) {
             shutdown_actor(&handle.tx, StreamsGroupActorMessage::Shutdown, timeout).await;
         }
-        coordinator.seeds.remove(&group_id);
-        coordinator.seeds_cache.remove(&group_id);
-        coordinator.drop_respawn_seed(&group_id);
-        coordinator.share_seeds.remove(&group_id);
-        coordinator.share_seeds_cache.remove(&group_id);
-        coordinator.streams_seeds.remove(&group_id);
-        coordinator.streams_seeds_cache.remove(&group_id);
-        coordinator.group_types.remove(&group_id);
+        coordinator.forget_group_state(&group_id);
         // The group's offsets partition moved to another broker, so its lag is
         // that broker's to report from here on. Nothing else would release the
         // series: this broker's sampler will never name the group again.

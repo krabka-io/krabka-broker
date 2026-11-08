@@ -30,6 +30,23 @@ impl GroupCoordinator {
         group_ids.extend(keys(&self.streams_seeds_cache));
         group_ids
     }
+
+    /// Drops the replayed and cached seeds, the respawn seed and the type
+    /// lock of `group_id`.
+    ///
+    /// It leaves the group's actors to the caller, which has to shut each one
+    /// down. Dropping the respawn seed detaches the commits it still held, as
+    /// [`drop_respawn_seed`](Self::drop_respawn_seed) describes.
+    pub(crate) fn forget_group_state(&self, group_id: &str) {
+        self.seeds.remove(group_id);
+        self.seeds_cache.remove(group_id);
+        self.drop_respawn_seed(group_id);
+        self.share_seeds.remove(group_id);
+        self.share_seeds_cache.remove(group_id);
+        self.streams_seeds.remove(group_id);
+        self.streams_seeds_cache.remove(group_id);
+        self.group_types.remove(group_id);
+    }
 }
 
 /// The group ids `map` holds an entry for.
