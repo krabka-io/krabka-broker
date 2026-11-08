@@ -213,7 +213,7 @@ fn committed_batches(sim: &Sim<KraftBackedLog>, node: NodeId, hwm: i64) -> Vec<R
 use {
     assert2::check,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct DiskScenario {
@@ -278,7 +278,7 @@ fn committed_logs_agree(disk: &DiskScenario) {
     }
 }
 
-#[when("a follower receives a conflicting epoch seven tail")]
+#[given("a follower has received a conflicting epoch seven tail")]
 fn inject_divergence(disk: &mut DiskScenario) {
     let StableSim { sim, leader } = disk
         .stable
@@ -374,4 +374,7 @@ fn safe_watermark(disk: &DiskScenario, minimum: i64) {
     }
 }
 
-scenarios!("tests/features/kraft_log_sim.feature", fixtures = [disk: DiskScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/kraft_log_sim.feature",
+    fixtures = [disk: DiskScenario],
+);

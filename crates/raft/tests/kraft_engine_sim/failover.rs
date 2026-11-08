@@ -170,6 +170,8 @@ async fn lockstep_failover_leader(failover: &mut FailoverCluster, cluster: u128)
     );
     time::sleep(fixture::Duration::from_secs(1)).await;
 }
+#[given("the leader has crashed and the surviving majority has elected a replacement")]
+async fn crashed_leader(failover: &mut FailoverCluster) { crash_leader(failover).await; }
 #[when("the current leader crashes and the surviving majority elects a replacement")]
 async fn crash_leader(failover: &mut FailoverCluster) {
     let initial = failover.elected.as_ref().expect("initial leader elected");
@@ -289,6 +291,12 @@ fn repeated_failover_convergence(failover: &FailoverCluster) {
         assert2::assert!(epoch >= 1);
     }
 }
+#[given(
+    "the network has isolated the leader until it resigned and the majority elected a replacement"
+)]
+async fn isolated_failover_leader(failover: &mut FailoverCluster) {
+    isolate_failover_leader(failover).await;
+}
 #[when("the network isolates the leader until it resigns and the majority elects a replacement")]
 async fn isolate_failover_leader(failover: &mut FailoverCluster) {
     let initial = failover.elected.as_ref().expect("initial leader");
@@ -363,39 +371,19 @@ fn healed_failover_image(failover: &FailoverCluster) {
             .is_some()
     );
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "A leader crash preserves majority commits"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn leader_failure_reelects(failover: FailoverCluster) {
-    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
+impl krabka_bdd::World for FailoverCluster {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        fixture::shutdown_nodes(&self.net, &self.ids).await;
+    }
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "Five leader restarts preserve election convergence"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn repeated_leader_restart_reelects(failover: FailoverCluster) {
-    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "An isolated leader resigns and rejoins after healing"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn isolated_leader_resigns_and_rejoins_after_heal(failover: FailoverCluster) {
-    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
-    name = "Lockstep survivors retry split votes on the election timer"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
-    failover: FailoverCluster,
-    cluster: u128,
-) {
-    let _ = cluster;
-    fixture::shutdown_nodes(&failover.net, &failover.ids).await;
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_engine_sim/failover.feature",
+    fixtures = [failover: FailoverCluster],
+    world = failover,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

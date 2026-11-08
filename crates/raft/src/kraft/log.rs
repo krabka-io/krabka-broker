@@ -817,7 +817,7 @@ mod tests {
 
     use {
         rstest::fixture,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct EpochLog {
@@ -860,7 +860,10 @@ mod tests {
         check!(epoch_log.answer == Some(LogOffsetMetadata { offset, epoch }));
     }
 
-    scenarios!("tests/features/migrated/src/kraft/log.feature", fixtures = [epoch_log: EpochLog]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/kraft/log.feature",
+        fixtures = [epoch_log: EpochLog],
+    );
 
     #[test]
     fn empty_log_last_epoch_is_zero() {

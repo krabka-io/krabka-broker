@@ -13,7 +13,7 @@ use {
     },
     rstest::fixture,
     rstest_bdd::Slot,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 enum RequestKind {
@@ -115,4 +115,7 @@ fn controller_release_gates(
     assert!(range.probe == Some((released_blocked, unstable_blocked)));
 }
 
-scenarios!("tests/features/migrated/tests/controller_api_version.feature", fixtures = [range: ControllerRange]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/controller_api_version.feature",
+    fixtures = [range: ControllerRange],
+);

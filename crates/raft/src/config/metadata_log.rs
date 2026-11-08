@@ -93,7 +93,7 @@ mod tests {
         krabka_units::prelude::{ByteSizeExt, TimeExt},
         rstest::fixture,
         rstest_bdd::datatable::Rows,
-        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        rstest_bdd_macros::{DataTableRow, given, then, when},
         std::collections::BTreeMap,
     };
 
@@ -191,5 +191,8 @@ mod tests {
         check!(storage.partition == Some(PathBuf::from(partition)));
     }
 
-    scenarios!("tests/features/migrated/src/config/metadata_log.feature", fixtures = [storage: MetadataStorage]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/config/metadata_log.feature",
+        fixtures = [storage: MetadataStorage],
+    );
 }

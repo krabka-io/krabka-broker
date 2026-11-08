@@ -6,7 +6,7 @@ mod sim_harness;
 use {
     krabka_ids::NodeId,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
     sim_harness::{cluster::Sim, sim_log::SimLog},
 };
 
@@ -69,6 +69,9 @@ fn isolate_leader(consensus: &mut ConsensusScenario) {
         .collect();
 }
 
+#[given("the leader has been isolated")]
+fn isolated_leader(consensus: &mut ConsensusScenario) { isolate_leader(consensus); }
+
 #[then("the majority elects exactly one replacement leader")]
 fn replacement_leader(consensus: &ConsensusScenario) {
     assert2::assert!(consensus.replacements.len() == 1);
@@ -114,4 +117,7 @@ fn voters_caught_up(consensus: &mut ConsensusScenario) {
     assert2::assert!(consensus.sim().all_voters_fetched_to(watermark));
 }
 
-scenarios!("tests/features/kraft_sim.feature", fixtures = [consensus: ConsensusScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/kraft_sim.feature",
+    fixtures = [consensus: ConsensusScenario],
+);

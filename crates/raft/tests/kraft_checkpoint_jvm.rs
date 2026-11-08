@@ -194,6 +194,8 @@ fn decode_checkpoint(checkpoint: &mut JvmCheckpoint) {
     checkpoint.dump = Some(out);
     checkpoint.dump_text = Some(text);
 }
+#[given("Kafka dump-log has decoded the engine snapshot checkpoint")]
+fn decoded_checkpoint(checkpoint: &mut JvmCheckpoint) { decode_checkpoint(checkpoint); }
 #[then(
     "all Kafka record families decode with valid CRCs, identities, partition epochs and the committed timestamp"
 )]
@@ -296,9 +298,7 @@ fn checkpoint_shell_topic(checkpoint: &JvmCheckpoint) {
         "metadata shell did not load the snapshot: {shell_text}"
     );
 }
-#[ignore = "requires Docker"]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_checkpoint_jvm.feature",
-    name = "Kafka JVM tools decode and replay the engine checkpoint"
-)]
-fn jvm_dump_log_parses_engine_snapshot(checkpoint: JvmCheckpoint) { let _ = checkpoint; }
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_checkpoint_jvm.feature",
+    fixtures = [checkpoint: JvmCheckpoint],
+);

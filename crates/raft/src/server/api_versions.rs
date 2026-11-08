@@ -590,7 +590,7 @@ mod tests {
 
     use {
         rstest_bdd::Slot,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
     struct TrunkOnlyRouter;
     impl ControllerAdminRouter for TrunkOnlyRouter {
@@ -815,16 +815,12 @@ mod tests {
             (&actual.finalized_features, actual.finalized_features_epoch) == (&expected, -1)
         );
     }
-    mod trunk_cases {
-        use super::*;
-        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@trunk", fixtures=[trunk_advertisement: TrunkAdvertisement]);
-    }
-    mod request_cases {
-        use super::*;
-        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@request", fixtures=[version_request: VersionRequest]);
-    }
-    mod features_cases {
-        use super::*;
-        scenarios!("tests/features/migrated/src/server/api_versions.feature", tags="@features", fixtures=[feature_advertisement: FeatureAdvertisement]);
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/server/api_versions.feature",
+        fixtures = [
+            trunk_advertisement: TrunkAdvertisement,
+            version_request: VersionRequest,
+            feature_advertisement: FeatureAdvertisement,
+        ],
+    );
 }

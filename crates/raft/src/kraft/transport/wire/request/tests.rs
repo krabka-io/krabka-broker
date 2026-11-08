@@ -364,7 +364,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct VoteDecode {
@@ -460,6 +460,9 @@ fn encode_singleton(singleton: &mut SingletonRequest) {
     singleton.encoded = Some(bytes);
 }
 
+#[given("the EndQuorumEpoch has been encoded at the current protocol version")]
+fn encoded_singleton_end(singleton: &mut SingletonRequest) { encode_singleton(singleton); }
+
 #[then(
     "BeginQuorumEpoch uses Kafka's singleton metadata partition and complete voter and leader endpoint fields"
 )]
@@ -527,12 +530,17 @@ fn expected_singleton_end(version: i16) -> EndQuorumEpochRequest {
     }
 }
 
-#[then(
-    "EndQuorumEpoch uses Kafka's current candidate identities and version-zero preferred successors"
-)]
+#[then("EndQuorumEpoch uses Kafka's current candidate identities")]
 fn kafka_singleton_end(singleton: &SingletonRequest) {
     check!(singleton.end.as_ref() == Some(&expected_singleton_end(QUORUM_EPOCH_VERSION)));
+}
+
+#[then("the version-zero EndQuorumEpoch names its candidates as preferred successors")]
+fn kafka_v0_singleton_end(singleton: &SingletonRequest) {
     check!(singleton.v0_end.as_ref() == Some(&expected_singleton_end(0)));
 }
 
-scenarios!("tests/features/migrated/src/kraft/transport/wire/request/tests.feature", fixtures = [vote: VoteDecode, singleton: SingletonRequest]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/transport/wire/request/tests.feature",
+    fixtures = [vote: VoteDecode, singleton: SingletonRequest],
+);

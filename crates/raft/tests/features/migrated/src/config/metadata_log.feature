@@ -2,10 +2,8 @@ Feature: Kafka metadata log storage defaults
   A freshly configured metadata log follows Kafka's size, retention and directory
   conventions without requiring operator overrides.
 
-  Background:
-    Given the metadata log root directory is /mnt/kafka/kafka-metadata-logs
-
   Scenario: Fresh metadata storage uses Kafka's documented default limits
+    Given the metadata log root directory is /mnt/kafka/kafka-metadata-logs
     When default metadata log storage is resolved
     Then metadata storage uses these Kafka limits:
       | setting               | value      |
@@ -17,5 +15,6 @@ Feature: Kafka metadata log storage defaults
       | minimum_segment_bytes | 8388608    |
 
   Scenario: The metadata partition uses Kafka's cluster metadata directory name
+    Given the metadata log root directory is /mnt/kafka/kafka-metadata-logs
     When default metadata log storage is resolved
     Then the metadata partition directory is /mnt/kafka/kafka-metadata-logs/__cluster_metadata-0

@@ -13,8 +13,13 @@ Feature: Kafka quorum peer request encoding
     When the singleton quorum request is encoded at the current protocol version
     Then BeginQuorumEpoch uses Kafka's singleton metadata partition and complete voter and leader endpoint fields
 
-  Scenario: EndQuorumEpoch preserves the preferred successor across protocol versions
+  Scenario: EndQuorumEpoch carries directory-aware candidates at the current protocol version
     Given an EndQuorumEpoch from leader 1 at epoch 4 preferring voter 2
     When the singleton quorum request is encoded at the current protocol version
-    And the encoded EndQuorumEpoch is downgraded to protocol version zero
-    Then EndQuorumEpoch uses Kafka's current candidate identities and version-zero preferred successors
+    Then EndQuorumEpoch uses Kafka's current candidate identities
+
+  Scenario: EndQuorumEpoch downgraded to protocol version zero keeps the preferred successor
+    Given an EndQuorumEpoch from leader 1 at epoch 4 preferring voter 2
+    And the EndQuorumEpoch has been encoded at the current protocol version
+    When the encoded EndQuorumEpoch is downgraded to protocol version zero
+    Then the version-zero EndQuorumEpoch names its candidates as preferred successors

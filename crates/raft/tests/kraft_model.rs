@@ -28,7 +28,7 @@ use {
     krabka_ids::NodeId,
     model::ConsensusModel,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
     stateright::{Checker, Model},
 };
 
@@ -211,4 +211,7 @@ fn model_properties(consensus_model: &ModelScenario) {
         .assert_properties();
 }
 
-scenarios!("tests/features/migrated/tests/kraft_model.feature", fixtures = [consensus_model: ModelScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_model.feature",
+    fixtures = [consensus_model: ModelScenario],
+);

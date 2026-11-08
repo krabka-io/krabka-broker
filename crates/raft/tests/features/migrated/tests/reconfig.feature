@@ -8,7 +8,7 @@ Feature: Quorum reconfiguration request identity
     Then the <operation> change preserves voter ID 2, directory integer 2, and local-append acknowledgement for adds
 
     Examples:
-      | operation |
-      | add       |
-      | remove    |
-      | update    |
+      | case             | operation |
+      | an added voter   | add       |
+      | a removed voter  | remove    |
+      | an updated voter | update    |

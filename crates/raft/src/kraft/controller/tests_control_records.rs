@@ -1071,70 +1071,10 @@ fn admission_check_no_mutation(admission: &VoterAdmission) {
     check!(!leader.core.quorum_state().voters.contains(NodeId(4)));
 }
 
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "No fetch never catches up"
-)]
-#[tokio::test]
-async fn unfetched_candidate_is_refused(admission: VoterAdmission) { let _ = admission; }
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "A short fetch is insufficient"
-)]
-#[tokio::test]
-async fn short_fetch_is_refused(admission: VoterAdmission) { let _ = admission; }
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "Fetching the log end catches up"
-)]
-#[tokio::test]
-async fn current_end_fetch_is_admitted(admission: VoterAdmission) { let _ = admission; }
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "A replica keeping pace with appends catches up"
-)]
-#[tokio::test]
-async fn continuous_append_candidate_is_admitted(admission: VoterAdmission) { let _ = admission; }
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "Another directory cannot establish candidate progress"
-)]
-#[tokio::test]
-async fn another_directory_does_not_admit_candidate(admission: VoterAdmission) {
-    let _ = admission;
-}
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "A stranger passes local checks without changing quorum state"
-)]
-#[tokio::test]
-async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order(
-    admission: VoterAdmission,
-) {
-    let _ = admission;
-}
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
-    name = "Local admission refuses invalid requests in Kafka order"
-)]
-#[tokio::test]
-async fn local_add_admission_order(
-    admission: VoterAdmission,
-    version: i16,
-    pending: bool,
-    id: u64,
-    directory: u128,
-    outcome: String,
-) {
-    let _ = admission;
-    let _ = (version, pending, id, directory, outcome);
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/controller/tests_control_records.feature",
+    fixtures = [admission: VoterAdmission],
+);
 
 /// `AddRaftVoter` v1 can ask for an acknowledgement on append: the leader
 /// answers as soon as the voters batch is in its log, and still tracks the

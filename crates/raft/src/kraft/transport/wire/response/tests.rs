@@ -353,7 +353,7 @@ fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
 
 use {
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct RefusedFetch {
@@ -413,4 +413,7 @@ fn kafka_fetch_refusal(fetch_refusal: &RefusedFetch, id: i32, endpoint: bool) {
     );
 }
 
-scenarios!("tests/features/migrated/src/kraft/transport/wire/response/tests.feature", fixtures = [fetch_refusal: RefusedFetch]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/transport/wire/response/tests.feature",
+    fixtures = [fetch_refusal: RefusedFetch],
+);

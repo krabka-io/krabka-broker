@@ -13,143 +13,55 @@ Feature: Kafka voter identity, admission and reconfiguration responses
     When the Kafka replica key is formatted
     Then the formatted replica key is ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ)
 
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (1: boundary foreign cluster on follower, leader false)
-    Given the local quorum is at epoch 7 with leadership false
-    And an AddVoter request names cluster foreign, voter 3, directory defined, and listener controller
+  Scenario Outline: AddVoter rejects cluster leadership and voter defects in Kafka order
+    Given the local quorum is at epoch 7 with leadership <leader>
+    And an AddVoter request names cluster <cluster>, voter <voter>, directory <directory>, and listener <listener>
     When Kafka AddVoter admission checks are applied
-    Then voter request admission returns INCONSISTENT_CLUSTER_ID with message The given id "cluster-b" doesn't match the cluster id "cluster-a"
+    Then voter request admission returns <code> with message <message>
 
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (2: boundary follower, leader false)
-    Given the local quorum is at epoch 7 with leadership false
-    And an AddVoter request names cluster absent, voter 3, directory defined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns NOT_LEADER_OR_FOLLOWER with message absent
+    Examples:
+      | case                               | leader | cluster | voter | directory | listener   | code                    | message                                                                                      |
+      | a foreign cluster on a follower    | false  | foreign | 3     | defined   | controller | INCONSISTENT_CLUSTER_ID | The given id "cluster-b" doesn't match the cluster id "cluster-a"                            |
+      | a follower                         | false  | absent  | 3     | defined   | controller | NOT_LEADER_OR_FOLLOWER  | absent                                                                                       |
+      | an invalid voter on a follower     | false  | absent  | -1    | defined   | controller | NOT_LEADER_OR_FOLLOWER  | absent                                                                                       |
+      | a negative voter                   | true   | absent  | -1    | defined   | controller | INVALID_REQUEST         | Add voter request didn't include a valid voter                                               |
+      | an undefined directory             | true   | absent  | 3     | undefined | controller | INVALID_REQUEST         | Add voter request didn't include a valid voter                                               |
+      | no listeners                       | true   | absent  | 3     | defined   | absent     | INVALID_REQUEST         | Add voter request didn't include a valid voter                                               |
+      | a missing controller listener      | true   | absent  | 3     | defined   | PLAINTEXT  | INVALID_REQUEST         | Add voter request didn't include the endpoint for the default listener CONTROLLER            |
+      | an explicit local cluster          | true   | local   | 3     | defined   | controller | NONE                    | absent                                                                                       |
+      | no cluster identity                | true   | absent  | 3     | defined   | controller | NONE                    | absent                                                                                       |
 
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (3: boundary invalid voter on follower, leader false)
-    Given the local quorum is at epoch 7 with leadership false
-    And an AddVoter request names cluster absent, voter -1, directory defined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns NOT_LEADER_OR_FOLLOWER with message absent
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (4: boundary negative voter, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster absent, voter -1, directory defined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Add voter request didn't include a valid voter
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (5: boundary undefined directory, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster absent, voter 3, directory undefined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Add voter request didn't include a valid voter
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (6: boundary no listeners, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster absent, voter 3, directory defined, and listener absent
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Add voter request didn't include a valid voter
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (7: boundary missing controller listener, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster absent, voter 3, directory defined, and listener PLAINTEXT
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Add voter request didn't include the endpoint for the default listener CONTROLLER
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (8: boundary explicit local cluster, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster local, voter 3, directory defined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns NONE with message absent
-
-  Scenario: AddVoter rejects cluster leadership and voter defects in Kafka order (9: boundary no cluster identity, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an AddVoter request names cluster absent, voter 3, directory defined, and listener controller
-    When Kafka AddVoter admission checks are applied
-    Then voter request admission returns NONE with message absent
-
-  Scenario: RemoveVoter validates cluster and leadership before the voter key (1: boundary foreign cluster, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And a RemoveVoter request names cluster foreign, voter 2, and directory defined
+  Scenario Outline: RemoveVoter validates cluster and leadership before the voter key
+    Given the local quorum is at epoch 7 with leadership <leader>
+    And a RemoveVoter request names cluster <cluster>, voter <voter>, and directory <directory>
     When Kafka RemoveVoter admission checks are applied
-    Then voter request admission returns INCONSISTENT_CLUSTER_ID with message The given id "cluster-b" doesn't match the cluster id "cluster-a"
+    Then voter request admission returns <code> with message <message>
 
-  Scenario: RemoveVoter validates cluster and leadership before the voter key (2: boundary follower with invalid voter, leader false)
-    Given the local quorum is at epoch 7 with leadership false
-    And a RemoveVoter request names cluster absent, voter -1, and directory defined
-    When Kafka RemoveVoter admission checks are applied
-    Then voter request admission returns NOT_LEADER_OR_FOLLOWER with message absent
+    Examples:
+      | case                               | leader | cluster | voter | directory | code                    | message                                                           |
+      | a foreign cluster                  | true   | foreign | 2     | defined   | INCONSISTENT_CLUSTER_ID | The given id "cluster-b" doesn't match the cluster id "cluster-a" |
+      | a follower with an invalid voter   | false  | absent  | -1    | defined   | NOT_LEADER_OR_FOLLOWER  | absent                                                            |
+      | a negative voter                   | true   | absent  | -1    | defined   | INVALID_REQUEST         | Remove voter request didn't include a valid voter                 |
+      | an undefined directory             | true   | absent  | 2     | undefined | INVALID_REQUEST         | Remove voter request didn't include a valid voter                 |
+      | a valid local voter                | true   | local   | 2     | defined   | NONE                    | absent                                                            |
 
-  Scenario: RemoveVoter validates cluster and leadership before the voter key (3: boundary negative voter, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And a RemoveVoter request names cluster absent, voter -1, and directory defined
-    When Kafka RemoveVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Remove voter request didn't include a valid voter
-
-  Scenario: RemoveVoter validates cluster and leadership before the voter key (4: boundary undefined directory, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And a RemoveVoter request names cluster absent, voter 2, and directory undefined
-    When Kafka RemoveVoter admission checks are applied
-    Then voter request admission returns INVALID_REQUEST with message Remove voter request didn't include a valid voter
-
-  Scenario: RemoveVoter validates cluster and leadership before the voter key (5: boundary valid local voter, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And a RemoveVoter request names cluster local, voter 2, and directory defined
-    When Kafka RemoveVoter admission checks are applied
-    Then voter request admission returns NONE with message absent
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (1: boundary foreign cluster, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster foreign, epoch 7, directory defined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
+  Scenario Outline: UpdateVoter validates epochs feature ranges and controller endpoints
+    Given the local quorum is at epoch 7 with leadership <leader>
+    And an UpdateVoter request names cluster <cluster>, epoch <epoch>, directory <directory>, kraft minimum <minimum>, kraft maximum <maximum>, and listener <listener>
     When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns INCONSISTENT_CLUSTER_ID
+    Then UpdateVoter admission returns <code>
 
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (2: boundary old epoch, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 6, directory defined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns FENCED_LEADER_EPOCH
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (3: boundary unknown epoch, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 8, directory defined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns UNKNOWN_LEADER_EPOCH
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (4: boundary follower, leader false)
-    Given the local quorum is at epoch 7 with leadership false
-    And an UpdateVoter request names cluster absent, epoch 7, directory defined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns NOT_LEADER_OR_FOLLOWER
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (5: boundary undefined directory, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 7, directory undefined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns INVALID_REQUEST
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (6: boundary negative feature minimum, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 7, directory defined, kraft minimum -1, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns INVALID_REQUEST
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (7: boundary inverted feature range, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 7, directory defined, kraft minimum 2, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns INVALID_REQUEST
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (8: boundary missing controller endpoint, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 7, directory defined, kraft minimum 0, kraft maximum 1, and listener PLAINTEXT
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns INVALID_REQUEST
-
-  Scenario: UpdateVoter validates epochs feature ranges and controller endpoints (9: boundary valid update, leader true)
-    Given the local quorum is at epoch 7 with leadership true
-    And an UpdateVoter request names cluster absent, epoch 7, directory defined, kraft minimum 0, kraft maximum 1, and listener CONTROLLER
-    When Kafka UpdateVoter admission checks are applied
-    Then UpdateVoter admission returns NONE
+    Examples:
+      | case                              | leader | cluster | epoch | directory | minimum | maximum | listener   | code                    |
+      | a foreign cluster                 | true   | foreign | 7     | defined   | 0       | 1       | CONTROLLER | INCONSISTENT_CLUSTER_ID |
+      | an old epoch                      | true   | absent  | 6     | defined   | 0       | 1       | CONTROLLER | FENCED_LEADER_EPOCH     |
+      | an unknown epoch                  | true   | absent  | 8     | defined   | 0       | 1       | CONTROLLER | UNKNOWN_LEADER_EPOCH    |
+      | a follower                        | false  | absent  | 7     | defined   | 0       | 1       | CONTROLLER | NOT_LEADER_OR_FOLLOWER  |
+      | an undefined directory            | true   | absent  | 7     | undefined | 0       | 1       | CONTROLLER | INVALID_REQUEST         |
+      | a negative feature minimum        | true   | absent  | 7     | defined   | -1      | 1       | CONTROLLER | INVALID_REQUEST         |
+      | an inverted feature range         | true   | absent  | 7     | defined   | 2       | 1       | CONTROLLER | INVALID_REQUEST         |
+      | a missing controller endpoint     | true   | absent  | 7     | defined   | 0       | 1       | PLAINTEXT  | INVALID_REQUEST         |
+      | a valid update                    | true   | absent  | 7     | defined   | 0       | 1       | CONTROLLER | NONE                    |
 
   Scenario Outline: Reconfiguration outcomes preserve Kafka response codes and messages
     Given an AddVoter operation for voter 3 ends with <outcome>
@@ -157,11 +69,11 @@ Feature: Kafka voter identity, admission and reconfiguration responses
     Then the reconfiguration response is <code> with message <message>
 
     Examples:
-      | outcome | code | message |
-      | committed | NONE | absent |
-      | not-leader | NOT_LEADER_OR_FOLLOWER | absent |
-      | candidate-lag-10 | REQUEST_TIMED_OUT | Aborted add voter operation for ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) since it is lagging behind |
-      | pending-change | REQUEST_TIMED_OUT | Request timed out waiting for leader to handle previous voter change request |
-      | duplicate-voter | DUPLICATE_VOTER | The voter id for ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) is already part of the set of voters |
-      | unknown-voter | VOTER_NOT_FOUND | Cannot remove voter ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) from the set of voters |
-      | rejected-empty-quorum | INVALID_REQUEST | empty voter set |
+      | case                          | outcome | code | message |
+      | a committed change            | committed | NONE | absent |
+      | a leader that lost leadership | not-leader | NOT_LEADER_OR_FOLLOWER | absent |
+      | a candidate lagging behind    | candidate-lag-10 | REQUEST_TIMED_OUT | Aborted add voter operation for ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) since it is lagging behind |
+      | a pending voter change        | pending-change | REQUEST_TIMED_OUT | Request timed out waiting for leader to handle previous voter change request |
+      | a duplicate voter             | duplicate-voter | DUPLICATE_VOTER | The voter id for ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) is already part of the set of voters |
+      | an unknown voter              | unknown-voter | VOTER_NOT_FOUND | Cannot remove voter ReplicaKey(id=3, directoryId=CQkJCQkJCQkJCQkJCQkJCQ) from the set of voters |
+      | an empty voter set            | rejected-empty-quorum | INVALID_REQUEST | empty voter set |

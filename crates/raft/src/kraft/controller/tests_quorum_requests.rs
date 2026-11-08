@@ -536,18 +536,6 @@ fn vote_response(vote_admission: &VoteAdmission, expected: String) {
         VoteResponse::decode(&mut &body[..], VOTE_VERSION).expect("complete Kafka response");
     check!(response == expected.native());
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
-    name = "Vote validates the incoming request and returns the full Kafka response"
-)]
-#[tokio::test]
-async fn vote_runs_kafka_request_checks(
-    vote_admission: VoteAdmission,
-    request: String,
-    expected: String,
-) {
-    let _ = (vote_admission, request, expected);
-}
 
 #[derive(Default)]
 struct BeginQuorumEpochAdmission {
@@ -599,18 +587,6 @@ fn begin_quorum_epoch_response(
     let response = BeginQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION)
         .expect("complete Kafka response");
     check!(response == expected.begin());
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
-    name = "BeginQuorumEpoch validates the incoming request and returns the full Kafka response"
-)]
-#[tokio::test]
-async fn begin_quorum_epoch_runs_kafka_request_checks(
-    begin_quorum_epoch_admission: BeginQuorumEpochAdmission,
-    request: String,
-    expected: String,
-) {
-    let _ = (begin_quorum_epoch_admission, request, expected);
 }
 
 #[derive(Default)]
@@ -676,19 +652,6 @@ fn end_quorum_epoch_response(
             == role
     );
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
-    name = "EndQuorumEpoch validates the incoming request and returns the full Kafka response"
-)]
-#[tokio::test]
-async fn end_quorum_epoch_runs_kafka_request_checks(
-    end_quorum_epoch_admission: EndQuorumEpochAdmission,
-    request: String,
-    expected: String,
-    role: String,
-) {
-    let _ = (end_quorum_epoch_admission, request, expected, role);
-}
 
 #[derive(Default)]
 struct FetchSnapshotAdmission {
@@ -737,18 +700,6 @@ fn fetch_snapshot_response(fetch_snapshot_admission: &FetchSnapshotAdmission, ex
         .as_ref()
         .expect("request handled");
     check!(*body == encode(&expected.native(), FETCH_SNAPSHOT_VERSION));
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
-    name = "FetchSnapshot validates the incoming request and returns the full Kafka response"
-)]
-#[tokio::test]
-async fn fetch_snapshot_runs_kafka_request_checks(
-    fetch_snapshot_admission: FetchSnapshotAdmission,
-    request: String,
-    expected: String,
-) {
-    let _ = (fetch_snapshot_admission, request, expected);
 }
 
 type QuorumTopics<P> = Vec<(String, Vec<P>)>;
@@ -1115,3 +1066,13 @@ impl SnapshotExpected {
         }
     }
 }
+
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature",
+    fixtures = [
+        vote_admission: VoteAdmission,
+        begin_quorum_epoch_admission: BeginQuorumEpochAdmission,
+        end_quorum_epoch_admission: EndQuorumEpochAdmission,
+        fetch_snapshot_admission: FetchSnapshotAdmission,
+    ],
+);

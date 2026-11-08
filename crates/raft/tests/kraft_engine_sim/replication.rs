@@ -49,6 +49,11 @@ async fn replication_leader(replication_cluster: &mut ReplicationCluster) {
         .0,
     );
 }
+#[given("a follower has refused the orders topic submission with the current leader hint")]
+async fn refused_follower_submission(replication_cluster: &mut ReplicationCluster) {
+    follower_submission(replication_cluster).await;
+    follower_hint(replication_cluster);
+}
 #[when("a follower receives the orders topic submission")]
 async fn follower_submission(replication_cluster: &mut ReplicationCluster) {
     let leader = replication_cluster.leader.expect("leader elected");
@@ -107,18 +112,21 @@ fn replicated_topic(replication_cluster: &ReplicationCluster) {
         );
     }
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/replication.feature",
-    name = "A follower hints the leader and the leader replicates the submitted topic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_submit_change_propagates(replication_cluster: ReplicationCluster) {
-    for id in replication_cluster.ids {
-        replication_cluster
-            .net
-            .get(id)
-            .expect("voter running")
-            .shutdown()
-            .await;
+impl krabka_bdd::World for ReplicationCluster {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        for id in self.ids {
+            self.net.get(id).expect("voter running").shutdown().await;
+        }
     }
 }
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_engine_sim/replication.feature",
+    fixtures = [replication_cluster: ReplicationCluster],
+    world = replication_cluster,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

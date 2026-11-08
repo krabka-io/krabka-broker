@@ -9,27 +9,27 @@ Feature: Kafka controller authorization and refusal layouts
     Then the controller API requires <operation>
 
     Examples:
-      | api | operation |
-      | Fetch | ClusterAction |
-      | Vote | ClusterAction |
-      | BeginQuorumEpoch | ClusterAction |
-      | EndQuorumEpoch | ClusterAction |
-      | FetchSnapshot | ClusterAction |
-      | ControllerRegistration | ClusterAction |
-      | UpdateRaftVoter | ClusterAction |
-      | AssignReplicasToDirs | ClusterAction |
-      | SubmitChange | ClusterAction |
-      | MetadataFetch | ClusterAction |
-      | DelegationTokenMutation | ClusterAction |
-      | AddRaftVoter | Alter |
-      | RemoveRaftVoter | Alter |
-      | DescribeCluster | Alter |
-      | DescribeQuorum | Describe |
-      | ApiVersions | broker-handler-authorization |
-      | CreateTopics | broker-handler-authorization |
-      | Envelope | broker-handler-authorization |
-      | BrokerRegistration | broker-handler-authorization |
-      | BrokerHeartbeat | broker-handler-authorization |
+      | case                    | api | operation |
+      | Fetch                   | Fetch | ClusterAction |
+      | Vote                    | Vote | ClusterAction |
+      | BeginQuorumEpoch        | BeginQuorumEpoch | ClusterAction |
+      | EndQuorumEpoch          | EndQuorumEpoch | ClusterAction |
+      | FetchSnapshot           | FetchSnapshot | ClusterAction |
+      | ControllerRegistration  | ControllerRegistration | ClusterAction |
+      | UpdateRaftVoter         | UpdateRaftVoter | ClusterAction |
+      | AssignReplicasToDirs    | AssignReplicasToDirs | ClusterAction |
+      | SubmitChange            | SubmitChange | ClusterAction |
+      | MetadataFetch           | MetadataFetch | ClusterAction |
+      | DelegationTokenMutation | DelegationTokenMutation | ClusterAction |
+      | AddRaftVoter            | AddRaftVoter | Alter |
+      | RemoveRaftVoter         | RemoveRaftVoter | Alter |
+      | DescribeCluster         | DescribeCluster | Alter |
+      | DescribeQuorum          | DescribeQuorum | Describe |
+      | ApiVersions             | ApiVersions | broker-handler-authorization |
+      | CreateTopics            | CreateTopics | broker-handler-authorization |
+      | Envelope                | Envelope | broker-handler-authorization |
+      | BrokerRegistration      | BrokerRegistration | broker-handler-authorization |
+      | BrokerHeartbeat         | BrokerHeartbeat | broker-handler-authorization |
 
   Scenario: Fetch and quorum refusals retain exact Kafka schema layouts
     Given the controller receives these authorization-refusal request shapes:

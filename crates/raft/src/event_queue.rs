@@ -168,7 +168,7 @@ mod tests {
         },
         assert2::check,
         rstest::fixture,
-        rstest_bdd_macros::{given, scenario, then, when},
+        rstest_bdd_macros::{given, then, when},
         std::sync::Arc,
         tokio::time::{Duration, Instant, advance},
     };
@@ -260,25 +260,10 @@ mod tests {
         check!(turn.measurements.as_ref() == Some(&expected));
     }
 
-    // Each binding retains start_paused so metric expectations use exact logical time.
-    #[scenario(
-        path = "tests/features/migrated/src/event_queue.feature",
-        name = "Timer turns do not record queue delay"
-    )]
-    #[tokio::test(start_paused = true)]
-    async fn one_turn_records_kafkas_event_queue_measurements(turn: MeteredTurn) {}
-
-    #[scenario(
-        path = "tests/features/migrated/src/event_queue.feature",
-        name = "Queued commands include the preceding busy turn in queue delay"
-    )]
-    #[tokio::test(start_paused = true)]
-    async fn queued_command_measurements(turn: MeteredTurn) {}
-
-    #[scenario(
-        path = "tests/features/migrated/src/event_queue.feature",
-        name = "An abandoned caller is counted as timed out while its command still runs"
-    )]
-    #[tokio::test(start_paused = true)]
-    async fn abandoned_command_measurements(turn: MeteredTurn) {}
+    // The paused clock keeps the metric expectations at exact logical time.
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/event_queue.feature",
+        fixtures = [turn: MeteredTurn],
+        runtime = "tokio-current-thread-paused",
+    );
 }

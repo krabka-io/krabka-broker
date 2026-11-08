@@ -6,8 +6,8 @@ Feature: KRaft consensus over real on-disk logs
 
   Scenario: A divergent follower truncates and reconverges
     Given three disk-backed voters have replicated 3 records
-    When a follower receives a conflicting epoch seven tail
-    And the leader writes authoritative records and the follower reconnects
+    And a follower has received a conflicting epoch seven tail
+    When the leader writes authoritative records and the follower reconnects
     Then the follower's log and epoch match the leader after truncation
 
   Scenario: Committed watermarks fit in every voter log

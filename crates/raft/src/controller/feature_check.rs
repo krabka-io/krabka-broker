@@ -126,7 +126,7 @@ mod tests {
     use {
         rstest::fixture,
         rstest_bdd::{Slot, datatable::Rows},
-        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        rstest_bdd_macros::{DataTableRow, given, then, when},
     };
 
     struct RecoveredFeatures {
@@ -199,5 +199,8 @@ mod tests {
         check!(recovered.refusal.get() == Some(Some(refusal(&name, level, &range))));
     }
 
-    scenarios!("tests/features/migrated/src/controller/feature_check.feature", fixtures = [recovered: RecoveredFeatures]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/controller/feature_check.feature",
+        fixtures = [recovered: RecoveredFeatures],
+    );
 }

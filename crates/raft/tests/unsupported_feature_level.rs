@@ -251,6 +251,11 @@ async fn watermark_log(recovery: &mut FeatureRecovery, watermark: String) {
     recovery.expected_refusal = refusal;
     recovery.before = protected_metadata_files(&metadata_partition_dir(recovery.dir.path()));
 }
+#[given("the controller has been refused a rejoin with unstable features disabled")]
+async fn refused_unstable_restart(recovery: &mut FeatureRecovery) {
+    refuse_unstable_restart(recovery).await;
+    unchanged_refused_restart(recovery);
+}
 #[when("the controller rejoins with unstable features disabled")]
 async fn refuse_unstable_restart(recovery: &mut FeatureRecovery) {
     recovery.refusal = Some(refused_start(&recovery.dir, recovery.cluster).await);
@@ -388,49 +393,21 @@ fn normal_feature_fault(recovery: &FeatureRecovery) {
     check!(recovery.channel_closed == Some(true));
     check!(recovery.fault.is_none());
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
-    name = "a log finalized at an unstable level starts only with the flag on"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on(
-    recovery: FeatureRecovery,
-) {
-    if let Some(controller) = recovery.controller.take() {
-        controller.shutdown().await;
+impl krabka_bdd::World for FeatureRecovery {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        if let Some(controller) = self.controller.take() {
+            controller.shutdown().await;
+        }
     }
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
-    name = "a level above the recovered high watermark is refused before any write"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
-    recovery: FeatureRecovery,
-    watermark: String,
-) {
-    let _ = watermark;
-    if let Some(controller) = recovery.controller.take() {
-        controller.shutdown().await;
-    }
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
-    name = "a controller stops when it replays a level it does not support"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_stops_when_it_replays_a_level_it_does_not_support(recovery: FeatureRecovery) {
-    if let Some(controller) = recovery.controller.take() {
-        controller.shutdown().await;
-    }
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/unsupported_feature_level.feature",
-    name = "a controller that stops for any other reason reports no fault"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_controller_that_stops_for_any_other_reason_reports_no_fault(recovery: FeatureRecovery) {
-    if let Some(controller) = recovery.controller.take() {
-        controller.shutdown().await;
-    }
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/unsupported_feature_level.feature",
+    fixtures = [recovery: FeatureRecovery],
+    world = recovery,
+    runtime = "tokio-multi-thread",
+    workers = 2,
+);

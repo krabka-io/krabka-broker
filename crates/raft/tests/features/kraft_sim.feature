@@ -4,11 +4,16 @@ Feature: Deterministic KRaft consensus
     When the voters stabilize
     Then all voters agree on one leader epoch
 
-  Scenario: A partitioned leader rejoins as a follower
+  Scenario: An isolated leader is replaced by the majority
     Given three in-memory KRaft voters
     And the voters have elected a leader
     When the leader is isolated
     Then the majority elects exactly one replacement leader
+
+  Scenario: A partitioned leader rejoins as a follower
+    Given three in-memory KRaft voters
+    And the voters have elected a leader
+    And the leader has been isolated
     When the partition heals
     Then the replacement remains the only leader
 

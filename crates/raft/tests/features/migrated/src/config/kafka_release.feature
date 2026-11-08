@@ -13,17 +13,17 @@ Feature: Kafka 4.4 released API version catalogue
     Then the released maximum API version is <version>
 
     Examples:
-      | key  | version     |
-      | 18   | 5           |
-      | 22   | 5           |
-      | 28   | 6           |
-      | 42   | 3           |
-      | 88   | 1           |
-      | 89   | 1           |
-      | 92   | 0           |
-      | 93   | 0           |
-      | 94   | 0           |
-      | 1020 | unavailable |
+      | case                                       | key  | version     |
+      | ApiVersions                                | 18   | 5           |
+      | InitProducerId                             | 22   | 5           |
+      | TxnOffsetCommit                            | 28   | 6           |
+      | DeleteGroups                               | 42   | 3           |
+      | StreamsGroupHeartbeat                      | 88   | 1           |
+      | StreamsGroupDescribe                       | 89   | 1           |
+      | DeleteShareGroupOffsets                    | 92   | 0           |
+      | StreamsGroupTopologyDescriptionUpdate      | 93   | 0           |
+      | UnregisterController                       | 94   | 0           |
+      | a key the release does not publish         | 1020 | unavailable |
 
   Scenario: Fetch retains its complete released version range
     Given an API key 1 requested from the Kafka 4.4 catalogue

@@ -588,7 +588,7 @@ mod tests {
     use {
         rstest::fixture,
         rstest_bdd::Slot,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct VoterRequests {
@@ -838,5 +838,8 @@ mod tests {
         check!(request.mapped == Some((kafka_code(&code), message(text))));
     }
 
-    scenarios!("tests/features/migrated/src/voter_requests.feature", fixtures = [request: VoterRequests]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/voter_requests.feature",
+        fixtures = [request: VoterRequests],
+    );
 }

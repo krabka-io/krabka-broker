@@ -8,7 +8,7 @@ Feature: KRaft log leader-epoch end offsets
     Then the metadata log answers epoch <found> ending at offset <offset>
 
     Examples:
-      | boundary              | requested | found | offset |
+      | case                  | requested | found | offset |
       | older than the log    | 1         | 1     | 0      |
       | completed prior epoch | 2         | 2     | 1      |
       | gap between epochs    | 3         | 2     | 1      |

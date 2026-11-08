@@ -17,7 +17,7 @@ const ASKER: VoteAsker = VoteAsker {
     known_leader: None,
 };
 
-use rstest_bdd_macros::{given, scenarios, then, when};
+use rstest_bdd_macros::{given, then, when};
 #[derive(Default)]
 struct VoteInterpretation {
     known_leader: Option<NodeId>,
@@ -83,7 +83,10 @@ fn vote_transition(
     };
     assert2::assert!(interpretation.step.as_ref() == Some(&expected));
 }
-scenarios!("tests/features/migrated/src/kraft/controller/vote_response/tests.feature", fixtures = [interpretation: VoteInterpretation]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/controller/vote_response/tests.feature",
+    fixtures = [interpretation: VoteInterpretation],
+);
 
 /// A Vote answer encoded as voter 2 sends it.
 fn answer(granted: bool, leader_id: Option<NodeId>, epoch: Epoch) -> bytes::Bytes {

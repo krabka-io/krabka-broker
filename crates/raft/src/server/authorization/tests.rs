@@ -609,7 +609,7 @@ fn admin_and_private_refusal_fixtures() -> Vec<RefusalCase> {
 use {
     rstest::fixture,
     rstest_bdd::{Slot, datatable::Rows},
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct ControllerAuthorization {
@@ -734,4 +734,7 @@ fn exact_controller_refusals(authorization: &ControllerAuthorization) {
     }
 }
 
-scenarios!("tests/features/migrated/src/server/authorization/tests.feature", fixtures = [authorization: ControllerAuthorization]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/server/authorization/tests.feature",
+    fixtures = [authorization: ControllerAuthorization],
+);

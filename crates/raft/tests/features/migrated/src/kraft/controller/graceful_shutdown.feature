@@ -8,7 +8,7 @@ Feature: Bounded graceful KRaft shutdown
     Then the graceful shutdown window is <window_ms> ms
 
     Examples:
-      | timeout_ms | window_ms |
-      | 500        | 1250      |
-      | 2000       | 5000      |
-      | 20000      | 5000      |
+      | case                                 | timeout_ms | window_ms |
+      | a short timeout shortens the window  | 500        | 1250      |
+      | exactly the five-second cap          | 2000       | 5000      |
+      | a long timeout is capped             | 20000      | 5000      |

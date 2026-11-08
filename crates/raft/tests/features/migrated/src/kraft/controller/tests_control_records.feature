@@ -44,9 +44,9 @@ Feature: Kafka voter admission checks and replica catch-up
     When the controller checks voter <id> in directory <directory>
     Then voter admission returns <outcome>
     Examples:
-      | version | pending | id | directory | outcome |
-      | 1 | false | 2 | 0 | duplicate |
-      | 1 | false | 2 | 7 | duplicate |
-      | 1 | true | 2 | 7 | pending-change |
-      | 1 | true | 4 | 7 | pending-change |
-      | 0 | false | 4 | 7 | unsupported-version |
+      | case                                            | version | pending | id | directory | outcome             |
+      | an existing voter id with no directory          | 1       | false   | 2  | 0         | duplicate           |
+      | an existing voter id in another directory       | 1       | false   | 2  | 7         | duplicate           |
+      | a pending change outranks a duplicate voter     | 1       | true    | 2  | 7         | pending-change      |
+      | a pending change refuses a new voter            | 1       | true    | 4  | 7         | pending-change      |
+      | kraft version 0 cannot change voters            | 0       | false   | 4  | 7         | unsupported-version |

@@ -95,35 +95,21 @@ fn unique_elected_leader(election_cluster: &ElectionCluster) {
     );
     assert2::assert!(election_cluster.self_leaders == Some(1));
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
-    name = "Three engines elect exactly one leader"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_engines_elect_one_leader(election_cluster: ElectionCluster) {
-    for id in election_cluster.live {
-        election_cluster
-            .net
-            .get(id)
-            .expect("live voter")
-            .shutdown()
-            .await;
+impl krabka_bdd::World for ElectionCluster {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        for &id in &self.live {
+            self.net.get(id).expect("live voter").shutdown().await;
+        }
     }
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/election.feature",
-    name = "A bare majority elects with uniform timeouts"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bare_majority_two_of_three_elects_with_uniform_timeouts(
-    election_cluster: ElectionCluster,
-) {
-    for id in election_cluster.live {
-        election_cluster
-            .net
-            .get(id)
-            .expect("live voter")
-            .shutdown()
-            .await;
-    }
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_engine_sim/election.feature",
+    fixtures = [election_cluster: ElectionCluster],
+    world = election_cluster,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

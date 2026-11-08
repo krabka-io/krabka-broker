@@ -8,8 +8,8 @@ Feature: Kafka-defined metadata record types in checkpoints
     Then the checkpoint contains data records and every data-record API key is Kafka-defined
 
     Examples:
-      | family                 |
-      | feature-level          |
-      | diskless-offset-advance |
-      | topic-write-freeze     |
-      | break-glass-proposal   |
+      | case                      | family                 |
+      | a finalized feature level | feature-level          |
+      | a diskless offset advance | diskless-offset-advance |
+      | a topic write freeze      | topic-write-freeze     |
+      | a break-glass proposal    | break-glass-proposal   |

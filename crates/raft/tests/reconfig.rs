@@ -8,7 +8,7 @@ use {
         reconfig::{AddVoter, RemoveVoter, UpdateVoter, VoterChange},
     },
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 #[path = "support/voter.rs"]
@@ -84,4 +84,7 @@ fn preserved_voter_identity(identity: &VoterIdentity, operation: String, id: u64
     );
 }
 
-scenarios!("tests/features/migrated/tests/reconfig.feature", fixtures = [identity: VoterIdentity]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/reconfig.feature",
+    fixtures = [identity: VoterIdentity],
+);

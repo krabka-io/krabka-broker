@@ -179,6 +179,18 @@ async fn snapshot_pair(snapshots: &mut SnapshotCluster, cluster: u128) {
     snapshots.pair =
         Some(elected_snapshot_pair(&snapshots.net, &snapshots.ids, snapshots.cluster, 5).await);
 }
+#[given(
+    "a leader in cluster {cluster} that snapshots every five records has committed fifteen topics prefixed {prefix} beginning at identity {identity}"
+)]
+async fn snapshotted_burst(
+    snapshots: &mut SnapshotCluster,
+    cluster: u128,
+    prefix: String,
+    identity: u128,
+) {
+    snapshot_pair(snapshots, cluster).await;
+    snapshot_burst(snapshots, prefix, identity).await;
+}
 #[when("the leader commits fifteen topics prefixed {prefix} beginning at identity {identity}")]
 async fn snapshot_burst(snapshots: &mut SnapshotCluster, prefix: String, identity: u128) {
     let pair = snapshots.pair.as_ref().expect("elected pair");
@@ -243,6 +255,10 @@ fn installed_snapshot_image(snapshots: &SnapshotCluster) {
     );
     assert2::assert!(lag.quorum_snapshot().log_start_offset > 0);
 }
+#[given("the follower has finished independent pruning and received a Fetch from offset zero")]
+async fn fetched_pruned_follower(snapshots: &mut SnapshotCluster) {
+    fetch_pruned_follower(snapshots).await;
+}
 #[when("the follower finishes independent pruning and receives a Fetch from offset zero")]
 async fn fetch_pruned_follower(snapshots: &mut SnapshotCluster) {
     let pair = snapshots.pair.as_ref().expect("elected pair");
@@ -280,7 +296,7 @@ async fn fetch_pruned_follower(snapshots: &mut SnapshotCluster) {
     snapshots.fetch_answer = Some(answer);
 }
 #[then(
-    "the follower retains one or two checkpoints and refuses Fetch with the current leader and its own log start"
+    "the follower retains between one and two checkpoints and refuses Fetch with the current leader and its own log start"
 )]
 fn follower_fetch_refusal(snapshots: &SnapshotCluster) {
     let pair = snapshots.pair.as_ref().expect("elected pair");
@@ -386,6 +402,10 @@ async fn request_snapshot_chunk(snapshots: &mut SnapshotCluster, maximum: i32) -
     snapshots.total = Some(usize::try_from(size).expect("snapshot size"));
     bytes
 }
+#[given("a lagging peer has started a snapshot transfer with only the header batch")]
+async fn started_snapshot_transfer(snapshots: &mut SnapshotCluster) {
+    start_snapshot_transfer(snapshots).await;
+}
 #[when("a lagging peer starts a snapshot transfer with only the header batch")]
 async fn start_snapshot_transfer(snapshots: &mut SnapshotCluster) {
     let pair = snapshots.pair.as_ref().expect("elected pair");
@@ -425,6 +445,8 @@ fn partial_snapshot_transfer(snapshots: &SnapshotCluster) {
         assert2::assert!((Some(identity), error) == (snapshots.snapshot_id, 0));
     }
 }
+#[given("newly committed topics have rolled the leader onto a newer checkpoint")]
+async fn rolled_checkpoint(snapshots: &mut SnapshotCluster) { roll_checkpoint(snapshots).await; }
 #[when("newly committed topics roll the leader onto a newer checkpoint")]
 async fn roll_checkpoint(snapshots: &mut SnapshotCluster) {
     let pair = snapshots.pair.as_ref().expect("elected pair");
@@ -477,31 +499,19 @@ fn original_snapshot_topics(snapshots: &SnapshotCluster) {
     assert2::assert!(topics.len() >= 5);
     assert2::assert!(topics.iter().all(|name| name.starts_with('r')));
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
-    name = "An empty voter installs a snapshot and converges"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn lagging_follower_catches_up_via_snapshot(snapshots: SnapshotCluster) {
-    shutdown_nodes(&snapshots.net, &snapshots.ids).await;
+impl krabka_bdd::World for SnapshotCluster {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        shutdown_nodes(&self.net, &self.ids).await;
+    }
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
-    name = "A pruned follower redirects Fetch and FetchSnapshot to the leader"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader(
-    snapshots: SnapshotCluster,
-) {
-    shutdown_nodes(&snapshots.net, &snapshots.ids).await;
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
-    name = "A snapshot transfer survives a leader checkpoint roll"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint(
-    snapshots: SnapshotCluster,
-) {
-    shutdown_nodes(&snapshots.net, &snapshots.ids).await;
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature",
+    fixtures = [snapshots: SnapshotCluster],
+    world = snapshots,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

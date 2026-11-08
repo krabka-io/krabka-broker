@@ -47,7 +47,7 @@ async fn wait_for_leader(controller: &ControllerHandle) {
 use {
     assert2::assert,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenario, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct SingleVoterTopic {
@@ -142,27 +142,22 @@ fn duplicate_topic(node: &SingleVoterTopic) {
     ));
 }
 
-async fn stop_controller(mut node: SingleVoterTopic) {
-    if let Some(controller) = node.controller.take() {
-        controller.shutdown().await;
+impl krabka_bdd::World for SingleVoterTopic {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        if let Some(controller) = self.controller.take() {
+            controller.shutdown().await;
+        }
     }
 }
 
-// Explicit bindings preserve the original two-worker Tokio runtimes and test identities.
-#[scenario(
-    path = "tests/features/migrated/tests/single_node.feature",
-    name = "A single-voter leader commits a new topic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_voter_create_topic_round_trip(node: SingleVoterTopic) {
-    stop_controller(node).await;
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/single_node.feature",
-    name = "A single-voter leader refuses a duplicate topic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_voter_duplicate_topic_rejected(node: SingleVoterTopic) {
-    stop_controller(node).await;
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/single_node.feature",
+    fixtures = [node: SingleVoterTopic],
+    world = node,
+    runtime = "tokio-multi-thread",
+    workers = 2,
+);

@@ -154,7 +154,7 @@ mod tests {
         assert2::check,
         rstest::fixture,
         rstest_bdd::Slot,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct ReleaseCatalogue {
@@ -239,5 +239,8 @@ mod tests {
         check!(release.row.get() == Some(Some(api(1, 4, 18))));
     }
 
-    scenarios!("tests/features/migrated/src/config/kafka_release.feature", fixtures = [release: ReleaseCatalogue]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/config/kafka_release.feature",
+        fixtures = [release: ReleaseCatalogue],
+    );
 }

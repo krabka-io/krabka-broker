@@ -1635,7 +1635,7 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
 
 use {
     assert2::check,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 #[derive(Default)]
 struct RefetchDecision {
@@ -1698,10 +1698,30 @@ fn observer_initial(observer_progress: &ObserverProgress) {
             .is_empty()
     );
 }
+#[given("observer 9 has fetched {position} after {advance_ms} milliseconds with log growth {grow}")]
+fn observer_fetched(
+    observer_progress: &mut ObserverProgress,
+    position: String,
+    advance_ms: u64,
+    grow: bool,
+) {
+    record_observer_fetch(observer_progress, &position, advance_ms, grow);
+}
 #[when("observer 9 fetches {position} after {advance_ms} milliseconds with log growth {grow}")]
 fn observer_fetch(
     observer_progress: &mut ObserverProgress,
     position: String,
+    advance_ms: u64,
+    grow: bool,
+) {
+    record_observer_fetch(observer_progress, &position, advance_ms, grow);
+}
+/// Observer 9 fetches at `position` after `advance_ms` of leader time, the
+/// leader's log first growing by one record when `grow` is set, and the
+/// observer row the leader then publishes is kept.
+fn record_observer_fetch(
+    observer_progress: &mut ObserverProgress,
+    position: &str,
     advance_ms: u64,
     grow: bool,
 ) {
@@ -1710,7 +1730,7 @@ fn observer_fetch(
         engine.test_append_and_commit(&topic_record("grows"));
     }
     engine.clock_base -= StdDuration::from_millis(advance_ms);
-    let (epoch, offset) = match position.as_str() {
+    let (epoch, offset) = match position {
         "zero" => (0, 0),
         "previous-end" => (
             engine.core.quorum_state().leader_epoch,
@@ -1756,11 +1776,7 @@ fn observer_current_credit(observer_progress: &ObserverProgress) {
     check!(third_fetch > second_fetch);
     check!(caught_up == third_fetch);
 }
-mod refetch_cases {
-    use super::*;
-    scenarios!("tests/features/migrated/src/kraft/controller/tests_fetch.feature", tags = "@refetch", fixtures = [refetch: RefetchDecision]);
-}
-mod observer_cases {
-    use super::*;
-    scenarios!("tests/features/migrated/src/kraft/controller/tests_fetch.feature", tags = "@observer", fixtures = [observer_progress: ObserverProgress]);
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/controller/tests_fetch.feature",
+    fixtures = [refetch: RefetchDecision, observer_progress: ObserverProgress],
+);

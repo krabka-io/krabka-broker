@@ -266,7 +266,7 @@ fn kafka_records_from(engine: &Engine, start: Offset) -> Vec<KafkaRecord> {
         .collect()
 }
 
-use rstest_bdd_macros::{given, scenarios, then, when};
+use rstest_bdd_macros::{given, then, when};
 
 struct RegistrationHistory {
     engine: Engine,
@@ -299,8 +299,24 @@ fn registration_leader(registration_history: &RegistrationHistory) {
     );
 }
 
+#[given("broker 7 has made registration transitions {transitions}")]
+fn earlier_registration_transitions(
+    registration_history: &mut RegistrationHistory,
+    transitions: String,
+) {
+    for transition in transitions.split(", ") {
+        apply_registration_transition(registration_history, transition);
+    }
+}
+
 #[when("broker 7 performs registration transition {transition}")]
 fn registration_transition(registration_history: &mut RegistrationHistory, transition: String) {
+    apply_registration_transition(registration_history, &transition);
+}
+
+/// Commits one registration transition of broker 7 and keeps the Kafka records
+/// it wrote and the registration it left.
+fn apply_registration_transition(registration_history: &mut RegistrationHistory, transition: &str) {
     use krabka_metadata::{
         BrokerRegistrationChangeRecord, FencingChange, MetadataRecord, UnregisterBrokerRecord,
     };
@@ -318,7 +334,7 @@ fn registration_transition(registration_history: &mut RegistrationHistory, trans
                 broker_epoch: epoch,
             })
         } else {
-            let (fenced, in_controlled_shutdown) = match transition.as_str() {
+            let (fenced, in_controlled_shutdown) = match transition {
                 "unfence" => (FencingChange::Unfence, false),
                 "shutdown" => (FencingChange::None, true),
                 "fence" => (FencingChange::Fence, false),
@@ -433,7 +449,10 @@ fn unregistered_kafka_record(registration_history: &RegistrationHistory) {
     check!(registration_history.registration.is_none());
 }
 
-scenarios!("tests/features/migrated/src/kraft/controller/tests_broker_registration.feature", fixtures = [registration_history: RegistrationHistory]);
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/kraft/controller/tests_broker_registration.feature",
+    fixtures = [registration_history: RegistrationHistory],
+);
 
 /// krabka-io/krabka-broker#1009: a `BrokerRegistrationChangeRecord` built
 /// before the broker registered again names an epoch the broker is no longer

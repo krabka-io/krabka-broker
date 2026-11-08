@@ -95,11 +95,19 @@ fn recovered_persistent_topic(restart_cluster: &RestartCluster) {
             .is_some()
     );
 }
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/kraft_engine_sim/restart.feature",
-    name = "A follower rebuilds its image from checkpoint and log"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn restart_recovers_image(restart_cluster: RestartCluster) {
-    shutdown_nodes(&restart_cluster.net, &restart_cluster.ids).await;
+impl krabka_bdd::World for RestartCluster {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        shutdown_nodes(&self.net, &self.ids).await;
+    }
 }
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/kraft_engine_sim/restart.feature",
+    fixtures = [restart_cluster: RestartCluster],
+    world = restart_cluster,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

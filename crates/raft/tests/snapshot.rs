@@ -59,7 +59,7 @@ fn has_checkpoint(meta_dir: &Path) -> bool {
 
 use {
     rstest::fixture,
-    rstest_bdd_macros::{given, scenario, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct SnapshotCodec {
@@ -173,8 +173,6 @@ fn restored_control_state(codec: &SnapshotCodec) {
     );
 }
 
-scenarios!("tests/features/migrated/tests/snapshot.feature", tags = "@codec", fixtures = [codec: SnapshotCodec]);
-
 struct SnapshotRecovery {
     directory: Option<TempDir>,
     cluster_id: Uuid,
@@ -246,6 +244,12 @@ async fn trigger_snapshot(recovery: &mut SnapshotRecovery) {
     )));
 }
 
+#[given("the operator has taken a manual metadata snapshot")]
+async fn taken_snapshot(recovery: &mut SnapshotRecovery) {
+    trigger_snapshot(recovery).await;
+    snapshot_persisted(recovery);
+}
+
 #[then("the committed topic feature level and voter are present and the checkpoint exists on disk")]
 fn snapshot_persisted(recovery: &SnapshotRecovery) {
     check!(
@@ -314,13 +318,22 @@ fn snapshot_recovered(recovery: &SnapshotRecovery) {
     );
 }
 
-#[scenario(
-    path = "tests/features/migrated/tests/snapshot.feature",
-    name = "A manual snapshot survives a full controller restart"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_then_restart_recovers_image(recovery: SnapshotRecovery) {
-    if let Some(controller) = recovery.controller.take() {
-        controller.shutdown().await;
+impl krabka_bdd::World for SnapshotRecovery {
+    async fn after(
+        &mut self,
+        _scenario: &krabka_bdd::ScenarioSpec,
+        _outcome: &krabka_bdd::Outcome,
+    ) {
+        if let Some(controller) = self.controller.take() {
+            controller.shutdown().await;
+        }
     }
 }
+
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/snapshot.feature",
+    fixtures = [codec: SnapshotCodec, recovery: SnapshotRecovery],
+    world = recovery,
+    runtime = "tokio-multi-thread",
+    workers = 2,
+);

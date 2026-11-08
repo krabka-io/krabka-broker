@@ -399,7 +399,7 @@ mod tests {
         },
         krabka_protocol::records::metadata::KraftMetadataRecord,
         rstest::fixture,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct MetadataCheckpoint {
@@ -504,5 +504,8 @@ mod tests {
         );
     }
 
-    scenarios!("tests/features/migrated/src/snapshot/writer.feature", fixtures = [checkpoint: MetadataCheckpoint]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/snapshot/writer.feature",
+        fixtures = [checkpoint: MetadataCheckpoint],
+    );
 }

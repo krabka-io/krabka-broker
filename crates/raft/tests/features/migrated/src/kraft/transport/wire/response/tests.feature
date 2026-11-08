@@ -9,6 +9,6 @@ Feature: Kafka follower Fetch refusal encoding
     Then the wire bytes equal Kafka's empty Fetch response for leader <wire_leader> with endpoint present <endpoint>
 
     Examples:
-      | known_leader | wire_leader | endpoint |
-      | 2            | 2           | true     |
-      | unknown      | -1          | false    |
+      | case                                 | known_leader | wire_leader | endpoint |
+      | a known leader is published          | 2            | 2           | true     |
+      | an unknown leader hides its endpoint | unknown      | -1          | false    |

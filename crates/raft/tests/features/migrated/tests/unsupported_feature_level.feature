@@ -1,24 +1,33 @@
 Feature: Unsupported finalized feature levels stop controllers without damaging metadata
-  Scenario: a log finalized at an unstable level starts only with the flag on
+
+  Scenario: a log finalized at an unstable level is refused with the flag off
     Given a stopped controller log finalized at unstable metadata version 34
     When the controller rejoins with unstable features disabled
     Then startup reports the exact unsupported feature fault before changing any protected metadata file
+
+  Scenario: a log finalized at an unstable level starts only with the flag on
+    Given a stopped controller log finalized at unstable metadata version 34
+    And the controller has been refused a rejoin with unstable features disabled
     When the same controller log rejoins with unstable features enabled
     Then the recovered controller publishes finalized metadata version 34
+
   Scenario Outline: a level above the recovered high watermark is refused before any write
     Given the finalized unstable log has recovered high watermark <watermark>
     When the controller rejoins with unstable features disabled
     Then startup reports the exact unsupported feature fault before changing any protected metadata file
+
     Examples:
-      | watermark |
-      | at-log-start |
-      | missing |
-      | below-following-record |
+      | case                                       | watermark              |
+      | a watermark at the log start               | at-log-start           |
+      | a missing watermark file                   | missing                |
+      | a watermark below the following record     | below-following-record |
+
   Scenario: a controller stops when it replays a level it does not support
     Given a running controller with unstable features enabled false
     Then the controller has not reported a fatal fault
     When metadata version 34 commits and subsequent submissions observe the controller stopping
     Then the stopped controller rejects changes with Shutdown and publishes the unsupported feature reason
+
   Scenario: a controller that stops for any other reason reports no fault
     Given a running controller with unstable features enabled true
     When metadata version 34 commits and the supported controller shuts down normally

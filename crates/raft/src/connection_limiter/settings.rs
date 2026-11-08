@@ -358,7 +358,7 @@ mod tests {
     use {
         rstest::fixture,
         rstest_bdd::{Slot, datatable::Rows},
-        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        rstest_bdd_macros::{DataTableRow, given, then, when},
     };
 
     struct ConnectionOverrides {
@@ -376,16 +376,16 @@ mod tests {
         }
     }
 
-    #[given("the per-IP connection override text is {quoted}")]
-    fn override_text(quota: &mut ConnectionOverrides, quoted: String) {
-        quota.value = Some(
-            quoted
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .expect("the feature preserves exact whitespace inside double quotes")
-                .to_owned(),
-        );
+    #[given("the per-IP connection override text is {text}")]
+    fn override_text(quota: &mut ConnectionOverrides, text: String) { quota.value = Some(text); }
+
+    #[given("the per-IP connection override text, padded with a space on each side, is {text}")]
+    fn padded_override_text(quota: &mut ConnectionOverrides, text: String) {
+        quota.value = Some(format!(" {text} "));
     }
+
+    #[given("an empty per-IP connection override text")]
+    fn empty_override_text(quota: &mut ConnectionOverrides) { quota.value = Some(String::new()); }
 
     #[when("Kafka per-IP override parsing is applied")]
     fn parse_override_text(quota: &mut ConnectionOverrides) {
@@ -414,5 +414,8 @@ mod tests {
         assert2::assert!(quota.parsed.get() == Some(None));
     }
 
-    scenarios!("tests/features/migrated/src/connection_limiter/settings.feature", fixtures = [quota: ConnectionOverrides]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/connection_limiter/settings.feature",
+        fixtures = [quota: ConnectionOverrides],
+    );
 }

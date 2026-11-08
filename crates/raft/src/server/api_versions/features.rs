@@ -113,7 +113,7 @@ mod tests {
 
     use {
         crate::test_support::feature_image as image,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
     #[derive(Default)]
     struct SupportedFeatures {
@@ -162,7 +162,10 @@ mod tests {
         };
         check!(feature_support.keys.as_ref() == Some(&expected));
     }
-    scenarios!("tests/features/migrated/src/server/api_versions/features.feature", fixtures = [feature_support: SupportedFeatures]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/server/api_versions/features.feature",
+        fixtures = [feature_support: SupportedFeatures],
+    );
 
     /// A feature whose maximum is 0 cannot be finalized above 0, and Kafka
     /// does not advertise it at any version.
