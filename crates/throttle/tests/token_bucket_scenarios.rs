@@ -1,6 +1,6 @@
-//! Gherkin scenarios for the token bucket behind the KIP-612 connection
-//! creation rate: its debt ledger, refill, refunds and whole-token grants,
-//! bound to the features under `tests/features/token_bucket`.
+//! Gherkin scenarios for the token bucket: its debt ledger, refill, refunds
+//! and whole-token grants, bound to the features under
+//! `tests/features/token_bucket`.
 
 mod support;
 

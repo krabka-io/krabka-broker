@@ -73,8 +73,8 @@ pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Parse
     pub quota_throttle_max: Option<Time>,
     /// Whole sampled window of the client quotas, Kafka's `quota.window.num *
     /// quota.window.size.seconds`: the quotas keep `quota_window /
-    /// quota_throttle_max` samples of `quota_throttle_max` each. It also sizes
-    /// the burst of the `connection_creation_rate` token bucket.
+    /// quota_throttle_max` samples of `quota_throttle_max` each. The per-IP
+    /// `connection_creation_rate` is measured over the same window.
     pub quota_window: Option<Time>,
     /// Time window whose throughput defines the KIP-599 controller-mutation
     /// quota burst capacity (default 11 s), Kafka's

@@ -2500,7 +2500,7 @@
         },
         "quota_window": {
           "default": null,
-          "description": "Whole sampled window of the client quotas, Kafka's `quota.window.num *\nquota.window.size.seconds`: the quotas keep `quota_window /\nquota_throttle_max` samples of `quota_throttle_max` each. It also sizes\nthe burst of the `connection_creation_rate` token bucket.",
+          "description": "Whole sampled window of the client quotas, Kafka's `quota.window.num *\nquota.window.size.seconds`: the quotas keep `quota_window /\nquota_throttle_max` samples of `quota_throttle_max` each. The per-IP\n`connection_creation_rate` is measured over the same window.",
           "format": "duration",
           "type": [
             "string",

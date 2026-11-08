@@ -1,17 +1,12 @@
 //! Per-broker cache of quota meters: one [`ClientQuota`] per
-//! (`quota_type`, `entity_key`) pair for the KIP-13 and KIP-124 client quotas,
-//! and one [`TokenBucket`] per `ip` entity for the KIP-612
-//! `connection_creation_rate`.
+//! (`quota_type`, `entity_key`) pair, for the KIP-13 and KIP-124 client quotas
+//! and the KIP-612 `connection_creation_rate` of each `ip` entity.
 
 use {
     super::{IpNames, QuotaType, entity_field},
-    crate::{
-        config::DEFAULT_QUOTA_WINDOW,
-        throttle::{ClientQuota, QuotaWindow, TokenBucket},
-    },
+    crate::throttle::{ClientQuota, QuotaWindow},
     dashmap::DashMap,
     krabka_metadata::EntityKey,
-    krabka_units::Time,
     qubit_clock::{MonotonicClock, MonotonicInstant, StdMonotonicClock},
     std::{
         hash::Hash,
@@ -83,17 +78,15 @@ pub struct LiveMeter<M> {
 #[derive(derive_more::Debug)]
 pub struct QuotaBuckets {
     /// The `producer_byte_rate`, `consumer_byte_rate` and
-    /// `request_percentage` quota of each entity, created on first use as
-    /// Kafka's `ClientQuotaManager.getOrCreateQuotaSensors` creates the
+    /// `request_percentage` quota of each entity, and the
+    /// `connection_creation_rate` of each `ip` entity, created on first use as
+    /// Kafka's `ClientQuotaManager.getOrCreateQuotaSensors` and
+    /// `ConnectionQuotas.getOrCreateConnectionRateQuotaSensor` create the
     /// entity's sensor.
     client_quotas: DashMap<BucketKey, Arc<MeterEntry<ClientQuota>>>,
-    /// The `connection_creation_rate` bucket of each `ip` entity.
-    connection_buckets: DashMap<EntityKey, Arc<MeterEntry<TokenBucket>>>,
     controller_mutations: DashMap<EntityKey, Arc<Mutex<ControllerMutationBucket>>>,
     /// The sample window of every client quota.
     client_quota_window: QuotaWindow,
-    /// The span a `connection_creation_rate` bucket's burst holds.
-    connection_burst_window: Time,
     /// The clock the client quotas measure on and idle meters expire by.
     #[debug(skip)]
     clock: Arc<dyn MonotonicClock>,
@@ -123,21 +116,16 @@ impl QuotaBuckets {
     pub fn new() -> Self { Self::configured().call() }
 
     /// Meters whose client quotas sample over `client_quota_window`, Kafka's
-    /// `quota.window.num` samples of `quota.window.size.seconds`, and whose
-    /// `connection_creation_rate` buckets hold `rate * connection_burst_window`
-    /// tokens. Tests pass a [`qubit_clock::ManualMonotonicClock`] as `clock`.
+    /// `quota.window.num` samples of `quota.window.size.seconds`. Tests pass a [`qubit_clock::ManualMonotonicClock`] as `clock`.
     #[builder]
     pub fn configured(
         #[builder(default)] client_quota_window: QuotaWindow,
-        #[builder(default = DEFAULT_QUOTA_WINDOW)] connection_burst_window: Time,
         #[builder(default = Arc::new(StdMonotonicClock::new()))] clock: Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
             client_quotas: DashMap::new(),
-            connection_buckets: DashMap::new(),
             controller_mutations: DashMap::new(),
             client_quota_window,
-            connection_burst_window,
             clock,
             ip_names: IpNames::default(),
         }
@@ -149,10 +137,6 @@ impl QuotaBuckets {
     #[must_use]
     pub fn client_quota_window(&self) -> QuotaWindow { self.client_quota_window }
 
-    /// The span a `connection_creation_rate` bucket's burst holds.
-    #[must_use]
-    pub fn connection_burst_window(&self) -> Time { self.connection_burst_window }
-
     /// The addresses the image's `ip` quota entity names stand for, which the
     /// quota refresh task keeps current.
     #[must_use]
@@ -160,7 +144,8 @@ impl QuotaBuckets {
 
     /// Returns the client quota for `(quota_type, entity_key)`, and creates it
     /// on first use, bounded at `bound` per second in the unit the quota
-    /// records. `quota_type` is `Produce`, `Fetch` or `Request`.
+    /// records. `quota_type` is `Produce`, `Fetch`, `Request` or
+    /// `ConnectionCreation`; a `ConnectionCreation` key is an `ip` entity.
     #[must_use]
     pub fn client_quota(
         &self,
@@ -177,41 +162,11 @@ impl QuotaBuckets {
         })
     }
 
-    /// Returns the `connection_creation_rate` bucket of the `ip` entity
-    /// `entity_key`, and creates it on first use at `rate` connections per
-    /// second, with a burst of `rate * connection_burst_window`.
-    #[must_use]
-    pub fn connection_bucket(&self, entity_key: &EntityKey, rate: f64) -> Arc<TokenBucket> {
-        get_or_insert(
-            &self.connection_buckets,
-            entity_key.clone(),
-            self.clock.now(),
-            || {
-                let bucket = TokenBucket::new();
-                let rate = super::bucket_rate(rate);
-                bucket.set_byte_rate_with_burst(rate, (rate * self.connection_burst_window).into());
-                bucket
-            },
-        )
-    }
-
     /// Iterates over every live client quota with the key it is stored under.
     /// The refresh task uses it to push new bounds after an image change.
     pub fn client_quotas(&self) -> impl Iterator<Item = LiveMeter<ClientQuota>> + '_ {
         self.client_quotas.iter().map(|r| LiveMeter {
             key: r.key().clone(),
-            entry: Arc::clone(r.value()),
-        })
-    }
-
-    /// Iterates over every live `connection_creation_rate` bucket with the
-    /// key it is stored under.
-    pub fn connection_buckets(&self) -> impl Iterator<Item = LiveMeter<TokenBucket>> + '_ {
-        self.connection_buckets.iter().map(|r| LiveMeter {
-            key: BucketKey {
-                quota_type: QuotaType::ConnectionCreation,
-                entity_key: r.key().clone(),
-            },
             entry: Arc::clone(r.value()),
         })
     }
@@ -226,9 +181,6 @@ impl QuotaBuckets {
         let mut expired = Vec::new();
         retain_active(&self.client_quotas, now, max_age, |key| {
             expired.push(expired_bucket(key.quota_type, &key.entity_key));
-        });
-        retain_active(&self.connection_buckets, now, max_age, |entity_key| {
-            expired.push(expired_bucket(QuotaType::ConnectionCreation, entity_key));
         });
         expired
     }
@@ -254,7 +206,7 @@ impl QuotaBuckets {
 
     #[cfg(test)]
     #[must_use]
-    pub fn len(&self) -> usize { self.client_quotas.len() + self.connection_buckets.len() }
+    pub fn len(&self) -> usize { self.client_quotas.len() }
 
     #[cfg(test)]
     #[must_use]
@@ -308,11 +260,11 @@ fn expired_bucket(quota_type: QuotaType, entity_key: &EntityKey) -> ExpiredBucke
 #[cfg(test)]
 mod tests {
     use {
-        super::{super::bucket_rate, *},
+        super::*,
         assert2::{assert, check},
         krabka_units::{millis, secs},
         qubit_clock::ManualMonotonicClock,
-        std::num::NonZeroU32,
+        std::{iter, num::NonZeroU32},
     };
 
     fn key(user: &str) -> EntityKey { vec![("user".into(), Some(user.into()))] }
@@ -373,7 +325,7 @@ mod tests {
         let buckets = QuotaBuckets::new();
         let _ = buckets.client_quota(QuotaType::Produce, &key("alice"), 1024.0);
         let _ = buckets.client_quota(QuotaType::Fetch, &key("alice"), 2048.0);
-        let _ = buckets.connection_bucket(&key("alice"), 2.0);
+        let _ = buckets.client_quota(QuotaType::ConnectionCreation, &key("alice"), 2.0);
         assert!(buckets.len() == 3);
     }
 
@@ -385,18 +337,18 @@ mod tests {
         assert!(buckets.len() == 2);
     }
 
-    /// A `connection_creation_rate` bucket keeps its token-bucket burst of
-    /// `rate * connection_burst_window`.
+    /// A `connection_creation_rate` is measured like any other client quota:
+    /// a new `ip` entity at 2 connections a second may open 20 at once over
+    /// the ten padded samples, and the 21st is 0.1 a second over, a 500 ms
+    /// throttle.
     #[test]
-    fn a_connection_bucket_bursts_for_its_window() {
-        let buckets = QuotaBuckets::configured()
-            .connection_burst_window(secs(3))
-            .call();
-        let bucket = buckets.connection_bucket(&key("alice"), 2.0);
+    fn a_connection_rate_admits_its_padded_window_at_once() {
+        let (_, buckets) = manual(QuotaWindow::KAFKA_DEFAULT);
+        let quota = buckets.client_quota(QuotaType::ConnectionCreation, &key("alice"), 2.0);
 
-        check!(bucket.byte_rate() == bucket_rate(2.0));
-        check!(bucket.try_consume(6) == 6);
-        check!(bucket.try_consume(1) == 0);
+        let throttles: Vec<_> = iter::repeat_with(|| quota.record(1)).take(21).collect();
+        let expected: Vec<_> = iter::repeat_n(millis(0), 20).chain([millis(500)]).collect();
+        check!(throttles == expected);
     }
 
     /// A meter expires once it has been idle longer than the age, on the
@@ -406,7 +358,7 @@ mod tests {
         let (clock, buckets) = manual(QuotaWindow::KAFKA_DEFAULT);
         let _ = buckets.client_quota(QuotaType::Produce, &key("alice"), 1.0);
         let _ = buckets.client_quota(QuotaType::Produce, &key("bob"), 1.0);
-        let _ = buckets.connection_bucket(&key("carol"), 1.0);
+        let _ = buckets.client_quota(QuotaType::ConnectionCreation, &key("carol"), 1.0);
 
         check!(let Ok(()) = clock.advance(Duration::from_secs(10)));
         let _ = buckets.client_quota(QuotaType::Produce, &key("bob"), 1.0);

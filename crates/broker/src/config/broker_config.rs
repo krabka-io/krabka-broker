@@ -241,7 +241,7 @@ krabka_macros::broker_config! {
         /// Length of one client-quota sample (default 1 s), Kafka's `quota.window.size.seconds`. The `producer_byte_rate`, `consumer_byte_rate` and `request_percentage` quotas sample in samples this long, and it is also the maximum request-quota throttle delay, Kafka's `ClientRequestQuotaManager.maxThrottleTimeMs`, bounding how long one response over `request_percentage` mutes a client. Byte-rate and controller-mutation throttles are not bounded.
         #[default(secs(1))]
         pub quota_throttle_max: Time,
-        /// Whole sampled window of the client quotas (default 11 s), Kafka's `quota.window.num * quota.window.size.seconds`. The quotas keep `quota_window / quota_throttle_max` samples, rounded and at least one, and a new client is measured as if it had been quiet for all but one of them. It also sizes the KIP-612 `connection_creation_rate` token bucket burst: `window x connection_creation_rate` connections.
+        /// Whole sampled window of the client quotas (default 11 s), Kafka's `quota.window.num * quota.window.size.seconds`. The quotas keep `quota_window / quota_throttle_max` samples, rounded and at least one, and a new client is measured as if it had been quiet for all but one of them. The KIP-612 `connection_creation_rate` of each `ip` entity is measured over the same window.
         #[default(DEFAULT_QUOTA_WINDOW)]
         pub quota_window: Time,
         /// Time window sizing the KIP-599 controller-mutation token bucket burst capacity (default 11 s): the bucket holds `window x controller_mutation_rate` tokens. Equivalent to Kafka's `controller.quota.window.num * controller.quota.window.size.seconds`.

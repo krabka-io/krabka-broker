@@ -3,11 +3,8 @@
 use {
     crate::throttle::ClientQuota,
     krabka_metadata::MetadataImage,
-    krabka_units::{
-        ByteRate, Time,
-        convert::{ByteRateExt as _, TimeExt},
-    },
-    num_traits::cast::{NumCast, ToPrimitive as _},
+    krabka_units::{Time, convert::TimeExt},
+    num_traits::cast::NumCast,
     std::{cmp::Ordering, sync::Arc},
 };
 
@@ -186,27 +183,6 @@ pub(crate) fn record_consumer_quota(
 #[must_use]
 pub(crate) fn throttle_time_ms(delay: Time) -> i32 {
     i32::try_from(delay.millis_i64()).unwrap_or(i32::MAX)
-}
-
-/// A raw quota rate as the [`TokenBucket`](crate::throttle::TokenBucket)'s
-/// [`ByteRate`], fractional part included.
-///
-/// The bucket is byte-dimensioned, but the KIP-612 `connection_creation_rate`
-/// it enforces counts connections, not bytes. Its raw magnitude therefore
-/// crosses into the bucket's dimension here, in one place, instead of at each
-/// call site.
-pub(crate) fn bucket_rate(raw: f64) -> ByteRate { ByteRate::from_bytes_per_sec_f64(raw) }
-
-/// A configured rate as a whole token count, truncated toward zero.
-///
-/// Negative and non-finite rates are not throughputs, so they collapse to `0`,
-/// the bucket's "no limit configured" sentinel. Anything past `u64::MAX`
-/// saturates.
-pub(crate) fn positive_f64_to_u64(value: f64) -> u64 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    value.trunc().to_u64().unwrap_or(u64::MAX)
 }
 
 /// A count widened for the quota arithmetic, which Kafka does in doubles.
@@ -508,11 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn quota_rate_conversion_is_checked_and_saturating() {
-        assert!(positive_f64_to_u64(-1.0) == 0);
-        assert!(positive_f64_to_u64(f64::NAN) == 0);
-        assert!(positive_f64_to_u64(10.9) == 10);
-        assert!(positive_f64_to_u64(f64::MAX) == u64::MAX);
+    fn quota_count_widening_is_total() {
         assert!(u64_to_f64(u64::MAX).is_finite());
     }
 

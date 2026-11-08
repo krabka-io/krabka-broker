@@ -5,8 +5,9 @@
 //!    (ip=127.0.0.1) `connection_creation_rate=2.0`, describes it, and
 //!    asserts.
 //! 2. `connection_creation_rate_closes_the_throttled_connection`. Over
-//!    PLAINTEXT with rate=1, a second connection from the same ip closes
-//!    without a response, and a connection from another ip is served at once.
+//!    PLAINTEXT with rate=1 and Kafka's 11-sample quota window, ten
+//!    connections from the same ip are served, the eleventh closes without a
+//!    response, and a connection from another ip is served at once.
 //! 3. `unthrottled_ip_unaffected`. Over PLAINTEXT with no quota, it opens 5
 //!    connections and asserts a wall time <500ms.
 #![cfg(test)]
@@ -29,6 +30,7 @@ use {
     crate::{
         cluster::{
             start_single_broker_plaintext, start_single_broker_plaintext_with_conn_caps,
+            start_single_broker_plaintext_with_kafka_quota_window,
             start_single_broker_sasl_plaintext_with_users,
         },
         kafka_wire::{
@@ -148,10 +150,23 @@ fn described(quotas: &QuotaAdministration) {
     );
 }
 
+/// The loopback address the rate-limited connections come from. No connection
+/// the broker opens to itself uses it, so only the scenario's connections are
+/// recorded on its quota.
+const LIMITED_SOURCE: [u8; 4] = [127, 0, 0, 3];
+
+/// A loopback address with no quota of its own.
+const OTHER_SOURCE: [u8; 4] = [127, 0, 0, 2];
+
+/// How many connections a new `ip` entity at one connection a second may
+/// open at once: Kafka's `Rate` measures it over `quota.window.num - 1` = 10
+/// padded samples of 1 s.
+const SERVED_AT_ONCE: usize = 10;
+
 struct ConnectionRate {
     broker: Option<IpBroker>,
     entity: String,
-    first: Option<io::Result<Vec<u8>>>,
+    served: Vec<io::Result<Vec<u8>>>,
     throttled: Option<io::Result<Vec<u8>>>,
     other: Option<io::Result<Vec<u8>>>,
     other_elapsed: Option<Duration>,
@@ -163,7 +178,7 @@ fn rate() -> ConnectionRate {
     ConnectionRate {
         broker: None,
         entity: String::new(),
-        first: None,
+        served: Vec::new(),
         throttled: None,
         other: None,
         other_elapsed: None,
@@ -185,7 +200,7 @@ async fn connect_from(addr: SocketAddr, source: [u8; 4]) -> TcpStream {
 }
 #[given("IP entity {entity} permits one new connection per second")]
 async fn rate_limit(rate: &mut ConnectionRate, entity: String) {
-    let broker = start_single_broker_plaintext().await;
+    let broker = start_single_broker_plaintext_with_kafka_quota_window().await;
     let record =
         krabka_metadata::MetadataRecord::V1ClientQuota(krabka_metadata::ClientQuotaRecord {
             entity: vec![krabka_metadata::QuotaEntity {
@@ -211,31 +226,34 @@ async fn rate_limit(rate: &mut ConnectionRate, entity: String) {
                 .is_some()
         })
         .await;
-    // Broker-internal connections may have spent the first token.
-    time::sleep(Duration::from_millis(1_100)).await;
     rate.broker = Some(broker);
     rate.entity = entity;
 }
 #[when(
-    "two loopback connections request API versions while another loopback IP requests them independently"
+    "eleven connections from the limited IP request API versions while another loopback IP requests them independently"
 )]
 async fn concurrent_ips(rate: &mut ConnectionRate) {
     let addr = rate.broker.as_ref().expect("rate limit configured").2;
-    let mut first = connect_from(addr, [127, 0, 0, 1]).await;
-    rate.first = Some(
-        kafka_wire::round_trip()
-            .stream(&mut first)
-            .client_id(CLIENT_ID)
-            .body(&api_versions())
-            .call()
-            .await,
-    );
-    let mut throttled = connect_from(addr, [127, 0, 0, 1]).await;
+    let mut held = Vec::new();
+    for correlation in 0..SERVED_AT_ONCE {
+        let mut stream = connect_from(addr, LIMITED_SOURCE).await;
+        rate.served.push(
+            kafka_wire::round_trip()
+                .stream(&mut stream)
+                .correlation(i32::try_from(correlation).expect("small correlation"))
+                .client_id(CLIENT_ID)
+                .body(&api_versions())
+                .call()
+                .await,
+        );
+        held.push(stream);
+    }
+    let mut throttled = connect_from(addr, LIMITED_SOURCE).await;
     let body = api_versions();
     let task = tokio::spawn(async move {
         kafka_wire::round_trip()
             .stream(&mut throttled)
-            .correlation(2)
+            .correlation(100)
             .client_id(CLIENT_ID)
             .body(&body)
             .call()
@@ -244,11 +262,11 @@ async fn concurrent_ips(rate: &mut ConnectionRate) {
     // Preserve accept ordering before probing an independent address.
     time::sleep(Duration::from_millis(100)).await;
     let started = Instant::now();
-    let mut other = connect_from(addr, [127, 0, 0, 2]).await;
+    let mut other = connect_from(addr, OTHER_SOURCE).await;
     rate.other = Some(
         kafka_wire::round_trip()
             .stream(&mut other)
-            .correlation(3)
+            .correlation(101)
             .client_id(CLIENT_ID)
             .body(&api_versions())
             .call()
@@ -261,17 +279,16 @@ async fn concurrent_ips(rate: &mut ConnectionRate) {
             .expect("throttled connection closes after throttle")
             .expect("round-trip task"),
     );
-    drop((first, other));
+    drop((held, other));
 }
 #[then(
-    "the first connection is served the second closes without a response and the other IP is served within five hundred milliseconds"
+    "the first ten connections are served the eleventh closes without a response and the other IP is served within five hundred milliseconds"
 )]
 fn rate_outcomes(rate: &ConnectionRate) {
-    let first = rate
-        .first
-        .as_ref()
-        .expect("first connection requested API versions");
-    assert!(first.is_ok(), "first connection is served: {first:?}");
+    assert!(rate.served.len() == SERVED_AT_ONCE);
+    for (index, served) in rate.served.iter().enumerate() {
+        assert!(served.is_ok(), "connection {index} is served: {served:?}");
+    }
     let other = rate
         .other
         .as_ref()
@@ -285,7 +302,7 @@ fn rate_outcomes(rate: &ConnectionRate) {
     let refused = rate
         .throttled
         .as_ref()
-        .expect("second connection completed");
+        .expect("eleventh connection completed");
     assert!(
         refused.as_ref().is_err_and(|error| matches!(
             error.kind(),

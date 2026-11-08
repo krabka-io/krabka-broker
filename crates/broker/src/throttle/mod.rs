@@ -1,6 +1,6 @@
 //! KIP-73 throttled replication: the value types and the parser.
 
-pub use krabka_throttle::{ClientQuota, QuotaWindow, ReplicationQuota, ThrottleState, TokenBucket};
+pub use krabka_throttle::{ClientQuota, QuotaWindow, ReplicationQuota, ThrottleState};
 use std::collections::BTreeSet;
 
 mod refresh;

@@ -29,3 +29,20 @@ pub async fn start_single_broker_plaintext_with_conn_caps(
     })
     .await
 }
+
+/// Starts a single-broker PLAINTEXT cluster whose client quotas measure over
+/// Kafka's default window, 11 samples of 1 s, rather than the one sample the
+/// test config sets. Returns `(handle, _dir, addr)`.
+///
+/// Kafka's `Rate` pads a window to `quota.window.num - 1` samples, so with
+/// one sample a new `ip` entity's first connection is measured over 1 ms and
+/// throttled at any rate. Kafka's default window lets a rate of one a second
+/// admit ten connections at once and throttle the eleventh.
+pub async fn start_single_broker_plaintext_with_kafka_quota_window()
+-> (BrokerHandle, TempDir, SocketAddr) {
+    start_plaintext_configured(|cfg| {
+        cfg.quota_window = krabka_units::secs(11);
+        cfg.quota_throttle_max = krabka_units::secs(1);
+    })
+    .await
+}

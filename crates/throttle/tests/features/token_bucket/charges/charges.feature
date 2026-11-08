@@ -1,10 +1,9 @@
 Feature: A token bucket charges every recording in full and keeps the overage as debt
 
-  The broker's token bucket refills at its rate and holds a burst of it. It
-  backs the KIP-612 connection creation rate, max.connection.creation.rate and
-  an ip entity's connection_creation_rate, as tests/features/token_bucket/grants
-  shows. The sampled KIP-13 and KIP-124 client quotas are not token buckets:
-  tests/features/client_quota documents them.
+  The token bucket refills at its rate and holds a burst of it. The broker's
+  quotas are not token buckets: the sampled KIP-13 and KIP-124 client quotas
+  and the KIP-612 connection_creation_rate are documented in
+  tests/features/client_quota.
 
   A bucket metered in bytes counts one token per byte. A recording takes its
   whole charge whether or not the balance covers it. What the balance cannot

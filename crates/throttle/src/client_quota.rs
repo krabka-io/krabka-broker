@@ -2,11 +2,12 @@
 //! sensor of Kafka's `ClientQuotaManager` over a `Rate`.
 //!
 //! The broker keeps one per quota entity and quota type:
-//! `producer_byte_rate`, `consumer_byte_rate` and `request_percentage`. A
-//! request is recorded in full and then checked, as Kafka's
-//! `recordAndGetThrottleTimeMs` records with `checkQuotas` set, so a request
-//! over the quota still counts, and the requests after it pay for it until
-//! its sample leaves the window.
+//! `producer_byte_rate`, `consumer_byte_rate` and `request_percentage`, and
+//! the KIP-612 `connection_creation_rate` of each `ip` entity, which Kafka's
+//! `ConnectionQuotas` measures with the same sensor. A request is recorded in
+//! full and then checked, as Kafka's `recordAndGetThrottleTimeMs` records
+//! with `checkQuotas` set, so a request over the quota still counts, and the
+//! requests after it pay for it until its sample leaves the window.
 //!
 //! The measurement is [`SampledRate`] with the `Rate` window size: a young
 //! window is padded to `quota.window.num - 1` whole samples, so a new client

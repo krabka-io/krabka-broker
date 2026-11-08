@@ -1,8 +1,8 @@
 # krabka-throttle
 
-Shared throttling primitives for the broker: the KIP-13 and KIP-124 client
-quota, the KIP-73 replication quota, and the token bucket behind the KIP-612
-connection creation rate.
+Shared throttling primitives for the broker: the client quota behind KIP-13,
+KIP-124 and the KIP-612 `connection_creation_rate`, the KIP-73 replication
+quota, and a token bucket.
 
 Part of [krabka-broker](../../README.md), an Apache Kafka-compatible broker
 written in Rust.
@@ -12,7 +12,8 @@ written in Rust.
 `ClientQuota` and `ReplicationQuota` both measure with `SampledRate`, a port of
 Kafka's `SampledStat` with its `WindowedSum`. `ClientQuota` is the quota sensor
 of Kafka's `ClientQuotaManager` over a `Rate`, for `producer_byte_rate`,
-`consumer_byte_rate` and `request_percentage`. `ReplicationQuota` is a port of
+`consumer_byte_rate`, `request_percentage` and the per-IP
+`connection_creation_rate`. `ReplicationQuota` is a port of
 Kafka's `ReplicationQuotaManager` over a `SimpleRate`. Both default to 11
 samples of one second each, and `QuotaWindow` sets that window.
 `ThrottleState` bundles the three replication quotas the broker meters:

@@ -1,9 +1,10 @@
 Feature: A token bucket grants whole tokens from its balance
 
-  KIP-612. The broker meters max.connection.creation.rate and an ip entity's
-  connection_creation_rate with a token bucket of one token per connection.
-  The acceptor asks the bucket for one token per new connection and throttles
-  the connection when the bucket grants none.
+  A caller that meters one token per event, such as one per new connection,
+  asks the bucket for tokens and holds the event back when it grants none.
+  The broker's KIP-612 connection rates do not use it: an ip entity's
+  connection_creation_rate is a sampled client quota, documented in
+  tests/features/client_quota.
 
   Rule: A grant takes whole tokens from the balance
 

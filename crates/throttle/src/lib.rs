@@ -1,6 +1,6 @@
-//! Shared throttling primitives: the KIP-13 and KIP-124 client quota, the
-//! KIP-73 replication quota, and the token bucket behind the KIP-612
-//! connection rate.
+//! Shared throttling primitives: the client quota behind KIP-13, KIP-124 and
+//! the KIP-612 `connection_creation_rate`, the KIP-73 replication quota, and
+//! a token bucket.
 
 mod client_quota;
 mod replication_quota;
