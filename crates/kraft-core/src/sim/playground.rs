@@ -120,7 +120,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         rstest::fixture,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     fn step_until<F: Fn(&Sim) -> bool>(sim: &mut Sim, max: usize, done: F) {
@@ -280,6 +280,13 @@ mod tests {
         playground.appended = Some(playground.sim().append(2));
     }
 
+    #[given("a playground append has been refused without a leader")]
+    fn refused_append(playground: &mut Playground) {
+        fresh_cluster(playground);
+        append_without_leader(playground);
+        append_refused(playground);
+    }
+
     #[then("the playground refuses the append without a leader")]
     fn append_refused(playground: &Playground) {
         assert!(playground.appended == Some(false));
@@ -300,5 +307,5 @@ mod tests {
         assert!(playground.log_after == playground.log_before + 2);
     }
 
-    scenarios!("tests/features/migrated/src/sim/playground.feature", fixtures = [playground: Playground]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/sim/playground.feature", fixtures = [playground: Playground]);
 }

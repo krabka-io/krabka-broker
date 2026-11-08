@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(test)]
-use std::vec;
 
 /// `Partition.isReplicaIsrEligible` and `isBrokerEpochIsrEligible`.
 #[yare::parameterized(
@@ -28,7 +26,7 @@ fn replica_isr_eligibility_follows_kip_841(facts: IsrEligibilityFacts, expected:
 use {
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct IsrCandidate {
@@ -112,4 +110,4 @@ fn candidate_membership(candidate: &IsrCandidate, selected: bool) {
     assert2::check!(candidate.selected == Some(selected));
 }
 
-scenarios!("tests/features/migrated/src/isr/tests/replica_isr_eligibility_follows_kip_841.feature", fixtures = [candidate: IsrCandidate]);
+krabka_bdd::scenarios!("tests/features/migrated/src/isr/tests/replica_isr_eligibility_follows_kip_841.feature", fixtures = [candidate: IsrCandidate]);

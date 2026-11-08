@@ -9,7 +9,7 @@ Feature: Follower catch-up credit and ISR maintenance
     Then the follower receives caught-up credit for <credit>
 
     Examples:
-      | boundary                | current_end | previous_end | fetch_offset | credit             |
+      | case                    | current_end | previous_end | fetch_offset | credit             |
       | reaches current end     | 120         | 100          | 120          | this-fetch         |
       | reaches previous end    | 120         | 100          | 100          | the-previous-fetch |
       | below both ends         | 120         | 100          | 99           | neither-fetch      |

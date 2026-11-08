@@ -2,8 +2,7 @@ use {
     super::*,
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 #[derive(Default)]
@@ -148,4 +147,4 @@ fn removed_remote_prefix(retention: &RetentionPasses, count: usize) {
     check!(retention.remote_prefixes == Some((count, 0)));
 }
 
-scenarios!("tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature", fixtures = [retention: RetentionPasses]);
+krabka_bdd::scenarios!("tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature", fixtures = [retention: RetentionPasses]);

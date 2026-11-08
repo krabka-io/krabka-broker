@@ -9,7 +9,7 @@ Feature: Kafka retention cuts and ordered segment deletion
     Then the held barrier cut has expired: <expired>
 
     Examples:
-      | boundary | published | retained | held | expired |
+      | case     | published | retained | held | expired |
       | before expiry | 10 | 3 | 6 | true |
       | at expiry | 10 | 3 | 7 | true |
       | after expiry | 10 | 3 | 8 | false |

@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::vec;
 use {super::*, crate::log_index::IndexEntry};
 
 #[yare::parameterized(
@@ -75,7 +73,7 @@ fn offset_and_time_index_entries_are_strict_and_bounded() {
 use {
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct RestoredTransactions {
@@ -131,7 +129,7 @@ fn transaction_index_validity(index: &RestoredTransactions, valid: bool) {
     check!(index.valid == Some(valid));
 }
 
-scenarios!("tests/features/migrated/src/restore_sidecar/tests/index_frontier_is_the_u32_relative_span.feature", fixtures = [index: RestoredTransactions]);
+krabka_bdd::scenarios!("tests/features/migrated/src/restore_sidecar/tests/index_frontier_is_the_u32_relative_span.feature", fixtures = [index: RestoredTransactions]);
 
 #[test]
 fn leader_epoch_entries_are_strict_and_bounded() {

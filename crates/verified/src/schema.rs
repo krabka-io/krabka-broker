@@ -128,7 +128,7 @@ pub fn schema_batch_admission(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, std::vec};
+    use {super::*, assert2::check};
 
     #[yare::parameterized(
         unknown = { SchemaFailureKind::Unknown, SchemaFailureDecision::Reject },
@@ -216,7 +216,7 @@ mod tests {
         check!(field.action == Some(expected));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/migrated/src/schema.feature", fixtures = [field: SchemaFieldScenario]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/schema.feature", fixtures = [field: SchemaFieldScenario]);
 
     #[yare::parameterized(
         empty = { true, 0, 0, SchemaBatchAdmission::Admit },

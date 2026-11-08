@@ -6,8 +6,6 @@
 //! pair that an `OffsetForLeaderEpoch` row carries and that a `Fetch` row's
 //! `diverging_epoch` is built from.
 
-#[cfg(test)]
-use std::vec;
 use {
     creusot_std::prelude::*,
     krabka_ids::{LeaderEpoch, Offset},
@@ -244,7 +242,7 @@ mod tests {
         assert2::check!(checkpoint.answer == Some((LeaderEpoch(found), Offset(end))));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/migrated/src/leader_epoch.feature", fixtures = [checkpoint: EpochLookup]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/leader_epoch.feature", fixtures = [checkpoint: EpochLookup]);
 
     proptest! {
         #[test]

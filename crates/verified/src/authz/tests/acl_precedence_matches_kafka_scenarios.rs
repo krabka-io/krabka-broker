@@ -5,7 +5,7 @@ use {
         acl_operation_match, acl_resource_match, check, request_auth_admission,
     },
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct AclScenario {
@@ -199,4 +199,4 @@ fn admission_result(acl: &AclScenario, matches: bool) {
     check!(acl.matches == Some(matches));
 }
 
-scenarios!("tests/features/acl", fixtures = [acl: AclScenario]);
+krabka_bdd::scenarios!("tests/features/acl", fixtures = [acl: AclScenario]);

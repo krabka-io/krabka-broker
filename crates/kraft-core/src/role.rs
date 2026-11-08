@@ -172,7 +172,7 @@ mod tests {
     use {
         rstest::fixture,
         rstest_bdd::datatable::Rows,
-        rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+        rstest_bdd_macros::{DataTableRow, given, then, when},
     };
 
     #[derive(DataTableRow)]
@@ -224,7 +224,7 @@ mod tests {
         assert!(follower.progress.as_ref() == Some(&expected));
     }
 
-    scenarios!("tests/features/migrated/src/role.feature", fixtures = [follower: FollowerProgress]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/role.feature", fixtures = [follower: FollowerProgress]);
 
     /// `LeaderState.isReplicaCaughtUp`: caught up at some point, and fetched
     /// within the last hour.

@@ -162,7 +162,7 @@ mod tests {
     use {
         super::*,
         rstest::fixture,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct Catalogue {
@@ -230,5 +230,5 @@ mod tests {
         assert2::assert!(leaders == 1);
     }
 
-    scenarios!("tests/features/migrated/src/sim/curated.feature", fixtures = [catalogue: Catalogue]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/sim/curated.feature", fixtures = [catalogue: Catalogue]);
 }

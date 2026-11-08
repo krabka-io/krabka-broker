@@ -7,26 +7,26 @@ Feature: Kafka ACL authorization
     When the ACL decision is evaluated
     Then authorization is <decision>
     Examples:
-      | principal | entries | default_policy | decision |
-      | regular | none | deny | denied because no ACL grants access |
-      | regular | allow | deny | allowed by a matching ACL |
-      | regular | deny | deny | denied by an explicit ACL |
-      | regular | allow-and-deny | deny | denied by an explicit ACL |
-      | superuser | deny | deny | allowed by superuser status |
-      | regular | none | allow | allowed because no ACL applies |
-      | regular | deny | allow | denied by an explicit ACL |
-      | regular | allow | allow | allowed by a matching ACL |
+      | case                                                    | principal | entries        | default_policy | decision                            |
+      | no matching entry under a deny-by-default policy        | regular   | none           | deny           | denied because no ACL grants access |
+      | a matching allow entry under a deny-by-default policy   | regular   | allow          | deny           | allowed by a matching ACL           |
+      | a matching deny entry under a deny-by-default policy    | regular   | deny           | deny           | denied by an explicit ACL           |
+      | a deny entry wins over a matching allow entry           | regular   | allow-and-deny | deny           | denied by an explicit ACL           |
+      | a superuser overrides a matching deny entry             | superuser | deny           | deny           | allowed by superuser status         |
+      | no matching entry under an allow-by-default policy      | regular   | none           | allow          | allowed because no ACL applies      |
+      | a matching deny entry under an allow-by-default policy  | regular   | deny           | allow          | denied by an explicit ACL           |
+      | a matching allow entry under an allow-by-default policy | regular   | allow          | allow          | allowed by a matching ACL           |
 
   Scenario Outline: An exact identity or wildcard makes an ACL applicable
     Given an ACL <identity> entry <stored> is checked against <requested>
     When the ACL identity is matched
     Then the ACL applies: <applies>
     Examples:
-      | identity | stored | requested | applies |
-      | principal | User:alice | User:alice | true |
-      | principal | * | User:alice | true |
-      | principal | User:bob | User:alice | false |
-      | host | * | 127.0.0.1 | true |
+      | case                  | identity  | stored     | requested  | applies |
+      | an exact principal    | principal | User:alice | User:alice | true    |
+      | a wildcard principal  | principal | *          | User:alice | true    |
+      | a different principal | principal | User:bob   | User:alice | false   |
+      | a wildcard host       | host      | *          | 127.0.0.1  | true    |
 
   Scenario: Resource type and literal or prefixed names decide ACL applicability (1: case literal exact, pattern Literal)
     Given a Literal ACL on topic named orders is checked against topic named orders

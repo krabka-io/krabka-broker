@@ -2,8 +2,7 @@ use {
     super::*,
     assert2::assert,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct SequenceArithmetic {
@@ -139,4 +138,4 @@ fn producer_outcome(producer: &ProducerAdmission, decision: String) {
     assert!(producer.actual == Some(expected));
 }
 
-scenarios!("tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature", fixtures = [arithmetic: SequenceArithmetic, producer: ProducerAdmission]);
+krabka_bdd::scenarios!("tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature", fixtures = [arithmetic: SequenceArithmetic, producer: ProducerAdmission]);

@@ -9,19 +9,19 @@ Feature: Kafka producer sequence continuity and retry admission
     Then the incremented sequence is <incremented> and the decremented sequence is <decremented>
 
     Examples:
-      | sequence | step | incremented | decremented |
-      | 0 | 0 | 0 | 0 |
-      | 5 | 3 | 8 | 2 |
-      | 2147483647 | 1 | 0 | 2147483646 |
-      | 2147483646 | 3 | 1 | 2147483643 |
-      | 0 | 1 | 1 | 2147483647 |
-      | 2 | 5 | 7 | 2147483645 |
-      | 2147483647 | 2147483647 | 2147483646 | 0 |
-      | -1 | 1 | 0 | 2147483646 |
-      | -2147483648 | -1 | 2147483647 | 1 |
-      | -2147483648 | -2147483648 | 0 | 0 |
-      | 5 | -2147483648 | 5 | 5 |
-      | -3 | 2147483647 | 2147483644 | 2147483646 |
+      | case                                                 | sequence    | step        | incremented | decremented |
+      | a zero step leaves the sequence unchanged            | 0           | 0           | 0           | 0           |
+      | a small step stays in range                          | 5           | 3           | 8           | 2           |
+      | incrementing the maximum wraps to zero               | 2147483647  | 1           | 0           | 2147483646  |
+      | incrementing past the maximum wraps by the remainder | 2147483646  | 3           | 1           | 2147483643  |
+      | decrementing zero wraps to the maximum               | 0           | 1           | 1           | 2147483647  |
+      | decrementing past zero wraps by the remainder        | 2           | 5           | 7           | 2147483645  |
+      | the maximum stepped by the maximum                   | 2147483647  | 2147483647  | 2147483646  | 0           |
+      | a negative sequence                                  | -1          | 1           | 0           | 2147483646  |
+      | the minimum stepped by a negative step               | -2147483648 | -1          | 2147483647  | 1           |
+      | the minimum stepped by the minimum                   | -2147483648 | -2147483648 | 0           | 0           |
+      | a minimum step leaves the sequence unchanged         | 5           | -2147483648 | 5           | 5           |
+      | a negative sequence stepped by the maximum           | -3          | 2147483647  | 2147483644  | 2147483646  |
 
   Scenario: Epoch and retained batch boundaries decide append, retry, fence or refusal (1: boundary no state, snapshot absent)
     Given producer snapshot absent with retained sequence ranges unused,0,1-2,3,4-6

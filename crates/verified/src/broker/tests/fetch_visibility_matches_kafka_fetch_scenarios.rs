@@ -1,7 +1,7 @@
 use {
     super::{FetchReader, FetchVisibility, FetchWatermarks, Isolation, fetch_visibility},
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct FetchScenario {
@@ -115,4 +115,4 @@ fn fetch_reported_watermarks(fetch: &FetchScenario, response_hw: i64, response_l
     );
 }
 
-scenarios!("tests/features/fetch_visibility", fixtures = [fetch: FetchScenario]);
+krabka_bdd::scenarios!("tests/features/fetch_visibility", fixtures = [fetch: FetchScenario]);

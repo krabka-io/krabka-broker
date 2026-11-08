@@ -6,7 +6,7 @@ use {
     assert2::assert,
     rstest::fixture,
     rstest_bdd::{Slot, datatable::Rows},
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 #[derive(DataTableRow)]
@@ -145,4 +145,4 @@ fn no_subscriber(assignment: &AssignmentScenario) {
 fn selected_subscriber(assignment: &AssignmentScenario, index: usize) {
     assert!(assignment.selected.get() == Some(Some(index)));
 }
-scenarios!("tests/features/uniform_quotas", fixtures = [assignment: AssignmentScenario]);
+krabka_bdd::scenarios!("tests/features/uniform_quotas", fixtures = [assignment: AssignmentScenario]);

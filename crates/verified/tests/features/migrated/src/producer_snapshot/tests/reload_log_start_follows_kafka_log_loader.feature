@@ -8,11 +8,11 @@ Feature: Kafka producer-state snapshot reload
     Then producer-state reload starts at offset <start>
 
     Examples:
-      | remote | checkpoint | local | start |
-      | true | 3 | 8 | 3 |
-      | true | none | 8 | 0 |
-      | false | 3 | 8 | 8 |
-      | false | none | 8 | 8 |
+      | case                                               | remote | checkpoint | local | start |
+      | remote storage starts at the checkpoint            | true   | 3          | 8     | 3     |
+      | remote storage without a checkpoint starts at zero | true   | none       | 8     | 0     |
+      | a local log ignores the checkpoint                 | false  | 3          | 8     | 8     |
+      | a local log without a checkpoint                   | false  | none       | 8     | 8     |
 
   Scenario Outline: Reload excludes the start boundary and includes the log end
     Given a producer reload range starting at 5 and ending at 10
@@ -20,7 +20,7 @@ Feature: Kafka producer-state snapshot reload
     Then the snapshot is retained for reload: <kept>
 
     Examples:
-      | boundary | offset | kept |
+      | case     | offset | kept |
       | below start | 4 | false |
       | at start | 5 | false |
       | inside range | 6 | true |
@@ -30,11 +30,11 @@ Feature: Kafka producer-state snapshot reload
 
   Scenario Outline: Stray removal preserves segment-aligned snapshots and the newest clean-shutdown snapshot
     Given snapshot offsets <snapshots> and segment bases <bases>
-    When the loader classifies every snapshot as stray or retained
+    When the loader classifies every snapshot for stray removal
     Then the snapshot removal decisions are <decisions>
 
     Examples:
-      | boundary | snapshots | bases | decisions |
+      | case     | snapshots | bases | decisions |
       | all aligned | 0,4,8 | 0,4,8 | keep,keep,keep |
       | older strays | 2,4,6 | 0,4,8 | remove,keep,remove |
       | clean shutdown | 4,8,11 | 0,4,8 | keep,keep,keep |
@@ -49,7 +49,7 @@ Feature: Kafka producer-state snapshot reload
     Then the selected snapshot index is <selected>
 
     Examples:
-      | boundary | start | end | snapshots | selected |
+      | case     | start | end | snapshots | selected |
       | no snapshots | 5 | 10 | empty | none |
       | all unusable | 5 | 10 | 3,5,11,-1 | none |
       | unsorted offsets | 5 | 10 | 6,10,7,12 | 1 |

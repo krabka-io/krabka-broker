@@ -1,7 +1,4 @@
 use super::*;
-#[cfg(test)]
-use std::vec;
-
 #[yare::parameterized(
     scanned_live = { true, RestoreSnapshotState::Live, RestoreReconcileDecision::Keep },
     scanned_delete_started = {
@@ -49,7 +46,7 @@ fn batch_step_is_contiguous_and_overflow_safe() {
 use {
     rstest::fixture,
     rstest_bdd::{Slot, datatable::Rows},
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct RestoredBatch {
@@ -179,4 +176,4 @@ fn rejected_header(batch: &RestoredBatch) {
     check!(batch.frontier.get() == Some(None));
 }
 
-scenarios!("tests/features/migrated/src/restore/tests/archive_reconciliation_covers_every_scan_and_snapshot_pair.feature", fixtures = [batch: RestoredBatch]);
+krabka_bdd::scenarios!("tests/features/migrated/src/restore/tests/archive_reconciliation_covers_every_scan_and_snapshot_pair.feature", fixtures = [batch: RestoredBatch]);

@@ -94,15 +94,15 @@ Feature: Transaction timeout and producer identity decisions
     Then the allocated producer identity is <allocated>
 
     Examples:
-      | verified | recovery | epoch | fresh | allocated |
-      | false | false | 32767 | none | 7:32767 |
-      | false | true | 32767 | 11 | 7:32767 |
-      | true | false | 32765 | none | 7:32766 |
-      | true | false | 32766 | none | unavailable |
-      | true | false | 32766 | 11 | 11:0 |
-      | true | true | 32766 | none | 7:32767 |
-      | true | true | 32767 | none | unavailable |
-      | true | true | 32767 | 11 | 11:0 |
+      | case                                                             | verified | recovery | epoch | fresh | allocated   |
+      | an unverified identity keeps the exhausted epoch                 | false    | false    | 32767 | none  | 7:32767     |
+      | an unverified identity in recovery keeps its epoch               | false    | true     | 32767 | 11    | 7:32767     |
+      | a verified identity below the ceiling bumps its epoch            | true     | false    | 32765 | none  | 7:32766     |
+      | a verified identity at the ceiling without a replacement ID      | true     | false    | 32766 | none  | unavailable |
+      | a verified identity at the ceiling rotates to the replacement ID | true     | false    | 32766 | 11    | 11:0        |
+      | recovery at the ceiling bumps to the exhausted epoch             | true     | true     | 32766 | none  | 7:32767     |
+      | recovery at the exhausted epoch without a replacement ID         | true     | true     | 32767 | none  | unavailable |
+      | recovery at the exhausted epoch rotates to the replacement ID    | true     | true     | 32767 | 11    | 11:0        |
 
   Scenario: InitProducerId distinguishes identity bumps from retries and fenced callers (1: entry_pid 7, entry_epoch 4)
     Given a producer entry with ID 7, epoch 4, last epoch -1, and previous ID -1

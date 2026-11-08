@@ -74,7 +74,7 @@ mod tests {
         super::*,
         assert2::check,
         rstest::fixture,
-        rstest_bdd_macros::{given, scenarios, then, when},
+        rstest_bdd_macros::{given, then, when},
     };
 
     struct NodeTimers {
@@ -110,5 +110,5 @@ mod tests {
         check!(timers.heartbeat_millis == Some(300));
     }
 
-    scenarios!("tests/features/migrated/src/sim/node.feature", fixtures = [timers: NodeTimers]);
+    krabka_bdd::scenarios!("tests/features/migrated/src/sim/node.feature", fixtures = [timers: NodeTimers]);
 }

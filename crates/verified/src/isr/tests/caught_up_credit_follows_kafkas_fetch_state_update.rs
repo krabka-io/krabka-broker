@@ -1,8 +1,7 @@
 use {
     super::*,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct FollowerIsr {
@@ -94,4 +93,4 @@ fn selected_member(follower: &FollowerIsr, selected: bool) {
     assert2::check!(follower.selected == Some(selected));
 }
 
-scenarios!("tests/features/migrated/src/isr/tests/caught_up_credit_follows_kafkas_fetch_state_update.feature", fixtures = [follower: FollowerIsr]);
+krabka_bdd::scenarios!("tests/features/migrated/src/isr/tests/caught_up_credit_follows_kafkas_fetch_state_update.feature", fixtures = [follower: FollowerIsr]);

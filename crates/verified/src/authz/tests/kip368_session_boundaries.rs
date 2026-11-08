@@ -1,8 +1,7 @@
 use {
     super::*,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{given, then, when},
 };
 
 #[derive(Default)]
@@ -86,4 +85,4 @@ fn reauthentication_admitted(session: &SessionBoundary, begins: bool) {
     check!(session.reauthentication == Some(begins));
 }
 
-scenarios!("tests/features/migrated/src/authz/tests/kip368_session_boundaries.feature", fixtures = [session: SessionBoundary]);
+krabka_bdd::scenarios!("tests/features/migrated/src/authz/tests/kip368_session_boundaries.feature", fixtures = [session: SessionBoundary]);

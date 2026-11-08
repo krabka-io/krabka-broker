@@ -1,7 +1,4 @@
 use super::*;
-#[cfg(test)]
-use std::vec;
-
 #[test]
 fn reclaim_needs_the_grace_period_and_no_reference() {
     check!(diskless_object_reclaimable(false, true));
@@ -42,7 +39,7 @@ fn trim_is_bounded_non_regressing_and_overflow_safe(
 use {
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct DisklessRetention {
@@ -141,4 +138,4 @@ fn expired_prefix(retention: &DisklessRetention, count: usize) {
     check!(retention.prefix == Some(count));
 }
 
-scenarios!("tests/features/migrated/src/diskless/tests/reclaim_needs_the_grace_period_and_no_reference.feature", fixtures = [retention: DisklessRetention]);
+krabka_bdd::scenarios!("tests/features/migrated/src/diskless/tests/reclaim_needs_the_grace_period_and_no_reference.feature", fixtures = [retention: DisklessRetention]);

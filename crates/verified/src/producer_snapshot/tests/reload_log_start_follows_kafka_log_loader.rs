@@ -2,8 +2,7 @@ use {
     super::*,
     rstest::fixture,
     rstest_bdd::{Slot, datatable::Rows},
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 #[derive(Default)]
@@ -98,7 +97,7 @@ fn snapshot_inventory(reload: &mut SnapshotReload, snapshots: String, bases: Str
     reload.bases = offsets(&bases);
 }
 
-#[when("the loader classifies every snapshot as stray or retained")]
+#[when("the loader classifies every snapshot for stray removal")]
 fn classify_snapshots(reload: &mut SnapshotReload) {
     reload.removed = Some(
         (0..reload.offsets.len())
@@ -185,4 +184,4 @@ fn valid_entry(reload: &SnapshotReload, valid: bool) {
     assert2::check!(reload.valid == Some(valid));
 }
 
-scenarios!("tests/features/migrated/src/producer_snapshot/tests/reload_log_start_follows_kafka_log_loader.feature", fixtures = [reload: SnapshotReload]);
+krabka_bdd::scenarios!("tests/features/migrated/src/producer_snapshot/tests/reload_log_start_follows_kafka_log_loader.feature", fixtures = [reload: SnapshotReload]);

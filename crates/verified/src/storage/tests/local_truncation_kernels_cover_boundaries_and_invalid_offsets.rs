@@ -64,7 +64,7 @@ fn future_log_swap_requires_equal_frontiers() {
 use {
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct RemoteLifecycles {
@@ -179,7 +179,7 @@ fn partition_permissions(
     assert2::check!(actual.as_slice() == expected.as_slice());
 }
 
-scenarios!("tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature", fixtures = [lifecycle: RemoteLifecycles]);
+krabka_bdd::scenarios!("tests/features/migrated/src/storage/tests/local_truncation_kernels_cover_boundaries_and_invalid_offsets.feature", fixtures = [lifecycle: RemoteLifecycles]);
 
 #[yare::parameterized(
     cannot_resurrect = {

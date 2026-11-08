@@ -2,8 +2,7 @@ use {
     super::*,
     rstest::fixture,
     rstest_bdd::datatable::Rows,
-    rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
 struct IsrController {
@@ -147,4 +146,4 @@ fn admitted_proposal(controller: &IsrController, outcome: String) {
     assert2::check!(controller.admission == Some(expected));
 }
 
-scenarios!("tests/features/migrated/src/isr/tests/leader_high_watermark_follows_kafka.feature", fixtures = [controller: IsrController]);
+krabka_bdd::scenarios!("tests/features/migrated/src/isr/tests/leader_high_watermark_follows_kafka.feature", fixtures = [controller: IsrController]);

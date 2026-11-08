@@ -79,7 +79,7 @@ Feature: Authentication session expiry and reauthentication admission
     Then reauthentication can begin: <begins>
 
     Examples:
-      | boundary                  | expiry | last_start | now     | begins |
+      | case                      | expiry | last_start | now     | begins |
       | session without an expiry | none   | none       | 5000    | false  |
       | first reauthentication    | 1000   | none       | 5000    | true   |
       | exactly one second later  | 1000   | 4000       | 5000    | true   |

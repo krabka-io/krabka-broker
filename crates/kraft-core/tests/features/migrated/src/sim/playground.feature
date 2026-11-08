@@ -23,9 +23,12 @@ Feature: Interactive consensus playground controls
     When the operator reorders election traffic and duplicates the next available message
     Then playground accessors and replay faults report the same event history
 
-  Scenario: Append is routed only to an elected leader
+  Scenario: Append without an elected leader is refused
     Given a fresh three-voter playground cluster
     When the operator appends two records without a playground leader
     Then the playground refuses the append without a leader
+
+  Scenario: Append is routed only to an elected leader
+    Given a playground append has been refused without a leader
     When the operator elects a leader and appends two records
     Then the elected playground leader gains exactly two records

@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(test)]
-use std::vec;
 
 const RENEW_EXPECTED: TokenMutationFacts = TokenMutationFacts {
     kind: TokenMutationKind::Renew,
@@ -114,7 +112,7 @@ fn token_mutations_are_generation_bound_live_and_idempotent(
 
 use {
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct TokenExpiration {
@@ -165,7 +163,7 @@ fn expired_token(expiration: &TokenExpiration, outcome: String, deadline: String
     check!(expiration.outcome == Some(expected));
 }
 
-scenarios!("tests/features/migrated/src/delegation_token/tests/token_mutations_are_generation_bound_live_and_idempotent.feature", fixtures = [expiration: TokenExpiration]);
+krabka_bdd::scenarios!("tests/features/migrated/src/delegation_token/tests/token_mutations_are_generation_bound_live_and_idempotent.feature", fixtures = [expiration: TokenExpiration]);
 
 #[test]
 fn expiry_and_renewal_stay_within_the_token_maximum() {

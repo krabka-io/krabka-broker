@@ -8,8 +8,8 @@ Feature: Playground scheduler timer precision
     Then its election timer is <election_ms> ms and its heartbeat timer is 300 ms
 
     Examples:
-      | node_id | election_ms |
-      | 1       | 1050        |
-      | 2       | 1100        |
-      | 3       | 1150        |
-      | 7       | 1350        |
+      | case                                   | node_id | election_ms |
+      | the first voter waits one stagger      | 1       | 1050        |
+      | the second voter waits two staggers    | 2       | 1100        |
+      | the third voter waits three staggers   | 3       | 1150        |
+      | a voter id beyond the cluster size     | 7       | 1350        |

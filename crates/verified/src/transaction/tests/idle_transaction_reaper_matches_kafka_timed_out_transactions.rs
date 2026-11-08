@@ -3,8 +3,7 @@ use {
     assert2::assert,
     rstest::fixture,
     rstest_bdd::Slot,
-    rstest_bdd_macros::{given, scenarios, then, when},
-    std::vec,
+    rstest_bdd_macros::{given, then, when},
 };
 
 #[derive(Default)]
@@ -214,4 +213,4 @@ fn completed_transaction(coordinator: &CoordinatorDecisions, outcome: String) {
     assert!(coordinator.completed == Some(expected));
 }
 
-scenarios!("tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature", fixtures = [coordinator: CoordinatorDecisions]);
+krabka_bdd::scenarios!("tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature", fixtures = [coordinator: CoordinatorDecisions]);

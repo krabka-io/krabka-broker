@@ -490,7 +490,7 @@ fn deadlines_are_staggered(draws: &ElectionDraws) {
     );
 }
 
-rstest_bdd_macros::scenarios!("tests/features/migrated/src/core/election/tests.feature", fixtures = [draws: ElectionDraws]);
+krabka_bdd::scenarios!("tests/features/migrated/src/core/election/tests.feature", fixtures = [draws: ElectionDraws]);
 
 /// How a pre-vote round began: from following a leader whose fetches stopped,
 /// or with no leader to abandon.

@@ -1,7 +1,4 @@
 use super::*;
-#[cfg(test)]
-use std::vec;
-
 #[yare::parameterized(
     no_filter_even_owner = { false, true, false, false, false, false },
     no_filter_even_requester = { false, false, true, false, false, false },
@@ -54,7 +51,7 @@ fn token_api_admission_requires_identity_and_blocks_every_token_authed_call(api:
 
 use {
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
 };
 
 struct TokenDeadlinesScenario {
@@ -152,4 +149,4 @@ fn renewed_token(token: &TokenDeadlinesScenario, outcome: String, expiry: String
     check!(token.renewal == Some(expected));
 }
 
-scenarios!("tests/features/migrated/src/delegation_token/tests/token_visibility_requires_owner_filter_plus_a_relationship.feature", fixtures = [token: TokenDeadlinesScenario]);
+krabka_bdd::scenarios!("tests/features/migrated/src/delegation_token/tests/token_visibility_requires_owner_filter_plus_a_relationship.feature", fixtures = [token: TokenDeadlinesScenario]);
