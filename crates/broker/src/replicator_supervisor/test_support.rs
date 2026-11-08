@@ -128,54 +128,58 @@ pub(super) struct MaterializeFixture {
     producer_state: Arc<ProducerState>,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct MaterializeSetup<'a> {
-    pub topic: &'a str,
-    pub log_dirs: &'a [PathBuf],
-    pub log_config: &'a LogConfig,
-    pub context: &'a str,
+/// The log policy a materialized test partition gets unless a test names one.
+pub(super) fn default_log_config() -> &'static LogConfig {
+    static LOG_CONFIG: OnceLock<LogConfig> = OnceLock::new();
+    LOG_CONFIG.get_or_init(LogConfig::default)
 }
 
-impl Default for MaterializeSetup<'_> {
-    fn default() -> Self {
-        static LOG_CONFIG: OnceLock<LogConfig> = OnceLock::new();
-        Self {
-            topic: "t",
-            log_dirs: &[],
-            log_config: LOG_CONFIG.get_or_init(LogConfig::default),
-            context: "materialize",
-        }
-    }
-}
-
+#[bon::bon]
 impl MaterializeFixture {
+    #[builder]
     pub(super) fn config<'a>(
         &'a self,
-        partitions: &'a PartitionRegistry,
-        setup: MaterializeSetup<'a>,
+        #[builder(start_fn)] partitions: &'a PartitionRegistry,
+        #[builder(default = "t")] topic: &'a str,
+        #[builder(default = &[])] log_dirs: &'a [PathBuf],
+        #[builder(default = default_log_config())] log_config: &'a LogConfig,
     ) -> MaterializePartitionConfig<'a> {
         MaterializePartitionConfig {
             partitions,
-            topic: setup.topic,
+            topic,
             topic_id: None,
             partition: 0,
-            log_dirs: setup.log_dirs,
-            log_config: setup.log_config,
+            log_dirs,
+            log_config,
             log_dir_status: &self.log_dir_status,
             producer_state: &self.producer_state,
             runtime: PartitionRuntimeConfig::new((1_024, 64, 3), false, (None, None, None)),
         }
     }
 
-    pub(super) fn materialize(&self, partitions: &PartitionRegistry, setup: MaterializeSetup<'_>) {
-        super::materialize::materialize_partition(self.config(partitions, setup))
-            .expect(setup.context);
+    #[builder]
+    pub(super) fn materialize(
+        &self,
+        #[builder(start_fn)] partitions: &PartitionRegistry,
+        topic: Option<&str>,
+        log_dirs: Option<&[PathBuf]>,
+        log_config: Option<&LogConfig>,
+        #[builder(default = "materialize")] context: &str,
+    ) {
+        super::materialize::materialize_partition(
+            self.config(partitions)
+                .maybe_topic(topic)
+                .maybe_log_dirs(log_dirs)
+                .maybe_log_config(log_config)
+                .call(),
+        )
+        .expect(context);
     }
 }
 
 /// Materialize `t-0` with the usual config, retaining its directory and registry.
 pub(super) fn materialized_partition() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
-    materialized_partition_with_config(MaterializeSetup::default().log_config)
+    materialized_partition_with_config(default_log_config())
 }
 
 /// Materialize `t-0` using the caller's log policy and retain its directory guard.
@@ -184,11 +188,11 @@ pub(super) fn materialized_partition_with_config(
 ) -> (tempfile::TempDir, Arc<PartitionRegistry>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
-    MaterializeFixture::default().materialize(&partitions, MaterializeSetup {
-        log_dirs: &[dir.path().to_path_buf()],
-        log_config,
-        ..Default::default()
-    });
+    MaterializeFixture::default()
+        .materialize(&partitions)
+        .log_dirs(&[dir.path().to_path_buf()])
+        .log_config(log_config)
+        .call();
     (dir, partitions)
 }
 
