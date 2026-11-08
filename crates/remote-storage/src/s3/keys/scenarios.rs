@@ -212,4 +212,4 @@ fn holds_nothing(key_prefixing: &KeyPrefixScenario) {
     check!(key_prefixing.tier().keys() == Vec::<String>::new());
 }
 
-rstest_bdd_macros::scenarios!("tests/features/key_prefixing", fixtures = [key_prefixing: KeyPrefixScenario]);
+krabka_bdd::scenarios!("tests/features/key_prefixing", fixtures = [key_prefixing: KeyPrefixScenario]);
