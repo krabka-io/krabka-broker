@@ -202,12 +202,7 @@ pub(super) async fn initialize_led_group(
     lead_all(coordinator).await;
     let image = image_with_topic(topic, 1);
     coordinator
-        .initialize(
-            &image,
-            ShareKeyRef::new("g", topic, 0),
-            epoch.0,
-            offset,
-        )
+        .initialize(&image, ShareKeyRef::new("g", topic, 0), epoch.0, offset)
         .await
         .unwrap();
     image
