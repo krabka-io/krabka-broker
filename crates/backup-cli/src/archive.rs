@@ -8,7 +8,9 @@
 pub use krabka_object_store::ArchiveArgs;
 use {
     crate::error::BackupError,
-    krabka_object_store::{ObjectOps, ObjectStoreClient, PutMode, PutRequest, build_object_store},
+    krabka_object_store::{
+        CappedDigest, ObjectOps, ObjectStoreClient, PutMode, PutRequest, build_object_store,
+    },
     object_store::path::Path,
     std::{collections::BTreeSet, sync::Arc},
 };
@@ -91,21 +93,21 @@ impl Archive {
             .to_vec())
     }
 
-    /// Read an exact object key, refusing oversized bodies before buffering.
+    /// Hash the object at an exact key as it streams, refusing an oversized
+    /// body, without buffering it.
     ///
     /// # Errors
     /// Returns [`BackupError::ObjectStore`] when the object is absent, exceeds
-    /// `max_bytes`, or cannot be read.
-    pub async fn get_absolute_capped(
+    /// `max_bytes`, changes during the read, or cannot be read.
+    pub async fn digest_absolute_capped(
         &self,
         key: &str,
         max_bytes: u64,
-    ) -> Result<Vec<u8>, BackupError> {
+    ) -> Result<CappedDigest, BackupError> {
         Ok(self
             .client
-            .get_capped(&Path::from(key), max_bytes)
-            .await?
-            .to_vec())
+            .digest_capped(&Path::from(key), max_bytes)
+            .await?)
     }
 
     /// The distinct directory names one level below `relative`.
@@ -141,7 +143,10 @@ mod tests {
         crate::error::{BackupError, EXIT_BAD_ARGUMENT},
         assert2::check,
         bytes::Bytes,
-        krabka_object_store::{ObjectStoreClient, ObjectStoreError, fault::FaultInjectingStore},
+        krabka_object_store::{
+            CappedDigest, ObjectStoreClient, ObjectStoreError, fault::FaultInjectingStore,
+        },
+        krabka_remote_storage::Sha256Digest,
         object_store::{ObjectStoreExt as _, PutPayload, path::Path},
         std::{fs, path, sync::Arc},
     };
@@ -288,13 +293,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absolute_read_rejects_an_oversized_object_before_fetching_it() {
+    async fn an_absolute_digest_matches_the_hash_of_the_whole_object() {
+        let root = tempfile::tempdir().expect("archive root");
+        // Several MiB, so the local store streams it in more than one chunk.
+        let body = (0..3 * 1024 * 1024 + 11)
+            .map(|index: u32| index.to_le_bytes()[0] ^ index.to_le_bytes()[2])
+            .collect::<Vec<u8>>();
+        fs::write(root.path().join("wal.ckwl"), &body).expect("write object");
+        let archive = Archive::open(&local_args(root.path())).expect("open the archive");
+
+        let digest = archive
+            .digest_absolute_capped("wal.ckwl", body.len() as u64)
+            .await
+            .expect("object fits the cap");
+
+        check!(
+            digest
+                == CappedDigest {
+                    size_bytes: body.len() as u64,
+                    sha256: Sha256Digest::of(&body).0,
+                }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_absolute_digest_rejects_an_oversized_object_before_fetching_it() {
         let root = tempfile::tempdir().expect("archive root");
         fs::write(root.path().join("wal.ckwl"), b"oversized").expect("write object");
         let archive = Archive::open(&local_args(root.path())).expect("open the archive");
 
         let error = archive
-            .get_absolute_capped("wal.ckwl", 4)
+            .digest_absolute_capped("wal.ckwl", 4)
             .await
             .expect_err("object exceeds the cap");
 
@@ -302,10 +331,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absolute_read_rejects_growth_between_head_and_get() {
+    async fn an_absolute_digest_rejects_growth_between_head_and_get() {
         let archive = archive_that_grows_during_get("wal.ckwl", None).await;
         let error = archive
-            .get_absolute_capped("wal.ckwl", 5)
+            .digest_absolute_capped("wal.ckwl", 5)
             .await
             .unwrap_err();
         check!(matches!(

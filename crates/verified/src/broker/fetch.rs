@@ -1,7 +1,7 @@
 use {
     super::{
-        FetchVisibility, FetchWatermarks, PreferredLeaderChange, ReplicaFetchFacts,
-        ReplicaFetchMutation,
+        FetchReader, FetchVisibility, FetchWatermarks, Isolation, PreferredLeaderChange,
+        ReplicaFetchFacts, ReplicaFetchMutation,
     },
     creusot_std::prelude::*,
 };
@@ -138,14 +138,13 @@ pub fn offset_min(a: Int, b: Int) -> Int {
 /// A consumer reads below the high watermark (`HIGH_WATERMARK`), below the
 /// last stable offset as well under `read_committed` (`TXN_COMMITTED`), and,
 /// on a scheduled topic, below KFC-1's delivery watermark too.
-pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWatermarks) -> Int {
+pub fn fetch_limit_model(reader: FetchReader, w: FetchWatermarks) -> Int {
     pearlite! {
-        if is_follower {
-            w.log_end@
-        } else if read_committed {
-            offset_min(offset_min(w.hw@, w.deliverable@), w.lso@)
-        } else {
-            offset_min(w.hw@, w.deliverable@)
+        match reader {
+            FetchReader::Follower => w.log_end@,
+            FetchReader::Consumer(Isolation::ReadCommitted) =>
+                offset_min(offset_min(w.hw@, w.deliverable@), w.lso@),
+            FetchReader::Consumer(Isolation::ReadUncommitted) => offset_min(w.hw@, w.deliverable@),
         }
     }
 }
@@ -180,12 +179,16 @@ pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWaterm
 /// delivery watermark, or, under `read_committed`, the last stable offset.
 #[ensures(result.out_of_range == (fetch_offset@ < w.log_start@ || fetch_offset@ > w.log_end@))]
 #[ensures(result.empty == (!result.out_of_range
-    && fetch_offset@ >= if is_follower { w.log_end@ } else { offset_min(w.hw@, w.deliverable@) }))]
-#[ensures(result.limit_offset@ == fetch_limit_model(is_follower, read_committed, w))]
-#[ensures(!is_follower ==> result.limit_offset@ <= w.hw@
+    && fetch_offset@ >= if reader == FetchReader::Follower {
+        w.log_end@
+    } else {
+        offset_min(w.hw@, w.deliverable@)
+    }))]
+#[ensures(result.limit_offset@ == fetch_limit_model(reader, w))]
+#[ensures(!(reader == FetchReader::Follower) ==> result.limit_offset@ <= w.hw@
     && result.limit_offset@ <= w.deliverable@
-    && (read_committed ==> result.limit_offset@ <= w.lso@))]
-#[ensures(result.read_committed_aborts == (read_committed && !is_follower))]
+    && (reader == FetchReader::Consumer(Isolation::ReadCommitted) ==> result.limit_offset@ <= w.lso@))]
+#[ensures(result.read_committed_aborts == (reader == FetchReader::Consumer(Isolation::ReadCommitted)))]
 #[ensures(result.effective_lso@ == if result.read_committed_aborts {
     offset_min(w.lso@, w.hw@)
 } else {
@@ -195,8 +198,7 @@ pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWaterm
 #[ensures(result.response_lso@ == offset_min(w.lso@, w.hw@))]
 #[must_use]
 pub fn fetch_visibility(
-    is_follower: bool,
-    read_committed: bool,
+    reader: FetchReader,
     w: FetchWatermarks,
     fetch_offset: i64,
 ) -> FetchVisibility {
@@ -207,15 +209,15 @@ pub fn fetch_visibility(
         w.hw
     };
     let stable = if w.lso < w.hw { w.lso } else { w.hw };
-    let read_committed_aborts = read_committed && !is_follower;
-    let limit_offset = if is_follower {
-        w.log_end
-    } else if read_committed && stable < visible {
-        stable
-    } else {
-        visible
+    let (limit_offset, upper_bound, read_committed_aborts) = match reader {
+        FetchReader::Follower => (w.log_end, w.log_end, false),
+        FetchReader::Consumer(Isolation::ReadUncommitted) => (visible, visible, false),
+        FetchReader::Consumer(Isolation::ReadCommitted) => (
+            if stable < visible { stable } else { visible },
+            visible,
+            true,
+        ),
     };
-    let upper_bound = if is_follower { w.log_end } else { visible };
     let out_of_range = fetch_offset < w.log_start || fetch_offset > w.log_end;
     FetchVisibility {
         out_of_range,

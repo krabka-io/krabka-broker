@@ -4,6 +4,8 @@
 //! with each other, so they are grouped here purely as the periodic work the
 //! broker spawns at startup.
 
+#[cfg(not(target_family = "wasm"))]
+use crate::{oauth_jwks::JwksRefresher, time_util::system_timer};
 use {
     crate::{
         blocking::spawn_blocking,
@@ -77,41 +79,57 @@ pub(super) fn spawn_storage_security_maintenance(
         ));
     }
     #[cfg(not(target_family = "wasm"))]
-    if let Some(endpoint) = config.oauthbearer_jwks_endpoint.clone()
-        && let Some(handle) = config.oauthbearer_validator.jwks_handle()
-    {
-        use crate::{oauth_jwks::JwksRefresher, time_util::system_timer};
-
-        let signal_rx = config
-            .oauthbearer_jwks_signal_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| {
-                BrokerError::Startup(
-                    "signed validator must park its JWKS signal receiver".to_owned(),
-                )
-            })?;
-        let refresher = JwksRefresher {
-            endpoint,
-            handle,
-            interval: config.oauthbearer_jwks_refresh_interval,
-            shutdown: shutdown.child_token(),
-            tls_trust: config.oauthbearer_idp_tls_trust.clone(),
-            signal_rx,
-            min_on_demand_pause: config.oauthbearer_jwks_min_on_demand_pause,
-            http_timeout: config.oauth_jwks_http_timeout,
-            last_successful_fetch_ms: Arc::clone(&config.oauthbearer_jwks_last_successful_fetch_ms),
-            cache_generation: Arc::clone(&config.oauthbearer_jwks_cache_generation),
-            last_on_demand_refresh_ms: Arc::clone(
-                &config.oauthbearer_jwks_last_on_demand_refresh_ms,
-            ),
-            ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
-            timer: system_timer(),
-        };
+    if let Some(refresher) = jwks_refresher(config, shutdown)? {
         tokio::spawn(refresher.run());
     }
     Ok(disk_scanner)
+}
+
+/// The JWKS refresher a signed validator with an endpoint needs, or `None` for
+/// any other validator.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] when the signed validator's signal
+/// receiver is missing or was already taken.
+#[cfg(not(target_family = "wasm"))]
+fn jwks_refresher(
+    config: &BrokerConfig,
+    shutdown: &CancellationToken,
+) -> Result<Option<JwksRefresher>, BrokerError> {
+    let Some(endpoint) = config.oauthbearer_jwks_endpoint.clone() else {
+        return Ok(None);
+    };
+    let Some(handle) = config.oauthbearer_validator.jwks_handle() else {
+        return Ok(None);
+    };
+    let missing_receiver =
+        || BrokerError::Startup("signed validator must park its JWKS signal receiver".to_owned());
+    let runtime = config
+        .oauthbearer_jwks_runtime
+        .as_ref()
+        .ok_or_else(missing_receiver)?;
+    let signal_rx = runtime
+        .signal_rx
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .ok_or_else(missing_receiver)?;
+    Ok(Some(JwksRefresher {
+        endpoint,
+        handle,
+        interval: config.oauthbearer_jwks_refresh_interval,
+        shutdown: shutdown.child_token(),
+        tls_trust: config.oauthbearer_idp_tls_trust.clone(),
+        signal_rx,
+        min_on_demand_pause: config.oauthbearer_jwks_min_on_demand_pause,
+        http_timeout: config.oauth_jwks_http_timeout,
+        last_successful_fetch_ms: Arc::clone(&runtime.snapshot.last_successful_fetch_ms),
+        cache_generation: Arc::clone(&runtime.snapshot.generation),
+        last_on_demand_refresh_ms: Arc::clone(&runtime.last_on_demand_refresh_ms),
+        ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
+        timer: system_timer(),
+    }))
 }
 
 /// What the producer-expiry sweep reads on each tick.
@@ -278,6 +296,70 @@ mod tests {
         std::sync::Arc,
         tokio::sync::Notify,
     };
+    #[cfg(not(target_family = "wasm"))]
+    use {
+        super::jwks_refresher,
+        crate::{BrokerError, config::BrokerConfig, file_config::FileConfig},
+        std::sync::atomic::Ordering,
+        tokio_util::sync::CancellationToken,
+    };
+
+    /// The broker configuration a `[oauthbearer]` table body applies to.
+    #[cfg(not(target_family = "wasm"))]
+    fn oauthbearer_config(table: &str) -> BrokerConfig {
+        let file: FileConfig = toml::from_str(&format!("[oauthbearer]\n{table}")).unwrap();
+        let mut config = BrokerConfig::default();
+        file.apply_to(&mut config).unwrap();
+        config
+    }
+
+    /// A signed validator's refresher publishes into the same generation and
+    /// fetch timestamp that the authenticate path's cache guard reads, and the
+    /// validator's key handle sees the same timestamp.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn signed_config_shares_jwks_publication_with_the_authenticate_path() {
+        let config = oauthbearer_config("jwks_endpoint_uri = \"https://idp.example/jwks\"\n");
+        let refresher = jwks_refresher(&config, &CancellationToken::new())
+            .unwrap()
+            .expect("a signed validator gets a refresher");
+        let authenticate = config.oauthbearer_jwks_snapshot();
+        assert!(Arc::ptr_eq(
+            &refresher.cache_generation,
+            &authenticate.generation
+        ));
+        assert!(Arc::ptr_eq(
+            &refresher.last_successful_fetch_ms,
+            &authenticate.last_successful_fetch_ms
+        ));
+        refresher
+            .last_successful_fetch_ms
+            .store(42, Ordering::Release);
+        let handle = config.oauthbearer_validator.jwks_handle().unwrap();
+        assert!(handle.last_successful_fetch_ms() == 42);
+    }
+
+    /// The signal receiver is taken once: a second refresher for the same
+    /// validator construction is a startup error.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn a_second_jwks_refresher_is_a_startup_error() {
+        let config = oauthbearer_config("jwks_endpoint_uri = \"https://idp.example/jwks\"\n");
+        let shutdown = CancellationToken::new();
+        assert!(let Ok(Some(_)) = jwks_refresher(&config, &shutdown));
+        assert!(
+            let Err(BrokerError::Startup(message)) = jwks_refresher(&config, &shutdown)
+        );
+        assert!(message == "signed validator must park its JWKS signal receiver");
+    }
+
+    /// Only a signed validator gets a refresher.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn an_unsecured_config_gets_no_jwks_refresher() {
+        let config = oauthbearer_config("allow_unsecured = true\n");
+        assert!(let Ok(None) = jwks_refresher(&config, &CancellationToken::new()));
+    }
 
     /// A one-record idempotent batch of `producer_id` at sequence 0.
     fn idempotent_batch(producer_id: i64, max_timestamp: i64) -> RecordBatch {

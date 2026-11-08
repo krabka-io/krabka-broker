@@ -6,9 +6,9 @@ use {
     crate::{
         broker::Broker,
         handlers::{ApiKeyCode, RequestContext},
-        metrics::{BrokerMetrics, QuotaType},
+        metrics::BrokerMetrics,
         quota::{
-            QuotaBuckets, QuotaDelay, debt_tokens, entity_field, lookup_quota_with_key,
+            QuotaBuckets, QuotaDelay, QuotaType, debt_tokens, entity_field, lookup_quota_with_key,
             throttle_time_ms,
         },
         throttle::{ReplicationQuota, TokenBucket, TopicThrottle},
@@ -144,7 +144,7 @@ pub(super) fn consumer_quota_window_bytes(
         image,
         &context.principal.name,
         context.client_id,
-        "consumer_byte_rate",
+        QuotaType::Fetch,
     ) else {
         return usize::MAX;
     };
@@ -272,7 +272,7 @@ fn consume_consumer_quota(
     bytes: u64,
 ) -> ConsumerQuotaOutcome {
     let Some((entity_key, rate)) =
-        lookup_quota_with_key(image, principal, client_id, "consumer_byte_rate")
+        lookup_quota_with_key(image, principal, client_id, QuotaType::Fetch)
     else {
         return ConsumerQuotaOutcome {
             throttle: QuotaDelay::zero(),
@@ -291,7 +291,7 @@ fn consume_consumer_quota(
     // runs at the configured rate, fractional part included. Like the
     // producer path it records the whole response and turns the debt into the
     // throttle (#1212); a throttled fetch then gives the whole charge back.
-    let bucket = buckets.get_or_create("consumer_byte_rate", &entity_key, rate);
+    let bucket = buckets.get_or_create(QuotaType::Fetch, &entity_key, rate);
     let debt = bucket.record(bytes);
     let charge = ConsumerCharge(Some(ChargedBucket {
         bucket: Arc::clone(&bucket),

@@ -172,6 +172,19 @@ impl ShareStateError {
         }
     }
 
+    /// The row message of a refused `ReadShareGroupStateSummary` partition: a
+    /// refusal's own message, or the operation error that Kafka's
+    /// `readStateSummary` prefixes with
+    /// `Unable to read share group state summary: `.
+    pub(crate) fn summary_row_message(self) -> String {
+        match self {
+            Self::Refused { message, .. } => message.to_owned(),
+            Self::Operation { message, .. } => {
+                format!("Unable to read share group state summary: {message}")
+            }
+        }
+    }
+
     /// The error of a status check that [`ShareCoordinator::active`] refused.
     fn inactive(code: ShareErrorCode) -> Self {
         let message = if code == COORDINATOR_LOAD_IN_PROGRESS {

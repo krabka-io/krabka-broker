@@ -33,41 +33,117 @@ pub fn parse_log_filename(name: &str) -> Result<i64, LogError> {
         .map_err(|_| LogError::BadSegmentName(name.into()))
 }
 
+/// A file that a segment keeps under its base-offset stem, or the producer
+/// snapshot that sits at the same stem. Each kind has one on-disk extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SegmentFile {
+    /// `.log`: the record batches.
+    Log,
+    /// `.index`: the sparse offset index.
+    Index,
+    /// `.timeindex`: the sparse timestamp index.
+    TimeIndex,
+    /// `.txnindex`: the aborted-transaction index. A segment with no aborted
+    /// transaction has none.
+    TxnIndex,
+    /// `.stampindex`: the internal stamp coordinate. A partition that stamps
+    /// nothing has none.
+    StampIndex,
+    /// `.snapshot`: the producer state as of the stem's offset.
+    Snapshot,
+}
+
+impl SegmentFile {
+    /// What retention retires with a deleted segment: [`Self::SEGMENT`] and
+    /// the producer snapshot at the segment's base offset.
+    pub const RETIRED_WITH_SEGMENT: [Self; 6] = [
+        Self::Log,
+        Self::Index,
+        Self::TimeIndex,
+        Self::TxnIndex,
+        Self::StampIndex,
+        Self::Snapshot,
+    ];
+    /// Every file a segment owns: its `.log` and its sidecars. A truncation
+    /// and a completed compaction swap remove these for a dropped segment.
+    pub const SEGMENT: [Self; 5] = [
+        Self::Log,
+        Self::Index,
+        Self::TimeIndex,
+        Self::TxnIndex,
+        Self::StampIndex,
+    ];
+    /// The sidecars a segment can carry beside its `.log`.
+    pub const SIDECARS: [Self; 4] = [
+        Self::Index,
+        Self::TimeIndex,
+        Self::TxnIndex,
+        Self::StampIndex,
+    ];
+    /// The files of a compaction swap set, the `.log` first. A swap carries
+    /// no `.stampindex`, so the survivor takes no stamp ranges over.
+    pub const SWAP_SET: [Self; 4] = [Self::Log, Self::Index, Self::TimeIndex, Self::TxnIndex];
+    /// The sidecars of a compaction swap set. The `.txnindex` is optional:
+    /// the rewrite writes one only when an aborted transaction survives.
+    pub const SWAP_SIDECARS: [Self; 3] = [Self::Index, Self::TimeIndex, Self::TxnIndex];
+
+    /// The file's extension, without the dot.
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::Index => "index",
+            Self::TimeIndex => "timeindex",
+            Self::TxnIndex => "txnindex",
+            Self::StampIndex => "stampindex",
+            Self::Snapshot => "snapshot",
+        }
+    }
+
+    /// The path of this file for the stem `base_offset` in `dir`.
+    #[must_use]
+    pub fn path(self, dir: &Path, base_offset: i64) -> PathBuf {
+        dir.join(format!(
+            "{}.{}",
+            format_base_offset(base_offset),
+            self.extension()
+        ))
+    }
+}
+
 /// Path to the `.log` file of the segment that starts at `base_offset`. It holds the record batches.
 #[must_use]
-pub fn log_path(dir: &Path, base_offset: i64) -> PathBuf {
-    dir.join(format!("{}.log", format_base_offset(base_offset)))
-}
+pub fn log_path(dir: &Path, base_offset: i64) -> PathBuf { SegmentFile::Log.path(dir, base_offset) }
 
 /// Path to the sparse offset index, `.index`, of the segment that starts at `base_offset`.
 #[must_use]
 pub fn index_path(dir: &Path, base_offset: i64) -> PathBuf {
-    dir.join(format!("{}.index", format_base_offset(base_offset)))
+    SegmentFile::Index.path(dir, base_offset)
 }
 
 /// Path to the sparse timestamp index, `.timeindex`, of the segment that starts at `base_offset`.
 #[must_use]
 pub fn timeindex_path(dir: &Path, base_offset: i64) -> PathBuf {
-    dir.join(format!("{}.timeindex", format_base_offset(base_offset)))
+    SegmentFile::TimeIndex.path(dir, base_offset)
 }
 
 /// Path to the aborted-transaction index, `.txnindex`, of the segment that starts at `base_offset`.
 #[must_use]
 pub fn txnindex_path(dir: &Path, base_offset: i64) -> PathBuf {
-    dir.join(format!("{}.txnindex", format_base_offset(base_offset)))
+    SegmentFile::TxnIndex.path(dir, base_offset)
 }
 
 /// Path to the `.snapshot` file that holds the producer state as of `offset`.
 #[must_use]
 pub fn producer_snapshot_path(dir: &Path, offset: i64) -> PathBuf {
-    dir.join(format!("{}.snapshot", format_base_offset(offset)))
+    SegmentFile::Snapshot.path(dir, offset)
 }
 
 /// Path to the per-segment `.stampindex` sidecar. It holds the additional
 /// internal stamp coordinate and is never a client-facing file.
 #[must_use]
 pub fn stampindex_path(dir: &Path, base_offset: i64) -> PathBuf {
-    dir.join(format!("{}.stampindex", format_base_offset(base_offset)))
+    SegmentFile::StampIndex.path(dir, base_offset)
 }
 
 /// Path to the per-partition `.leader-epoch-checkpoint` file.
@@ -179,5 +255,94 @@ mod tests {
     fn handles_topic_with_dashes() {
         // Topic names can themselves contain hyphens; rsplit takes the last.
         assert!(parse_partition_dir("my-cool-topic-3") == Some(("my-cool-topic".to_owned(), 3)));
+    }
+
+    /// Every named file set, against the extensions written out by hand: a
+    /// set that gained or lost a file would delete or keep the wrong files.
+    #[test]
+    fn segment_file_sets_hold_their_on_disk_extensions() {
+        let sets: [(&str, Vec<&str>, &[&str]); 5] = [
+            (
+                "sidecars",
+                SegmentFile::SIDECARS.map(SegmentFile::extension).to_vec(),
+                &["index", "timeindex", "txnindex", "stampindex"],
+            ),
+            (
+                "segment",
+                SegmentFile::SEGMENT.map(SegmentFile::extension).to_vec(),
+                &["log", "index", "timeindex", "txnindex", "stampindex"],
+            ),
+            (
+                "retired with a segment",
+                SegmentFile::RETIRED_WITH_SEGMENT
+                    .map(SegmentFile::extension)
+                    .to_vec(),
+                &[
+                    "log",
+                    "index",
+                    "timeindex",
+                    "txnindex",
+                    "stampindex",
+                    "snapshot",
+                ],
+            ),
+            (
+                "swap set",
+                SegmentFile::SWAP_SET.map(SegmentFile::extension).to_vec(),
+                &["log", "index", "timeindex", "txnindex"],
+            ),
+            (
+                "swap sidecars",
+                SegmentFile::SWAP_SIDECARS
+                    .map(SegmentFile::extension)
+                    .to_vec(),
+                &["index", "timeindex", "txnindex"],
+            ),
+        ];
+        for (name, got, want) in sets {
+            assert!(got == want, "{name}");
+        }
+    }
+
+    /// Each file kind names the file Kafka and earlier krabka releases wrote.
+    #[test]
+    fn segment_file_paths_keep_their_on_disk_names() {
+        let dir = Path::new("/data/t-0");
+        let cases = [
+            (
+                SegmentFile::Log,
+                log_path(dir, 7),
+                "00000000000000000007.log",
+            ),
+            (
+                SegmentFile::Index,
+                index_path(dir, 7),
+                "00000000000000000007.index",
+            ),
+            (
+                SegmentFile::TimeIndex,
+                timeindex_path(dir, 7),
+                "00000000000000000007.timeindex",
+            ),
+            (
+                SegmentFile::TxnIndex,
+                txnindex_path(dir, 7),
+                "00000000000000000007.txnindex",
+            ),
+            (
+                SegmentFile::StampIndex,
+                stampindex_path(dir, 7),
+                "00000000000000000007.stampindex",
+            ),
+            (
+                SegmentFile::Snapshot,
+                producer_snapshot_path(dir, 7),
+                "00000000000000000007.snapshot",
+            ),
+        ];
+        for (file, helper_path, want) in cases {
+            assert!(file.path(dir, 7) == dir.join(want), "{file:?}");
+            assert!(helper_path == dir.join(want), "{file:?}");
+        }
     }
 }

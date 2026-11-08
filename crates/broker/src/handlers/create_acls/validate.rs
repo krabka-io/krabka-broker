@@ -22,8 +22,16 @@ use {
     crate::{
         codes,
         handlers::acl_wire::{
-            CLUSTER_RESOURCE_NAME, operation_concrete, pattern_type_concrete, permission_concrete,
-            resource_type_concrete,
+            CLUSTER_RESOURCE_NAME, WIRE_ANY, WIRE_OPERATION_ALL, WIRE_OPERATION_ALTER,
+            WIRE_OPERATION_ALTER_CONFIGS, WIRE_OPERATION_CLUSTER_ACTION, WIRE_OPERATION_CREATE,
+            WIRE_OPERATION_CREATE_TOKENS, WIRE_OPERATION_DELETE, WIRE_OPERATION_DESCRIBE,
+            WIRE_OPERATION_DESCRIBE_CONFIGS, WIRE_OPERATION_DESCRIBE_TOKENS,
+            WIRE_OPERATION_IDEMPOTENT_WRITE, WIRE_OPERATION_READ, WIRE_OPERATION_TWO_PHASE_COMMIT,
+            WIRE_OPERATION_WRITE, WIRE_PATTERN_LITERAL, WIRE_PATTERN_MATCH, WIRE_PATTERN_PREFIXED,
+            WIRE_PERMISSION_ALLOW, WIRE_PERMISSION_DENY, WIRE_RESOURCE_CLUSTER,
+            WIRE_RESOURCE_DELEGATION_TOKEN, WIRE_RESOURCE_GROUP, WIRE_RESOURCE_TOPIC,
+            WIRE_RESOURCE_TRANSACTIONAL_ID, WIRE_RESOURCE_USER, WIRE_UNKNOWN, operation_concrete,
+            pattern_type_concrete, permission_concrete, resource_type_concrete,
         },
     },
     krabka_authz::cidr::Cidr,
@@ -36,15 +44,6 @@ use {
 /// from Kafka's `AclControlManager.validateHostPattern`.
 const CIDR_UNSUPPORTED_VERSION_MESSAGE: &str =
     "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.";
-
-/// Wire `resource_type` of Kafka's `ResourceType.CLUSTER`.
-const RESOURCE_TYPE_CLUSTER: i8 = 4;
-/// Wire `UNKNOWN` (0), shared by every ACL enum axis.
-const WIRE_UNKNOWN: i8 = 0;
-/// Wire `ANY` (1), shared by every ACL enum axis.
-const WIRE_ANY: i8 = 1;
-/// Wire `PatternType.MATCH` (2).
-const WIRE_PATTERN_MATCH: i8 = 2;
 
 /// True when any creation carries a wire `UNKNOWN` (0) resource type, pattern
 /// type, operation or permission type.
@@ -83,13 +82,13 @@ pub(super) fn has_filter_only_element(creations: &[AclCreation]) -> bool {
 /// `ResourceType.fromCode` resolves it: an unrecognized code is `UNKNOWN`.
 fn resource_type_name(code: i8) -> &'static str {
     match code {
-        1 => "ANY",
-        2 => "TOPIC",
-        3 => "GROUP",
-        4 => "CLUSTER",
-        5 => "TRANSACTIONAL_ID",
-        6 => "DELEGATION_TOKEN",
-        7 => "USER",
+        WIRE_ANY => "ANY",
+        WIRE_RESOURCE_TOPIC => "TOPIC",
+        WIRE_RESOURCE_GROUP => "GROUP",
+        WIRE_RESOURCE_CLUSTER => "CLUSTER",
+        WIRE_RESOURCE_TRANSACTIONAL_ID => "TRANSACTIONAL_ID",
+        WIRE_RESOURCE_DELEGATION_TOKEN => "DELEGATION_TOKEN",
+        WIRE_RESOURCE_USER => "USER",
         _ => "UNKNOWN",
     }
 }
@@ -97,10 +96,10 @@ fn resource_type_name(code: i8) -> &'static str {
 /// Kafka's `PatternType` constant name for a wire code.
 fn pattern_type_name(code: i8) -> &'static str {
     match code {
-        1 => "ANY",
-        2 => "MATCH",
-        3 => "LITERAL",
-        4 => "PREFIXED",
+        WIRE_ANY => "ANY",
+        WIRE_PATTERN_MATCH => "MATCH",
+        WIRE_PATTERN_LITERAL => "LITERAL",
+        WIRE_PATTERN_PREFIXED => "PREFIXED",
         _ => "UNKNOWN",
     }
 }
@@ -108,21 +107,21 @@ fn pattern_type_name(code: i8) -> &'static str {
 /// Kafka's `AclOperation` constant name for a wire code.
 fn operation_name(code: i8) -> &'static str {
     match code {
-        1 => "ANY",
-        2 => "ALL",
-        3 => "READ",
-        4 => "WRITE",
-        5 => "CREATE",
-        6 => "DELETE",
-        7 => "ALTER",
-        8 => "DESCRIBE",
-        9 => "CLUSTER_ACTION",
-        10 => "DESCRIBE_CONFIGS",
-        11 => "ALTER_CONFIGS",
-        12 => "IDEMPOTENT_WRITE",
-        13 => "CREATE_TOKENS",
-        14 => "DESCRIBE_TOKENS",
-        15 => "TWO_PHASE_COMMIT",
+        WIRE_ANY => "ANY",
+        WIRE_OPERATION_ALL => "ALL",
+        WIRE_OPERATION_READ => "READ",
+        WIRE_OPERATION_WRITE => "WRITE",
+        WIRE_OPERATION_CREATE => "CREATE",
+        WIRE_OPERATION_DELETE => "DELETE",
+        WIRE_OPERATION_ALTER => "ALTER",
+        WIRE_OPERATION_DESCRIBE => "DESCRIBE",
+        WIRE_OPERATION_CLUSTER_ACTION => "CLUSTER_ACTION",
+        WIRE_OPERATION_DESCRIBE_CONFIGS => "DESCRIBE_CONFIGS",
+        WIRE_OPERATION_ALTER_CONFIGS => "ALTER_CONFIGS",
+        WIRE_OPERATION_IDEMPOTENT_WRITE => "IDEMPOTENT_WRITE",
+        WIRE_OPERATION_CREATE_TOKENS => "CREATE_TOKENS",
+        WIRE_OPERATION_DESCRIBE_TOKENS => "DESCRIBE_TOKENS",
+        WIRE_OPERATION_TWO_PHASE_COMMIT => "TWO_PHASE_COMMIT",
         _ => "UNKNOWN",
     }
 }
@@ -130,9 +129,9 @@ fn operation_name(code: i8) -> &'static str {
 /// Kafka's `AclPermissionType` constant name for a wire code.
 fn permission_type_name(code: i8) -> &'static str {
     match code {
-        1 => "ANY",
-        2 => "DENY",
-        3 => "ALLOW",
+        WIRE_ANY => "ANY",
+        WIRE_PERMISSION_DENY => "DENY",
+        WIRE_PERMISSION_ALLOW => "ALLOW",
         _ => "UNKNOWN",
     }
 }
@@ -168,7 +167,7 @@ pub(super) fn validate(c: &AclCreation, host_check: HostCheck) -> Result<AclEntr
     // `AclApis.handleCreateAcls`, before the binding reaches the controller.
     // The authorizer only ever asks about `kafka-cluster`, so a CLUSTER ACL
     // under any other name would be stored and never match.
-    if c.resource_type == RESOURCE_TYPE_CLUSTER && c.resource_name != CLUSTER_RESOURCE_NAME {
+    if c.resource_type == WIRE_RESOURCE_CLUSTER && c.resource_name != CLUSTER_RESOURCE_NAME {
         return Err(invalid(format!(
             "The only valid name for the CLUSTER resource is {CLUSTER_RESOURCE_NAME}"
         )));

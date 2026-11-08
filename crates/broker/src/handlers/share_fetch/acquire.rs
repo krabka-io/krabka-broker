@@ -21,6 +21,7 @@ use {
         broker::Broker,
         codes,
         error::BrokerError,
+        handlers::log_read_failure::local_read_failure,
         partition::Partition,
         share_partition::{
             group_settings::GroupShareSettings,
@@ -580,7 +581,11 @@ async fn acquire_partition(
     let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
         Ok(cell) => cell,
         Err(code) => {
-            fail_partition(p, has_acks, code);
+            if has_acks {
+                fail_share_row_and_ack(p, code);
+            } else {
+                fail_share_row(p, code);
+            }
             return;
         }
     };
@@ -590,7 +595,7 @@ async fn acquire_partition(
     if has_acks
         && let Err(code) = apply_piggybacked_acks(context, pass.now, p, &cell, &mut st).await
     {
-        fail_partition(p, true, code);
+        fail_share_row_and_ack(p, code);
         return;
     }
 
@@ -613,6 +618,15 @@ async fn acquire_partition(
         persist_best_effort(mgr, group, p, &cell, &mut st).await;
         return;
     };
+    // Kafka's `ReplicaManager.readFromLog` answers `KAFKA_STORAGE_ERROR` for
+    // a partition whose log dir went offline, before it reads. A failed read
+    // takes the dir offline in `local_read_failure`, so the dead disk is not
+    // read again, and no records are acquired from it.
+    if broker.log_dir_status.is_offline(&part.log_dir.load()) {
+        persist_best_effort(mgr, group, p, &cell, &mut st).await;
+        fail_share_row(p, codes::KAFKA_STORAGE_ERROR);
+        return;
+    }
     let upper = read_upper_bound(&part, read_committed).await;
     // A released or expired record at the delivery limit is archived
     // first, so it cannot hold the window shut.
@@ -670,7 +684,7 @@ async fn acquire_partition(
             // no records, and the other partitions of the request still
             // return theirs. A record that this pass locked before the
             // failure stays locked until its lock times out.
-            let code = read_failure_code(&err);
+            let code = local_read_failure(&part, &err, &broker.log_dir_status);
             tracing::warn!(
                 group,
                 topic_id = %p.topic_id,
@@ -680,7 +694,7 @@ async fn acquire_partition(
                 "share-partition log read failed"
             );
             persist_best_effort(mgr, group, p, &cell, &mut st).await;
-            fail_partition(p, false, code);
+            fail_share_row(p, code);
             return;
         }
     };
@@ -697,13 +711,13 @@ async fn acquire_partition(
         .await;
     drop(st);
     match persisted {
-        Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
+        Err(code) if fences_the_partition(code) => fail_share_row(p, code),
         _ => match append_records(&mut p.out, fresh) {
             Ok(bytes) => {
                 pass.total.records += acquired_count;
                 pass.total.bytes += bytes;
             }
-            Err(err) => fail_partition(p, false, read_failure_code(&err)),
+            Err(err) => fail_share_row(p, local_read_failure(&part, &err, &broker.log_dir_status)),
         },
     }
 }
@@ -723,23 +737,6 @@ async fn persist_best_effort(
     let _ = mgr
         .persist_if_dirty(group, p.topic_id, p.partition_index, Some(cell), st)
         .await;
-}
-
-/// The error code of a partition whose log read failed, as Kafka's
-/// `Errors.forException` maps what `ReplicaManager.readFromLog` catches: an
-/// I/O fault is `KAFKA_STORAGE_ERROR`, a batch that does not decode or check
-/// is `CORRUPT_MESSAGE`, and anything else is `UNKNOWN_SERVER_ERROR`.
-fn read_failure_code(err: &BrokerError) -> i16 {
-    match err {
-        BrokerError::Log(
-            LogError::CrcMismatch { .. }
-            | LogError::PartialBatch { .. }
-            | LogError::Records(_)
-            | LogError::Corrupt(_),
-        ) => codes::CORRUPT_MESSAGE,
-        BrokerError::Log(LogError::Io(_)) => codes::KAFKA_STORAGE_ERROR,
-        other => codes::from_broker_error(other),
-    }
 }
 
 /// Adds the records and the acquired rows of one pass to a partition row, and
@@ -769,21 +766,24 @@ fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, 
     Ok(added_len)
 }
 
-/// Fails one partition row with a share-partition error, and leaves it out of
-/// any later acquire pass.
+/// Fails one partition row's fetch half with a share-partition error, and
+/// leaves the row out of any later acquire pass.
 ///
-/// The fetch error goes on a row of the share session, and the acknowledge
-/// error on a row that carried acknowledgements.
-fn fail_partition(p: &mut PendingPartition, has_acks: bool, code: i16) {
+/// The error goes on the row only if the row is part of the share session.
+fn fail_share_row(p: &mut PendingPartition, code: i16) {
     p.out.records = None;
     p.out.acquired_records.clear();
     if p.fetchable {
         p.out.error_code = code;
     }
-    if has_acks {
-        p.out.acknowledge_error_code = code;
-    }
     p.leadable = false;
+}
+
+/// [`fail_share_row`], and also fails the acknowledgements the row carried
+/// with the same error.
+fn fail_share_row_and_ack(p: &mut PendingPartition, code: i16) {
+    fail_share_row(p, code);
+    p.out.acknowledge_error_code = code;
 }
 
 #[cfg(test)]
@@ -799,6 +799,8 @@ mod tests {
                     share_topic_uuid, start_share_allow_all_no_audit,
                 },
             },
+            log_dir_status::LogDirRegistry,
+            partition::test_support::test_partition,
             share_partition::state::AcquisitionState,
             test_support::initialize_share_state,
         },
@@ -811,6 +813,7 @@ mod tests {
             io::Error,
             time::{Duration, Instant},
         },
+        tokio::sync::Notify,
     };
 
     #[yare::parameterized(
@@ -962,6 +965,9 @@ mod tests {
 
     #[derive(Default)]
     struct ShareReadFailureScenario {
+        partition: Option<Partition>,
+        dir: Option<tempfile::TempDir>,
+        registry: Option<LogDirRegistry>,
         error: Option<BrokerError>,
         code: Option<i16>,
     }
@@ -973,8 +979,12 @@ mod tests {
             ..Default::default()
         }
     }
-    #[rstest_bdd_macros::given("reading share records fails with {failure}")]
+    #[rstest_bdd_macros::given("reading share records from an online log dir fails with {failure}")]
     fn failed_share_read(share_read_failure: &mut ShareReadFailureScenario, failure: String) {
+        let (partition, dir) = test_partition(Arc::new(Notify::new()));
+        share_read_failure.registry = Some(LogDirRegistry::probe(&[dir.path().to_path_buf()]));
+        share_read_failure.partition = Some(partition);
+        share_read_failure.dir = Some(dir);
         share_read_failure.error = Some(match failure.as_str() {
             "a log disk I/O error" => BrokerError::Log(LogError::Io(Error::other("disk"))),
             "a corrupt transaction index" => {
@@ -987,17 +997,118 @@ mod tests {
             _ => panic!("unknown share read failure: {failure}"),
         });
     }
-    #[rstest_bdd_macros::when("ShareFetch maps the failed read to a partition response error")]
+    #[rstest_bdd_macros::when("ShareFetch settles the failed read for its partition row")]
     fn map_share_read_failure(share_read_failure: &mut ShareReadFailureScenario) {
-        share_read_failure.code = Some(read_failure_code(
+        share_read_failure.code = Some(local_read_failure(
+            share_read_failure.partition.as_ref().unwrap(),
             share_read_failure.error.as_ref().unwrap(),
+            share_read_failure.registry.as_ref().unwrap(),
         ));
     }
-    #[rstest_bdd_macros::then("the ShareFetch partition error is {code}")]
-    fn check_share_read_failure(share_read_failure: &ShareReadFailureScenario, code: i16) {
+    #[rstest_bdd_macros::then(
+        "the ShareFetch partition error is {code} and the log dir offline state is {offline}"
+    )]
+    fn check_share_read_failure(
+        share_read_failure: &ShareReadFailureScenario,
+        code: i16,
+        offline: bool,
+    ) {
+        let dir = share_read_failure.dir.as_ref().unwrap().path();
         assert!(share_read_failure.code.unwrap() == code);
+        assert!(
+            share_read_failure
+                .registry
+                .as_ref()
+                .unwrap()
+                .is_offline(dir)
+                == offline
+        );
     }
-    rstest_bdd_macros::scenarios!("tests/features/handler_share_read_errors",fixtures=[share_read_failure:ShareReadFailureScenario]);
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_read_errors/errors.feature",
+        name = "A failed log read maps to the Kafka partition error for its cause"
+    )]
+    #[tokio::test]
+    async fn a_failed_share_read_answers_its_kafka_row_and_fences_only_disk_faults(
+        share_read_failure: ShareReadFailureScenario,
+        failure: String,
+        code: i16,
+        offline: bool,
+    ) {
+    }
+
+    /// What a share consumer gets from a partition row.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ShareRow {
+        error: i16,
+        acquired: Vec<OffsetRun>,
+    }
+
+    /// Once a failed read took the partition's log dir offline, the next
+    /// `ShareFetch` must not read the dead disk again, or hand out records
+    /// from it. Kafka's `ReplicaManager.readFromLog` answers
+    /// `KAFKA_STORAGE_ERROR` for an offline partition before it reads.
+    #[rstest::rstest]
+    #[case::online(false, ShareRow { error: codes::NONE, acquired: vec![OffsetRun::new(0, 1)] })]
+    #[case::offline(true, ShareRow { error: codes::KAFKA_STORAGE_ERROR, acquired: Vec::new() })]
+    #[tokio::test]
+    async fn a_partition_on_an_offline_log_dir_is_a_storage_error_and_acquires_nothing(
+        #[case] dir_offline: bool,
+        #[case] expected: ShareRow,
+    ) {
+        let StartedBroker { broker, dir: _dir } = start_share_allow_all_no_audit().await;
+        let shared = broker.broker_arc_for_test();
+        let group = "offline-log-dir";
+        let topic_id = create_topic()
+            .broker(&broker)
+            .client_id("share-acquire-test")
+            .name(group)
+            .call()
+            .await;
+        initialize_share_state(&broker, group, share_topic_uuid(topic_id), 0).await;
+        let row_of = |epoch: i32| {
+            let request = test_fetch_request()
+                .group_id(group.into())
+                .member_id("member".into())
+                .topic_id(topic_id.0)
+                .share_session_epoch(epoch)
+                .call();
+            let broker = &broker;
+            async move {
+                let rows = share_fetch_partition_rows(
+                    share_fetch_wire()
+                        .broker(broker)
+                        .request(&request)
+                        .call()
+                        .await,
+                );
+                let row = rows.into_iter().next().expect("one partition row");
+                ShareRow {
+                    error: row.error_code,
+                    acquired: acquired_share_records(&row),
+                }
+            }
+        };
+        // The first fetch opens the share session.
+        row_of(0).await;
+        produce_records()
+            .broker(&broker)
+            .topic(group)
+            .count(2)
+            .call()
+            .await;
+        if dir_offline {
+            let partition = shared
+                .partitions
+                .get(group, krabka_ids::PartitionIndex(0))
+                .expect("the topic has partition 0");
+            shared
+                .log_dir_status
+                .mark_offline(&partition.log_dir.load(), "a read failed with EIO");
+        }
+
+        assert!(row_of(1).await == expected);
+    }
 
     /// What a client and the partition cache show after a renew-ack fetch
     /// whose ack-only row found its state write fenced.

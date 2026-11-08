@@ -31,7 +31,7 @@ use {
         config_keys::{AUDIT_PLACEMENT_EPOCH_PREFIX, MIN_INSYNC_REPLICAS},
         error::BrokerError,
         handlers::forward_to_controller::guarded_operation_on_source,
-        metadata_source::MetadataSource,
+        metadata_source::{MetadataSource, topic_reaches_image},
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::{
@@ -66,7 +66,9 @@ mod tests;
 /// path, a cluster with isolated controllers has no node that can place the
 /// topic on a broker. The leader counts a topic that a pending batch creates
 /// as an existing topic, so two racing submits create the topic once, and the
-/// function treats the `TopicExists` refusal as a success.
+/// function treats the `TopicExists` refusal as a success. A forwarded refusal
+/// names no reason, so the function counts it as a success only once the
+/// topic reaches the local image.
 ///
 /// Only a registered broker gets a replica. Before any registration reaches
 /// the image, the local node stands in for the broker list, but only when the
@@ -152,6 +154,19 @@ async fn create_audit_topic(
     match controller.submit_change(records).await {
         // Idempotent: another node or a restart already created it.
         Ok(_) | Err(RaftError::Metadata(MetadataError::TopicExists(_))) => Ok(()),
+        // A forwarded refusal carries no reason. A racing node that created
+        // the topic first is one; any other is a real failure. The local image
+        // trails the leader, so wait for the topic before deciding.
+        Err(RaftError::ForwardedChangeRejected)
+            if topic_reaches_image(
+                controller.watch_image(),
+                &config.audit_topic,
+                config.audit_partition_wait_timeout.to_std(),
+            )
+            .await =>
+        {
+            Ok(())
+        }
         Err(e) => Err(BrokerError::Startup(e.to_string())),
     }
 }

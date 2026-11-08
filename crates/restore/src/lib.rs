@@ -218,7 +218,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
     )
     .await?;
     let authenticated_archive = authenticated_archive(authenticated.as_ref());
-    materialize::seed_rlmm_snapshot_from(
+    materialize::seed_rlmm_snapshot(
         args,
         authenticated_archive.map(AuthenticatedArchive::report),
         rlmm_snapshot.as_ref(),
@@ -340,7 +340,7 @@ async fn restore_partition(
             consumed.extend(segment.artifacts().map(|object| object.key.to_string()));
         }
         segments.push(
-            materialize::write_segment_after_skip(
+            materialize::write_segment(
                 args,
                 &entry.partition,
                 &verified,
@@ -415,8 +415,7 @@ async fn format_with_next_offsets(
         None => Vec::new(),
     };
     let format =
-        materialize::format_target_with_snapshot(args, archive, metadata_snapshot, &next_offsets)
-            .await?;
+        materialize::format_target(args, archive, metadata_snapshot, &next_offsets).await?;
     Ok((format, next_offsets))
 }
 

@@ -8,8 +8,10 @@
 //! complete set of non-default values.
 
 use {
-    super::group_config_record_from,
-    crate::{api_catalog::UnstableApiVersions, config_keys::group::GroupBounds},
+    crate::{
+        api_catalog::UnstableApiVersions, config_keys::group::GroupBounds,
+        handlers::config_alter::group_config_record_from,
+    },
     krabka_metadata::MetadataRecord,
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,

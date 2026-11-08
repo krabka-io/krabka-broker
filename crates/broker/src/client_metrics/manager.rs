@@ -26,6 +26,7 @@ mod subscription;
 #[cfg(test)]
 mod test_support;
 
+use self::subscription::SelectorError;
 #[cfg(test)]
 pub use self::subscription::compute_subscription;
 pub use self::subscription::{Subscriptions, subscription_id};
@@ -84,14 +85,14 @@ impl ClientInstance {
         default_interval_ms: i32,
         subscription_version: u64,
         now: Instant,
-    ) -> Self {
-        let subscription = subscriptions.compute(&attrs, default_interval_ms);
+    ) -> Result<Self, SelectorError> {
+        let subscription = subscriptions.compute(&attrs, default_interval_ms)?;
         let subscription_id = subscription_id(&subscription, attrs.client_instance_id);
         // `interval.ms` is validated in [100, 3_600_000], and the default is
         // positive, so the interval is always positive.
         let push_interval =
             Duration::from_millis(u64::from(subscription.push_interval_ms.unsigned_abs()));
-        Self {
+        Ok(Self {
             attrs,
             subscription_version,
             subscription,
@@ -102,7 +103,7 @@ impl ClientInstance {
             last_seen: now,
             terminating: false,
             last_error: codes::NONE,
-        }
+        })
     }
 
     /// Kafka's `maybeUpdateGetRequestTimestamp`.
@@ -204,26 +205,31 @@ impl State {
     /// Kafka's `ClientMetricsManager.clientInstance`: the instance for `attrs`,
     /// created when this broker holds none, and created again with its first
     /// attributes when the subscriptions changed since it was built.
+    ///
+    /// A [`SelectorError`] leaves the instances as they were: no instance is
+    /// created, and one due for a rebuild keeps its old subscription, so the
+    /// next request tests the selectors again.
     fn client_instance(
         &mut self,
         image: &MetadataImage,
         attrs: &ClientAttributes,
         now: Instant,
-    ) -> &mut ClientInstance {
+    ) -> Result<&mut ClientInstance, SelectorError> {
         self.observe_subscriptions(image);
         let version = self.subscription_version;
         let default_interval_ms = self.default_interval_ms;
         let id = attrs.client_instance_id;
         let inst = match self.instances.entry(id) {
             Entry::Vacant(slot) => {
-                self.connections.insert(attrs.connection_id.clone(), id);
-                slot.insert(ClientInstance::new(
+                let inst = ClientInstance::new(
                     &self.subscriptions,
                     attrs.clone(),
                     default_interval_ms,
                     version,
                     now,
-                ))
+                )?;
+                self.connections.insert(attrs.connection_id.clone(), id);
+                slot.insert(inst)
             }
             Entry::Occupied(slot) => {
                 let inst = slot.into_mut();
@@ -234,20 +240,21 @@ impl State {
                         connection_id: attrs.connection_id.clone(),
                         ..inst.attrs.clone()
                     };
-                    self.connections.insert(attrs.connection_id.clone(), id);
-                    *inst = ClientInstance::new(
+                    let rebuilt = ClientInstance::new(
                         &self.subscriptions,
                         first_attrs,
                         default_interval_ms,
                         version,
                         now,
-                    );
+                    )?;
+                    self.connections.insert(attrs.connection_id.clone(), id);
+                    *inst = rebuilt;
                 }
                 inst
             }
         };
         inst.last_seen = now;
-        inst
+        Ok(inst)
     }
 
     /// [`ClientMetricsManager::get_subscription`] under the state lock.
@@ -266,7 +273,14 @@ impl State {
                 }
             };
         }
-        let inst = self.client_instance(image, &attrs, now);
+        let inst = match self.client_instance(image, &attrs, now) {
+            Ok(inst) => inst,
+            Err(error) => {
+                return SubscriptionDecision::Reject {
+                    error_code: selector_failure(&error, &attrs),
+                };
+            }
+        };
 
         // Kafka's `validateGetRequest`: the timestamp check runs first and
         // moves the timestamp only when it passes. A client that the last push
@@ -301,7 +315,14 @@ impl State {
         max_payload_len: usize,
         now: Instant,
     ) -> PushDecision {
-        let inst = self.client_instance(image, attrs, now);
+        let inst = match self.client_instance(image, attrs, now) {
+            Ok(inst) => inst,
+            Err(error) => {
+                return PushDecision::Reject {
+                    error_code: selector_failure(&error, attrs),
+                };
+            }
+        };
 
         let error_code = if inst.terminating {
             codes::INVALID_REQUEST
@@ -352,6 +373,24 @@ impl State {
         });
         connections.retain(|_, id| instances.contains_key(id));
     }
+}
+
+/// Log a subscription selector that the matcher could not test, and give the
+/// error code that fails the request.
+///
+/// Java's `Matcher.matches()` has no backtrack limit, so Kafka has no answer
+/// to copy for this case. A failure that escapes Kafka's
+/// `ClientMetricsManager` is answered `UNKNOWN_SERVER_ERROR`, and so is this
+/// one. The log line names the subscription and selector, so an operator can
+/// rewrite the pattern.
+fn selector_failure(error: &SelectorError, attrs: &ClientAttributes) -> i16 {
+    tracing::error!(
+        %error,
+        client_instance_id = %attrs.client_instance_id,
+        client_id = %attrs.client_id,
+        "client-metrics subscription selector could not be tested; failing the telemetry request"
+    );
+    codes::UNKNOWN_SERVER_ERROR
 }
 
 pub struct ClientMetricsManager {
@@ -1105,6 +1144,61 @@ mod tests {
                 == &expected
         );
     }
+    /// An image whose `slow` subscription selects clients by a `client_id`
+    /// pattern that runs the matcher past its backtrack limit for
+    /// [`backtracking_client`], and a client it does that for.
+    fn backtrack_limit_case() -> (MetadataImage, super::ClientAttributes) {
+        let image = test_support::img_with("slow", &[
+            test_support::ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            test_support::ConfigEntry {
+                key: "match",
+                value: r"client_id=((x+x+)+)\2y",
+            },
+        ]);
+        (image, backtracking_client())
+    }
+
+    fn backtracking_client() -> super::ClientAttributes {
+        super::ClientAttributes {
+            client_id: "x".repeat(29),
+            ..attrs()
+        }
+    }
+
+    // Kafka's `Matcher.matches()` answers such a selector however slowly, and
+    // a regex failure escapes `ClientMetricsManager` as `UNKNOWN_SERVER_ERROR`.
+    // Reading the limit as no match would hide the subscription from the
+    // client without a word, so the request fails, as an SSL principal mapping
+    // rule past the limit fails the connection.
+    #[test]
+    fn a_selector_past_the_backtrack_limit_fails_get_telemetry_subscriptions() {
+        let (image, client) = backtrack_limit_case();
+        assert!(
+            manager().get_subscription_at(&image, &client, Instant::now())
+                == SubscriptionDecision::Reject {
+                    error_code: codes::UNKNOWN_SERVER_ERROR,
+                }
+        );
+    }
+
+    #[test]
+    fn a_selector_past_the_backtrack_limit_fails_push_telemetry() {
+        let (image, client) = backtrack_limit_case();
+        assert!(
+            manager().authorize_push_at(
+                &image,
+                &client,
+                push(TelemetrySubscriptionId::default()),
+                Instant::now()
+            ) == PushDecision::Reject {
+                error_code: codes::UNKNOWN_SERVER_ERROR,
+            }
+        );
+    }
+
     rstest_bdd_macros::scenarios!(
         "tests/features/migrated/src/client_metrics/manager.feature",
         fixtures = [telemetry_timeline: TelemetryTimeline],

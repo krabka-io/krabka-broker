@@ -25,14 +25,30 @@ krabka_macros::parsed_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
-    /// reason is on stderr. `2` means the broker could not be reached, so nothing
-    /// is known about the outcome. `3` means a cut does not match the log.
+    /// reason is on stderr. `2` means no request completed, because the broker
+    /// could not be reached or refused the login, or `--command-config` was
+    /// unusable. `3` means a cut does not match the log.
     ///
     /// # Panics
     ///
     /// Panics if `argv` does not parse, which for a caller passing a literal
     /// argument list is a bug in that list rather than a runtime condition.
 });
+
+/// The `timeout_ms` that asks the broker for its own default. The broker reads
+/// any non-positive value that way.
+const BROKER_DEFAULT_TIMEOUT_MS: i32 = 0;
+
+/// The `timeout_ms` a `trigger --timeout` sends.
+///
+/// No timeout asks for the broker's default. A timeout above `i32::MAX`
+/// milliseconds saturates there, so the broker clamps it to its ceiling, as the
+/// `--timeout` help says.
+fn trigger_timeout_ms(timeout: Option<Time>) -> i32 {
+    timeout.map_or(BROKER_DEFAULT_TIMEOUT_MS, |timeout| {
+        i32::try_from(timeout.millis_i64()).unwrap_or(i32::MAX)
+    })
+}
 
 /// Run one parsed command, writing to stdout and stderr.
 pub async fn run(cli: Cli) -> i32 {
@@ -44,15 +60,10 @@ pub async fn run(cli: Cli) -> i32 {
 ///
 /// The exit code means what it does for [`run_from_args`].
 pub async fn run_with(cli: Cli, console: &mut Console<'_>) -> i32 {
-    let client = match Client::builder()
-        .bootstrap(&cli.bootstrap_server)
-        .client_id("krabka-barrier")
-        .build()
-        .await
-    {
+    let client = match cli.connection.connect("krabka-barrier").await {
         Ok(client) => client,
         Err(error) => {
-            console.err(format!("cannot reach {}: {error}", cli.bootstrap_server));
+            console.err(error.to_string());
             return EXIT_UNREACHABLE;
         }
     };
@@ -97,11 +108,7 @@ async fn dispatch(client: &Client, command: Command, console: &mut Console<'_>) 
         Command::Trigger { group, timeout } => {
             let request = api::TriggerBarrierRequest {
                 group,
-                // A non-positive timeout asks the broker for its own default.
-                timeout_ms: timeout
-                    .map(Time::millis_i64)
-                    .and_then(|ms| i32::try_from(ms).ok())
-                    .unwrap_or(0),
+                timeout_ms: trigger_timeout_ms(timeout),
                 ..api::TriggerBarrierRequest::default()
             };
             send_then(client, console, request, report_trigger).await
@@ -165,5 +172,28 @@ async fn send_then<R: krabka_client_core::ProtocolRequest>(
             ));
             EXIT_UNREACHABLE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        assert2::check,
+        krabka_units::prelude::{days, secs},
+    };
+
+    /// `trigger --timeout` reaches the wire in whole milliseconds. A timeout
+    /// past `i32::MAX` saturates, so the broker clamps it to its ceiling
+    /// rather than reading it as "use the default".
+    #[yare::parameterized(
+        omitted = { None, BROKER_DEFAULT_TIMEOUT_MS },
+        five_seconds = { Some(secs(5)), 5_000 },
+        largest_that_fits = { Some(Time::from_millis(i64::from(i32::MAX))), i32::MAX },
+        one_past_the_field = { Some(Time::from_millis(i64::from(i32::MAX) + 1)), i32::MAX },
+        thirty_days = { Some(days(30)), i32::MAX },
+    )]
+    fn trigger_timeout_ms_saturates_past_the_wire_field(timeout: Option<Time>, expected: i32) {
+        check!(trigger_timeout_ms(timeout) == expected);
     }
 }

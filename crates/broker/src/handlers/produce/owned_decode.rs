@@ -156,7 +156,8 @@ mod tests {
             records,
             krabka_records_legacy::Magic::V1,
             &mut legacy,
-        );
+        )
+        .unwrap();
 
         let prepared = prepare_batch(
             PartitionPayload::Owned(RecordsPayload::Legacy(legacy.freeze())),

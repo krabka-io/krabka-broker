@@ -66,6 +66,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-barrier` | Operator CLI for barrier groups: define a group, trigger and list cuts, verify a cut against the log. |
 | `krabka-guard` | Operator CLI for topic write freezes and break-glass proposals: freeze, thaw, propose, approve. |
 | `krabka-backup` | Operator CLI for restore inputs: capture the RLMM and metadata snapshots and group offsets, verify a capture, put offsets back. |
+| `krabka-cli-connection` | The cluster connection every operator CLI shares: `--bootstrap-server` and a Kafka `--command-config` properties file for TLS and SASL. |
 | `krabka-format` | Formats a fresh log directory: Kafka's `meta.properties`, bootstrap records, the singleton `VotersRecord`. |
 | `krabka-restore` | Offline point-in-time restore of a bootable log directory from a KIP-405 archive. |
 | `krabka-throttle` | Quota token buckets (Creusot-verified). |
@@ -75,8 +76,9 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
 | `krabka-docgen` | Renders the broker reference pages from the broker's own in-process data. |
 | `krabka-macros` | Derive macros for the broker: `RegisterMetrics` builds and registers `BrokerMetrics` from its field attributes. |
-| `krabka-bdd` | The BDD layer over rstest-bdd: house-style feature lint, step-registry check, multi-thread Tokio harness, `StepParam` and `Given<T>`. |
-| `krabka-bdd-macros` | The proc macros behind `krabka-bdd`: `scenarios!` and `#[derive(StepParam)]`. |
+| `krabka-bdd` | The BDD layer over rstest-bdd: house-style feature lint, generated scenario tests and their runner, hooks, step attributes, `Attempt`, `StepParam` and `Given<T>`. |
+| `krabka-bdd-model` | The Gherkin model behind `krabka-bdd`: loading, rule flattening, outline expansion, the tag glossary and the house-style lint. |
+| `krabka-bdd-macros` | The proc macros behind `krabka-bdd`: `scenarios!`, the step and hook attributes, and `#[derive(StepParam)]`. |
 | `krabka-bench-driver` | Load driver and report aggregator for the cluster benchmark harness under `bench/`. |
 | `krabka-log-iobench` | Bench-only crate: measures the log read path against mmap. |
 

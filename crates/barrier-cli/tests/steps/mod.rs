@@ -8,7 +8,7 @@
 
 use {
     crate::support::{CutQuery, GROUP, GroupDefinition, LazyCluster, Transcript},
-    krabka_bdd::{Given, TokioMultiThreadContext},
+    krabka_bdd::Given,
     rstest_bdd_macros::{given, then, when},
     std::collections::BTreeSet,
 };
@@ -28,46 +28,35 @@ pub struct BarrierScenario {
 
 impl BarrierScenario {
     /// Create `topic` with `partitions` partitions, once.
-    pub fn create_topic(
-        &mut self,
-        runtime: &TokioMultiThreadContext,
-        topic: &str,
-        partitions: i32,
-    ) {
-        let cluster = self.cluster.get(runtime);
-        runtime.block_on(cluster.create_topic(topic, partitions));
+    pub async fn create_topic(&mut self, topic: &str, partitions: i32) {
+        let cluster = self.cluster.get().await;
+        cluster.create_topic(topic, partitions).await;
         self.topics.insert(topic.to_owned());
     }
 
     /// Define the scenario's group, and require the broker to accept it.
-    pub fn define(&mut self, runtime: &TokioMultiThreadContext, definition: GroupDefinition) {
-        let cluster = self.cluster.get(runtime);
-        let defined = runtime.block_on(cluster.operator().define(definition));
+    pub async fn define(&mut self, definition: GroupDefinition) {
+        let cluster = self.cluster.get().await;
+        let defined = cluster.operator().define(definition).await;
         assert2::assert!(defined.exit == 0, "{defined:?}");
     }
 
     /// Define the scenario's group over `topic`, creating the topic with one
     /// partition if no step has, and cut it `times` times.
-    pub fn cut_group(
-        &mut self,
-        runtime: &TokioMultiThreadContext,
-        topic: &str,
-        retained_cuts: Option<i32>,
-        times: usize,
-    ) {
+    pub async fn cut_group(&mut self, topic: &str, retained_cuts: Option<i32>, times: usize) {
         if !self.topics.contains(topic) {
-            self.create_topic(runtime, topic, 1);
+            self.create_topic(topic, 1).await;
         }
         self.define(
-            runtime,
             GroupDefinition::builder()
                 .topics(vec![topic.to_owned()])
                 .maybe_retained_cuts(retained_cuts)
                 .build(),
-        );
+        )
+        .await;
         for _ in 0..times {
-            let cluster = self.cluster.get(runtime);
-            let cut = runtime.block_on(cluster.operator().trigger(GROUP));
+            let cluster = self.cluster.get().await;
+            let cut = cluster.operator().trigger(GROUP).await;
             assert2::assert!(cut.exit == 0, "{cut:?}");
             self.cuts.push(cut);
         }
@@ -85,88 +74,56 @@ pub fn barrier() -> BarrierScenario {
 }
 
 #[given("the {topic} topic has {partitions} partitions")]
-fn topic_has_partitions(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-    partitions: i32,
-) {
-    barrier.create_topic(runtime, &topic, partitions);
+async fn topic_has_partitions(barrier: &mut BarrierScenario, topic: String, partitions: i32) {
+    barrier.create_topic(&topic, partitions).await;
 }
 
 #[given("an operator has defined a barrier group over the {topic} topic")]
-fn defined_over_one_topic(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-) {
-    barrier.define(
-        runtime,
-        GroupDefinition::builder().topics(vec![topic]).build(),
-    );
+async fn defined_over_one_topic(barrier: &mut BarrierScenario, topic: String) {
+    barrier
+        .define(GroupDefinition::builder().topics(vec![topic]).build())
+        .await;
 }
 
 #[given("an operator has defined a barrier group over the {first} and {second} topics")]
-fn defined_over_two_topics(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    first: String,
-    second: String,
-) {
-    barrier.define(
-        runtime,
-        GroupDefinition::builder()
-            .topics(vec![first, second])
-            .build(),
-    );
+async fn defined_over_two_topics(barrier: &mut BarrierScenario, first: String, second: String) {
+    barrier
+        .define(
+            GroupDefinition::builder()
+                .topics(vec![first, second])
+                .build(),
+        )
+        .await;
 }
 
 #[given("a barrier group over the {topic} topic has been cut once")]
-fn cut_once(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-) {
-    barrier.cut_group(runtime, &topic, None, 1);
+async fn cut_once(barrier: &mut BarrierScenario, topic: String) {
+    barrier.cut_group(&topic, None, 1).await;
 }
 
 #[given("a barrier group over the {topic} topic has been cut {times} times")]
-fn cut_times(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-    times: usize,
-) {
-    barrier.cut_group(runtime, &topic, None, times);
+async fn cut_times(barrier: &mut BarrierScenario, topic: String, times: usize) {
+    barrier.cut_group(&topic, None, times).await;
 }
 
 #[when("the operator triggers a cut of the group")]
-fn trigger(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().trigger(GROUP));
+async fn trigger(barrier: &mut BarrierScenario) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().trigger(GROUP).await;
     barrier.transcript.set(transcript);
 }
 
 #[when("the operator describes the group")]
-fn describe(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().describe(GROUP));
+async fn describe(barrier: &mut BarrierScenario) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().describe(GROUP).await;
     barrier.transcript.set(transcript);
 }
 
 #[when("the operator lists the cuts of the group")]
-fn list(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().list(CutQuery::builder().build()));
+async fn list(barrier: &mut BarrierScenario) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().list(CutQuery::builder().build()).await;
     barrier.transcript.set(transcript);
 }
 

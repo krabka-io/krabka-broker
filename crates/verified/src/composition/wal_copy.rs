@@ -1,6 +1,6 @@
 use {
     super::{
-        DeleteRecordsTrimApplication, FetchWatermarks, WalCopyBatch,
+        DeleteRecordsTrimApplication, FetchReader, FetchWatermarks, WalCopyBatch,
         delete_records_trim_application, fetch_visibility, in_half_open_window,
         local_append_coordinates, local_recovery_batch_step, produce_durability_frontier,
         wal_batch_equal, wal_covering_batch_range,
@@ -223,8 +223,7 @@ pub(super) fn covering_copy_preserves_logical_fetch(
     let (end, bytes_end) =
         checked_wal_copy_replays_exactly(source, stored, physical, target, position, file_end)?;
     let visibility = fetch_visibility(
-        true,
-        false,
+        FetchReader::Follower,
         FetchWatermarks {
             log_start: floor,
             log_end: end,

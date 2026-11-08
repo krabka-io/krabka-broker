@@ -1,62 +1,54 @@
 //! Commit-stamp range-index decisions.
 
 #[cfg(creusot)]
-use creusot_std::prelude::{Int, Seq, invariant, logic};
+use creusot_std::prelude::{DeepModel, Int, Seq, invariant, logic};
 use creusot_std::prelude::{ensures, requires};
 
-/// Parallel inclusive ranges `[bases[i], lasts[i]]`, each ordered and each
-/// ending before the next begins.
+/// One inclusive offset range `[base, last]` of the commit-stamp index.
+#[krabka_macros::model_type]
+pub struct StampRange {
+    /// The first offset the range covers.
+    pub base: i64,
+    /// The last offset the range covers.
+    pub last: i64,
+}
+
+/// Inclusive ranges, each ordered and each ending before the next begins.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-pub fn sorted_disjoint(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
+pub fn sorted_disjoint(ranges: Seq<StampRange>) -> bool {
     pearlite! {
-        bases.len() == lasts.len()
-            && (forall<i: Int> 0 <= i && i < bases.len() ==> bases[i]@ <= lasts[i]@)
-            && (forall<i: Int> 1 <= i && i < bases.len() ==> lasts[i - 1]@ < bases[i]@)
-    }
-}
-
-/// The `index`th range of the parallel `bases` and `lasts`, or `None` past
-/// the end of either.
-#[ensures(match result {
-    Some((base, last)) => index@ < bases@.len() && index@ < lasts@.len()
-        && base == bases@[index@] && last == lasts@[index@],
-    None => bases@.len() <= index@ || lasts@.len() <= index@,
-})]
-fn stamp_range(bases: &[i64], lasts: &[i64], index: usize) -> Option<(i64, i64)> {
-    match (bases.get(index), lasts.get(index)) {
-        (Some(&base), Some(&last)) => Some((base, last)),
-        _ => None,
+        (forall<i: Int> 0 <= i && i < ranges.len() ==> ranges[i].base@ <= ranges[i].last@)
+            && (forall<i: Int> 1 <= i && i < ranges.len()
+                ==> ranges[i - 1].last@ < ranges[i].base@)
     }
 }
 
 /// Validate sorted inclusive ranges as individually ordered and pairwise
 /// nonoverlapping.
-#[ensures(result == sorted_disjoint(bases@, lasts@))]
+#[ensures(result == sorted_disjoint(ranges@))]
 #[must_use]
-pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
-    if bases.len() != lasts.len() {
-        return false;
-    }
+pub fn stamp_ranges_valid(ranges: &[StampRange]) -> bool {
     let mut index = 0usize;
-    #[invariant(stamp_cursor_in_bounds(bases@, lasts@, index@))]
-    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> bases@[i]@ <= lasts@[i]@)]
-    #[invariant(forall<i: Int> 1 <= i && i < index@ ==> lasts@[i - 1]@ < bases@[i]@)]
-    #[variant(bases@.len() - index@)]
-    while index < bases.len() {
-        let Some((base, last)) = stamp_range(bases, lasts, index) else {
+    #[invariant(index@ <= ranges@.len())]
+    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> ranges@[i].base@ <= ranges@[i].last@)]
+    #[invariant(forall<i: Int> 1 <= i && i < index@
+        ==> ranges@[i - 1].last@ < ranges@[i].base@)]
+    #[variant(ranges@.len() - index@)]
+    while index < ranges.len() {
+        let Some(&range) = ranges.get(index) else {
             return false;
         };
-        if base > last {
+        if range.base > range.last {
             return false;
         }
         if index > 0 {
-            let Some(&previous_last) = lasts.get(index - 1) else {
+            let Some(&previous) = ranges.get(index - 1) else {
                 return false;
             };
-            if previous_last >= base {
+            if previous.last >= range.base {
                 return false;
             }
         }
@@ -67,43 +59,34 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
 
 /// Return the sorted insertion position for one nonoverlapping range.
 ///
-/// `bases` and `lasts` must have equal lengths and describe sorted,
-/// individually ordered, pairwise nonoverlapping inclusive ranges. Use
-/// [`stamp_ranges_valid`] to check these preconditions before calling.
-///
-/// A `lasts` shorter than `bases` breaks the precondition and the answer is
-/// unspecified. Proof annotations do not validate inputs in ordinary Rust
-/// builds.
-#[requires(sorted_disjoint(bases@, lasts@))]
+/// `ranges` must be sorted, individually ordered and pairwise nonoverlapping.
+/// Use [`stamp_ranges_valid`] to check this precondition before calling.
+/// Proof annotations do not validate inputs in ordinary Rust builds.
+#[requires(sorted_disjoint(ranges@))]
 #[ensures(match result {
-    Some(index) => index@ <= bases@.len()
-        && new_base@ <= new_last@
-        && (forall<i: Int> 0 <= i && i < index@ ==> lasts@[i]@ < new_base@)
-        && (index@ == bases@.len() || new_last@ < bases@[index@]@),
-    None => new_base@ > new_last@
-        || (exists<i: Int> 0 <= i && i < bases@.len()
-            && bases@[i]@ <= new_last@ && new_base@ <= lasts@[i]@),
+    Some(index) => index@ <= ranges@.len()
+        && new.base@ <= new.last@
+        && (forall<i: Int> 0 <= i && i < index@ ==> ranges@[i].last@ < new.base@)
+        && (index@ == ranges@.len() || new.last@ < ranges@[index@].base@),
+    None => new.base@ > new.last@
+        || (exists<i: Int> 0 <= i && i < ranges@.len()
+            && ranges@[i].base@ <= new.last@ && new.base@ <= ranges@[i].last@),
 })]
 #[must_use]
-pub fn stamp_range_insertion_index(
-    bases: &[i64],
-    lasts: &[i64],
-    new_base: i64,
-    new_last: i64,
-) -> Option<usize> {
-    if new_base > new_last {
+pub fn stamp_range_insertion_index(ranges: &[StampRange], new: StampRange) -> Option<usize> {
+    if new.base > new.last {
         return None;
     }
     let mut index = 0usize;
-    #[invariant(stamp_cursor_in_bounds(bases@, lasts@, index@))]
-    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lasts@[i]@ < new_base@)]
-    #[variant(bases@.len() - index@)]
-    while index < bases.len() {
-        let (base, last) = stamp_range(bases, lasts, index)?;
-        if new_last < base {
+    #[invariant(index@ <= ranges@.len())]
+    #[invariant(forall<i: Int> 0 <= i && i < index@ ==> ranges@[i].last@ < new.base@)]
+    #[variant(ranges@.len() - index@)]
+    while index < ranges.len() {
+        let &range = ranges.get(index)?;
+        if new.last < range.base {
             return Some(index);
         }
-        if new_base <= last {
+        if new.base <= range.last {
             return None;
         }
         index += 1;
@@ -111,37 +94,16 @@ pub fn stamp_range_insertion_index(
     Some(index)
 }
 
-/// Find the first range with both exact inclusive boundaries.
-///
-/// `bases` and `lasts` must have equal lengths.
-///
-/// A `lasts` shorter than `bases` breaks the precondition and the answer is
-/// unspecified; equal lengths are a caller precondition, not a runtime check.
-#[requires(stamp_range_arrays_parallel(bases@, lasts@))]
-#[ensures(stamp_lookup_result(
-    result,
-    bases@,
-    lasts@,
-    StampLookupQuery::Exact { base: target_base, last: target_last },
-))]
+/// Find the first range with both of `target`'s exact inclusive boundaries.
+#[ensures(stamp_lookup_result(result, ranges@, StampLookupQuery::Exact(target)))]
 #[must_use]
-pub fn exact_stamp_range_index(
-    bases: &[i64],
-    lasts: &[i64],
-    target_base: i64,
-    target_last: i64,
-) -> Option<usize> {
+pub fn exact_stamp_range_index(ranges: &[StampRange], target: StampRange) -> Option<usize> {
     let mut index = 0usize;
-    #[invariant(stamp_lookup_cursor_valid(
-        bases@,
-        lasts@,
-        index@,
-        StampLookupQuery::Exact { base: target_base, last: target_last },
-    ))]
-    #[variant(bases@.len() - index@)]
-    while index < bases.len() {
-        let (base, last) = stamp_range(bases, lasts, index)?;
-        if base == target_base && last == target_last {
+    #[invariant(stamp_lookup_cursor_valid(ranges@, index@, StampLookupQuery::Exact(target)))]
+    #[variant(ranges@.len() - index@)]
+    while index < ranges.len() {
+        let &range = ranges.get(index)?;
+        if range.base == target.base && range.last == target.last {
             return Some(index);
         }
         index += 1;
@@ -150,29 +112,15 @@ pub fn exact_stamp_range_index(
 }
 
 /// Find the first inclusive range that covers `offset`.
-///
-/// The slices must have equal lengths; with a shorter `lasts` slice the answer
-/// is unspecified.
-#[requires(stamp_range_arrays_parallel(bases@, lasts@))]
-#[ensures(stamp_lookup_result(
-    result,
-    bases@,
-    lasts@,
-    StampLookupQuery::Covering { offset },
-))]
+#[ensures(stamp_lookup_result(result, ranges@, StampLookupQuery::Covering { offset }))]
 #[must_use]
-pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> Option<usize> {
+pub fn covering_stamp_range_index(ranges: &[StampRange], offset: i64) -> Option<usize> {
     let mut index = 0usize;
-    #[invariant(stamp_lookup_cursor_valid(
-        bases@,
-        lasts@,
-        index@,
-        StampLookupQuery::Covering { offset },
-    ))]
-    #[variant(bases@.len() - index@)]
-    while index < bases.len() {
-        let (base, last) = stamp_range(bases, lasts, index)?;
-        if base <= offset && offset <= last {
+    #[invariant(stamp_lookup_cursor_valid(ranges@, index@, StampLookupQuery::Covering { offset }))]
+    #[variant(ranges@.len() - index@)]
+    while index < ranges.len() {
+        let &range = ranges.get(index)?;
+        if range.base <= offset && offset <= range.last {
             return Some(index);
         }
         index += 1;
@@ -180,28 +128,10 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
     None
 }
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open(crate))]
-/// Both parallel arrays contain every index before this scan cursor.
-pub(crate) fn stamp_cursor_in_bounds(bases: Seq<i64>, lasts: Seq<i64>, index: Int) -> bool {
-    pearlite! { index <= bases.len() && stamp_range_arrays_parallel(bases, lasts) }
-}
-
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
-/// Every listed stamp range has one inclusive end.
-pub fn stamp_range_arrays_parallel(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
-    pearlite! { bases.len() == lasts.len() }
-}
-
 #[cfg(creusot)]
 #[derive(Clone, Copy)]
 pub(crate) enum StampLookupQuery {
-    Exact { base: i64, last: i64 },
+    Exact(StampRange),
     Covering { offset: i64 },
 }
 
@@ -209,11 +139,11 @@ pub(crate) enum StampLookupQuery {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
-pub(crate) fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
+pub(crate) fn stamp_lookup_matches(query: StampLookupQuery, range: StampRange) -> bool {
     pearlite! { match query {
-        StampLookupQuery::Exact { base: target_base, last: target_last } =>
-            base@ == target_base@ && last@ == target_last@,
-        StampLookupQuery::Covering { offset } => base@ <= offset@ && offset@ <= last@,
+        StampLookupQuery::Exact(target) =>
+            range.base@ == target.base@ && range.last@ == target.last@,
+        StampLookupQuery::Covering { offset } => range.base@ <= offset@ && offset@ <= range.last@,
     } }
 }
 
@@ -222,13 +152,11 @@ pub(crate) fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
 pub(crate) fn no_stamp_lookup_before(
-    bases: Seq<i64>,
-    lasts: Seq<i64>,
+    ranges: Seq<StampRange>,
     count: Int,
     query: StampLookupQuery,
 ) -> bool {
-    pearlite! { forall<i: Int> 0 <= i && i < count
-    ==> !stamp_lookup_matches(query, bases[i], lasts[i]) }
+    pearlite! { forall<i: Int> 0 <= i && i < count ==> !stamp_lookup_matches(query, ranges[i]) }
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -236,15 +164,11 @@ pub(crate) fn no_stamp_lookup_before(
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
 pub(crate) fn stamp_lookup_cursor_valid(
-    bases: Seq<i64>,
-    lasts: Seq<i64>,
+    ranges: Seq<StampRange>,
     index: Int,
     query: StampLookupQuery,
 ) -> bool {
-    pearlite! {
-        stamp_cursor_in_bounds(bases, lasts, index)
-            && no_stamp_lookup_before(bases, lasts, index, query)
-    }
+    pearlite! { index <= ranges.len() && no_stamp_lookup_before(ranges, index, query) }
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -253,45 +177,44 @@ pub(crate) fn stamp_lookup_cursor_valid(
 #[logic(open(crate))]
 pub(crate) fn stamp_lookup_result(
     result: Option<usize>,
-    bases: Seq<i64>,
-    lasts: Seq<i64>,
+    ranges: Seq<StampRange>,
     query: StampLookupQuery,
 ) -> bool {
     pearlite! { match result {
-        Some(index) => index@ < bases.len()
-            && stamp_lookup_matches(query, bases[index@], lasts[index@])
-            && no_stamp_lookup_before(bases, lasts, index@, query),
-        None => no_stamp_lookup_before(bases, lasts, bases.len(), query),
+        Some(index) => index@ < ranges.len()
+            && stamp_lookup_matches(query, ranges[index@])
+            && no_stamp_lookup_before(ranges, index@, query),
+        None => no_stamp_lookup_before(ranges, ranges.len(), query),
     } }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        covering_stamp_range_index, exact_stamp_range_index, stamp_range_insertion_index,
-        stamp_ranges_valid,
+        StampRange, covering_stamp_range_index, exact_stamp_range_index,
+        stamp_range_insertion_index, stamp_ranges_valid,
     };
+
+    const fn range(base: i64, last: i64) -> StampRange { StampRange { base, last } }
 
     #[test]
     fn range_decisions_cover_boundaries_retries_and_malformed_inputs() {
-        let bases = [0, 5, 10];
-        let lasts = [2, 7, 12];
-        assert2::assert!(stamp_ranges_valid(&bases, &lasts));
-        assert2::assert!(!stamp_ranges_valid(&[0, 5], &[2]));
-        assert2::assert!(!stamp_ranges_valid(&[3], &[2]));
-        assert2::assert!(!stamp_ranges_valid(&[0, 2], &[2, 4]));
-        assert2::assert!(stamp_range_insertion_index(&bases, &lasts, 3, 4) == Some(1));
-        assert2::assert!(stamp_range_insertion_index(&bases, &lasts, 8, 9) == Some(2));
-        assert2::assert!(stamp_range_insertion_index(&bases, &lasts, 2, 3).is_none());
-        assert2::assert!(stamp_range_insertion_index(&bases, &lasts, 4, 3).is_none());
-        assert2::assert!(exact_stamp_range_index(&bases, &lasts, 5, 7) == Some(1));
-        assert2::assert!(exact_stamp_range_index(&bases, &lasts, 5, 8).is_none());
-        assert2::assert!(covering_stamp_range_index(&bases, &lasts, 7) == Some(1));
-        assert2::assert!(covering_stamp_range_index(&bases, &lasts, 8).is_none());
-        assert2::assert!(stamp_ranges_valid(&[1], &[1]));
-        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 1, 1) == Some(0));
-        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 10, 10) == Some(1));
-        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 5, 5).is_none());
-        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 4, 5).is_none());
+        let ranges = [range(0, 2), range(5, 7), range(10, 12)];
+        assert2::assert!(stamp_ranges_valid(&ranges));
+        assert2::assert!(!stamp_ranges_valid(&[range(3, 2)]));
+        assert2::assert!(!stamp_ranges_valid(&[range(0, 2), range(2, 4)]));
+        assert2::assert!(stamp_range_insertion_index(&ranges, range(3, 4)) == Some(1));
+        assert2::assert!(stamp_range_insertion_index(&ranges, range(8, 9)) == Some(2));
+        assert2::assert!(stamp_range_insertion_index(&ranges, range(2, 3)).is_none());
+        assert2::assert!(stamp_range_insertion_index(&ranges, range(4, 3)).is_none());
+        assert2::assert!(exact_stamp_range_index(&ranges, range(5, 7)) == Some(1));
+        assert2::assert!(exact_stamp_range_index(&ranges, range(5, 8)).is_none());
+        assert2::assert!(covering_stamp_range_index(&ranges, 7) == Some(1));
+        assert2::assert!(covering_stamp_range_index(&ranges, 8).is_none());
+        assert2::assert!(stamp_ranges_valid(&[range(1, 1)]));
+        assert2::assert!(stamp_range_insertion_index(&[range(5, 7)], range(1, 1)) == Some(0));
+        assert2::assert!(stamp_range_insertion_index(&[range(5, 7)], range(10, 10)) == Some(1));
+        assert2::assert!(stamp_range_insertion_index(&[range(5, 7)], range(5, 5)).is_none());
+        assert2::assert!(stamp_range_insertion_index(&[range(5, 7)], range(4, 5)).is_none());
     }
 }

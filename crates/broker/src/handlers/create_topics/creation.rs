@@ -28,6 +28,7 @@ use {
             partition_materialization::PartitionMaterialization,
             submit_failure::{controller_write_code, wrong_controller_write_message},
         },
+        metadata_source::{MetadataSource, topic_reaches_image},
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
         topic_policy::check,
@@ -36,7 +37,7 @@ use {
         create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
     },
     krabka_raft::RaftError,
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, time::Duration},
     uuid::Uuid,
 };
 
@@ -60,6 +61,9 @@ pub struct TopicCreation<'a> {
     topic_defaults: config_keys::TopicDefaults,
     /// KIP-108: a validate-only request runs every check and commits nothing.
     validate_only: bool,
+    /// The request's `timeoutMs`: how long a forwarded commit that the leader
+    /// refused waits for a racing creation of the name to reach the image.
+    timeout: Duration,
 }
 
 impl<'a> TopicCreation<'a> {
@@ -67,6 +71,7 @@ impl<'a> TopicCreation<'a> {
         broker: &'a Broker,
         image: &'a krabka_metadata::MetadataImage,
         validate_only: bool,
+        timeout: Duration,
     ) -> Self {
         Self {
             broker,
@@ -77,6 +82,7 @@ impl<'a> TopicCreation<'a> {
                 broker.config.features.unstable_api_versions,
             ),
             validate_only,
+            timeout,
         }
     }
 
@@ -338,12 +344,34 @@ impl<'a> TopicCreation<'a> {
                 return Ok(());
             }
             Err(error) => {
-                let leader = *broker.controller.watch_leader().borrow();
-                submit_failure_result(name.clone(), &error, leader)
+                failed_commit_result(name, &error, &*broker.controller, self.timeout).await
             }
         };
         Err(Box::new(failure))
     }
+}
+
+/// The row a topic answers when its commit through `controller` fails with
+/// `error`.
+///
+/// The leader refuses a forwarded commit with a code that names no reason. A
+/// request on another node that created the name first, which Kafka's
+/// controller answers `TOPIC_ALREADY_EXISTS`, is one such refusal, and shows
+/// once the name reaches this node's image. So a forwarded refusal waits up to
+/// `timeout` for the name before it takes the row of an unknown failure.
+async fn failed_commit_result(
+    name: &str,
+    error: &RaftError,
+    controller: &dyn MetadataSource,
+    timeout: Duration,
+) -> CreatableTopicResult {
+    if matches!(error, RaftError::ForwardedChangeRejected)
+        && topic_reaches_image(controller.watch_image(), name, timeout).await
+    {
+        return topic_exists_result(name.to_owned());
+    }
+    let leader = *controller.watch_leader().borrow();
+    submit_failure_result(name.to_owned(), error, leader)
 }
 
 /// The row a topic answers when its metadata commit fails with `error`.
@@ -357,7 +385,9 @@ fn submit_failure_result(
     match error {
         // Another request created the name after this one read the image. The
         // quorum decides that race, and the row is the one Kafka's existence
-        // check answers.
+        // check answers. A forwarded write that the leader refused arrives as
+        // `ForwardedChangeRejected` instead, whose reason is unknown; see
+        // `failed_commit_result`.
         RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_)) => {
             topic_exists_result(name)
         }
@@ -395,12 +425,18 @@ struct Placement<'a> {
 #[cfg(test)]
 mod tests {
     use {
-        super::submit_failure_result,
-        crate::codes,
+        super::{failed_commit_result, submit_failure_result, topic_exists_result},
+        crate::{
+            codes, metadata_source::test_support::topic_record, test_support::FakeMetadataSource,
+        },
         krabka_metadata::MetadataError,
         krabka_protocol::owned::create_topics_response::CreatableTopicResult,
         krabka_raft::{NodeId, RaftError},
+        std::{sync::Arc, time::Duration},
+        tokio::time,
     };
+
+    const TIMEOUT: Duration = Duration::from_secs(30);
 
     /// The row Kafka's `CreateTopicsRequest.getErrorResponse` builds for a
     /// refused topic, with the empty `Configs` Kafka sends.
@@ -468,6 +504,11 @@ mod tests {
             Some(NodeId(1)),
             row(codes::UNKNOWN_SERVER_ERROR, None),
         },
+        forwarded_change_rejected = {
+            RaftError::ForwardedChangeRejected,
+            Some(NodeId(1)),
+            row(codes::UNKNOWN_SERVER_ERROR, None),
+        },
     )]
     fn a_failed_commit_answers_kafkas_row(
         error: RaftError,
@@ -475,5 +516,56 @@ mod tests {
         expected: CreatableTopicResult,
     ) {
         assert2::assert!(submit_failure_result("orders".to_owned(), &error, leader) == expected);
+    }
+
+    /// A forwarded commit that the leader refused answers
+    /// `TOPIC_ALREADY_EXISTS` when a racing creation of the name reaches the
+    /// image within the request's timeout, as Kafka's controller answers the
+    /// loser of that race. When the name never arrives, the reason is
+    /// unknown and the row is `UNKNOWN_SERVER_ERROR`.
+    #[tokio::test(start_paused = true)]
+    async fn a_forwarded_refusal_answers_topic_exists_once_a_racing_topic_arrives() {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .build(),
+        );
+        let failure = {
+            let source = Arc::clone(&source);
+            tokio::spawn(async move {
+                failed_commit_result(
+                    "orders",
+                    &RaftError::ForwardedChangeRejected,
+                    &*source,
+                    TIMEOUT,
+                )
+                .await
+            })
+        };
+        time::sleep(TIMEOUT / 2).await;
+        source.set_records(&[topic_record("orders")]);
+        assert2::assert!(
+            failure.await.expect("the failure task does not panic")
+                == topic_exists_result("orders".to_owned())
+        );
+
+        let started = time::Instant::now();
+        let unknown = failed_commit_result(
+            "payments",
+            &RaftError::ForwardedChangeRejected,
+            &*source,
+            TIMEOUT,
+        )
+        .await;
+        assert2::assert!(unknown == row_named("payments", codes::UNKNOWN_SERVER_ERROR));
+        assert2::assert!(started.elapsed() >= TIMEOUT);
+    }
+
+    /// The row of `row` for the topic `name`.
+    fn row_named(name: &str, error_code: i16) -> CreatableTopicResult {
+        CreatableTopicResult {
+            name: name.to_owned(),
+            ..row(error_code, None)
+        }
     }
 }

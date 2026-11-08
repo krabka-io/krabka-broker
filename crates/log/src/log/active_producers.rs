@@ -48,22 +48,7 @@ impl Log {
     /// a replicated append and a reopen all update the same state, so a
     /// leader and its followers give the same answer at the same log end.
     #[must_use]
-    pub fn active_producers(&self) -> Vec<ActiveProducer> {
-        let mut producers: Vec<ActiveProducer> = self
-            .producer_state
-            .values()
-            .map(|entry| ActiveProducer {
-                producer_id: entry.producer_id,
-                producer_epoch: entry.producer_epoch,
-                last_sequence: entry.last_sequence,
-                last_timestamp: entry.timestamp,
-                coordinator_epoch: entry.coordinator_epoch,
-                current_txn_start_offset: entry.current_txn_first_offset,
-            })
-            .collect();
-        producers.sort_unstable_by_key(|producer| producer.producer_id);
-        producers
-    }
+    pub fn active_producers(&self) -> Vec<ActiveProducer> { self.producers.active_producers() }
 
     /// The last record of every producer that this log holds state for. A
     /// compaction pass keeps that record, so that the producer state
@@ -78,16 +63,7 @@ impl Log {
     pub(crate) fn last_records_of_active_producers(
         &self,
     ) -> HashMap<ProducerId, ProducerLastRecord> {
-        self.producer_state
-            .values()
-            .map(|entry| {
-                let last_record = ProducerLastRecord {
-                    last_data_offset: entry.last_batch().map(|batch| batch.last_offset),
-                    producer_epoch: entry.producer_epoch,
-                };
-                (entry.producer_id, last_record)
-            })
-            .collect()
+        self.producers.last_records()
     }
 
     /// Remove every producer that has no open transaction and whose last
@@ -98,24 +74,7 @@ impl Log {
     /// `isProducerExpired`, for `producer.id.expiration.ms`. The next
     /// producer-state snapshot does not hold a removed producer.
     pub fn remove_expired_producers(&mut self, now_ms: i64, expiration_ms: i64) {
-        let expired: Vec<ProducerId> = self
-            .producer_state
-            .values()
-            .filter(|entry| {
-                entry.current_txn_first_offset.is_none()
-                    && now_ms.saturating_sub(entry.timestamp) >= expiration_ms
-            })
-            .map(|entry| entry.producer_id)
-            .collect();
-        for producer_id in expired {
-            self.producer_state.remove(&producer_id);
-            self.earlier_batches.remove(&producer_id);
-            // Kafka keeps the coordinator epoch in the `ProducerStateEntry`,
-            // so it goes with the expired producer.
-            self.coordinator_epochs.remove(&producer_id);
-        }
-        self.verification_states
-            .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
+        self.producers.expire(now_ms, expiration_ms);
     }
 }
 

@@ -19,7 +19,7 @@ use {
         coordinator::GroupCoordinator,
         diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
         fetch_session::FetchSessionCache,
-        future_log::FutureLogState,
+        future_log::{FutureLogRegistry, MoveLock},
         handlers::DispatchRegistry,
         heartbeat::controller_state::ControllerLivenessState,
         listener_tls::{ListenerTlsCache, ListenerTlsInputs},
@@ -40,8 +40,6 @@ use {
         unclean_recovery::UncleanRecoveryHandle,
         wal::quorum::{registry::WalShardRegistry, router::WalShardRouter},
     },
-    dashmap::DashMap,
-    krabka_ids::PartitionIndex,
     krabka_raft::ConnectionLimiter,
     krabka_security::ListenerProtocol,
     std::{
@@ -140,7 +138,10 @@ pub struct Broker {
     /// The `AlterReplicaLogDirs` handler reads it to make a second
     /// request for the same partition idempotent, or to reject a
     /// conflicting target.
-    pub(crate) future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    pub(crate) future_logs: Arc<FutureLogRegistry>,
+    /// Held by each `AlterReplicaLogDirs` request while it starts its moves,
+    /// so that two requests for one partition cannot both start a move.
+    pub(crate) move_lock: MoveLock,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// The auto topic creation: Kafka's `DefaultAutoTopicCreationManager`.
     pub(crate) auto_topic_creation: Arc<AutoTopicCreation>,

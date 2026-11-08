@@ -6,7 +6,6 @@ mod steps;
 mod support;
 
 use {
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     std::collections::BTreeSet,
     steps::{BarrierScenario, barrier},
@@ -16,22 +15,14 @@ use {
 const UNDEFINED_GROUP: &str = "never-defined";
 
 #[given("the {topic} topic was created afterwards with {partitions} partitions")]
-fn topic_created_since(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-    partitions: i32,
-) {
-    barrier.create_topic(runtime, &topic, partitions);
+async fn topic_created_since(barrier: &mut BarrierScenario, topic: String, partitions: i32) {
+    barrier.create_topic(&topic, partitions).await;
 }
 
 #[when("an operator tries to trigger a cut of a group nobody defined")]
-fn trigger_undefined(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().trigger(UNDEFINED_GROUP));
+async fn trigger_undefined(barrier: &mut BarrierScenario) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().trigger(UNDEFINED_GROUP).await;
     barrier.transcript.set(transcript);
 }
 

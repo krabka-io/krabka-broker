@@ -5,12 +5,16 @@
 #[krabka_macros::sendfile_cfg]
 use krabka_protocol::records::FileRegion;
 use {
-    super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read},
+    super::{
+        FetchWatermarks, VisibilityWindow, compute_visibility_window, fetch_reader,
+        plan::refused_read,
+    },
     crate::{
         blocking::{run_blocking, run_page_cache_io},
         codes,
         diskless::hot_tail::HotTailCache,
         error::BrokerError,
+        handlers::log_read_failure::local_read_failure,
         log_dir_status::LogDirRegistry,
         partition::Partition,
     },
@@ -100,37 +104,30 @@ pub(super) async fn do_read(
 /// The catch arms of Kafka's `ReplicaManager.readFromLog.read`:
 ///   * an `IOException`, which `LocalLog.maybeHandleIOException` has already
 ///     turned into `KafkaStorageException` after it took the dir offline, is
-///     `KAFKA_STORAGE_ERROR`. The dir goes offline here as well, so the next
-///     fetch reaches the offline-dir refusal and the controller moves
-///     leadership away, instead of the same read failing on every retry;
+///     `KAFKA_STORAGE_ERROR`. [`local_read_failure`] takes the dir offline as
+///     well, so the next fetch reaches the offline-dir refusal and the
+///     controller moves leadership away, instead of the same read failing on
+///     every retry;
 ///   * `OffsetOutOfRangeException` is `OFFSET_OUT_OF_RANGE`. The log raises
 ///     [`LogError::OffsetTooLow`] when retention or `DeleteRecords` moved the
 ///     log start between `plan_read` and the read, and
 ///     [`LogError::OffsetBelowLocalStart`] when tiering did. The row has the
 ///     shape `plan_read` gives the same answer, so the cold-tier fallback
 ///     treats both alike;
-///   * `CorruptRecordException` is `CORRUPT_MESSAGE`;
-///   * anything else is the generic row `Errors.forException` gives it.
+///   * `CorruptRecordException` is `CORRUPT_MESSAGE`, and anything else is the
+///     generic row `Errors.forException` gives it. `ShareFetch` settles its
+///     reads with the same [`local_read_failure`].
 fn settle_failed_read(
     part: &Partition,
     partition_index: i32,
     error: &BrokerError,
     log_dir_status: &LogDirRegistry,
 ) -> PartitionData {
-    if let BrokerError::Log(LogError::Io(io_error)) = error {
-        log_dir_status.mark_offline(
-            &part.log_dir.load(),
-            &format!("partition read failed: {io_error}"),
-        );
-    }
     let code = match error {
         BrokerError::Log(
             LogError::OffsetTooLow { .. } | LogError::OffsetBelowLocalStart { .. },
         ) => codes::OFFSET_OUT_OF_RANGE,
-        BrokerError::Log(LogError::CrcMismatch { .. } | LogError::Corrupt(_)) => {
-            codes::CORRUPT_MESSAGE
-        }
-        other => codes::from_broker_error(other),
+        other => local_read_failure(part, other, log_dir_status),
     };
     if code != codes::OFFSET_OUT_OF_RANGE {
         tracing::error!(
@@ -443,6 +440,16 @@ fn aborted_served(
 /// just past the last batch the byte-copy path served, for the
 /// aborted-transaction scan; the sendfile path, which `read_committed` never
 /// takes, leaves it `None`.
+///
+/// Zero-copy: on a plaintext connection, describe the records run with a cheap
+/// header-only walk (`read_raw_desc`) instead of `pread`ing the payload. If the
+/// run is large enough to amortize the sendfile syscall, return file-backed
+/// regions for the `sendfile` drain; otherwise fall back to the byte-copy
+/// `read_raw` path (small/fragmented fetches stay on the vectored path). The
+/// descriptor is captured here under the log lock so retention can't truncate
+/// the region out from under the later async send (the `Arc<File>` pins the
+/// inode).
+#[krabka_macros::sendfile_cfg]
 fn run_read(
     plan: &RawReadPlan,
     read: &BlockingRead,
@@ -453,107 +460,63 @@ fn run_read(
         sendfile_min_bytes,
         ..
     } = read;
-
-    // Zero-copy (Increments D + E): on a plaintext connection
-    // (SENDFILE alias: Linux + Apple + FreeBSD/DragonFly), describe
-    // the records run with a cheap header-only walk (`read_raw_desc`)
-    // instead of `pread`ing the payload. If the run is large enough
-    // to amortize the sendfile syscall, return file-backed regions
-    // for the `sendfile` drain; otherwise fall back to the byte-copy
-    // `read_raw` path (small/fragmented fetches stay on the vectored
-    // path). The descriptor is captured here under the log lock so
-    // retention can't truncate the region out from under the later
-    // async send (the `Arc<File>` pins the inode).
-    // Set only on the raw-byte path below, which is the only path
-    // `read_committed_aborts` ever takes (the sendfile path is skipped
-    // whenever it is set — see the comment there). It is the offset just
-    // past the last batch this call actually served, which bounds the
-    // aborted-transaction scan below to what the response carries.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    let mut served_upper_bound: Option<Offset> = None;
-    // Every read on the targets without sendfile takes the raw-byte path,
-    // which assigns this exactly once.
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    )))]
-    let served_upper_bound: Option<Offset>;
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    let records: RecordsPayload = {
-        let mut chosen: Option<RecordsPayload> = None;
-        // READ_COMMITTED responses also carry aborted-transaction
-        // metadata and are consumed by ordinary Kafka clients as one
-        // framed response. Keep those on the raw-byte encoder; the
-        // file-region writer can otherwise detach the records payload
-        // from the metadata frame and leave a fresh stable-topic reader
-        // with HW/LSO but no decoded batches.
-        if sendfile_capable && !read_committed_aborts {
-            let desc = plan.read_regions()?;
-            if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
-                chosen = Some(RecordsPayload::FileRegions(desc.regions));
-            } else if !desc.regions.is_empty() {
-                // The walk has already found the run. Copying it costs one
-                // `pread` per region, where `read_raw` would look it up again
-                // from the offset index: a second header scan, readahead hint
-                // and read for every small fetch, the common case of a
-                // follower or consumer at the tail.
-                chosen = Some(RecordsPayload::Raw(read_regions(
-                    &desc.regions,
-                    desc.total,
-                )?));
-            }
+    // READ_COMMITTED responses also carry aborted-transaction metadata and are
+    // consumed by ordinary Kafka clients as one framed response. Keep those on
+    // the raw-byte encoder; the file-region writer can otherwise detach the
+    // records payload from the metadata frame and leave a fresh stable-topic
+    // reader with HW/LSO but no decoded batches.
+    if sendfile_capable && !read_committed_aborts {
+        let desc = plan.read_regions()?;
+        if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
+            return Ok((RecordsPayload::FileRegions(desc.regions), None));
         }
-        if let Some(p) = chosen {
-            p
-        } else {
-            let raw = plan.read_bytes()?;
-            served_upper_bound = raw.last_offset.map(|o| o + 1);
-            RecordsPayload::Raw(raw.bytes)
+        if !desc.regions.is_empty() {
+            // The walk has already found the run. Copying it costs one
+            // `pread` per region, where `read_raw` would look it up again
+            // from the offset index: a second header scan, readahead hint
+            // and read for every small fetch, the common case of a
+            // follower or consumer at the tail.
+            return Ok((
+                RecordsPayload::Raw(read_regions(&desc.regions, desc.total)?),
+                None,
+            ));
         }
-    };
-    // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
-    // `read_raw` + copy (the Increment C vectored path drains it).
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    )))]
-    let records: RecordsPayload = {
-        // Both sendfile inputs are consumed only by the platform
-        // branch above, so discard them here or `-D warnings` fails
-        // the build on this target.
-        let _ = (sendfile_capable, sendfile_min_bytes, read_committed_aborts);
-        let raw = plan.read_bytes()?;
-        served_upper_bound = raw.last_offset.map(|o| o + 1);
-        RecordsPayload::Raw(raw.bytes)
-    };
+    }
+    copy_read(plan)
+}
 
-    Ok((records, served_upper_bound))
+/// The read of one partition's plan on a target without a safe
+/// `sendfile`/`TransmitFile`: always the `read_raw` byte copy, which the
+/// vectored write path drains.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+)))]
+fn run_read(
+    plan: &RawReadPlan,
+    read: &BlockingRead,
+) -> Result<(RecordsPayload, Option<Offset>), BrokerError> {
+    // Only the sendfile definition reads these, so discard them here or
+    // `-D warnings` fails the build on this target.
+    let _ = (read.sendfile_capable, read.sendfile_min_bytes);
+    copy_read(plan)
+}
+
+/// The byte-copy read, which is the only path `read_committed_aborts` ever
+/// takes. Beside the bytes it returns the offset just past the last batch it
+/// served, which bounds the aborted-transaction scan to what the response
+/// carries.
+fn copy_read(plan: &RawReadPlan) -> Result<(RecordsPayload, Option<Offset>), BrokerError> {
+    let raw = plan.read_bytes()?;
+    Ok((
+        RecordsPayload::Raw(raw.bytes),
+        raw.last_offset.map(|o| o + 1),
+    ))
 }
 
 fn finish_read(
@@ -688,8 +651,7 @@ fn plan_read(
         partition.delivery.now_ms(),
     );
     let window = compute_visibility_window(
-        follower_fetch,
-        read_committed,
+        fetch_reader(follower_fetch, read_committed),
         FetchWatermarks {
             log_start: local_log_start,
             hw: high_watermark,
@@ -728,15 +690,7 @@ fn plan_read(
 
 /// The bytes of `regions`, in order, which a `read_raw` of the same window
 /// would have returned. `total` is their summed length.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-))]
+#[krabka_macros::sendfile_cfg]
 fn read_regions(regions: &[FileRegion], total: usize) -> io::Result<bytes::Bytes> {
     use std::os::unix::fs::FileExt as _;
 
@@ -777,7 +731,7 @@ mod tests {
         krabka_log::{DeliveryPolicy, Log, LogConfig, LogError, Offset},
         krabka_protocol::{
             owned::fetch_response::{AbortedTransaction, PartitionData},
-            records::{Attributes, Record, RecordBatch, RecordsPayload},
+            records::{Attributes, Record, RecordBatch, RecordsError, RecordsPayload},
         },
         krabka_units::prelude::{ByteSizeExt as _, mebibytes},
         std::{
@@ -1533,6 +1487,9 @@ mod tests {
             "corrupt-record-batch-header" => {
                 BrokerError::Log(LogError::Corrupt("record batch header".into()))
             }
+            "record-batch-that-does-not-parse" => BrokerError::Log(LogError::Records(
+                RecordsError::RecordParse("record batch".into()),
+            )),
             "task-panic-boom" => read_task_panicked(&"boom"),
             other => panic!("unknown read failure {other}"),
         });

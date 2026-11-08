@@ -24,10 +24,7 @@ use {
     crate::{error::LogError, log_start_offset_checkpoint},
     krabka_ids::Offset,
     krabka_units::prelude::TimeExt as _,
-    std::{
-        sync::PoisonError,
-        time::{Duration, Instant},
-    },
+    std::time::{Duration, Instant},
 };
 
 impl Log {
@@ -52,9 +49,7 @@ impl Log {
             // Kafka's setting is an `Int` of milliseconds, so no larger
             // interval can overflow the deadline.
             let interval = self
-                .config
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
+                .config()
                 .start_offset_checkpoint_interval
                 .millis_i64_trunc()
                 .clamp(0, i64::from(i32::MAX));

@@ -44,9 +44,9 @@ use {
         lag::{future_offset_lag, offset_lag_for},
     },
     crate::{
-        codes, future_log::FutureLogState, handlers::cluster_describe_denied, partition::Partition,
+        codes, future_log::FutureLogRegistry, handlers::cluster_describe_denied,
+        partition::Partition,
     },
-    dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{
         collections::HashMap,
@@ -198,22 +198,21 @@ struct LoadedLog {
 /// directory that holds it.
 fn loaded_logs_by_dir(
     hosted: &[Arc<Partition>],
-    future_logs: &DashMap<(String, PartitionIndex), Arc<FutureLogState>>,
+    future_logs: &FutureLogRegistry,
     filter: &Filter,
 ) -> HashMap<PathBuf, Vec<LoadedLog>> {
     let mut logs: Vec<_> = hosted
         .iter()
         .map(|part| (part.topic.clone(), part.index, false, Arc::clone(&part.log)))
         .collect();
-    logs.extend(future_logs.iter().map(|entry| {
-        let (topic, partition) = entry.key();
-        (
-            topic.clone(),
-            *partition,
-            true,
-            Arc::clone(&entry.value().future_log),
-        )
-    }));
+    logs.extend(
+        future_logs
+            .entries()
+            .into_iter()
+            .map(|((topic, partition), state)| {
+                (topic, partition, true, Arc::clone(&state.future_log))
+            }),
+    );
     let mut by_dir: HashMap<PathBuf, Vec<LoadedLog>> = HashMap::new();
     for (topic, partition, is_future_key, log) in logs {
         if !filter.allows(&topic, partition.0) {

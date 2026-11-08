@@ -7,8 +7,7 @@ use {
         broker::Broker,
         error::BrokerError,
         handlers::RequestContext,
-        metrics::QuotaType,
-        quota::{QuotaDelay, consume_producer_quota, throttle_time_ms},
+        quota::{QuotaDelay, QuotaType, consume_producer_quota, throttle_time_ms},
     },
     bytes::{Bytes, BytesMut},
     krabka_protocol::{

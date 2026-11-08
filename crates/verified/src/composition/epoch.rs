@@ -93,7 +93,11 @@ pub(super) fn validated_epochs_bound_truncated_fetch(
         deliverable: truncation_frontier(w.deliverable, end.0),
         ..w
     };
-    let visibility = fetch_visibility(false, true, bounded, w.log_start);
+    let visibility = fetch_visibility(
+        FetchReader::Consumer(Isolation::ReadCommitted),
+        bounded,
+        w.log_start,
+    );
     Ok(Some((found.0, bounded, visibility)))
 }
 

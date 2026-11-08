@@ -8,7 +8,7 @@
 //! `throttle_time_ms` and one channel mute (KIP-219).
 
 use {
-    super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota},
+    super::{QuotaConsumption, QuotaType, buckets::QuotaBuckets, consume_configured_quota},
     krabka_metadata::MetadataImage,
     krabka_units::{Time, convert::TimeExt},
     std::{
@@ -44,7 +44,7 @@ pub fn consume_request_quota(
             buckets,
             principal,
             client_id,
-            quota_key: "request_percentage",
+            quota_type: QuotaType::Request,
             amount: elapsed_micros,
             max_debt_wait: Some(maximum_delay),
         },

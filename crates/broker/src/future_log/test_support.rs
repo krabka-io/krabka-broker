@@ -141,7 +141,7 @@ pub(super) fn source_fixture(
 
 pub(super) struct RegisteredSourceFixture {
     pub partition: Arc<Partition>,
-    pub future_logs: Arc<dashmap::DashMap<(String, PartitionIndex), Arc<super::FutureLogState>>>,
+    pub future_logs: Arc<super::FutureLogRegistry>,
     pub partitions: Arc<PartitionRegistry>,
 }
 
@@ -159,7 +159,7 @@ pub(super) fn registered_source_fixture(
     let partitions = Arc::new(PartitionRegistry::with_stamp_source(
         setup.stamp_source.clone(),
     ));
-    let future_logs = Arc::new(dashmap::DashMap::new());
+    let future_logs = Arc::new(super::FutureLogRegistry::default());
     let partition = source_partition()
         .primary(primary)
         .count(setup.count)
@@ -179,7 +179,7 @@ pub(super) struct PlantedFutureLog {
 }
 
 pub(super) fn plant_future_log(
-    future_logs: &dashmap::DashMap<(String, PartitionIndex), Arc<super::FutureLogState>>,
+    future_logs: &super::FutureLogRegistry,
     target: &Path,
 ) -> PlantedFutureLog {
     let OpenedFutureLog { path, log } = open_future_log(target);

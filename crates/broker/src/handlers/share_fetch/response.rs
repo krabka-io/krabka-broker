@@ -9,12 +9,14 @@
 
 use {
     super::pending::PendingPartition,
-    crate::{codes, handlers::ApiVersion},
+    crate::{
+        codes,
+        handlers::{ApiVersion, LeaderHint},
+    },
     krabka_protocol::{
         Encode as _,
         owned::share_fetch_response::{
-            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
-            ShareFetchableTopicResponse,
+            NodeEndpoint, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
         },
         primitives::uuid::Uuid,
     },
@@ -28,19 +30,11 @@ pub(super) fn partition_response(partition_index: i32) -> PartitionData {
     }
 }
 
-pub(super) fn not_leader_response(
-    partition_index: i32,
-    leader_id: i32,
-    leader_epoch: i32,
-) -> PartitionData {
+pub(super) fn not_leader_response(partition_index: i32, leader: LeaderHint) -> PartitionData {
     PartitionData {
         partition_index,
         error_code: codes::NOT_LEADER_OR_FOLLOWER,
-        current_leader: LeaderIdAndEpoch {
-            leader_id,
-            leader_epoch,
-            ..Default::default()
-        },
+        current_leader: leader.into(),
         ..Default::default()
     }
 }
@@ -140,7 +134,8 @@ mod tests {
         super::*,
         assert2::assert,
         krabka_protocol::{
-            owned::share_fetch_response::AcquiredRecords, primitives::uuid::Uuid as ProtoUuid,
+            owned::share_fetch_response::{AcquiredRecords, LeaderIdAndEpoch},
+            primitives::uuid::Uuid as ProtoUuid,
         },
     };
 
@@ -150,7 +145,10 @@ mod tests {
         assert!(ordinary.partition_index == 7);
         assert!(ordinary.error_code == codes::NONE);
 
-        let redirected = not_leader_response(7, 2, 9);
+        let redirected = not_leader_response(7, LeaderHint {
+            leader_id: 2,
+            leader_epoch: 9,
+        });
         assert!(redirected.partition_index == 7);
         assert!(redirected.error_code == codes::NOT_LEADER_OR_FOLLOWER);
         assert!(redirected.current_leader.leader_id == 2);

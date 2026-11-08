@@ -257,6 +257,7 @@ async fn unload_partition(
     // Offset-only groups have a classic actor but no protocol-type record.
     // Include every live actor and seed map so losing an offsets partition
     // cannot leave any stale coordinator state reachable on the old leader.
+    // Respawn seeds too: one can outlive its actor's entry.
     let mut known_group_ids = HashSet::new();
     known_group_ids.extend(
         coordinator
@@ -281,6 +282,12 @@ async fn unload_partition(
     known_group_ids.extend(
         coordinator
             .seeds_cache
+            .iter()
+            .map(|entry| entry.key().clone()),
+    );
+    known_group_ids.extend(
+        coordinator
+            .respawn_seeds
             .iter()
             .map(|entry| entry.key().clone()),
     );
@@ -324,7 +331,7 @@ async fn unload_partition(
         }
         coordinator.seeds.remove(&group_id);
         coordinator.seeds_cache.remove(&group_id);
-        coordinator.respawn_seeds.remove(&group_id);
+        coordinator.drop_respawn_seed(&group_id);
         coordinator.share_seeds.remove(&group_id);
         coordinator.share_seeds_cache.remove(&group_id);
         coordinator.streams_seeds.remove(&group_id);
@@ -346,7 +353,10 @@ mod tests {
             codes::{self, COORDINATOR_LOAD_IN_PROGRESS, NONE},
             coordinator::{
                 test_support::default_coordinator,
-                unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog},
+                unified::{
+                    ImageMetadataProvider, group::CoordinatorGroup,
+                    offsets_log::fake::InMemoryOffsetsLog,
+                },
             },
             handlers::{
                 delete_groups::handle as delete_groups_handle, heartbeat::handle,
@@ -455,6 +465,23 @@ mod tests {
         unload_partition(&coordinator, &image, PartitionIndex(0)).await;
 
         check!(metrics.consumer_group_lag.get(&label).is_none());
+    }
+
+    /// A respawn seed can outlive its group's actor entry: the streams
+    /// offset-retention reaper can drop the closed handle of an offset-home
+    /// actor that stopped after a failed write and left the seed. Losing the
+    /// offsets partition must drop that seed too, or a later term on this
+    /// broker would respawn the group from it instead of from the log.
+    #[tokio::test]
+    async fn unloading_a_partition_drops_a_respawn_seed_with_no_actor() {
+        let OffsetsPartitionCoordinator {
+            coordinator, image, ..
+        } = coordinator_of_the_offsets_partition();
+        coordinator.leave_respawn_seed(CoordinatorGroup::new_classic("billing"));
+
+        unload_partition(&coordinator, &image, PartitionIndex(0)).await;
+
+        check!(!coordinator.holds_respawn_seed("billing"));
     }
 
     /// Losing the offsets partition of a share group makes this broker stop

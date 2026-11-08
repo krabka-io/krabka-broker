@@ -61,7 +61,7 @@ impl LegacyProducer {
                 value: Some(Bytes::from(format!("value-{offset}"))),
             });
         let mut wire = BytesMut::new();
-        encode_flat_message_set(records, magic, &mut wire);
+        assert!(let Ok(()) = encode_flat_message_set(records, magic, &mut wire));
         wire.freeze()
     }
 }

@@ -9,13 +9,8 @@ use crate::broker::Broker;
 use std::future::Future;
 use {
     crate::{
-        broker::BrokerHandle,
-        clean_shutdown::write,
-        error::BrokerError,
-        future_log::{abort_moves, shutdown_moves},
-        incarnation::own_broker_epoch,
-        partition::Partition,
-        partition_registry::PartitionRegistry,
+        broker::BrokerHandle, clean_shutdown::write, error::BrokerError,
+        incarnation::own_broker_epoch, partition::Partition, partition_registry::PartitionRegistry,
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
@@ -459,10 +454,14 @@ impl BrokerHandle {
         self.stop_listeners().await;
         self.broker.share_partition_leaders.shutdown().await;
 
-        // The supervisor's cancellation epilogue aborts and joins its private
-        // ordinary and WAL follower tasks. Its run loop races every reconcile
-        // after startup against this token, so awaiting it is bounded even if
-        // a network-backed reconciliation was in flight.
+        // The supervisor's cancellation epilogue signals its private ordinary
+        // and WAL follower tasks and joins them, aborting a fetcher still
+        // running after `TASK_STOP_TIMEOUT` (5 s); a WAL follower, which owns
+        // its shard's files, is never aborted. A follower therefore stops at its
+        // next shutdown check rather than at an arbitrary await, which is
+        // still a point where a process can die. Its run loop races every
+        // reconcile after startup against this token, so awaiting it is
+        // bounded even if a network-backed reconciliation was in flight.
         let task = self.broker.supervisor_handle.lock().await.take();
         if let Some(task) = task {
             let _ = task.await;
@@ -478,7 +477,7 @@ impl BrokerHandle {
             let _ = task.await;
         }
 
-        shutdown_moves(&self.broker.future_logs).await;
+        self.broker.future_logs.shutdown().await;
         shutdown_partition_writers(&self.broker.partitions).await;
         let task = self.broker.audit_writer_handle.lock().await.take();
         if let Some(task) = task {
@@ -591,7 +590,7 @@ impl BrokerHandle {
         if let Some(task) = task {
             let _ = task.await;
         }
-        shutdown_moves(&self.broker.future_logs).await;
+        self.broker.future_logs.shutdown().await;
         shutdown_partition_writers(&self.broker.partitions).await;
         close_logs(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;
@@ -644,7 +643,7 @@ impl Drop for BrokerHandle {
         {
             task.abort();
         }
-        abort_moves(&self.broker.future_logs);
+        self.broker.future_logs.abort();
         abort_partition_writers(&self.broker.partitions);
     }
 }

@@ -47,7 +47,7 @@ pub(super) struct RoundTrip {
 
 pub(super) fn round_trip(message: &Message) -> RoundTrip {
     let mut buffer = bytes::BytesMut::new();
-    message.encode_into(&mut buffer);
+    message.encode_into(&mut buffer).unwrap();
     let decoded = Message::decode_from(&mut &buffer[..], message.encoded_len()).unwrap();
     RoundTrip { buffer, decoded }
 }

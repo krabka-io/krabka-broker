@@ -149,7 +149,7 @@ fn put_frame(offset: i64, message: &Message, buf: &mut BytesMut) {
     assert!(let Ok(size) = i32::try_from(message.encoded_len()));
     buf.put_i64(offset);
     buf.put_i32(size);
-    message.encode_into(buf);
+    assert!(let Ok(()) = message.encode_into(buf));
 }
 
 /// A compressed wrapper message, assembled on the wire by hand.
@@ -200,7 +200,7 @@ impl Wrapper {
     /// records carry.
     fn around(self, inner: &[ParsedRecord], inner_magic: Magic) -> Self {
         let mut set = BytesMut::new();
-        encode_flat_message_set(inner.to_vec(), inner_magic, &mut set);
+        assert!(let Ok(()) = encode_flat_message_set(inner.to_vec(), inner_magic, &mut set));
         self.around_message_set(set.freeze())
     }
 

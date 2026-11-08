@@ -8,7 +8,7 @@ use {
         bound::{fetch_bound, last_fetchable_offset},
         leadership::resolve_for_broker,
         remote::concurrently,
-        resolve::{LatestContext, LatestSnapshot, TopicPartitionName, resolve_latest},
+        resolve::{LatestContext, PartitionLogSnapshot, TopicPartitionName, resolve_latest},
     },
     crate::{
         broker::Broker, codes, config_keys::resolve_remote_list_offsets_timeout,
@@ -117,13 +117,11 @@ async fn resolve_partition(
         Err(error_code) => return error_response(request.index, error_code),
     };
 
-    let (local_end, local_start, deleted_below, config, offsets) = {
+    // The legacy offsets come from the same log mutex hold as the snapshot.
+    let (snapshot, offsets) = {
         let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         (
-            log.log_end_offset().0,
-            log.local_log_start_offset().0,
-            log.established_log_start(),
-            log.config_snapshot(),
+            PartitionLogSnapshot::of(&log),
             log.legacy_offsets_before(request.timestamp, max_num_offsets),
         )
     };
@@ -138,7 +136,7 @@ async fn resolve_partition(
         let image = broker.controller.current_image();
         let remote_topic_id = image
             .topic(topic)
-            .filter(|_| config.remote_storage_enable)
+            .filter(|_| snapshot.log_config.remote_storage_enable)
             .map(|topic| topic.topic_id);
         let timeout = resolve_remote_list_offsets_timeout(&image, broker.config.node_id);
         match resolve_latest(LatestContext {
@@ -150,12 +148,7 @@ async fn resolve_partition(
             },
             remote_timeout: timeout,
             remote_topic_id,
-            snapshot: LatestSnapshot {
-                config: &config,
-                local_end,
-                local_log_start: local_start,
-                deleted_below,
-            },
+            snapshot: &snapshot,
         })
         .await
         {

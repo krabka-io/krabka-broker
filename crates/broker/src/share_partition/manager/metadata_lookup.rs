@@ -7,24 +7,26 @@
 //! step and because they are the only methods here that read metadata rather
 //! than acquisition state.
 
-use {super::SharePartitionLeaderManager, krabka_ids::PartitionIndex, std::sync::atomic::Ordering};
+use {
+    super::SharePartitionLeaderManager, crate::handlers::LeaderHint, krabka_ids::PartitionIndex,
+    std::sync::atomic::Ordering,
+};
 
 impl SharePartitionLeaderManager {
-    /// Resolves the wire `(leader_id, leader_epoch)` for
-    /// `(topic_id, partition)`.
+    /// Resolves the leader hint for `(topic_id, partition)`.
     ///
     /// The values come from the metadata image. A not-leader `ShareFetch` or
     /// `ShareAcknowledge` response carries them as the `current_leader`
-    /// redirect hint. This method returns `(-1, -1)` when the topic or the
-    /// partition is unknown.
-    pub(crate) fn current_leader_of(&self, topic_id: uuid::Uuid, partition: i32) -> (i32, i32) {
+    /// redirect hint. This method returns [`LeaderHint::UNKNOWN`] when the
+    /// topic or the partition is unknown.
+    pub(crate) fn current_leader_of(&self, topic_id: uuid::Uuid, partition: i32) -> LeaderHint {
         let image = self.controller.current_image();
         let Some(topic) = image.topic_name_by_id(&topic_id) else {
-            return (-1, -1);
+            return LeaderHint::UNKNOWN;
         };
-        image.partition(topic, partition).map_or((-1, -1), |p| {
-            (i32::try_from(p.leader.0).unwrap_or(-1), p.leader_epoch.0)
-        })
+        image
+            .partition(topic, partition)
+            .map_or(LeaderHint::UNKNOWN, LeaderHint::of)
     }
 
     /// Resolves the data-topic name for `topic_id` from the metadata image.
@@ -76,7 +78,10 @@ impl SharePartitionLeaderManager {
 #[cfg(test)]
 mod tests {
     use {
-        crate::share_partition::manager::test_support::{manager, manager_with_image},
+        crate::{
+            handlers::LeaderHint,
+            share_partition::manager::test_support::{manager, manager_with_image},
+        },
         assert2::assert,
         krabka_ids::LeaderEpoch,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
@@ -119,10 +124,28 @@ mod tests {
         let mgr = manager_with_image(image);
 
         // Known partition resolves to (leader_id, leader_epoch) from the image.
-        assert!(mgr.current_leader_of(tid, 0) == (2, 5));
+        assert!(
+            mgr.current_leader_of(tid, 0)
+                == LeaderHint {
+                    leader_id: 2,
+                    leader_epoch: 5
+                }
+        );
         // Unknown partition of a known topic -> (-1, -1).
-        assert!(mgr.current_leader_of(tid, 9) == (-1, -1));
+        assert!(
+            mgr.current_leader_of(tid, 9)
+                == LeaderHint {
+                    leader_id: -1,
+                    leader_epoch: -1
+                }
+        );
         // Unknown topic -> (-1, -1).
-        assert!(mgr.current_leader_of(uuid::Uuid::from_bytes([99; 16]), 0) == (-1, -1));
+        assert!(
+            mgr.current_leader_of(uuid::Uuid::from_bytes([99; 16]), 0)
+                == LeaderHint {
+                    leader_id: -1,
+                    leader_epoch: -1
+                }
+        );
     }
 }

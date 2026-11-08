@@ -7,8 +7,7 @@
 
 use {
     super::{
-        FutureLogState, MoveError, MovePolicy, canonicalize_or_self,
-        cleanup::cancel_move,
+        FutureLogRegistry, FutureLogState, MoveError, MoveGuard, MovePolicy, canonicalize_or_self,
         configured_log_dir, future_dir_name_too_long,
         replicator::{ReplicatorTask, replicator_loop},
     },
@@ -16,13 +15,12 @@ use {
         error::BrokerError, log_dir, log_dir_status::LogDirRegistry, partition::Partition,
         partition_registry::PartitionRegistry,
     },
-    dashmap::DashMap,
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig},
     std::{
         fs, io,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, PoisonError},
     },
     tokio_util::sync::CancellationToken,
 };
@@ -34,10 +32,15 @@ use {
 /// Idempotency: if a move with the same target is already in flight,
 /// returns `Ok(())` without spawning a second task. If its target differs,
 /// the old task and future log are removed before the replacement starts.
+///
+/// The caller holds the broker's [`MoveLock`](super::MoveLock) for the whole call, as the
+/// `_move_guard` shows, so no other move can start between the check for a
+/// move in flight and the registration of a new one.
 #[bon::builder]
 pub async fn start_move(
+    _move_guard: &MoveGuard<'_>,
     partitions: &Arc<PartitionRegistry>,
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: &Arc<FutureLogRegistry>,
     all_log_dirs: &[PathBuf],
     log_dir_status: &LogDirRegistry,
     log_config: &LogConfig,
@@ -90,11 +93,11 @@ pub async fn start_move(
     // (3) Already moving? Keep a same-target request idempotent. Kafka stops
     //     and removes a future replica when a later request changes its
     //     destination, including when the new destination is the current dir.
-    if let Some(existing) = future_logs.get(&key).map(|e| Arc::clone(e.value())) {
+    if let Some(existing) = future_logs.get(&key) {
         if canonicalize_or_self(&existing.target_log_dir) == canonicalize_or_self(&target_log_dir) {
             return Ok(());
         }
-        cancel_move(future_logs, &key, existing).await?;
+        future_logs.cancel(&key, existing).await?;
     }
 
     // (4) Already in the target dir? No-op success. This check must follow
@@ -110,7 +113,6 @@ pub async fn start_move(
     let future_log = open_future_log(partitions, &future_path, log_config)?;
 
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir,
         future_path,
@@ -130,7 +132,7 @@ pub async fn start_move(
 /// future log already holds.
 pub fn resume_move(
     partitions: &Arc<PartitionRegistry>,
-    future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: &Arc<FutureLogRegistry>,
     target_log_dir: &Path,
     log_config: &LogConfig,
     topic: &str,
@@ -143,7 +145,6 @@ pub fn resume_move(
     let future_path = log_dir::future_partition_dir(target_log_dir, topic, partition.get());
     let future_log = open_future_log(partitions, &future_path, log_config)?;
     spawn_move(MoveTask {
-        partitions: Arc::clone(partitions),
         future_logs: Arc::clone(future_logs),
         target_log_dir: target_log_dir.to_path_buf(),
         future_path,
@@ -172,8 +173,7 @@ fn open_future_log(
 /// `FutureLogState`, inserts it into the registry, and spawns the
 /// per-move replicator task.
 struct MoveTask {
-    partitions: Arc<PartitionRegistry>,
-    future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    future_logs: Arc<FutureLogRegistry>,
     target_log_dir: PathBuf,
     future_path: PathBuf,
     future_log: Arc<Mutex<Log>>,
@@ -187,39 +187,48 @@ fn spawn_move(task: MoveTask) {
     let cancel = CancellationToken::new();
     let target_partition_path =
         log_dir::partition_dir(&task.target_log_dir, &task.topic, task.partition.get());
-    let replicator = tokio::spawn(replicator_loop(ReplicatorTask {
-        part: task.part,
-        future_log: Arc::clone(&task.future_log),
-        future_path: task.future_path.clone(),
-        target_partition_path,
+    let state = Arc::new(FutureLogState {
         target_log_dir: task.target_log_dir.clone(),
+        future_path: task.future_path.clone(),
+        future_log: Arc::clone(&task.future_log),
         cancel: cancel.clone(),
-        _partitions: task.partitions,
-        future_logs: Arc::clone(&task.future_logs),
-        topic: task.topic.clone(),
+        task: Mutex::new(None),
+    });
+    // The entry is published before the task starts, so a task that ends at
+    // once removes it rather than racing ahead of the insert. The task slot
+    // stays locked until it holds the handle, so a cancel or shutdown that
+    // finds the entry in between waits for the handle to abort and await.
+    let mut slot = state.task.lock().unwrap_or_else(PoisonError::into_inner);
+    task.future_logs
+        .insert((task.topic.clone(), task.partition), Arc::clone(&state));
+    *slot = Some(tokio::spawn(replicator_loop(ReplicatorTask {
+        part: task.part,
+        future_log: task.future_log,
+        future_path: task.future_path,
+        target_partition_path,
+        target_log_dir: task.target_log_dir,
+        cancel,
+        future_logs: task.future_logs,
+        registration: Arc::clone(&state),
+        topic: task.topic,
         partition: task.partition,
         policy: task.policy,
-    }));
-    let state = Arc::new(FutureLogState {
-        target_log_dir: task.target_log_dir,
-        future_path: task.future_path,
-        future_log: task.future_log,
-        cancel,
-        task: Mutex::new(Some(replicator)),
-    });
-    task.future_logs.insert((task.topic, task.partition), state);
+    })));
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::future_log::test_support::{
-            PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
-            test_policy,
+        crate::future_log::{
+            MoveLock,
+            test_support::{
+                PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
+                test_policy,
+            },
         },
         assert2::assert,
-        std::time::Duration,
+        std::{iter, time::Duration},
         tempfile::tempdir,
         tokio::{task, time},
     };
@@ -228,7 +237,7 @@ mod tests {
 
     async fn move_with_defaults(
         partitions: &Arc<PartitionRegistry>,
-        future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        future_logs: &Arc<FutureLogRegistry>,
         dirs: &[PathBuf],
         status: &LogDirRegistry,
         topic_id: Option<uuid::Uuid>,
@@ -236,6 +245,7 @@ mod tests {
     ) -> Result<(), MoveError> {
         // The existing start_move API takes one topic/partition pair.
         start_move()
+            .move_guard(&MoveLock::default().lock().await)
             .partitions(partitions)
             .future_logs(future_logs)
             .all_log_dirs(dirs)
@@ -262,14 +272,14 @@ mod tests {
     struct MoveRegistries {
         log_dirs: Vec<PathBuf>,
         partitions: Arc<PartitionRegistry>,
-        future_logs: Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        future_logs: Arc<FutureLogRegistry>,
     }
 
     fn empty_move_registries(log_dirs: Vec<PathBuf>) -> MoveRegistries {
         MoveRegistries {
             log_dirs,
             partitions: Arc::new(PartitionRegistry::new()),
-            future_logs: Arc::new(DashMap::new()),
+            future_logs: Arc::new(FutureLogRegistry::default()),
         }
     }
 
@@ -283,7 +293,7 @@ mod tests {
         MoveRegistries {
             log_dirs: vec![primary.to_path_buf(), target.to_path_buf()],
             partitions,
-            future_logs: Arc::new(DashMap::new()),
+            future_logs: Arc::new(FutureLogRegistry::default()),
         }
     }
 
@@ -293,7 +303,7 @@ mod tests {
         // returns LogDirNotFound before it ever looks at the
         // partition map.
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let log_dirs: Vec<PathBuf> = vec![];
         let bogus = tempdir().unwrap();
         let err = move_with_defaults(
@@ -312,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn move_error_replica_not_available_when_partition_missing() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let dir = tempdir().unwrap();
         let err = move_with_defaults(
             &partitions,
@@ -331,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_target_does_not_replace_precreation_preference() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let valid = tempdir().unwrap();
         let invalid = tempdir().unwrap();
         partitions.set_preferred_log_dir(
@@ -450,7 +460,7 @@ mod tests {
     #[test]
     fn resume_move_errors_when_partition_missing() {
         let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
+        let future_logs = Arc::new(FutureLogRegistry::default());
         let target = tempdir().unwrap();
 
         let err = resume_move(
@@ -497,6 +507,62 @@ mod tests {
         .await
         .expect("same-target alter must be idempotent");
         assert!(future_logs.len() == 1);
+    }
+
+    /// A policy whose throttle never grants a chunk, so a move task runs
+    /// until something stops it.
+    fn stalled_policy() -> MovePolicy {
+        let policy = test_policy();
+        policy
+            .throttle
+            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1), krabka_units::bytes(0));
+        policy
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_moves_of_one_partition_leave_no_orphaned_task() {
+        for _ in 0..200 {
+            let primary = tempdir().unwrap();
+            let target = tempdir().unwrap();
+            let source = registered_source_fixture().primary(primary.path()).call();
+            let move_lock = Arc::new(MoveLock::default());
+            let log_dirs = Arc::new(vec![
+                primary.path().to_path_buf(),
+                target.path().to_path_buf(),
+            ]);
+            let requests: Vec<_> = iter::repeat_with(|| {
+                let partitions = Arc::clone(&source.partitions);
+                let future_logs = Arc::clone(&source.future_logs);
+                let log_dirs = Arc::clone(&log_dirs);
+                let move_lock = Arc::clone(&move_lock);
+                tokio::spawn(async move {
+                    start_move()
+                        .move_guard(&move_lock.lock().await)
+                        .partitions(&partitions)
+                        .future_logs(&future_logs)
+                        .all_log_dirs(&log_dirs)
+                        .log_dir_status(&LogDirRegistry::default())
+                        .log_config(&LogConfig::default())
+                        .topic_partition(("t", PartitionIndex(0)))
+                        .topic_id(None)
+                        .target_log_dir(&log_dirs[1])
+                        .policy(stalled_policy())
+                        .call()
+                        .await
+                })
+            })
+            .take(2)
+            .collect();
+            for request in requests {
+                request.await.unwrap().expect("both requests succeed");
+            }
+
+            source.future_logs.shutdown().await;
+
+            // Every move task holds the partition registry. Once shutdown
+            // has stopped the registered moves, no task may still hold it.
+            assert!(Arc::strong_count(&source.partitions) == 1);
+        }
     }
 
     #[tokio::test]

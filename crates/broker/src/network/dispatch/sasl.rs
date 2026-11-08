@@ -166,28 +166,24 @@ pub(super) struct SaslConnection<'a, 'b> {
 /// Counts and audits one authentication that failed before any credential was
 /// judged: a request the per-state gate refused, or a frame over
 /// `sasl.server.max.receive.size`. The row names the mechanism a handshake
-/// chose, or the `Unknown` sentinel when none did.
+/// chose, or the `Unknown` sentinel when none did, and an unidentified
+/// principal carries that mechanism's auth method, as every other failure row
+/// does.
 pub(super) fn record_refused_authentication(
     AuthenticationSinks { metrics, audit_log }: AuthenticationSinks<'_>,
     auth: &ConnectionAuth,
     peer: &SocketAddr,
     reason: &str,
 ) {
-    let mech_label = auth
-        .negotiated_mechanism()
-        .map_or(UNKNOWN_LABEL, SaslMechanism::wire_name);
+    let mechanism = auth.negotiated_mechanism();
+    let mech_label = mechanism.map_or(UNKNOWN_LABEL, SaslMechanism::wire_name);
     metrics.record_authentication(mech_label, false);
     emit_authentication(
         audit_log,
         peer,
         mech_label,
-        auth.principal().map_or_else(
-            || krabka_audit::AuditPrincipal {
-                name: String::new(),
-                auth_method: format!("{:?}", AuthMethod::Anonymous),
-            },
-            audit_principal,
-        ),
+        auth.principal()
+            .map_or_else(|| unidentified_principal(mechanism), audit_principal),
         krabka_audit::AuditOutcome::Failure,
         Some(reason.to_owned()),
     );
@@ -522,8 +518,7 @@ async fn run_authenticate(
             req,
             auth,
             &broker.config.oauthbearer_validator,
-            &broker.config.oauthbearer_jwks_cache_generation,
-            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
+            &broker.config.oauthbearer_jwks_snapshot(),
             now_ms,
             max_reauth,
         )
@@ -630,6 +625,21 @@ pub fn audit_principal(principal: &Principal) -> krabka_audit::AuditPrincipal {
     }
 }
 
+/// The audit principal of a failed authentication that resolved no
+/// principal: no name, and the auth method of the mechanism a handshake
+/// chose, or `Anonymous` when none did. Every failure row without a principal
+/// is built here, so the data plane and the controller listener spell it the
+/// same way.
+pub fn unidentified_principal(mechanism: Option<SaslMechanism>) -> krabka_audit::AuditPrincipal {
+    krabka_audit::AuditPrincipal {
+        name: String::new(),
+        auth_method: format!(
+            "{:?}",
+            mechanism.map_or(AuthMethod::Anonymous, AuthMethod::from_sasl)
+        ),
+    }
+}
+
 /// Names the identity a *failed* exchange claimed, where the connection state
 /// resolved no principal.
 ///
@@ -656,10 +666,7 @@ fn claimed_principal(
     };
     krabka_audit::AuditPrincipal {
         name,
-        auth_method: format!(
-            "{:?}",
-            mechanism.map_or(AuthMethod::Anonymous, |m| { AuthMethod::from_sasl(m) })
-        ),
+        ..unidentified_principal(mechanism)
     }
 }
 
@@ -808,6 +815,60 @@ mod tests {
                 port: 9092,
             },
             Some("authentication failed".to_owned()),
+        );
+        assert!(rx.try_recv().is_err(), "exactly one row per refusal");
+    }
+
+    /// A request the per-state gate refuses after a PLAIN handshake is one
+    /// failure row under the handshake's mechanism. No credential was judged,
+    /// so the row names no user, and its auth method is the mechanism's, the
+    /// same as a refused controller-listener login's.
+    #[test]
+    fn a_gate_refusal_after_a_plain_handshake_audits_one_unnamed_failure() {
+        let mut auth = ConnectionAuth::Anonymous;
+        let mut last_start_ms = None;
+        let handshake = SaslHandshakeRequest {
+            mechanism: "PLAIN".into(),
+            ..Default::default()
+        };
+        handle_handshake(
+            &handshake,
+            &mut auth,
+            &[SaslMechanism::Plain],
+            &mut ReauthClock {
+                now_ms: 0,
+                last_start_ms: &mut last_start_ms,
+            },
+        );
+        assert!(auth.negotiated_mechanism() == Some(SaslMechanism::Plain));
+        let peer: SocketAddr = "192.0.2.9:9092".parse().expect("peer addr");
+        let metrics = BrokerMetrics::new();
+        let (log, mut rx) = krabka_audit::AuditLog::new(8);
+
+        record_refused_authentication(
+            AuthenticationSinks {
+                metrics: &metrics,
+                audit_log: log.as_ref(),
+            },
+            &auth,
+            &peer,
+            "request blocked by per-state auth gate",
+        );
+
+        let event = rx.try_recv().expect("the refused authentication row");
+        assert_authentication_event(
+            &event,
+            krabka_audit::AuditOutcome::Failure,
+            "PLAIN",
+            krabka_audit::AuditPrincipal {
+                name: String::new(),
+                auth_method: "SaslPlain".into(),
+            },
+            krabka_audit::AuditEndpoint {
+                ip: "192.0.2.9".into(),
+                port: 9092,
+            },
+            Some("request blocked by per-state auth gate".to_owned()),
         );
         assert!(rx.try_recv().is_err(), "exactly one row per refusal");
     }
