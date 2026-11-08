@@ -368,7 +368,7 @@ mod tests {
             ("127.0.0.1:9001", true),
         },
     )]
-    fn a_join_goes_to_the_known_leader_and_to_a_bootstrap_server_otherwise(
+    fn a_voter_request_goes_to_the_known_leader_and_to_a_bootstrap_server_otherwise(
         case: &str,
         quorum: krabka_raft::QuorumState,
         attempt: usize,
