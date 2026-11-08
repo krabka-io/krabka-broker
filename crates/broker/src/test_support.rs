@@ -3093,7 +3093,7 @@ pub async fn committed_partition(
         false,
     )
     .unwrap();
-    part.current_leader.store(leader.0, Ordering::Relaxed);
+    part.test_set_leader(leader.0);
     part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
     part
 }

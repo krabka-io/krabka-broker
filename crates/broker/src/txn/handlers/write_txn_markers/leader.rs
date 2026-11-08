@@ -26,7 +26,7 @@ use {
     krabka_log::Offset,
     krabka_metadata::NodeId,
     std::{
-        sync::{Arc, atomic::Ordering},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -133,8 +133,7 @@ impl PendingMarker {
         let waited = self
             .partition
             .await_committed_while(self.end_offset, deadline, None, |partition, _| {
-                partition.current_leader.load(Ordering::Acquire) == leader
-                    && partition.current_leader_epoch.load(Ordering::Acquire) == epoch
+                partition.leader() == leader && partition.leader_epoch() == epoch
             })
             .await;
         let code = match waited {

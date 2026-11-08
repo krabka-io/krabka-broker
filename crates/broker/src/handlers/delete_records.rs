@@ -104,7 +104,7 @@ use {
         partition::Partition,
         partition_registry::PartitionRegistry,
     },
-    std::sync::{Arc, PoisonError, atomic},
+    std::sync::{Arc, PoisonError},
 };
 
 fn delete_records_transition<'a>(
@@ -520,7 +520,7 @@ fn admit_partition(env: &TrimEnv<'_>, topic: &str, index: i32) -> Result<Arc<Par
         return Err(codes::NOT_LEADER_OR_FOLLOWER);
     };
 
-    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
+    let cur_leader = part.leader();
     if cur_leader != env.broker.config.node_id {
         return Err(codes::NOT_LEADER_OR_FOLLOWER);
     }

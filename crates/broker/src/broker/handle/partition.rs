@@ -10,7 +10,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::Time,
-    std::sync::{Arc, atomic::Ordering},
+    std::sync::Arc,
 };
 
 impl BrokerHandle {
@@ -263,7 +263,7 @@ impl BrokerHandle {
         n: usize,
     ) -> Result<i64, BrokerError> {
         let part = self.local_partition(topic, partition)?;
-        let leader_epoch = part.current_leader_epoch.load(Ordering::Acquire);
+        let leader_epoch = part.leader_epoch().get();
         let mut last_offset = 0i64;
         for i in 0..n {
             let batch = RecordBatch {

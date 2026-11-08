@@ -134,7 +134,7 @@ impl BrokerHandle {
             .flushed_frontier(topic_id, partition);
         Some((
             part.diskless,
-            part.current_leader.load(Ordering::Acquire),
+            part.leader().get(),
             log_start,
             log_end,
             high_watermark,

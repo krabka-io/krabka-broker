@@ -250,12 +250,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     assert!(handle.partition_exists_for_test(local_topic, 0));
     assert!(handle.local_log_end_offset(local_topic, 0) == Some(2));
     handle.test_set_leader_epoch(local_topic, 0, 7);
-    assert!(
-        local_part
-            .current_leader_epoch
-            .load(atomic::Ordering::Acquire)
-            == 7
-    );
+    assert!(local_part.leader_epoch() == 7);
     handle
         .test_truncate_local_log(local_topic, 0, 1)
         .await

@@ -29,7 +29,7 @@ use {
     std::{
         cmp::Reverse,
         collections::{BinaryHeap, HashMap, HashSet},
-        sync::{Arc, atomic::Ordering},
+        sync::Arc,
         time::Duration,
     },
     tokio_util::sync::CancellationToken,
@@ -230,7 +230,7 @@ fn sweep(
             topic: partition.topic.clone(),
             index: partition.index,
         };
-        if partition.current_leader.load(Ordering::Relaxed) != node_id {
+        if partition.leader_relaxed() != node_id {
             heap.forget(&key);
             continue;
         }

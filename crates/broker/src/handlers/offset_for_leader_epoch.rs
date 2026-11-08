@@ -82,7 +82,7 @@ fn not_leader(
     partition: &Partition,
     node_id: krabka_metadata::NodeId,
 ) -> bool {
-    let installed = partition.current_leader.load(Ordering::Acquire) == node_id.0;
+    let installed = partition.leader() == node_id.0;
     let committed_elsewhere = image
         .partition(topic, partition_index)
         .is_some_and(|record| record.leader != node_id);
@@ -534,7 +534,7 @@ mod tests {
         let partition = time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
-                    && partition.current_leader.load(Ordering::Acquire) == leader.0
+                    && partition.leader() == leader.0
                 {
                     return partition;
                 }

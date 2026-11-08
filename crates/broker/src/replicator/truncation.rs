@@ -40,7 +40,7 @@ use {
         UNKNOWN_PENDING_UPLOAD_OFFSET, earliest_pending_upload_offset,
         should_fetch_from_last_tiered_offset,
     },
-    std::sync::{PoisonError, atomic},
+    std::sync::PoisonError,
     tracing::{info, warn},
 };
 
@@ -411,14 +411,12 @@ const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAction {
     // Asked under the epoch the local partition last saw; a partition that is
     // gone is caught by the recovery itself, which asks nothing then.
-    let our_epoch =
-        cfg.partitions
-            .get(&cfg.topic, cfg.partition)
-            .map_or(cfg.leader_epoch.0, |partition| {
-                partition
-                    .current_leader_epoch
-                    .load(atomic::Ordering::Acquire)
-            });
+    let our_epoch = cfg
+        .partitions
+        .get(&cfg.topic, cfg.partition)
+        .map_or(cfg.leader_epoch.0, |partition| {
+            partition.leader_epoch().get()
+        });
     recover_offset_moved_to_tiered_storage(cfg, |timestamp| {
         leader_list_offset(cfg, our_epoch, timestamp)
     })
@@ -700,7 +698,7 @@ where
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return Ok(());
     };
-    let current_leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let current_leader_epoch = part.leader_epoch().get();
     let latest_epoch = part
         .log
         .lock()
@@ -1421,9 +1419,7 @@ mod tests {
     ) -> FenceRecovery {
         let (cfg, _log_dir, partition) = replica_with_batches(batches);
         partition.set_follower_hw(Offset(high_watermark)).await;
-        partition
-            .current_leader_epoch
-            .store(7, atomic::Ordering::Release);
+        partition.test_set_leader_epoch(7);
         let asked = RefCell::new(None);
         recover_epoch_fence(&cfg, |query| {
             *asked.borrow_mut() = Some(query);

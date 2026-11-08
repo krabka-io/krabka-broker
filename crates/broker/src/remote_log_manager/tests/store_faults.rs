@@ -312,7 +312,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
     partitions.insert("orders".into(), PartitionIndex(0), first);
     let second_dir = tempfile::tempdir().unwrap();
     let second = tiered_partition(second_dir.path()).partition;
-    second.current_leader.store(1, Ordering::Relaxed);
+    second.test_set_leader(1);
     partitions.insert("orders".into(), PartitionIndex(1), second);
 
     let StoreBackend { store, rsm } = store_backend(stalling_store);

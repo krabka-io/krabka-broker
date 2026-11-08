@@ -97,7 +97,7 @@ mod tests {
         },
         assert2::assert,
         krabka_raft::NodeId,
-        std::sync::{Arc, atomic::Ordering},
+        std::sync::Arc,
     };
 
     /// One entry of a leader-epoch cache: an epoch and the offset it starts at.
@@ -142,8 +142,8 @@ mod tests {
         isr.sort_unstable();
         InstalledRole {
             epoch_history,
-            leader: partition.current_leader.load(Ordering::Acquire),
-            leader_epoch: partition.current_leader_epoch.load(Ordering::Acquire),
+            leader: partition.leader().get(),
+            leader_epoch: partition.leader_epoch().get(),
             isr,
         }
     }

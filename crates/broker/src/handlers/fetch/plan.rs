@@ -28,7 +28,7 @@ use {
     krabka_verified::FetchReader,
     std::{
         collections::HashSet,
-        sync::{Arc, PoisonError, atomic},
+        sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
 };
@@ -275,8 +275,7 @@ fn installed_leader_refusal(
     required_leader: Option<krabka_metadata::NodeId>,
 ) -> Option<PartitionData> {
     let node_id = required_leader?;
-    (partition.current_leader.load(atomic::Ordering::Acquire) != node_id.0)
-        .then(|| not_leader_row(image, topic, partition_index))
+    (partition.leader() != node_id.0).then(|| not_leader_row(image, topic, partition_index))
 }
 
 /// The `NOT_LEADER_OR_FOLLOWER` row of a refused leader check, naming the
@@ -733,7 +732,7 @@ pub(super) async fn plan_partition_read(
     // only on the leader.
     let leader_partition = partition
         .as_ref()
-        .filter(|partition| partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0);
+        .filter(|partition| partition.leader() == node_id.0);
     if !context.reader.is_follower()
         && let Some(leader_partition) = leader_partition
     {

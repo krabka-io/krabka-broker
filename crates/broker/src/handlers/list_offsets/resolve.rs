@@ -37,10 +37,7 @@ use {
         ListOffsetsEarliestFacts, ListOffsetsKind, ListOffsetsSelectionDecision,
         ListOffsetsSelectionFacts, list_offsets_earliest, list_offsets_selection_decision,
     },
-    std::{
-        sync::{PoisonError, atomic::Ordering},
-        time::Duration,
-    },
+    std::{sync::PoisonError, time::Duration},
 };
 
 fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
@@ -629,7 +626,7 @@ async fn resolve_kind(
             // happens to sit at -- the two agree once a record lands in the
             // new epoch, but LATEST must not wait for that.
             // `Partition.scala:1473-1475`.
-            let live_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+            let live_epoch = partition.leader_epoch().get();
             resolve_latest(LatestContext {
                 broker: ctx.broker,
                 partition,

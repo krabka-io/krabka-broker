@@ -436,8 +436,8 @@ struct LeaderFence<'a> {
 impl CopyFence for LeaderFence<'_> {
     fn holds(&self) -> bool {
         !self.shutdown.is_cancelled()
-            && self.partition.current_leader.load(Ordering::Acquire) == self.node_id
-            && self.partition.current_leader_epoch.load(Ordering::Acquire) == self.leader_epoch
+            && self.partition.leader() == self.node_id
+            && self.partition.leader_epoch() == self.leader_epoch
     }
 
     fn established_log_start(&self) -> Option<krabka_log::Offset> {
@@ -549,7 +549,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // Leadership decides which halves of the sweep run, not whether it
     // runs at all: the copy and the remote-retention pass are the
     // leader's, local retention is every replica's.
-    let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
+    let is_leader = partition.leader_relaxed() == node_id;
     // The high watermark is read before the lock, because reading it awaits.
     let high_watermark = partition.high_watermark().await;
     let Some(LogSnapshot {
@@ -603,10 +603,8 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // tier already holds keeps working, which is what makes the state a
     // freeze of the copy rather than an abandonment of the data.
     if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
-        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-        // Atomic stores the raw epoch; wrap for the remote-storage
-        // metadata seam.
-        let leader_epoch = krabka_ids::LeaderEpoch(raw_epoch);
+        let leader_epoch = partition.leader_epoch();
+        let raw_epoch = leader_epoch.get();
         let fence = LeaderFence {
             partition: &partition,
             node_id,
@@ -658,7 +656,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // against the floors this tick read first, so a raised start reaches them
     // on the next tick, and a stale lower floor only deletes less.
     if is_leader {
-        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+        let raw_epoch = partition.leader_epoch().get();
         let epoch = i64::from(raw_epoch);
         if partition.log_start_checked_epoch.load(Ordering::Acquire) != epoch {
             let fence = LeaderFence {
@@ -1247,7 +1245,7 @@ mod tests {
                 Arc::new(LaggingRlmm(inner))
             }
             Archive::LeadershipLost => {
-                partition.current_leader.store(2, Ordering::Release);
+                partition.test_set_leader(2);
                 inner
             }
         };
@@ -1335,7 +1333,7 @@ mod tests {
             "the tiered reopen takes the stale checkpoint"
         );
         let partition = test_support::leading_partition_over(PartitionIndex(0), local.path(), log);
-        partition.current_leader.store(leader, Ordering::Relaxed);
+        partition.test_set_leader(leader);
         let registry = PartitionRegistry::new();
         let fixtures::RegisteredFixture {
             controller,
@@ -1437,8 +1435,8 @@ mod tests {
     ) {
         let log_dir = tempfile::tempdir().unwrap();
         let partition = rolled_tiered_partition(log_dir.path());
-        partition.current_leader.store(1, Ordering::Release);
-        partition.current_leader_epoch.store(0, Ordering::Release);
+        partition.test_set_leader(1);
+        partition.test_set_leader_epoch(0);
         let shutdown = CancellationToken::new();
         let fence = LeaderFence {
             partition: &partition,
@@ -1447,10 +1445,8 @@ mod tests {
             shutdown: &shutdown,
         };
 
-        partition.current_leader.store(leader, Ordering::Release);
-        partition
-            .current_leader_epoch
-            .store(epoch, Ordering::Release);
+        partition.test_set_leader(leader);
+        partition.test_set_leader_epoch(epoch);
         if stopping {
             shutdown.cancel();
         }
@@ -1938,7 +1934,7 @@ mod tests {
             local_retention_size: Some(NO_BYTES),
             ..fixtures::rolled_partition_config()
         });
-        partition.current_leader.store(2, Ordering::Relaxed);
+        partition.test_set_leader(2);
         let exports = partition
             .log
             .lock()

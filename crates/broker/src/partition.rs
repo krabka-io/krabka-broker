@@ -21,7 +21,7 @@ use {
         wal::{OffsetSequencer, quorum::registry::WalShardRegistry},
     },
     arc_swap::ArcSwap,
-    krabka_ids::PartitionIndex,
+    krabka_ids::{LeaderEpoch, NodeId, PartitionIndex},
     krabka_log::{Log, Offset, ReadOutput},
     krabka_units::ByteSize,
     std::{
@@ -135,6 +135,29 @@ impl PartitionRuntimeConfig {
     }
 }
 
+/// The leader and leader epoch the metadata image names for a partition.
+///
+/// Atomic for lock-free reads in the Produce and Fetch hot paths. The broker
+/// stamps the epoch on every appended batch and validates it on every follower
+/// Fetch. Only the metadata listener moves them, when it publishes a
+/// replication target; everything else reads them through [`Partition`].
+#[derive(Debug, Default)]
+pub struct LeaderSlot {
+    node: AtomicU64,
+    epoch: AtomicI32,
+}
+
+impl LeaderSlot {
+    /// A slot that names `node` as the leader at `epoch`.
+    #[must_use]
+    pub const fn new(node: NodeId, epoch: LeaderEpoch) -> Self {
+        Self {
+            node: AtomicU64::new(node.get()),
+            epoch: AtomicI32::new(epoch.get()),
+        }
+    }
+}
+
 /// Runtime handle for a single partition.
 ///
 /// Cheap to clone. `log`, `writer_tx`, and `append_notify` are all `Arc`-ish,
@@ -186,12 +209,10 @@ pub struct Partition {
     /// The writer actor holds a clone of the same handles, so an append
     /// refreshes the mirror without reaching back through this struct.
     pub(crate) delivery: DeliveryHandles,
-    /// Current leader's `NodeId` from the metadata image. Atomic for
-    /// lock-free reads in the Produce/Fetch hot paths.
-    pub current_leader: Arc<AtomicU64>,
-    /// Current `leader_epoch` from the metadata image. The broker stamps it on
-    /// every appended batch and validates it on every follower Fetch.
-    pub current_leader_epoch: Arc<AtomicI32>,
+    /// The leader and leader epoch the metadata image names. Read them with
+    /// [`Self::leader`], [`Self::leader_epoch`] and [`Self::is_leader_at`].
+    /// A clone of the partition shares the slot.
+    pub(crate) leader_slot: Arc<LeaderSlot>,
     /// Serializes follower mutations against topic recreation and local
     /// leader/epoch installation. Replication holds a read guard through the
     /// writer acknowledgement; metadata reconciliation takes the write guard.
@@ -282,8 +303,7 @@ impl Partition {
             replica_state,
             hw_advance_notify,
             leadership_notify: Arc::new(Notify::new()),
-            current_leader: Arc::new(AtomicU64::new(0)),
-            current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            leader_slot: Arc::default(),
             delivery,
             replication_target: initial_replication_target(None),
             diskless: false,

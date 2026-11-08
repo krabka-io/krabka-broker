@@ -102,17 +102,13 @@ mod tests {
         },
         assert2::assert,
         krabka_log::Offset,
-        std::{
-            sync::atomic::Ordering,
-            time::{Duration, Instant},
-        },
+        std::time::{Duration, Instant},
     };
 
     /// Whether `partition` still has the leader and leader epoch it had when
     /// the case appended: node 1 at epoch 0.
     fn led_by_one_at_zero(partition: &Partition) -> bool {
-        partition.current_leader.load(Ordering::Acquire) == 1
-            && partition.current_leader_epoch.load(Ordering::Acquire) == 0
+        partition.leader() == 1 && partition.leader_epoch() == 0
     }
 
     /// A wait that follows no image ends with the installed leadership of the

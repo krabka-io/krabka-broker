@@ -20,7 +20,7 @@ use {
     krabka_units::convert::TimeExt as _,
     std::{
         collections::{HashMap, HashSet},
-        sync::{Arc, atomic},
+        sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     },
     tokio::time,
@@ -437,9 +437,7 @@ pub(super) fn spawn_broker_gauge_updater(
             let led = partitions
                 .arcs()
                 .iter()
-                .filter(|partition| {
-                    partition.current_leader.load(atomic::Ordering::Acquire) == node_id
-                })
+                .filter(|partition| partition.leader() == node_id)
                 .count();
             metrics.partitions_led.set(gauge_count(led));
             metrics.partitions_total.set(gauge_count(partitions.len()));

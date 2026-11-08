@@ -6,11 +6,7 @@
 //! the sentinel needs a function of its own rather than the log end offset the
 //! rest of the handler reads.
 
-use {
-    crate::partition::Partition,
-    krabka_log::DeliveryPolicy,
-    std::sync::{PoisonError, atomic},
-};
+use {crate::partition::Partition, krabka_log::DeliveryPolicy, std::sync::PoisonError};
 
 /// The offset the `LATEST` sentinel reports for one partition, before the
 /// fetchable bound is applied to it.
@@ -75,9 +71,7 @@ pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> i32
 /// the epoch it is supposed to bound: see
 /// [`resolve_partition`](super::resolve::resolve_partition).
 pub(super) fn epoch_start_offset(partition: &Partition) -> Option<i64> {
-    let current = partition
-        .current_leader_epoch
-        .load(atomic::Ordering::Acquire);
+    let current = partition.leader_epoch();
     let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     log.epoch_checkpoint()
         .entries()

@@ -31,7 +31,6 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
-    std::sync::atomic::Ordering,
 };
 
 pub fn handle(
@@ -69,7 +68,7 @@ pub fn handle(
                 )
             },
             |part| {
-                let epoch = part.current_leader_epoch.load(Ordering::Acquire);
+                let epoch = part.leader_epoch().get();
                 let log_end_offset = match part.log_end_offset() {
                     Ok(log_end_offset) => log_end_offset,
                     Err(error) => {
@@ -182,7 +181,7 @@ mod tests {
     async fn hosted_partition_reports_current_leader_epoch() {
         use {
             krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord},
-            std::sync::{Arc, atomic::Ordering},
+            std::sync::Arc,
         };
 
         let topic_uuid = uuid::Uuid::from_u128(0xABCD);
@@ -220,7 +219,7 @@ mod tests {
             .log_dir(dir.path())
             .log(log)
             .call();
-        part.current_leader_epoch.store(11, Ordering::Release);
+        part.test_set_leader_epoch(11);
         broker
             .partitions
             .insert("orders".into(), krabka_ids::PartitionIndex(0), part);
