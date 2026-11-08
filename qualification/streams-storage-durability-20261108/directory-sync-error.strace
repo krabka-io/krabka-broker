@@ -1,0 +1,10 @@
+fsync(9<<test-directory>/.pending-<attempt-uuid>>) = 0
+rename("<test-directory>/.pending-<attempt-uuid>", "<test-directory>/group-2e2e2f2e2e2f617070") = 0
+fsync(9<<test-directory>>) = -1 EIO (Input/output error) (INJECTED)
+unlink("<test-directory>/.pending-<attempt-uuid>") = -1 ENOENT (No such file or directory)
+unlinkat(9<<test-directory>>, "group-2e2e2f2e2e2f617070", 0) = 0
+unlinkat(AT_FDCWD<<worktree>>, "<test-directory>", AT_REMOVEDIR) = 0
++++ exited with 0 +++
++++ exited with 0 +++
++++ exited with 0 +++
++++ exited with 101 +++

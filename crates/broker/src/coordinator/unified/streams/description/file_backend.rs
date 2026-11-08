@@ -41,6 +41,10 @@ impl FileTopologyDescriptionBackend {
         })
     }
 
+    async fn sync_directory(&self) -> Result<(), Error> {
+        fs::File::open(&self.root).await?.sync_all().await
+    }
+
     fn path(&self, group_id: &str) -> PathBuf {
         // Hex is injective and prevents group IDs from escaping the root.
         let mut name = String::from("group-");
@@ -83,7 +87,10 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
                 file.write_all(&bytes).await?;
                 file.sync_all().await?;
                 drop(file);
-                fs::rename(&staging, path).await
+                fs::rename(&staging, path).await?;
+                // Syncing the staging inode does not persist its new directory
+                // entry. Do not acknowledge publication before both are synced.
+                self.sync_directory().await
             }
             .await;
             if result.is_err() {
@@ -125,7 +132,11 @@ impl TopologyDescriptionBackend for FileTopologyDescriptionBackend {
                     Err(_) => return Err(StorageFailure::Transient),
                 }
             }
-            Ok(())
+            // Also sync an already absent entry: an earlier attempt may have
+            // removed it but failed before syncing the directory.
+            self.sync_directory()
+                .await
+                .map_err(|_| StorageFailure::Transient)
         })
     }
 }
@@ -244,6 +255,37 @@ mod tests {
             count += 1;
         }
         assert!(count == 1, "completed attempts remove their staging names");
+    }
+
+    /// A failed delete can already have removed the published value. Retrying
+    /// must finish cleanup and remain idempotent rather than resurrecting it.
+    #[tokio::test]
+    async fn partial_delete_failure_is_retryable_after_reopen() {
+        let directory = tempfile::tempdir().expect("directory");
+        let backend = FileTopologyDescriptionBackend::new(directory.path())
+            .await
+            .expect("backend");
+        let description = TopologyDescription {
+            subtopologies: vec![],
+            global_stores: vec![],
+        };
+        backend.set("app", 7, &description).await.expect("set");
+        let legacy_staging = backend.path("app").with_extension("pending");
+        fs::create_dir(&legacy_staging)
+            .await
+            .expect("block cleanup");
+        assert!(backend.delete("app").await == Err(StorageFailure::Transient));
+        assert!(backend.get("app", 7).await == Ok(None));
+        drop(backend);
+        fs::remove_dir(legacy_staging)
+            .await
+            .expect("repair cleanup");
+        let reopened = FileTopologyDescriptionBackend::new(directory.path())
+            .await
+            .expect("reopen");
+        reopened.delete("app").await.expect("retry delete");
+        reopened.delete("app").await.expect("idempotent delete");
+        assert!(reopened.get("app", 7).await == Ok(None));
     }
 
     #[tokio::test]

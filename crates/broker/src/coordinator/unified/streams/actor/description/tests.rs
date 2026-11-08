@@ -979,9 +979,19 @@ async fn join_queued_during_backend_cleanup_cannot_revive_retired_streams_actor(
             })
             .await
             .expect("queued heartbeat");
+        let (push_reply, push_answer) = oneshot::channel();
+        stale
+            .tx
+            .send(StreamsGroupActorMessage::PushDescription {
+                push: Box::new(description_push("a", 0, 1)),
+                reply: push_reply,
+            })
+            .await
+            .expect("queue stale push during cleanup");
         release.notify_one();
         transition.await.expect("task");
         assert!(answer.await.is_err());
+        assert!(push_answer.await.is_err());
         assert!(coordinator.find_streams("app").is_none());
         assert!(backend.value.lock().expect("lock").is_none());
     }
@@ -1120,10 +1130,21 @@ async fn active_member_handoff_drains_admitted_backend_write() {
         .send(StreamsGroupActorMessage::Shutdown(reply))
         .await
         .expect("queue shutdown");
+    // A delayed request already holding the old mailbox must not write after
+    // shutdown or after the replacement coordinator restores the stored epoch.
+    let (stale_reply, stale_answer) = oneshot::channel();
+    old.tx
+        .send(StreamsGroupActorMessage::PushDescription {
+            push: Box::new(description_push("a", 0, 1)),
+            reply: stale_reply,
+        })
+        .await
+        .expect("queue stale push behind shutdown");
     assert!(!writer.is_finished());
     release.notify_one();
     assert!(writer.await.expect("writer task").0 == codes::NONE);
     stopped.await.expect("old owner drained");
+    assert!(stale_answer.await.is_err());
     assert!(old.tx.is_closed());
     let seed = first.cached_streams_seed("app").expect("durable seed");
     assert!(seed.members.contains_key("a"));
