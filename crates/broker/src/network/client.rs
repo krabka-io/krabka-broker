@@ -18,7 +18,7 @@ use {
     krabka_client_core::ClientDuplex,
     krabka_security::ListenerProtocol,
     krabka_units::{ByteSize, mebibytes},
-    std::{collections::BTreeMap, io, sync::Arc},
+    std::{collections::BTreeMap, fmt, io, sync::Arc},
     thiserror::Error,
     tokio::net::TcpStream,
     tokio_rustls::TlsConnector,
@@ -46,31 +46,57 @@ const DEFAULT_SOCKET_BUFFER: ByteSize = mebibytes(1);
 /// accept side: an untuned connection still works, just less efficiently.
 #[cfg(not(target_family = "wasm"))]
 fn tune_outbound_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
-    tune_socket(stream, send_buffer, receive_buffer, [
-        |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on outbound socket"),
-        |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on outbound socket"),
-        |e| tracing::debug!(error = %e, "SO_RCVBUF set failed on outbound socket"),
-    ]);
+    tune_socket(stream, send_buffer, receive_buffer, |option, error| {
+        tracing::debug!(%error, "{option} set failed on outbound socket");
+    });
 }
 
-/// Apply options in their original order; callers retain their diagnostic call sites.
+/// A socket option that [`tune_socket`] sets. It displays as the option's
+/// socket-level name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SocketOption {
+    /// `TCP_NODELAY`.
+    NoDelay,
+    /// `SO_SNDBUF`.
+    #[cfg(not(target_family = "wasm"))]
+    SendBuffer,
+    /// `SO_RCVBUF`.
+    #[cfg(not(target_family = "wasm"))]
+    RecvBuffer,
+}
+
+impl fmt::Display for SocketOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NoDelay => "TCP_NODELAY",
+            #[cfg(not(target_family = "wasm"))]
+            Self::SendBuffer => "SO_SNDBUF",
+            #[cfg(not(target_family = "wasm"))]
+            Self::RecvBuffer => "SO_RCVBUF",
+        })
+    }
+}
+
+/// Set `TCP_NODELAY`, then `SO_SNDBUF` and `SO_RCVBUF`, on `stream`. Each
+/// option that fails goes to `on_error` with its error, and the rest are
+/// still set.
 pub(crate) fn tune_socket(
     stream: &TcpStream,
     send_buffer: ByteSize,
     receive_buffer: ByteSize,
-    on_error: [fn(io::Error); 3],
+    on_error: impl Fn(SocketOption, io::Error),
 ) {
     if let Err(error) = stream.set_nodelay(true) {
-        on_error[0](error);
+        on_error(SocketOption::NoDelay, error);
     }
     #[cfg(not(target_family = "wasm"))]
     {
         let socket = socket2::SockRef::from(stream);
         if let Err(error) = socket.set_send_buffer_size(send_buffer.bytes_usize()) {
-            on_error[1](error);
+            on_error(SocketOption::SendBuffer, error);
         }
         if let Err(error) = socket.set_recv_buffer_size(receive_buffer.bytes_usize()) {
-            on_error[2](error);
+            on_error(SocketOption::RecvBuffer, error);
         }
     }
     // WASI preview 1 has no socket-buffer options and keeps the host defaults.
@@ -367,8 +393,8 @@ impl krabka_raft::OutboundDialer for InterBrokerDialer {
 mod tests {
     use {
         super::{
-            DEFAULT_SOCKET_BUFFER, InterBrokerClient, to_client_creds, tune_outbound_socket,
-            unbracket_host,
+            DEFAULT_SOCKET_BUFFER, InterBrokerClient, SocketOption, to_client_creds,
+            tune_outbound_socket, unbracket_host,
         },
         crate::{
             config::InterBrokerCredentials,
@@ -378,6 +404,16 @@ mod tests {
         std::path::PathBuf,
         tokio::net::TcpListener,
     };
+
+    /// The tuning failure logs name each option as the socket API does.
+    #[yare::parameterized(
+        no_delay = { SocketOption::NoDelay, "TCP_NODELAY" },
+        send_buffer = { SocketOption::SendBuffer, "SO_SNDBUF" },
+        recv_buffer = { SocketOption::RecvBuffer, "SO_RCVBUF" },
+    )]
+    fn a_socket_option_displays_its_socket_name(option: SocketOption, name: &str) {
+        assert2::assert!(option.to_string() == name);
+    }
 
     #[tokio::test]
     async fn outbound_socket_tuning_sets_nodelay_and_large_buffers() {
