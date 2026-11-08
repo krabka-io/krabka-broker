@@ -102,3 +102,13 @@ failed-member absence and healthy repair. These bounded cases supersede the
 older unmeasured labels above only for the exact scenarios executed. Active-member
 plugin-removal restart, other malformed output, ACL races and arbitrary faults
 remain open.
+
+## Active-member plugin-removal restart (2026-11-08)
+
+The [active-restart receipt](../../qualification/streams-assignor-active-restart-20261108/README.md)
+now covers a clean single-broker restart without leaving either active member,
+removal of the selected custom plugin, restored previous target, and complete
+cooperative sticky reassignment after a third member joins (10 matching scenario
+rows per peer). It uses the pinned historical native candidate, not a combined
+build. Mixed-registry RF3 movement and the unknown-owner safety divergence remain
+open; this does not qualify arbitrary JVM-plugin loading.

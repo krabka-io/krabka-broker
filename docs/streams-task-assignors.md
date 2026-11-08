@@ -36,3 +36,10 @@ that name and tests its actual execution rather than silently choosing sticky.
 Names are bytewise unique. Group override values use Kafka STRING trimming;
 registration itself does not rewrite plugin-provided names. These measurements
 do not claim arbitrary JVM-plugin compatibility.
+
+A paired [active-member restart](../qualification/streams-assignor-active-restart-20261108/README.md)
+now measures clean reopening with the selected plugin removed: active members
+and previous targets survive, the raw override remains visible, and a new member
+triggers complete cooperative reassignment through sticky. This bounded result
+uses a pinned historical native candidate. Mixed-registry RF3 deployments remain
+outside the supported identical-plugin host contract.

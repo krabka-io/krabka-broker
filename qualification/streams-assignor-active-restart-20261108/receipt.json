@@ -1,0 +1,77 @@
+{
+  "qualification_pass": true,
+  "scope": "paired clean single-broker active-member restart with custom plugin removed, preserved target and complete sticky reassignment after third member joins",
+  "native_baseline_revision": "c51d444b3c290b307bb9cb43b2f4faed9344a603",
+  "native_binary_path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/.run/streams_fault_broker-measured",
+  "native_binary_sha256": "4099d2cca69599dff92fcd04f402eb11b998d8b005e234243b6f0c33fb54dc37",
+  "combined_tree_build": false,
+  "oracle_image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "codec_jar_sha256": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+  "scenario_rows": {
+    "native": {
+      "prepare": [
+        "SCENARIO\ttarget-last-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tprepared-active-group\tPASS"
+      ],
+      "verify": [
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\ttarget-sticky-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tactive-members-restored-with-previous-target\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tactive-removal-sticky-reassignment-complete\tPASS"
+      ]
+    },
+    "oracle": {
+      "prepare": [
+        "SCENARIO\ttarget-last-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tprepared-active-group\tPASS"
+      ],
+      "verify": [
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\ttarget-sticky-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tactive-members-restored-with-previous-target\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tactive-removal-sticky-reassignment-complete\tPASS"
+      ]
+    }
+  },
+  "sources_sha256": {
+    "tools/kafka44/StreamsAssignorRestart.java": "818cf759c4220b8fcf5602b1f244f380fd1081a0d4021010fafb71ef8c7c10d5",
+    "tools/kafka44/StreamsAssignorWire.java": "8c6c26deee1e876a77222e07711cc8156fa135486d35073f8196337e35b2f11a",
+    "tools/kafka44/StreamsPositive.java": "d84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9",
+    "tools/kafka44/ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe",
+    "tools/kafka44/AssignorPlugin.java": "21735b3c044ee74bb5bfce2e075202197a3105c0510833a7cabcfdc424b75b31"
+  },
+  "artifacts_sha256": {
+    "broker-after.properties": "63b394b02f12a1b1880f1ee1f424aaf78de98d560c0a97dc14e9a0b0f0437281",
+    "broker-before.properties": "5f518146059eb16ce5f6be587f6719059bb80e19dcd1a29ad96f03c32f24ac4e",
+    "native-after.log": "fc04129b39fad6d5515e543e25240ac200c007e6a6b53311f3852f2f142f5cc0",
+    "native-before.log": "12888e3ee3ec34a0707573e34ce978e9cf0def13b979c3f80d8675502f04b27e",
+    "native-prepare.log": "75fa1005074d3e5f04803fbfb5f4fcd8e85fff52be928da31e4bcd8cc650bba3",
+    "native-verify.log": "d213f974839375702b949428b2fc04c514b402dbf8c6b2eeb4a279d68b1e9db0",
+    "oracle-after.log": "f23f6d4836881d54f4d8ed06d238f2ab3d27a49693b19413baca36dedbfa8ada",
+    "oracle-before.log": "4b8631402675a8281c1a21ffa0fc51938202dff643629061c491d2306bbced67",
+    "oracle-prepare.log": "1873c1a55f848fb502c97ec837b06c0cd89b2a3d42053fdd384b49028542745f",
+    "oracle-verify.log": "5dc736d0e88c1f36d161699f6365febe871aca9d44c85297621b53291ddbaacf"
+  },
+  "checks": {
+    "javac": "exit 0",
+    "native_prepare": "exit 0",
+    "native_verify": "exit 0",
+    "oracle_prepare": "exit 0",
+    "oracle_verify": "exit 0",
+    "scenario_rows_equal": true
+  },
+  "limits": [
+    "not RF3 mixed-registry movement",
+    "not arbitrary crash schedules",
+    "native immutable historical candidate, not combined tree",
+    "unknown-owner safety divergence retained"
+  ]
+}
