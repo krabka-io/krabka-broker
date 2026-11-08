@@ -1,13 +1,14 @@
 //! KIP-13 + KIP-124 + KIP-257 client quotas.
 
 use {
+    crate::throttle::ClientQuota,
     krabka_metadata::MetadataImage,
     krabka_units::{
         ByteRate, Time,
         convert::{ByteRateExt as _, TimeExt},
     },
     num_traits::cast::{NumCast, ToPrimitive as _},
-    std::cmp::Ordering,
+    std::{cmp::Ordering, sync::Arc},
 };
 
 mod buckets;
@@ -37,7 +38,6 @@ pub(crate) use {
 };
 
 mod refresh;
-use crate::throttle::MICROS_PER_TOKEN;
 pub(crate) use expiry::run as run_expiry;
 pub use refresh::run;
 
@@ -92,76 +92,88 @@ struct QuotaConsumption<'a> {
     client_id: Option<&'a str>,
     quota_type: QuotaType,
     amount: u64,
-    /// The most debt to keep, as the wait it takes the refill to repay it, for
-    /// a quota whose throttle Kafka bounds, and `None` for one it does not.
-    max_debt_wait: Option<Time>,
 }
 
-/// Charges `request.amount` tokens to the bucket of the quota entity the
-/// request resolves to, and returns the throttle for the debt the charge
-/// leaves.
+/// What recording a request on its client quota earned: the throttle, charged
+/// to the entity the request resolved to, and the quota it was recorded on,
+/// `None` when no quota applies.
+pub(crate) struct QuotaRecorded {
+    pub(crate) delay: QuotaDelay,
+    pub(crate) quota: Option<Arc<ClientQuota>>,
+}
+
+/// Records `request.amount` on the client quota of the entity the request
+/// resolves to, and returns the throttle Kafka's `QuotaUtils.throttleTime`
+/// gives for the rate it leaves.
 ///
 /// Kafka records the whole value on the entity's `Rate` sensor and checks the
 /// quota after (`ClientQuotaManager.recordAndGetThrottleTimeMs` calls
 /// `quotaSensor().record(value, timeMs, true)`), so a request over the quota
 /// is charged in full and the next request on the entity, on any connection,
-/// still pays for it. The bucket does the same: [`TokenBucket::record`] takes
-/// the charge and reports the debt (#1212).
+/// still pays for it until its sample leaves the window (#1212). A zero value
+/// is recorded too, as Kafka records it, so a request that adds nothing is
+/// still throttled while the entity is over its quota.
 ///
-/// `token_rate` turns the configured rate into the bucket's tokens per second,
-/// fractional or not. `delay_for_overage` gets the tokens of debt, part token
-/// included, the configured rate, and the token rate.
-///
-/// [`TokenBucket::record`]: crate::throttle::TokenBucket::record
-fn consume_configured_quota(
-    request: QuotaConsumption<'_>,
-    token_rate: impl FnOnce(f64) -> f64,
-    delay_for_overage: impl FnOnce(f64, f64, f64) -> Time,
-) -> QuotaDelay {
-    if request.amount == 0 {
-        return QuotaDelay::zero();
-    }
+/// The bound is the configured rate in the unit the quota records
+/// ([`QuotaType::metered_rate`]). Kafka bounds no byte-rate throttle, so the
+/// caller applies the request quota's bound.
+fn record_client_quota(request: QuotaConsumption<'_>) -> QuotaRecorded {
+    let unmetered = || QuotaRecorded {
+        delay: QuotaDelay::zero(),
+        quota: None,
+    };
     let Some((entity_key, rate)) = lookup::lookup_quota_with_key(
         request.image,
         request.principal,
         request.client_id,
         request.quota_type,
     ) else {
-        return QuotaDelay::zero();
+        return unmetered();
     };
     if !rate.is_finite() || rate <= 0.0 {
-        return QuotaDelay::zero();
+        return unmetered();
     }
-    let token_rate = token_rate(rate);
-    let user = entity_field(&entity_key, "user");
-    let client_id = entity_field(&entity_key, "client-id");
-
-    let bucket = request
-        .buckets
-        .get_or_create(request.quota_type, &entity_key, token_rate);
-    // Kafka holds the quota as a double, so the bucket keeps a part token in
-    // its debt and the throttle is exact under a fractional rate. A quota
-    // whose throttle is bounded keeps no more debt than the bound repays:
-    // Kafka forgets a sample after its quota window, so debt past the bound
-    // would throttle a client that has stopped overrunning for minutes.
-    let debt = request.max_debt_wait.map_or_else(
-        || bucket.record(request.amount),
-        |wait| bucket.record_bounded(request.amount, wait),
+    let quota = request.buckets.client_quota(
+        request.quota_type,
+        &entity_key,
+        request.quota_type.metered_rate(rate),
     );
-    let Some(overage) = debt_tokens(debt) else {
-        return QuotaDelay::zero();
+    let delay = quota.record(request.amount);
+    let delay = if delay > <Time as TimeExt>::ZERO {
+        QuotaDelay::new(
+            delay,
+            entity_field(&entity_key, "user"),
+            entity_field(&entity_key, "client-id"),
+        )
+    } else {
+        QuotaDelay::zero()
     };
-    // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
-    // takes `boundedThrottleTime`), so the bound, where there is one, is the
-    // caller's.
-    let delay = delay_for_overage(overage, rate, token_rate);
-    QuotaDelay::new(delay, user, client_id)
+    QuotaRecorded {
+        delay,
+        quota: Some(quota),
+    }
 }
 
-/// The debt a bucket reports, in tokens with its fractional part, or `None`
-/// when the bucket owes nothing.
-pub(crate) fn debt_tokens(debt_micros: u64) -> Option<f64> {
-    (debt_micros > 0).then(|| u64_to_f64(debt_micros) / u64_to_f64(MICROS_PER_TOKEN))
+/// KIP-13 `consumer_byte_rate` enforcement: records `bytes`, the size of the
+/// whole response, on the quota of the entity `(principal, client_id)`
+/// resolves to, and returns the throttle with the quota it was recorded on, so
+/// that a throttled fetch can take its bytes back off it
+/// ([`ClientQuota::unrecord`]). Kafka does not bound a byte-rate throttle.
+pub(crate) fn record_consumer_quota(
+    image: &MetadataImage,
+    buckets: &QuotaBuckets,
+    principal: &str,
+    client_id: Option<&str>,
+    bytes: u64,
+) -> QuotaRecorded {
+    record_client_quota(QuotaConsumption {
+        image,
+        buckets,
+        principal,
+        client_id,
+        quota_type: QuotaType::Fetch,
+        amount: bytes,
+    })
 }
 
 /// A quota delay as Kafka's `throttle_time_ms` wire field: the delay in
@@ -179,10 +191,10 @@ pub(crate) fn throttle_time_ms(delay: Time) -> i32 {
 /// A raw quota rate as the [`TokenBucket`](crate::throttle::TokenBucket)'s
 /// [`ByteRate`], fractional part included.
 ///
-/// The bucket is byte-dimensioned, but Kafka drives `request_percentage` and
-/// `controller_mutation_rate` through the same token arithmetic, and those are
-/// not byte throughputs. Their raw magnitudes therefore cross into the
-/// bucket's dimension here, in one place, instead of at each call site.
+/// The bucket is byte-dimensioned, but the KIP-612 `connection_creation_rate`
+/// it enforces counts connections, not bytes. Its raw magnitude therefore
+/// crosses into the bucket's dimension here, in one place, instead of at each
+/// call site.
 pub(crate) fn bucket_rate(raw: f64) -> ByteRate { ByteRate::from_bytes_per_sec_f64(raw) }
 
 /// A configured rate as a whole token count, truncated toward zero.
@@ -197,7 +209,7 @@ pub(crate) fn positive_f64_to_u64(value: f64) -> u64 {
     value.trunc().to_u64().unwrap_or(u64::MAX)
 }
 
-/// A token count widened for the overage-over-rate division.
+/// A count widened for the quota arithmetic, which Kafka does in doubles.
 ///
 /// The conversion is exact below 2^53, which covers every quota magnitude
 /// Kafka can express. `NumCast` never fails for `u64` into `f64`. The fallback
@@ -256,7 +268,17 @@ pub(crate) mod test_support {
             .value(rate)
             .call()
     }
-    use crate::throttle::TokenBucket;
+    use {crate::throttle::ClientQuota, qubit_clock::ManualMonotonicClock};
+
+    /// Quota meters over Kafka's default window on a manual clock, which a
+    /// test advances instead of sleeping.
+    pub fn manual_buckets() -> (Arc<ManualMonotonicClock>, super::QuotaBuckets) {
+        let clock = ManualMonotonicClock::new_shared();
+        let buckets = super::QuotaBuckets::configured()
+            .clock(Arc::<ManualMonotonicClock>::clone(&clock))
+            .call();
+        (clock, buckets)
+    }
 
     /// A quota rate, the bytes charged against it and the throttle that
     /// charge must earn.
@@ -267,16 +289,22 @@ pub(crate) mod test_support {
     }
 
     /// Independent expected throttles for producer and consumer quotas.
+    ///
+    /// A new client is measured over Kafka's padded window of
+    /// `quota.window.num - 1` = 10 samples of 1 s, so `bytes` at once read
+    /// `bytes / 10 s`, and Kafka's `QuotaUtils.throttleTime` is
+    /// `(bytes / 10 s - rate) / rate * 10 s`, which is `bytes / rate - 10 s`
+    /// once that is positive.
     pub fn fractional_bandwidth_cases() -> [FractionalBandwidthCase; 7] {
         let case = |rate, bytes, delay| FractionalBandwidthCase { rate, bytes, delay };
         [
-            case(1024.0, 1024, <Time as TimeExt>::ZERO),
-            case(1024.0, 2048, secs(1)),
-            case(0.5, 1, secs(1)),
-            case(0.5, 100, secs(199)),
-            case(0.25, 1, secs(3)),
-            case(1.5, 1, <Time as TimeExt>::ZERO),
-            case(1.5, 3, secs(1)),
+            case(1024.0, 10_240, <Time as TimeExt>::ZERO),
+            case(1024.0, 20_480, secs(10)),
+            case(0.5, 5, <Time as TimeExt>::ZERO),
+            case(0.5, 100, secs(190)),
+            case(0.25, 3, secs(2)),
+            case(1.5, 15, <Time as TimeExt>::ZERO),
+            case(1.5, 18, secs(2)),
         ]
     }
 
@@ -289,7 +317,7 @@ pub(crate) mod test_support {
         let mut expected = Vec::new();
         for FractionalBandwidthCase { rate, bytes, delay } in fractional_bandwidth_cases() {
             let image = image_with_quota().key(key).value(rate).call();
-            let buckets = super::QuotaBuckets::with_window(secs(1));
+            let (_, buckets) = manual_buckets();
             actual.push((rate.to_string(), bytes, consume(&image, &buckets, bytes)));
             expected.push((rate.to_string(), bytes, delay));
         }
@@ -323,10 +351,11 @@ pub(crate) mod test_support {
         Arc::new(image_from_quota_setup(setup))
     }
 
-    /// A bucket table and the one bucket that `alice_bucket` created in it.
+    /// A quota table and the one client quota that `alice_bucket` created
+    /// in it.
     pub struct AliceBucket {
         pub(crate) buckets: Arc<super::QuotaBuckets>,
-        pub(crate) bucket: Arc<TokenBucket>,
+        pub(crate) quota: Arc<ClientQuota>,
     }
 
     fn record_from_quota_setup(setup: QuotaRecordSetup<'_>) -> ClientQuotaRecord {
@@ -412,8 +441,8 @@ pub(crate) mod test_support {
         let setup = UserBucketSetup { quota_type, rate };
         let buckets = Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-        let bucket = buckets.get_or_create(setup.quota_type, &key, setup.rate.0);
-        AliceBucket { buckets, bucket }
+        let quota = buckets.client_quota(setup.quota_type, &key, setup.rate.0);
+        AliceBucket { buckets, quota }
     }
 
     /// The 5,000-byte pair used to compare lookup precedence with bucket refresh.
@@ -439,14 +468,12 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use {
-        super::{test_support::image_with_quota, *},
-        crate::throttle::MICROS_PER_TOKEN,
+        super::{
+            test_support::{image_with_quota, manual_buckets},
+            *,
+        },
         assert2::{assert, check},
         krabka_units::secs,
-        std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
     };
 
     /// `throttle_time_ms` rounds to the nearest millisecond, half up, as
@@ -506,96 +533,78 @@ mod tests {
         check!(u64_to_f64(value).to_bits() == former.to_bits());
     }
 
-    /// The overage keeps the part token a bucket's debt holds, and a bucket
-    /// that owes nothing has none.
+    /// A quota that is missing or not a positive rate records nothing and
+    /// creates no quota.
     #[yare::parameterized(
-        no_debt = { 0, None },
-        one_micro_token = { 1, Some(0.000_001) },
-        half_token = { MICROS_PER_TOKEN / 2, Some(0.5) },
-        one_token = { MICROS_PER_TOKEN, Some(1.0) },
-        ninety_nine_and_half_tokens = {
-            99 * MICROS_PER_TOKEN + MICROS_PER_TOKEN / 2,
-            Some(99.5),
-        },
+        negative_rate = { -1.0 },
+        zero_rate = { 0.0 },
+        infinite_rate = { f64::INFINITY },
     )]
-    fn debt_tokens_is_the_exact_debt(debt_micros: u64, want: Option<f64>) {
-        check!(
-            debt_tokens(debt_micros) == want,
-            "{debt_micros} micro-tokens of debt"
-        );
-    }
-
-    #[yare::parameterized(
-        zero_amount = { QuotaType::Request, 100.0, 0 },
-        negative_rate = { QuotaType::Produce, -1.0, 1 },
-        zero_rate = { QuotaType::Produce, 0.0, 1 },
-    )]
-    fn consume_configured_quota_ignores_noop_inputs(quota_type: QuotaType, rate: f64, amount: u64) {
-        let image = image_with_quota()
-            .key(quota_type.config_key())
-            .value(rate)
-            .call();
+    fn record_client_quota_ignores_a_rate_that_is_not_positive(rate: f64) {
+        let image = image_with_quota().value(rate).call();
         let buckets = QuotaBuckets::new();
-        let initial_rate_called = Arc::new(AtomicBool::new(false));
-        let delay_for_overage_called = Arc::new(AtomicBool::new(false));
 
-        let delay = consume_configured_quota(
-            QuotaConsumption {
-                image: &image,
-                buckets: &buckets,
-                principal: "alice",
-                client_id: Some(""),
-                quota_type,
-                amount,
-                max_debt_wait: None,
-            },
-            {
-                let called = Arc::clone(&initial_rate_called);
-                move |_| {
-                    called.store(true, Ordering::Relaxed);
-                    1.0
-                }
-            },
-            {
-                let called = Arc::clone(&delay_for_overage_called);
-                move |_, _, _| {
-                    called.store(true, Ordering::Relaxed);
-                    secs(1)
-                }
-            },
-        );
+        let QuotaRecorded { delay, quota } = record_client_quota(QuotaConsumption {
+            image: &image,
+            buckets: &buckets,
+            principal: "alice",
+            client_id: Some(""),
+            quota_type: QuotaType::Produce,
+            amount: 1,
+        });
 
         check!(delay == <Time as TimeExt>::ZERO);
+        check!(quota.is_none());
         check!(buckets.is_empty());
-        assert2::assert!(!initial_rate_called.load(Ordering::Relaxed));
-        assert2::assert!(!delay_for_overage_called.load(Ordering::Relaxed));
     }
 
+    /// Kafka records every request on the entity's sensor, a zero value too,
+    /// so a request that adds nothing still creates the quota, and is still
+    /// throttled while the entity is over it: 20 bytes at 1 B/s are 2 B/s
+    /// over the padded 10 s window, a 10 s throttle whatever comes next.
     #[test]
-    fn consume_configured_quota_leaves_the_overage_delay_uncapped() {
+    fn record_client_quota_records_a_zero_value() {
         let image = image_with_quota().value(1.0).call();
-        // A one-second window: at 1 B/s the burst is one byte, so 10 bytes
-        // leaves the 9-byte overage the closure below checks.
-        let buckets = QuotaBuckets::with_window(secs(1));
-
-        let delay = consume_configured_quota(
-            QuotaConsumption {
+        let (_, buckets) = manual_buckets();
+        let record = |amount| {
+            record_client_quota(QuotaConsumption {
                 image: &image,
                 buckets: &buckets,
                 principal: "alice",
                 client_id: Some(""),
                 quota_type: QuotaType::Produce,
-                amount: 10,
-                max_debt_wait: None,
-            },
-            |rate| rate,
-            |overage, rate, token_rate| {
-                check!((overage, rate, token_rate) == (9.0, 1.0, 1.0));
-                secs(10)
-            },
-        );
+                amount,
+            })
+            .delay
+            .delay
+        };
 
-        check!(delay == secs(10));
+        let fresh = record(0);
+        let over = record(20);
+        let nothing_more = record(0);
+
+        check!((fresh, over, nothing_more) == (<Time as TimeExt>::ZERO, secs(10), secs(10)));
         assert!(buckets.len() == 1);
+    }
+
+    /// The throttle is charged to the entity the request resolved to, and a
+    /// byte-rate throttle is not bounded: 100 bytes at 1 B/s over the padded
+    /// 10 s window are 10 B/s, `(10 - 1) / 1 * 10 s` = 90 s.
+    #[test]
+    fn record_client_quota_charges_the_entity_and_leaves_the_throttle_unbounded() {
+        let image = image_with_quota().value(1.0).call();
+        let (_, buckets) = manual_buckets();
+
+        let QuotaRecorded { delay, quota } = record_client_quota(QuotaConsumption {
+            image: &image,
+            buckets: &buckets,
+            principal: "alice",
+            client_id: Some("app"),
+            quota_type: QuotaType::Produce,
+            amount: 100,
+        });
+
+        check!(delay == QuotaDelay::new(secs(90), Some("alice".into()), None));
+        check!(quota.is_some());
     }
 }

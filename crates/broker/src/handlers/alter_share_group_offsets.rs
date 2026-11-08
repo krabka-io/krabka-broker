@@ -29,11 +29,11 @@ use {
         error::BrokerError,
         features::share_groups_enabled,
         handlers::{
-            ApiVersion, ErrorResponse as _, RequestContext, denied_topics, group_coordinator_error,
-            group_read_denied,
+            ApiVersion, ErrorResponse as _, RequestContext, denied_topics, group_actor_error_code,
+            group_coordinator_error, group_read_denied,
         },
         share_coordinator::{coordinator::message::UNKNOWN_TOPIC_OR_PARTITION, key::ShareKeyRef},
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_metadata::{AclOperation, MetadataImage},
     krabka_protocol::{
@@ -111,14 +111,9 @@ pub async fn handle(
     .await;
     let actor_result = match asked {
         Ok(actor_result) => actor_result,
-        Err(AskError::Closed) => {
-            return Ok(AlterShareGroupOffsetsResponse::error(
-                codes::COORDINATOR_NOT_AVAILABLE,
-                None,
-            ));
-        }
-        Err(AskError::Dropped) => {
-            return Err(BrokerError::Share("share-group reset actor stopped".into()));
+        Err(error) => {
+            let error_code = group_actor_error_code(broker, &gid, error);
+            return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
         }
     };
     let result_codes = match actor_result {

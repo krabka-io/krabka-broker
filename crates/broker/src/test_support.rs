@@ -24,7 +24,10 @@
 pub use crate::handlers::test_support::StartedBroker;
 use {
     crate::share_coordinator::key::ShareKeyRef,
-    krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
+    krabka_metadata::{
+        FeatureLevelRecord, krabka_version::KRABKA_VERSION_FEATURE,
+        metadata_version::SHARE_VERSION_FEATURE,
+    },
     krabka_protocol::owned::{
         api_versions_request::API_KEY,
         broker_registration_request::Feature,
@@ -172,6 +175,16 @@ pub fn ecdsa_pair_for_host(host: &str) -> EcdsaPair {
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
     let cert = params.self_signed(&key).unwrap();
     EcdsaPair { cert, key }
+}
+
+/// An empty image whose finalized `krabka.version` is `level`.
+pub fn image_at_krabka_version(level: i16) -> Arc<MetadataImage> {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: KRABKA_VERSION_FEATURE.into(),
+        level,
+    }));
+    Arc::new(image)
 }
 
 /// Advertise every finalized feature from zero through its finalized level.

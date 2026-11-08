@@ -10,8 +10,9 @@ use {
                 GroupActorHandle, GroupActorMessage,
                 member_state::build_member,
                 test_support::{
-                    bidirectional_coordinator, bidirectional_with_members, last_classic_metadata,
-                    make_coordinator, rpc, seed_completing_classic, seed_stable_classic,
+                    actor_stops, bidirectional_coordinator, bidirectional_with_members,
+                    last_classic_metadata, live_actor, make_coordinator, reloaded_classic_view,
+                    rpc, seed_completing_classic, seed_stable_classic, time_out_appended_writes,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
@@ -497,4 +498,43 @@ async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     check!(sync_rx.await.unwrap().error_code == codes::REBALANCE_IN_PROGRESS);
     let view = rpc::classic_inspect(&handle).await;
     check!(view.state == ClassicGroupState::PreparingRebalance);
+}
+
+/// A leave empties the group, and the write of its next generation times out
+/// after the record reached the log, so the record may still commit. The
+/// actor answers the append error and stops, as Kafka's `CoordinatorRuntime`
+/// keeps a timed-out write's records and a reload builds the group from them.
+/// Its replacement serves the group the log holds: `Empty` under the next
+/// generation. A reverted actor would keep serving `m1` under the old
+/// generation once the record commits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_leave_whose_write_may_still_commit_respawns_the_persisted_group() {
+    let (coord, log) = make_coordinator();
+    let seeded = seed_stable_classic(&coord, &["m1"]);
+    log.hold_commits();
+    let reply = rpc::begin(&seeded.handle, |reply| GroupActorMessage::ClassicLeave {
+        req: LeaveGroupRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            ..Default::default()
+        },
+        version: 2,
+        reply,
+    })
+    .await;
+    time_out_appended_writes(&log, 1).await;
+
+    let result = reply.await.unwrap();
+    check!(result.error_code == codes::COORDINATOR_NOT_AVAILABLE);
+    check!(result.members.is_empty());
+    check!(
+        actor_stops(&seeded.handle).await,
+        "the actor stops after the uncertain write"
+    );
+    log.release_commits();
+    let reloaded = reloaded_classic_view(&log).await;
+    check!(reloaded.state == ClassicGroupState::Empty);
+    check!(reloaded.generation_id == seeded.generation + 1);
+    let live = live_actor(&coord).await;
+    check!(rpc::classic_inspect(&live).await == reloaded);
 }

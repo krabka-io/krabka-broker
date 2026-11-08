@@ -9,7 +9,7 @@
 use {
     super::{
         AutoJoinParams,
-        request::{advertised_controller_listener, select_bootstrap_server},
+        request::{advertised_controller_listener, controller_target},
         rpc::send_update_voter,
     },
     crate::codes,
@@ -23,7 +23,6 @@ use {
         primitives::uuid::Uuid,
     },
     krabka_units::convert::TimeExt as _,
-    std::collections::BTreeMap,
     tokio::time::sleep,
 };
 
@@ -73,16 +72,10 @@ async fn advertise_forever(
                 continue;
             }
 
-            // Resolve target controller: try the known leader's endpoint first,
-            // falling back to bootstrap_servers only when unmapped.
-            let target_str = resolve_target_controller(
-                leader,
-                &quorum.voter_nodes,
-                &params.bootstrap_servers,
-                &mut next_server,
-            );
-
-            let Some(target) = target_str else {
+            // The known leader's endpoint first, and a bootstrap server only
+            // while the leader's endpoints are not known.
+            let Some(target) = controller_target(&quorum, &params.bootstrap_servers, next_server)
+            else {
                 tracing::warn!(
                     node_id = params.node_id.0,
                     ?leader,
@@ -91,6 +84,10 @@ async fn advertise_forever(
                 sleep(params.retry_backoff.to_std()).await;
                 continue;
             };
+            if target.from_bootstrap {
+                next_server = next_server.wrapping_add(1);
+            }
+            let target = target.server;
             let request = build_update_raft_voter_request(
                 params.cluster_id,
                 epoch,
@@ -139,29 +136,6 @@ pub fn voter_already_up_to_date(
         .iter()
         .any(|ep| ep.host == listener.host && ep.port == listener.port);
     matches_dir && matches_listener
-}
-
-pub fn resolve_target_controller(
-    leader: Option<krabka_raft::NodeId>,
-    voter_nodes: &BTreeMap<krabka_raft::NodeId, krabka_raft::Node>,
-    bootstrap_servers: &[String],
-    next_server: &mut usize,
-) -> Option<String> {
-    if let Some(leader_id) = leader
-        && let Some(leader_node) = voter_nodes.get(&leader_id)
-        && let Some(ep) = leader_node
-            .endpoints
-            .iter()
-            .find(|e| e.name.eq_ignore_ascii_case("CONTROLLER"))
-            .or_else(|| leader_node.endpoints.first())
-    {
-        Some(format!("{}:{}", ep.host, ep.port))
-    } else if let Some(s) = select_bootstrap_server(bootstrap_servers, *next_server) {
-        *next_server = next_server.wrapping_add(1);
-        Some(s.to_owned())
-    } else {
-        None
-    }
 }
 
 pub fn build_update_raft_voter_request(
@@ -302,65 +276,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn resolve_target_controller_finds_leader_or_bootstrap() {
-        let mut voter_nodes = BTreeMap::new();
-        voter_nodes.insert(NodeId(1), Node {
-            directory_id: uuid::Uuid::from_u128(1),
-            endpoints: vec![
-                VoterEndpoint {
-                    name: "OTHER".to_owned(),
-                    host: "127.0.0.1".to_owned(),
-                    port: 8080,
-                },
-                VoterEndpoint {
-                    name: "CONTROLLER".to_owned(),
-                    host: "127.0.0.1".to_owned(),
-                    port: 9093,
-                },
-            ],
-            kraft_version: KRaftVersionRange::default(),
-        });
-        voter_nodes.insert(NodeId(2), Node {
-            directory_id: uuid::Uuid::from_u128(2),
-            endpoints: vec![VoterEndpoint {
-                name: "INTERNAL".to_owned(),
-                host: "127.0.0.1".to_owned(),
-                port: 7070,
-            }],
-            kraft_version: KRaftVersionRange::default(),
-        });
-
-        let mut next = 0;
-        let bootstraps = vec!["127.0.0.1:9092".to_owned()];
-
-        // Prefers CONTROLLER endpoint
-        assert2::assert!(
-            resolve_target_controller(Some(NodeId(1)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:9093".to_owned())
-        );
-
-        // Falls back to first endpoint if no CONTROLLER
-        assert2::assert!(
-            resolve_target_controller(Some(NodeId(2)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:7070".to_owned())
-        );
-
-        // Unknown leader falls back to bootstrap server and advances index
-        assert2::assert!(
-            resolve_target_controller(Some(NodeId(99)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:9092".to_owned())
-        );
-        assert2::assert!(next == 1);
-
-        // Unknown leader with empty bootstrap returns None
-        let empty_bootstraps: Vec<String> = vec![];
-        assert2::assert!(
-            resolve_target_controller(Some(NodeId(99)), &voter_nodes, &empty_bootstraps, &mut next)
-                .is_none()
-        );
-    }
-
     #[tokio::test]
     async fn run_voter_updates_stops_when_node_id_overflows() {
         let source = Arc::new(
@@ -454,6 +369,41 @@ mod tests {
         let _ = timeout(Duration::from_millis(150), run_voter_updates(params)).await;
 
         assert2::assert!(count.load(Ordering::Relaxed) >= 2);
+    }
+
+    /// While the leader's endpoints are not known, each retry dials the next
+    /// bootstrap server, so a server that keeps refusing the update does not
+    /// stop it from reaching the others.
+    #[tokio::test]
+    async fn run_voter_updates_rotates_across_bootstrap_servers() {
+        let first = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let second = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let controller = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .term(1)
+                .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
+                .build(),
+        );
+        let params = params(controller, vec![
+            first.addr.to_string(),
+            second.addr.to_string(),
+        ]);
+        let shutdown = params.shutdown.clone();
+        let task = tokio::spawn(run_voter_updates(params));
+
+        let reached_both = timeout(Duration::from_secs(10), async {
+            while first.count.load(Ordering::Relaxed) == 0
+                || second.count.load(Ordering::Relaxed) == 0
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        shutdown.cancel();
+        task.await.expect("the loop does not panic");
+
+        assert2::assert!(reached_both.is_ok());
     }
 
     #[tokio::test]

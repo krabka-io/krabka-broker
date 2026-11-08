@@ -66,7 +66,7 @@ enum QuotaReach {
     /// reports `throttle_time_ms = 0`.
     FallbackAccounted,
     /// `RequestQuotaPolicy::ApplyFallbackAccounting` on an api that
-    /// [`super::response::buried_throttle_is_reencoded`] names. The dispatch
+    /// [`super::response::buried_throttle_reencoder`] has a reencoder for. The dispatch
     /// loop decodes the response, sets `ThrottleTimeMs` and encodes it again,
     /// so the client does see the delay.
     Reencoded,
@@ -301,7 +301,7 @@ fn recorded_reach_matches_the_dispatch_registry() {
             let reach = match policy {
                 RequestQuotaPolicy::SelfAccounted => QuotaReach::SelfAccounted,
                 RequestQuotaPolicy::ApplyFallbackAccounting
-                    if super::response::buried_throttle_is_reencoded(api_key) =>
+                    if super::response::buried_throttle_reencoder(api_key).is_some() =>
                 {
                     QuotaReach::Reencoded
                 }

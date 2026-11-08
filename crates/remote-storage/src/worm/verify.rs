@@ -64,7 +64,11 @@ pub use self::{
     },
 };
 use {
-    self::{listing::list_archive, partition::verify_partition, report::VerifiedPartition},
+    self::{
+        listing::{ArchiveListing, list_archive},
+        partition::verify_partition,
+        report::VerifiedPartition,
+    },
     crate::{
         storage_manager::parse_partition_dir_name,
         worm::{
@@ -154,6 +158,12 @@ pub enum VerifyDepth {
 #[derive(Debug, Clone, Default)]
 pub struct VerifyRequest {
     /// Key prefix inside the store. `None` verifies the whole store.
+    ///
+    /// The prefix is read in both of the spellings a broker writes: trimmed
+    /// of surrounding whitespace and `/`, as `krabka.version` 3 writes it,
+    /// and exactly as given, as every earlier level writes it. A partition
+    /// whose chain is split across the two is verified as one chain, and its
+    /// directory is reported below the trimmed prefix.
     pub prefix: Option<String>,
     /// Verify only the partitions of this topic.
     pub topic: Option<String>,
@@ -246,7 +256,10 @@ async fn verify_archive_inner(
     request: &VerifyRequest,
     trusted: &TrustedManifestKeys,
 ) -> Result<AuthenticatedArchive, WormError> {
-    let mut listing = list_archive(store, request.prefix.as_deref()).await?;
+    let ArchiveListing {
+        dirs: mut listing,
+        captured,
+    } = list_archive(store, request.prefix.as_deref()).await?;
     let global_orphan_objects = listing
         .iter()
         .filter(|(dir, _)| {
@@ -257,8 +270,7 @@ async fn verify_archive_inner(
         })
         .flat_map(|(_, entries)| entries.keys())
         .filter(|key| {
-            !request.externally_authenticated_objects.contains(*key)
-                && !capture_namespace(key, request.prefix.as_deref())
+            !request.externally_authenticated_objects.contains(*key) && !captured.contains(*key)
         })
         .cloned()
         .collect();
@@ -294,13 +306,4 @@ async fn verify_archive_inner(
         },
         objects,
     })
-}
-
-fn capture_namespace(key: &str, prefix: Option<&str>) -> bool {
-    let relative = prefix
-        .and_then(|prefix| key.strip_prefix(prefix)?.strip_prefix('/'))
-        .unwrap_or(key);
-    relative
-        .split('/')
-        .any(|component| component == "restore-inputs")
 }

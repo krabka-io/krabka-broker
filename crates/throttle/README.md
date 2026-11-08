@@ -1,25 +1,37 @@
 # krabka-throttle
 
-Shared throttling primitives for the broker: the KIP-73 replication quota and
-the token bucket behind the client quotas.
+Shared throttling primitives for the broker: the KIP-13 and KIP-124 client
+quota, the KIP-73 replication quota, and the token bucket behind the KIP-612
+connection creation rate.
 
 Part of [krabka-broker](../../README.md), an Apache Kafka-compatible broker
 written in Rust.
 
 ## Overview
 
+`ClientQuota` and `ReplicationQuota` both measure with `SampledRate`, a port of
+Kafka's `SampledStat` with its `WindowedSum`. `ClientQuota` is the quota sensor
+of Kafka's `ClientQuotaManager` over a `Rate`, for `producer_byte_rate`,
+`consumer_byte_rate` and `request_percentage`. `ReplicationQuota` is a port of
+Kafka's `ReplicationQuotaManager` over a `SimpleRate`. Both default to 11
+samples of one second each, and `QuotaWindow` sets that window.
+`ThrottleState` bundles the three replication quotas the broker meters:
+leader-out and follower-in replica traffic (KIP-73), and intra-broker log
+directory moves (KIP-113).
 `TokenBucket` is the concurrent runtime around the pure `plan_consume`
 arithmetic in [`krabka-verified`](../verified/README.md). It holds the bucket
 state behind one lock, a lock-free copy of the rate for the unthrottled fast
 path, and an injected monotonic clock.
-`ReplicationQuota` is a port of Kafka's `ReplicationQuotaManager` over a
-`SimpleRate`: 11 samples of one second each, exceeded while the measured rate
-is above the bound. `ThrottleState` bundles the three replication quotas the
-broker meters: leader-out and follower-in replica traffic (KIP-73), and
-intra-broker log directory moves (KIP-113).
 
 ## Features
 
+- A `ClientQuota` that records a request in full and then checks it, as
+  Kafka's `recordAndGetThrottleTimeMs` does. A young window is padded to
+  `quota.window.num - 1` samples, so a new client can send that many samples'
+  worth of traffic at once before it is throttled. The throttle is Kafka's
+  `QuotaUtils.throttleTime`, `(rate - bound) / bound * window size` rounded to
+  the millisecond. A throttled fetch's bytes come back with `unrecord`, and a
+  new bound keeps the traffic already measured.
 - A `ReplicationQuota` that a reader asks before it reads throttled traffic
   and records after, as Kafka's fetchers do. A rate equal to the bound is
   within it, a batch past the bound keeps the quota exceeded until the
@@ -27,16 +39,13 @@ intra-broker log directory moves (KIP-113).
   zero admits no recorded traffic, and no bound never throttles. Changing
   the bound keeps the traffic already measured.
 - Byte, event, and plain token rates, each with an optional burst capacity.
-  The bucket counts micro-tokens, so a fractional byte rate such as Kafka's
-  `consumer_byte_rate = 0.5` is enforced as configured.
+  The bucket counts micro-tokens, so a fractional rate is enforced as
+  configured.
 - A `try_consume` that grants at most the request in whole tokens, and a
   `record` that charges the whole request and leaves what the balance could
-  not cover as debt, which the refill repays first. A quota caller turns the
-  debt into its throttle delay, as Kafka's `Sensor.record` and
-  `QuotaUtils.throttleTime` do. `record_bounded` keeps at most what the refill
-  repays in a given wait, for a quota whose throttle is bounded, as Kafka's
-  quota window forgets old samples. A change of rate keeps the balance and the
-  debt. Each consume and each rate change is one critical section, so a
+  not cover as debt, which the refill repays first. `record_bounded` keeps at
+  most what the refill repays in a given wait. A change of rate keeps the
+  balance and the debt. Each consume and each rate change is one critical section, so a
   consume never straddles a change and never loses the refill it claimed. An
   unthrottled bucket grants without the lock.
 - A caller-injected clock, so a test drives refills with

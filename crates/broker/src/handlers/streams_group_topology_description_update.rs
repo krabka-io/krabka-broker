@@ -34,10 +34,10 @@ use {
         },
         error::BrokerError,
         handlers::{
-            ApiVersion, ErrorResponse as _, RequestContext, group_coordinator_error,
-            group_read_denied, streams_protocol_enabled,
+            ApiVersion, ErrorResponse as _, RequestContext, group_actor_error_code,
+            group_coordinator_error, group_read_denied, streams_protocol_enabled,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_protocol::owned::{
         streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
@@ -113,6 +113,7 @@ async fn answer(
         };
         return (codes::GROUP_ID_NOT_FOUND, Some(message));
     };
+    let group_id = req.group_id.clone();
     let push = DescriptionPush {
         member_id: req.member_id,
         topology_epoch: req.topology_epoch,
@@ -127,8 +128,7 @@ async fn answer(
     .await;
     match asked {
         Ok(answer) => answer,
-        Err(AskError::Closed) => (codes::COORDINATOR_LOAD_IN_PROGRESS, None),
-        Err(AskError::Dropped) => (codes::UNKNOWN_SERVER_ERROR, None),
+        Err(error) => (group_actor_error_code(broker, &group_id, error), None),
     }
 }
 

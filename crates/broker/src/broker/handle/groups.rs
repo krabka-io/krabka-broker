@@ -21,12 +21,12 @@ impl BrokerHandle {
     async fn inspect_group_actor<T>(
         &self,
         group_id: &str,
-        message: impl FnOnce(oneshot::Sender<T>) -> GroupActorMessage,
+        message: impl FnOnce(oneshot::Sender<Option<T>>) -> GroupActorMessage,
     ) -> Option<T> {
         let handle = Arc::clone(self.broker.group_coordinator.groups.get(group_id)?.value());
         let (tx, rx) = oneshot::channel();
         handle.tx.send(message(tx)).await.ok()?;
-        rx.await.ok()
+        rx.await.ok().flatten()
     }
 
     // ── consumer/streams/share group awaiters ─────────────────────────────────

@@ -8,7 +8,7 @@
 
 use {
     super::{
-        ActorServices, ParkedWaiters, SyncResult, persistence::flush_classic_metadata,
+        ActorServices, ParkedWaiters, SyncResult, persistence::persist_classic_or_revert,
         waiters::drain_parked_followers,
     },
     crate::{
@@ -22,13 +22,14 @@ use {
     tokio::sync::oneshot,
 };
 
+/// Answers a classic `SyncGroup` and returns the actor's keep-running flag.
 pub(super) async fn handle_classic_sync_message(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
     services: ActorServices<'_>,
     request: SyncGroupRequest,
     reply: oneshot::Sender<SyncResult>,
-) {
+) -> bool {
     let Some(state) = group.as_classic_mut() else {
         let result = match group.as_consumer_mut() {
             Some(state) => {
@@ -49,7 +50,7 @@ pub(super) async fn handle_classic_sync_message(
             },
         };
         let _ = reply.send(result);
-        return;
+        return true;
     };
     let previous = state.clone();
     match classic_ops::handle_sync(state, &request) {
@@ -60,27 +61,32 @@ pub(super) async fn handle_classic_sync_message(
             parked.followers.insert(request.member_id, reply);
         }
         classic_ops::SyncAction::LeaderInstalled(result) => {
-            if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-                *state = previous;
-                tracing::warn!(group_id = %state.group_id, %error,
+            if let Err(failure) =
+                persist_classic_or_revert(state, &previous, services.offsets_log).await
+            {
+                tracing::warn!(group_id = %state.group_id, error = %failure.error,
                     "classic SyncGroup log write failed");
                 // Kafka's `propagateAssignment` leaves the protocol type and
                 // name null when it propagates an error.
-                let error_code = write_failure_code(&error);
-                let failure = || SyncResult {
+                let error_code = write_failure_code(&failure.error);
+                let answer = || SyncResult {
                     error_code,
                     ..SyncResult::default()
                 };
-                let _ = reply.send(failure());
+                let _ = reply.send(answer());
                 for (_, follower) in parked.followers.drain() {
-                    let _ = follower.send(failure());
+                    let _ = follower.send(answer());
                 }
-                return;
+                // A write that may still commit stops the actor, and its
+                // replacement serves the group a reload of the log builds,
+                // the assignment installed.
+                return failure.keep_running(group, services.coordinator);
             }
             let _ = reply.send(result);
             drain_parked_followers(state, &mut parked.followers);
         }
     }
+    true
 }
 
 #[cfg(test)]
@@ -89,11 +95,12 @@ mod tests {
         super::*,
         crate::coordinator::unified::{
             actor::{
-                DescribeMember, GroupActorMessage, JoinResult,
+                ClassicView, DescribeMember, GroupActorMessage, JoinResult,
                 test_support::{
-                    RejoinedClassic, decode_assignment, last_classic_metadata, make_coordinator,
-                    make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
-                    seed_completing_classic, upgrade_and_rejoin_classic, upgrade_coordinator,
+                    RejoinedClassic, actor_stops, decode_assignment, last_classic_metadata,
+                    live_actor, make_coordinator, make_coordinator_with_topic_policy,
+                    reloaded_classic_view, rpc, seed_and_upgrade, seed_completing_classic,
+                    time_out_appended_writes, upgrade_and_rejoin_classic, upgrade_coordinator,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
@@ -386,5 +393,58 @@ mod tests {
                 .is_empty()
         );
         check!(log.batches().await.len() == batches_before);
+    }
+
+    /// The leader installs the assignment, and its write times out after the
+    /// record reached the log, so the record may still commit. The leader and
+    /// the parked follower hear the append error, and the actor stops, as
+    /// Kafka's `CoordinatorRuntime` keeps a timed-out write's records and a
+    /// reload builds the group from them. Its replacement serves the group the
+    /// log holds: `Stable`, with the assignment. A reverted actor would keep
+    /// the group in `CompletingRebalance` with no assignment once the record
+    /// commits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sync_whose_write_may_still_commit_respawns_the_persisted_group() {
+        let (coord, log) = make_coordinator();
+        let seeded = seed_completing_classic(&coord, &["m1", "m2"]);
+        let follower = rpc::begin_classic_sync(&seeded.handle, SyncGroupRequest {
+            group_id: "g".into(),
+            member_id: "m2".into(),
+            generation_id: seeded.generation,
+            ..Default::default()
+        })
+        .await;
+        log.hold_commits();
+        let leader = rpc::begin_classic_sync(
+            &seeded.handle,
+            rpc::assignment_sync_request(
+                seeded.generation,
+                "m1",
+                Bytes::from_static(b"assignment"),
+            ),
+        )
+        .await;
+        time_out_appended_writes(&log, 1).await;
+
+        let failure = SyncResult {
+            error_code: codes::COORDINATOR_NOT_AVAILABLE,
+            ..SyncResult::default()
+        };
+        check!(leader.await.unwrap() == failure);
+        check!(follower.await.unwrap() == failure);
+        check!(
+            actor_stops(&seeded.handle).await,
+            "the actor stops after the uncertain write"
+        );
+        log.release_commits();
+        // A view lists the members in hash-map order.
+        let by_id = |mut view: ClassicView| {
+            view.members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
+            view
+        };
+        let reloaded = by_id(reloaded_classic_view(&log).await);
+        check!(reloaded.state == ClassicGroupState::Stable);
+        let live = live_actor(&coord).await;
+        check!(by_id(rpc::classic_inspect(&live).await) == reloaded);
     }
 }

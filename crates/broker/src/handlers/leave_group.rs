@@ -17,10 +17,10 @@ use {
         coordinator::unified::actor::{GroupActorMessage, LeaveResult},
         error::BrokerError,
         handlers::{
-            ApiVersion, ErrorCodeResponse as _, RequestContext, group_coordinator_error,
-            group_read_denied,
+            ApiVersion, ErrorCodeResponse as _, RequestContext, group_actor_error_code,
+            group_coordinator_error, group_read_denied,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_protocol::owned::{
         leave_group_request::LeaveGroupRequest,
@@ -73,20 +73,10 @@ pub async fn handle(
             })
             .await;
             match asked {
-                Err(AskError::Closed) => LeaveResult {
-                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                    members: Vec::new(),
-                },
-                // The actor stopped with the leave in its mailbox: it unloads
-                // with its offsets partition or after a failed write. Kafka
-                // fails an operation on a shard that unloads, so the member
-                // has not left. The routing check runs again and answers
-                // `NOT_COORDINATOR` once another broker leads the partition;
-                // a broker that still serves the group answers the retriable
-                // `COORDINATOR_NOT_AVAILABLE`.
-                Err(AskError::Dropped) => LeaveResult {
-                    error_code: group_coordinator_error(broker, &req.group_id)
-                        .unwrap_or(codes::COORDINATOR_NOT_AVAILABLE),
+                // An actor that stopped with the leave in its mailbox has not
+                // removed the member.
+                Err(error) => LeaveResult {
+                    error_code: group_actor_error_code(broker, &req.group_id, error),
                     members: Vec::new(),
                 },
                 // The actor answers a group of a kind the classic leave

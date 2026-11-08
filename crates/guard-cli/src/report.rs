@@ -86,18 +86,67 @@ pub fn report_error(err: &mut impl Write, code: i16, message: Option<&str>) -> i
     exit_for_code(code)
 }
 
-/// The outcome of one freeze or thaw.
+/// What one freeze or thaw prints, and the exit code it becomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetFreezeReport {
+    /// The line for stdout, when the broker accepted the change.
+    pub stdout: Option<String>,
+    /// The line for stderr, when the broker refused it.
+    pub stderr: Option<String>,
+    /// The exit code.
+    pub exit: i32,
+}
+
+/// The report for one freeze or thaw, without writing it.
+///
+/// A thaw that the broker answers with `INVALID_REQUEST` names a scope the
+/// registry holds no entry for. The tool never sends the other request that
+/// earns that code, a pattern type outside literal and prefixed, so the line
+/// says what the operator got wrong rather than leaving a bare Kafka code.
+#[must_use]
+pub fn set_freeze_report(response: &api::SetTopicFreezeResponse, frozen: bool) -> SetFreezeReport {
+    use crate::broker_codes as codes;
+
+    let code = response.error_code;
+    if code == 0 {
+        return SetFreezeReport {
+            stdout: Some(format!("{}\tok", if frozen { "frozen" } else { "thawed" })),
+            stderr: None,
+            exit: 0,
+        };
+    }
+    let message = response.error_message.as_deref();
+    let stderr = if !frozen && code == codes::INVALID_REQUEST {
+        format!(
+            "error {code} (the registry holds no freeze at this exact scope, so there is \
+             nothing to thaw){}",
+            message.map_or_else(String::new, |m| format!(": {m}"))
+        )
+    } else {
+        described_error(code, message)
+    };
+    SetFreezeReport {
+        stdout: None,
+        stderr: Some(stderr),
+        exit: exit_for_code(code),
+    }
+}
+
+/// Write the outcome of one freeze or thaw, and turn it into an exit code.
 pub fn report_set_freeze(
     out: &mut impl Write,
     err: &mut impl Write,
     response: &api::SetTopicFreezeResponse,
     frozen: bool,
 ) -> i32 {
-    if response.error_code != 0 {
-        return report_error(err, response.error_code, response.error_message.as_deref());
+    let report = set_freeze_report(response, frozen);
+    if let Some(line) = &report.stdout {
+        _ = writeln!(out, "{line}");
     }
-    _ = writeln!(out, "{}\tok", if frozen { "frozen" } else { "thawed" });
-    0
+    if let Some(line) = &report.stderr {
+        _ = writeln!(err, "{line}");
+    }
+    report.exit
 }
 
 /// One line per registry entry.

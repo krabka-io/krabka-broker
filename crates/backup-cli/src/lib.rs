@@ -70,13 +70,17 @@ pub use self::{
     report::{BackupEvent, OperationReport},
 };
 
+/// The exit code for a command line that does not parse.
+///
+/// It is [`EXIT_BAD_ARGUMENT`], the code `krabka restore` gives a bad argument,
+/// because one runbook branches on both tools.
+const EXIT_USAGE: i32 = EXIT_BAD_ARGUMENT;
+
 krabka_macros::parsed_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
     ///
-    /// # Panics
-    ///
-    /// Panics if `argv` does not parse, which for a caller passing a literal
-    /// argument list is a bug in that list rather than a runtime condition.
+    /// A command line that does not parse prints clap's message and returns
+    /// [`EXIT_BAD_ARGUMENT`]. `--help` and `--version` print and return `0`.
 });
 
 /// Run one parsed command line, mapping its error onto an exit code.

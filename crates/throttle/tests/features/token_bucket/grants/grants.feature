@@ -1,4 +1,4 @@
-Feature: A connection creation quota grants whole connections from its balance
+Feature: A token bucket grants whole tokens from its balance
 
   KIP-612. The broker meters max.connection.creation.rate and an ip entity's
   connection_creation_rate with a token bucket of one token per connection.

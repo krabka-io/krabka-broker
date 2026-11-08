@@ -65,15 +65,23 @@ struct Ports {
     client_advertised: [String; 3],
     /// `0.0.0.0:<port>` bind addresses for the three controller listeners.
     controller: [String; 3],
+    /// Holds the three client and three controller ports for the whole
+    /// process, so no other socket takes one between the scenarios that
+    /// rebind them. Never read.
+    _held: [[support::HeldPort; 3]; 2],
 }
 
 fn ports() -> &'static Ports {
     crate::once_value!(Ports, {
-        let (_, client_listen, client_advertised) = support::jvm_client_ports::<3>();
+        let (client, client_listen, client_advertised) = support::jvm_client_ports::<3>();
+        let controller: [support::HeldPort; 3] = array::from_fn(|_| support::hold_port());
         Ports {
             client_listen,
             client_advertised,
-            controller: array::from_fn(|_| format!("0.0.0.0:{}", support::free_port())),
+            controller: controller
+                .each_ref()
+                .map(|held| format!("0.0.0.0:{}", held.port())),
+            _held: [client, controller],
         }
     })
 }
