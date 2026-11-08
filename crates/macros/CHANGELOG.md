@@ -8,6 +8,11 @@ release that contains `krabka-macros`.
 
 ### Changed (breaking)
 
+- `wire_codes!` rows in the `release` and `trunk` sections now name Kafka's
+  default message, as `NAME = 3 => "message";`, and `private` rows name none.
+  The caller's `NamedCode` gains a `message: Option<&'static str>` field, the
+  caller defines `KafkaError { name, message }`, and the declaration emits a
+  private `declared_kafka_error` lookup over the rows that carry a message.
 - `parsed_cli_entrypoint!` parses with `Cli::try_parse_from`, prints clap's
   message on a parse error, and returns the caller's `EXIT_USAGE`, which must
   be in scope. `--help` and `--version` still return `0`. It used to exit the
