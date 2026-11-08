@@ -1,7 +1,10 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use {
     super::{
-        assignor::{AssignorInput, AssignorMember, StreamsAssignment, TaskAssignorRegistry},
+        assignor::{
+            AssignorInput, AssignorMember, BUILTIN_STICKY_ASSIGNOR, StreamsAssignment,
+            TaskAssignorRegistry,
+        },
         description::{NativeBackend, TopologyDescriptionPlugin},
     },
     crate::{
@@ -393,7 +396,7 @@ impl StreamsGroupConfig {
         } else {
             self.task_assignors
                 .names()
-                .chain(once("sticky"))
+                .chain(once(BUILTIN_STICKY_ASSIGNOR))
                 .collect::<Vec<_>>()
                 .join(",")
         }
@@ -405,7 +408,7 @@ impl StreamsGroupConfig {
         self.task_assignor_name
             .as_deref()
             .or_else(|| self.task_assignors.default_name())
-            .unwrap_or("sticky")
+            .unwrap_or(BUILTIN_STICKY_ASSIGNOR)
     }
 
     /// Execute the selected implementation without fallback on failure.
@@ -417,7 +420,7 @@ impl StreamsGroupConfig {
         input: &AssignorInput,
     ) -> Result<StreamsAssignment, String> {
         let name = self.selected_task_assignor_name();
-        if name == "sticky" {
+        if name == BUILTIN_STICKY_ASSIGNOR {
             return Ok(super::assignor::assign(members, input));
         }
         let assignment = self
@@ -511,7 +514,7 @@ impl StreamsGroupConfig {
                         out.task_assignor_name = Some(java_trim(value).into());
                     } else {
                         out.assignor = StreamsAssignorKind::parse(java_trim(value))?;
-                        out.task_assignor_name = Some("sticky".into());
+                        out.task_assignor_name = Some(BUILTIN_STICKY_ASSIGNOR.into());
                     }
                 }
                 KEY_RACK_AWARE_ASSIGNMENT_TAGS => {

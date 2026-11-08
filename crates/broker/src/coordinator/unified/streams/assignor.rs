@@ -50,6 +50,10 @@ mod tests;
 
 pub use self::types::{AssignorInput, AssignorMember, StreamsAssignment};
 
+/// The name of the built-in sticky task assignor, [`assign`]. A native
+/// extension may not register under it.
+pub const BUILTIN_STICKY_ASSIGNOR: &str = "sticky";
+
 /// Computes the target [`StreamsAssignment`] for a streams group.
 ///
 /// See the module docs for the algorithm. With no members, it returns an empty
@@ -139,7 +143,7 @@ impl TaskAssignorRegistry {
     /// Rejects duplicate names and the actual reserved built-in name.
     pub fn register(&mut self, assignor: Arc<dyn TaskAssignor>) -> Result<(), String> {
         let name = assignor.name();
-        if name == "sticky" || self.get(name).is_some() {
+        if name == BUILTIN_STICKY_ASSIGNOR || self.get(name).is_some() {
             return Err(format!(
                 "invalid or duplicate Streams task assignor name: {name}"
             ));

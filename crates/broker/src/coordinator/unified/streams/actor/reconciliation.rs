@@ -15,7 +15,7 @@ use {
         coordinator::unified::{
             can_compute_next_target_assignment,
             streams::{
-                assignor::{AssignorInput, AssignorMember},
+                assignor::{AssignorInput, AssignorMember, BUILTIN_STICKY_ASSIGNOR},
                 config::StreamsGroupConfig,
                 persistence::{NO_VALIDATED_TOPOLOGY_EPOCH, StreamsGroupTopologyValue},
                 state::{StreamsGroupStatePhase, StreamsTargetAssignment},
@@ -61,7 +61,8 @@ pub(super) fn reconcile(
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) -> Result<(), BrokerError> {
-    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    let before =
+        (config.selected_task_assignor_name() != BUILTIN_STICKY_ASSIGNOR).then(|| actor.clone());
     let result = reconcile_inner(actor, config, metadata_source);
     if result.is_err()
         && let Some(before) = before
@@ -262,7 +263,8 @@ pub(super) fn compute_and_install_target(
     topology: &StreamsGroupTopologyValue,
     num_tasks: &BTreeMap<String, i32>,
 ) -> Result<(), BrokerError> {
-    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    let before =
+        (config.selected_task_assignor_name() != BUILTIN_STICKY_ASSIGNOR).then(|| actor.clone());
     if !actor.state.bump_epoch() {
         return Ok(());
     }
