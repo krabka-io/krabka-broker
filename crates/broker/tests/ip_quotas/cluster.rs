@@ -10,10 +10,11 @@
 /// Starts a single-broker PLAINTEXT cluster, with no SASL. Returns
 /// `(handle, _dir, addr)`.
 pub use crate::support::sasl::start_single_broker_plaintext;
-pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
 use {
-    crate::support::sasl::start_plaintext_configured, krabka_broker::BrokerHandle,
-    std::net::SocketAddr, tempfile::TempDir,
+    crate::support::sasl::{start_configured_users, start_plaintext_configured},
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
 /// Starts a single-broker PLAINTEXT cluster with explicit connection caps,
@@ -41,6 +42,24 @@ pub async fn start_single_broker_plaintext_with_conn_caps(
 pub async fn start_single_broker_plaintext_with_kafka_quota_window()
 -> (BrokerHandle, TempDir, SocketAddr) {
     start_plaintext_configured(|cfg| {
+        cfg.quota_window = krabka_units::secs(11);
+        cfg.quota_throttle_max = krabka_units::secs(1);
+    })
+    .await
+}
+
+/// Starts a single-broker SASL/PLAIN cluster with `users`, whose client
+/// quotas measure over Kafka's default window. Returns `(handle, _dir, addr)`.
+///
+/// The administrator sets a `connection_creation_rate` on the address it
+/// then reconnects from, so a one-sample window would throttle that
+/// reconnection, as [`start_single_broker_plaintext_with_kafka_quota_window`]
+/// explains.
+pub async fn start_single_broker_sasl_plaintext_with_kafka_quota_window(
+    super_user: &str,
+    users: &[(&str, &str)],
+) -> (BrokerHandle, TempDir, SocketAddr) {
+    start_configured_users(super_user, users, |cfg| {
         cfg.quota_window = krabka_units::secs(11);
         cfg.quota_throttle_max = krabka_units::secs(1);
     })

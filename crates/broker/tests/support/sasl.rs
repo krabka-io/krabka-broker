@@ -237,8 +237,10 @@ pub async fn start_single_broker_plaintext() -> (BrokerHandle, TempDir, SocketAd
     start_plaintext_configured(|_| {}).await
 }
 
-/// Retain the directory and apply authorization before creating the broker-start future.
-fn start_configured_users(
+/// Start a PLAIN fixture with `users`, after `configure` adjusts its config.
+/// Retain the directory and apply authorization before creating the
+/// broker-start future.
+pub fn start_configured_users(
     super_user: &str,
     users: &[(&str, &str)],
     configure: impl FnOnce(&mut BrokerConfig),

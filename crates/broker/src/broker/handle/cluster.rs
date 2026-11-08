@@ -3,8 +3,6 @@
 //! that block until the image or a metric reaches an expected value. They are
 //! grouped here so the handle's production surface stays readable.
 
-#[cfg(any(test, feature = "test-helpers"))]
-use crate::{error::BrokerError, metrics::BrokerMetrics};
 use {
     crate::broker::{Broker, BrokerHandle, TEST_AWAITER_TIMEOUT},
     krabka_raft::reconfig::{ReconfigOutcome, RemoveVoter},
@@ -15,6 +13,15 @@ use {
         sync::Arc,
     },
     tokio::{sync::watch, time},
+};
+#[cfg(any(test, feature = "test-helpers"))]
+use {
+    crate::{
+        error::BrokerError,
+        metrics::BrokerMetrics,
+        quota::{QuotaType, lookup_ip_quota_with_key},
+    },
+    std::net::IpAddr,
 };
 
 impl BrokerHandle {
@@ -258,6 +265,34 @@ impl BrokerHandle {
         assert2::assert!(
             held,
             "wait_for_metrics({what}) timed out after {TEST_AWAITER_TIMEOUT:?}"
+        );
+    }
+
+    /// Test-only: await until the accept path resolves a KIP-612
+    /// `connection_creation_rate` for a connection from `peer`.
+    ///
+    /// An `ip` entity that spells the address another way, such as
+    /// `::ffff:127.0.0.1` for `127.0.0.1`, applies only once the quota refresh
+    /// task has re-read the image's entity names, which it does after the
+    /// image arrives. [`Self::wait_for_image`] alone does not wait for that.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn wait_for_connection_creation_rate(&self, peer: IpAddr) {
+        let held = super::await_until(|| {
+            future::ready(
+                lookup_ip_quota_with_key(
+                    &self.broker.controller.current_image(),
+                    self.broker.quota_buckets.ip_names(),
+                    peer,
+                    QuotaType::ConnectionCreation,
+                )
+                .is_some(),
+            )
+        })
+        .await;
+        assert2::assert!(
+            held,
+            "wait_for_connection_creation_rate({peer}) timed out after {TEST_AWAITER_TIMEOUT:?}"
         );
     }
 

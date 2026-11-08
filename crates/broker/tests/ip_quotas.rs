@@ -31,7 +31,7 @@ use {
         cluster::{
             start_single_broker_plaintext, start_single_broker_plaintext_with_conn_caps,
             start_single_broker_plaintext_with_kafka_quota_window,
-            start_single_broker_sasl_plaintext_with_users,
+            start_single_broker_sasl_plaintext_with_kafka_quota_window,
         },
         kafka_wire::{
             PlainAuthenticationSetup,
@@ -47,7 +47,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     std::{
         io::{self, ErrorKind},
-        net::SocketAddr,
+        net::{IpAddr, SocketAddr},
         time::{Duration, Instant},
     },
     tempfile::TempDir,
@@ -79,7 +79,11 @@ fn quotas() -> QuotaAdministration {
 #[given("a SASL PLAIN quota administrator connects as admin")]
 async fn quota_admin(quotas: &mut QuotaAdministration) {
     quotas.broker = Some(
-        start_single_broker_sasl_plaintext_with_users("admin", &[("admin", "admin-secret")]).await,
+        start_single_broker_sasl_plaintext_with_kafka_quota_window("admin", &[(
+            "admin",
+            "admin-secret",
+        )])
+        .await,
     );
 }
 #[when("the administrator sets loopback connection creation rate to two per second")]
@@ -225,6 +229,12 @@ async fn rate_limit(rate: &mut ConnectionRate, entity: String) {
                 .and_then(|settings| settings.get("connection_creation_rate"))
                 .is_some()
         })
+        .await;
+    // An entity that spells the address another way applies once the quota
+    // refresh task re-reads the image's names.
+    broker
+        .0
+        .wait_for_connection_creation_rate(IpAddr::from(LIMITED_SOURCE))
         .await;
     rate.broker = Some(broker);
     rate.entity = entity;
