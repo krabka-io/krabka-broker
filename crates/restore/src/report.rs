@@ -437,19 +437,6 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
     struct RestoredBatchCount(u64);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct SegmentOutcomeSetup {
-        #[default(Offset(0))]
-        base: Offset,
-        #[default(Offset(402))]
-        end: Offset,
-        #[default(RestoredRecordCount(402))]
-        kept: RestoredRecordCount,
-        dropped: RestoredRecordCount,
-        rewritten: RestoredBatchCount,
-        emptied: RestoredBatchCount,
-    }
-
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum RestoreMode {
         Perform,
@@ -465,22 +452,6 @@ mod tests {
         #[builder(into, default)] rewritten: RestoredBatchCount,
         #[builder(into, default)] emptied: RestoredBatchCount,
     ) -> SegmentOutcome {
-        let setup = SegmentOutcomeSetup {
-            base,
-            end,
-            kept,
-            dropped,
-            rewritten,
-            emptied,
-        };
-        let SegmentOutcomeSetup {
-            base,
-            end,
-            kept,
-            dropped,
-            rewritten,
-            emptied,
-        } = setup;
         SegmentOutcome {
             segment_id: Uuid::from_u128(u128::from(base.0.unsigned_abs()) + 1),
             base_offset: base,

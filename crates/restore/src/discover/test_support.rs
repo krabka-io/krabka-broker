@@ -75,14 +75,6 @@ pub(super) struct SegmentSetup<'a> {
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ArtifactSetup<'a> {
-    pub(super) prefix: Option<&'a str>,
-    pub(super) segment: SegmentSetup<'a>,
-    #[default(".log")]
-    pub(super) suffix: &'a str,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct SnapshotSegmentSetup<'a> {
     pub(super) segment: SegmentSetup<'a>,
     #[default(RemoteLogSegmentState::CopySegmentFinished)]
@@ -97,16 +89,6 @@ pub(super) fn write_artifact(
     #[builder(default)] segment: SegmentSetup<'_>,
     #[builder(default = ".log")] suffix: &'_ str,
 ) {
-    let setup = ArtifactSetup {
-        prefix,
-        segment,
-        suffix,
-    };
-    let ArtifactSetup {
-        prefix,
-        segment,
-        suffix,
-    } = setup;
     let SegmentSetup {
         partition,
         base_offset,
