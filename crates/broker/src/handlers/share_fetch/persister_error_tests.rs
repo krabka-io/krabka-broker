@@ -23,7 +23,7 @@ use {
             share_fetch_partition_rows, share_fetch_wire, share_topic_uuid,
             single_replica_partition,
         },
-        share_coordinator::bootstrap::TOPIC,
+        share_coordinator::{bootstrap::TOPIC, key::ShareKeyRef},
         test_support::initialize_share_state,
     },
     assert2::assert,
@@ -214,9 +214,7 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
             .share_coordinator
             .initialize(
                 &shared.controller.current_image(),
-                &name,
-                share_topic_uuid(topic_id),
-                0,
+                ShareKeyRef::new(&name, share_topic_uuid(topic_id), 0),
                 state_epoch + 1,
                 Offset(0),
             )

@@ -40,7 +40,17 @@ impl ShareKey {
     }
 }
 
-impl ShareKeyRef<'_> {
+impl<'a> ShareKeyRef<'a> {
+    /// The key of `partition` of `topic_id` in `group`.
+    #[must_use]
+    pub(crate) const fn new(group: &'a str, topic_id: uuid::Uuid, partition: i32) -> Self {
+        Self {
+            group,
+            topic_id,
+            partition,
+        }
+    }
+
     /// The owned form of this key.
     pub(crate) fn to_key(self) -> ShareKey {
         ShareKey {

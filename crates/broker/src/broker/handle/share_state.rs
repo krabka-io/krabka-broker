@@ -4,7 +4,10 @@
 //! expected value.
 
 use {
-    crate::{broker::BrokerHandle, share_coordinator::coordinator::ShareStateSummary},
+    crate::{
+        broker::BrokerHandle,
+        share_coordinator::{coordinator::ShareStateSummary, key::ShareKeyRef},
+    },
     std::cell::Cell,
 };
 
@@ -38,7 +41,11 @@ impl BrokerHandle {
     ) -> Option<(i32, i32, i64, i32)> {
         self.broker
             .share_coordinator
-            .stored_summary_for_test(group, topic_id, partition)
+            .stored_summary_for_test(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
             .await
             .map(raw_summary)
     }
@@ -68,7 +75,11 @@ impl BrokerHandle {
     ) -> Result<Option<(i32, i32, i64, i32)>, i16> {
         self.broker
             .share_coordinator
-            .active_summary_for_test(group, topic_id, partition)
+            .active_summary_for_test(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
             .await
             .map(|summary| summary.map(raw_summary))
     }
@@ -217,6 +228,7 @@ mod tests {
             share_coordinator::{
                 coordinator::test_support::{image_with_topic, share_write},
                 handlers::test_support::lead_share_state_partitions,
+                key::ShareKeyRef,
                 persistence::StateBatch,
             },
             share_partition::state::AcquisitionState,
@@ -256,9 +268,7 @@ mod tests {
             .share_coordinator
             .initialize(
                 &image_with_topic(topic_id, 1),
-                group,
-                topic_id,
-                0,
+                ShareKeyRef::new(group, topic_id, 0),
                 4,
                 krabka_log::Offset(-1),
             )
@@ -299,9 +309,7 @@ mod tests {
             .share_coordinator
             .initialize(
                 &share_image,
-                share_group,
-                share_topic_id,
-                share_partition,
+                ShareKeyRef::new(share_group, share_topic_id, share_partition),
                 11,
                 krabka_log::Offset(90),
             )
@@ -311,9 +319,7 @@ mod tests {
             .share_coordinator
             .read(
                 &share_image,
-                share_group,
-                share_topic_id,
-                share_partition,
+                ShareKeyRef::new(share_group, share_topic_id, share_partition),
                 2,
             )
             .await
@@ -322,9 +328,7 @@ mod tests {
             .share_coordinator
             .write(
                 &share_image,
-                share_group,
-                share_topic_id,
-                share_partition,
+                ShareKeyRef::new(share_group, share_topic_id, share_partition),
                 share_write((11, 2), (95, 7), vec![StateBatch {
                     first_offset: krabka_log::Offset(95),
                     last_offset: krabka_log::Offset(99),

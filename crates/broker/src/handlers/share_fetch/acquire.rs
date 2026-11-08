@@ -1215,9 +1215,7 @@ mod tests {
             .share_coordinator
             .initialize(
                 &shared.controller.current_image(),
-                group,
-                key,
-                0,
+                ShareKeyRef::new(group, key, 0),
                 state_epoch + 1,
                 Offset(0),
             )

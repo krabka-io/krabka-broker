@@ -156,24 +156,21 @@ impl SharePersister {
         // the lifecycle hook is the first thing to touch the topic when no
         // client has issued FindCoordinator(SHARE) yet. Mirrors how the txn
         // handlers refresh before dispatching.
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
                 .initialize(
                     &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
+                    key,
                     state_epoch,
                     start_offset,
                 )
@@ -209,19 +206,18 @@ impl SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<(), BrokerError> {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         let result = if local {
             self.share_coordinator
-                .delete(&self.controller.current_image(), group, topic_id, partition)
+                .delete(&self.controller.current_image(), key)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Delete, partition, error))
         } else {
@@ -265,7 +261,7 @@ impl SharePersister {
         } = key;
         let state_partition = self
             .share_coordinator
-            .state_partition_for(group, &topic_id, partition)
+            .state_partition_for(key)
             .ok_or_else(|| {
                 BrokerError::Share(format!(
                     "share key {group}:{topic_id}:{partition} maps to no {} partition",
@@ -376,26 +372,19 @@ impl SharePersister {
         partition: i32,
         leader_epoch: i32,
     ) -> Result<SharePartitionState, BrokerError> {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
-                .read(
-                    &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
-                    leader_epoch,
-                )
+                .read(&self.controller.current_image(), key, leader_epoch)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Read, partition, error));
         }
@@ -449,20 +438,19 @@ impl SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         let RoutedPartition {
             state_partition,
             local,
-        } = self
-            .route(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await?;
+        } = self.route(key).await?;
         if local {
             return self
                 .share_coordinator
-                .read_summary_checked(&self.controller.current_image(), group, topic_id, partition)
+                .read_summary_checked(&self.controller.current_image(), key)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::ReadSummary, partition, error));
         }
@@ -530,13 +518,7 @@ impl SharePersister {
         if local {
             return self
                 .share_coordinator
-                .write(
-                    &self.controller.current_image(),
-                    group,
-                    topic_id,
-                    partition,
-                    request,
-                )
+                .write(&self.controller.current_image(), key, request)
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Write, partition, error));
         }
