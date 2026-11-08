@@ -15,7 +15,7 @@ use {
         fmt::{self, Display, Formatter},
         fs::File,
         io::{BufReader, ErrorKind, Write},
-        net::{SocketAddr, TcpStream},
+        net::{Ipv4Addr, SocketAddr, TcpStream},
         path::{Path, PathBuf},
         process::{Child, Command, ExitStatus, Output, Stdio},
         sync::{
@@ -385,7 +385,7 @@ fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
         closed_port()
     };
     let (controller_reservation, controller) = if case.names.controller {
-        let (reservation, controller) = reserve_port();
+        let (reservation, controller) = reserve_port((Ipv4Addr::LOCALHOST, 0));
         (Some(reservation), controller)
     } else {
         (None, closed_port())
@@ -535,7 +535,7 @@ fn boot_config_file(command: &mut BrokerCommand) {
     // non-existent), so don't pre-create it. The controller listener goes into
     // the voter set, so it needs its port up front.
     let log_dir = tmp.path().join("data");
-    let (reservation, controller) = reserve_port();
+    let (reservation, controller) = reserve_port((Ipv4Addr::LOCALHOST, 0));
     run_krabka_format(&log_dir, 1, &controller.to_string());
     let running = started(
         "the config-file node",

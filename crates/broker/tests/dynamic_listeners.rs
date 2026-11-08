@@ -36,7 +36,7 @@ use {
     },
     std::{
         io::ErrorKind,
-        net::SocketAddr,
+        net::{Ipv4Addr, SocketAddr},
         path::Path,
         time::{Duration, Instant},
     },
@@ -248,7 +248,7 @@ async fn static_broker(listeners: &mut ListenerChange) {
 )]
 async fn add(listeners: &mut ListenerChange, name: String, protocol: String, mechanisms: String) {
     let broker = listeners.broker.as_ref().unwrap();
-    let (reservation, address) = reserve_port();
+    let (reservation, address) = reserve_port((Ipv4Addr::LOCALHOST, 0));
     let configured_listeners = format!("{},{name}://{address}", broker.static_listeners);
     let configured_protocols = format!("{},{name}:{protocol}", broker.static_protocols);
     let mechanism_key = format!(
