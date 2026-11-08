@@ -45,7 +45,7 @@ const TOPIC_B: &str = "resolution-b";
 #[derive(Debug)]
 struct DenyTopicDescribe;
 
-krabka_macros::test_authorizer!(DenyTopicDescribe, request; {
+krabka_broker_macros::test_authorizer!(DenyTopicDescribe, request; {
     if request.resource_type == ResourceType::Topic && request.operation == AclOperation::Describe {
         AuthorizationResult::Deny
     } else {
@@ -167,7 +167,7 @@ async fn metadata(
     request: &MetadataRequest,
 ) -> MetadataResponse {
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["describer"];
         client ["metadata-client"];

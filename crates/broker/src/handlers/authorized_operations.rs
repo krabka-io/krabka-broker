@@ -134,7 +134,7 @@ pub trait DescribedGroupRow {
     fn set_authorized_operations(&mut self, bits: i32);
 }
 
-krabka_macros::described_group_rows! {
+krabka_broker_macros::described_group_rows! {
     consumer_group_describe_response::DescribedGroup,
     describe_groups_response::DescribedGroup,
     share_group_describe_response::DescribedGroup,

@@ -152,7 +152,7 @@ type Probe = fn(ApiVersion) -> ThrottlePosition;
 ///   the `kafka_3_6_2` flavor, mirroring `handlers::produce` and
 ///   `handlers::fetch::encode_fetch_response`.
 fn probes() -> BTreeMap<ApiKeyCode, Probe> {
-    krabka_macros::throttle_probes! {
+    krabka_broker_macros::throttle_probes! {
         throttled:
             ListOffsets, Metadata, OffsetCommit, OffsetFetch, FindCoordinator, JoinGroup, Heartbeat,
             LeaveGroup, SyncGroup, DescribeGroups, ListGroups, ApiVersions, CreateTopics,

@@ -17,8 +17,8 @@ fn default_principal_to_local_rules() -> Vec<String> { vec!["DEFAULT".to_owned()
 /// TOML shape of `[gssapi]`. Maps to
 /// [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules`
 /// are parsed into `KerberosRule` at `apply_to` time.
-#[krabka_macros::human_units]
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::human_units]
+#[krabka_broker_macros::config_table(strict)]
 pub struct FileGssapiConfig {
     /// Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI
     /// accept path reads it to answer a client's ticket.

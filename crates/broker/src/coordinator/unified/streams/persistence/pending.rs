@@ -202,7 +202,7 @@ mod tests {
     // The keys of the streams records write the group id and the member id
     // with an `INT16` length. A string of 32767 bytes encodes, and one of
     // 32768 bytes makes the whole batch an error, not a panic in the actor.
-    krabka_macros::member_key_boundaries!(PendingStreamsRecords; factory [|| {
+    krabka_broker_macros::member_key_boundaries!(PendingStreamsRecords; factory [|| {
         let mut pending = pending_with_group_metadata();
         pending.member_metadata = vec![("m".into(), None)];
         pending.target_per_member = vec![("m".into(), None)];

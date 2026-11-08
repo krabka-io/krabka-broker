@@ -25,7 +25,7 @@ use {
     tokio::task,
 };
 
-krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
+krabka_broker_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
 
 /// Boot a single broker with the `Local` tiered-storage backend and the
 /// topic-backed RLMM pointed at its own loopback listener. Returns the

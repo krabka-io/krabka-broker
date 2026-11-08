@@ -11,7 +11,7 @@ use {
         records::RecordBatch,
     },
 };
-krabka_macros::single_partition_produce_fixture!(single_partition_produce);
+krabka_broker_macros::single_partition_produce_fixture!(single_partition_produce);
 
 /// Whether a Produce answer says the partition's leadership has not settled
 /// yet, rather than that the request failed: a broker that does not lead the

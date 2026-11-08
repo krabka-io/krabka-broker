@@ -28,7 +28,7 @@ use {
 
 const GROUP: &str = "backlog-workers";
 
-krabka_macros::delete_topic_request!(delete_request);
+krabka_broker_macros::delete_topic_request!(delete_request);
 
 #[derive(Default)]
 struct Backlog {

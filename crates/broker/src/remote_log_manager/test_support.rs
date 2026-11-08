@@ -304,7 +304,7 @@ impl FakeWormArchive {
     }
 }
 
-#[krabka_macros::missing_remote_reads]
+#[krabka_broker_macros::missing_remote_reads]
 impl RemoteStorageManager for FakeWormArchive {
     fn copy_log_segment_data(
         &self,
@@ -868,7 +868,7 @@ pub struct RefusesDeleteRsm {
     pub deletes_attempted: AtomicUsize,
 }
 
-#[krabka_macros::missing_remote_reads]
+#[krabka_broker_macros::missing_remote_reads]
 impl RemoteStorageManager for RefusesDeleteRsm {
     fn copy_log_segment_data(
         &self,

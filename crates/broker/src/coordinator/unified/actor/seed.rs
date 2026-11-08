@@ -80,7 +80,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed) {
             ..MemberState::empty(mid.clone(), Instant::now())
         });
     }
-    krabka_macros::hydrate_member_epochs!(state, seed; m, cur {
+    krabka_broker_macros::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state;
             // Kafka's `ConsumerGroupMember.Builder.updateWith` reads each
             // partition's assignment epoch through

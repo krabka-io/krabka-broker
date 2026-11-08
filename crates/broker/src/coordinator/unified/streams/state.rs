@@ -103,7 +103,7 @@ pub struct StoredTopologyHandle {
 
 /// Full in-memory state of one streams group. Exactly one
 /// `actor::GroupActor` task owns it, and it is never shared.
-#[derive(Debug, Clone, krabka_macros::GroupLifecycle)]
+#[derive(Debug, Clone, krabka_broker_macros::GroupLifecycle)]
 #[group_lifecycle(protocol = "streams")]
 pub struct StreamsGroupState {
     pub group_id: String,

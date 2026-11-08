@@ -164,12 +164,12 @@ mod tests {
         apply_submit_error(&mut results, &RaftError::Shutdown, Some(NodeId(1)));
 
         let expected_results = vec![
-            krabka_macros::tagged_wire!(DeleteAclsFilterResult {
+            krabka_broker_macros::tagged_wire!(DeleteAclsFilterResult {
                 error_code: codes::COORDINATOR_NOT_AVAILABLE,
                 error_message: Some("submit failed: controller shut down".into()),
                 matching_acls: vec![matched],
             }),
-            krabka_macros::tagged_wire!(DeleteAclsFilterResult {
+            krabka_broker_macros::tagged_wire!(DeleteAclsFilterResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some("Unknown entryFilter.".into()),
                 matching_acls: Vec::new(),

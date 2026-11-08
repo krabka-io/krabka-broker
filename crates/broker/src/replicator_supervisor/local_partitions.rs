@@ -305,7 +305,7 @@ mod tests {
     }
 
     // A disk that refuses every write to the leader-epoch checkpoint.
-    krabka_macros::epoch_checkpoint_failure!(EpochCheckpointFull, PermissionDenied);
+    krabka_broker_macros::epoch_checkpoint_failure!(EpochCheckpointFull, PermissionDenied);
 
     /// Kafka's `LeaderEpochFileCache` reports a checkpoint write that fails to
     /// `LogDirFailureChannel`, so a promotion that cannot record its epoch

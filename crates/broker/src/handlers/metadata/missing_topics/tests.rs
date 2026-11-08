@@ -44,7 +44,7 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["alice"];
         client ["metadata-client"];

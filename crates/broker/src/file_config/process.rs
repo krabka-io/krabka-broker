@@ -8,7 +8,7 @@
 use {super::FileConfigError, crate::config::StretchProfile};
 
 /// `[process]` TOML section — `KRaft` `process.roles`.
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileProcessConfig {
     /// Role strings: `"controller"`, `"broker"`, `"witness"`
@@ -24,7 +24,7 @@ pub struct FileProcessConfig {
 /// The table is all-or-nothing. When it is present, all three fields must
 /// be, because a half-built profile would let the broker start with a site
 /// layout that no node agrees on.
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileStretchConfig {
     /// The three site names. Each one is a `rack` value that some node of

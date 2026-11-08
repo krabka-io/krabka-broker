@@ -332,7 +332,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn denied_response_preserves_error_fields() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] deny_all;
             user ["alice"];
@@ -501,7 +501,7 @@ mod tests {
             &ctx,
         );
 
-        let expected = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
@@ -523,7 +523,7 @@ mod tests {
         seed_alice_quota(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         let allowed = allowed_user_quota_response(Some("alice"), 1024.0);
-        let denied = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
+        let denied = krabka_broker_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
@@ -531,7 +531,7 @@ mod tests {
 
         for (user, grant, expected) in describe_configs_acl_cases(&allowed, &denied) {
             grant_optional_cluster_operation(&broker_handle, user, grant).await;
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user [user];
             };
@@ -567,7 +567,7 @@ mod tests {
                 .call(),
         ]);
         let authorizer = AllowAllAuthorizer;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -675,7 +675,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["admin"];};
         quota_filter.response = Some(handle(
             &broker,
             &request()
@@ -696,7 +696,7 @@ mod tests {
     ) {
         check!(
             quota_filter.response.as_ref().unwrap()
-                == &krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
+                == &krabka_broker_macros::unthrottled_wire!(DescribeClientQuotasResponse {
                     error_code: code,
                     error_message: Some(message),
                     entries: None
@@ -787,7 +787,7 @@ mod tests {
             &ctx,
         );
 
-        let expected = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: 0,
             error_message: Some(String::new()),
             entries: Some(Vec::new()),

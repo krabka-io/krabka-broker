@@ -29,7 +29,7 @@ use {
 /// ignored `principal` typo would leave a key bound to nobody, and the
 /// principal binding is what stops one operator's key signing in another
 /// operator's name.
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileOperatorKey {
     /// Stable identifier that a signed freeze record or break-glass approval
@@ -62,8 +62,8 @@ impl From<&FileOperatorKey> for OperatorKeyEntry {
 /// an absent one retains it. `deny_unknown_fields` so a misspelled
 /// `require_signature` is rejected at parse time rather than leaving the
 /// broker on the opposite policy to the one the operator wrote.
-#[krabka_macros::human_units]
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::human_units]
+#[krabka_broker_macros::config_table(strict)]
 pub struct FileFreezeConfig {
     /// Ceiling on live freeze registry entries. Default
     /// [`crate::config::DEFAULT_FREEZE_MAX_ENTRIES`]. Must be at least 1.
@@ -88,8 +88,8 @@ pub struct FileFreezeConfig {
 /// Every field is `Option`, so `approvers = []` and `signed_actions = []` are
 /// each a written choice and are distinct from omitting the key.
 /// `deny_unknown_fields` so a misspelled key is rejected at parse time.
-#[krabka_macros::human_units]
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::human_units]
+#[krabka_broker_macros::config_table(strict)]
 pub struct FileBreakGlassConfig {
     /// Principals that may approve a proposal. Omitted leaves the
     /// `BrokerConfig` value, which is empty.

@@ -8,48 +8,10 @@ use {
     },
 };
 
-/// Top-level comma splitting that retains the input's diagnostic span.
-pub struct CommaArguments {
-    pub(crate) span: Span,
-    parts: Vec<Vec<TokenTree>>,
-}
+#[path = "shared/fixtures.rs"]
+mod shared;
 
-impl CommaArguments {
-    pub(crate) fn new(input: TokenStream) -> Self {
-        let span = input.span();
-        let tokens = Vec::from(input);
-        Self {
-            span,
-            parts: tokens
-                .split(TokenTree::is_punct_comma)
-                .map(<[TokenTree]>::to_vec)
-                .collect(),
-        }
-    }
-
-    pub(crate) fn parts(&self) -> Vec<&[TokenTree]> {
-        self.parts.iter().map(Vec::as_slice).collect()
-    }
-}
-
-pub fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
-    let tokens: Vec<_> = tokens.into_iter().collect();
-    match tokens.as_slice() {
-        [TokenTree::Ident(name)] => Ok(name.clone()),
-        _ => Err(ParseError::new(
-            Span::call_site(),
-            "fixture generator needs one item name",
-        )),
-    }
-}
-
-/// Build named fixture items after validating the generator's item name.
-pub fn named_items(
-    input: TokenStream,
-    build: impl FnOnce(Ident) -> TokenStream,
-) -> Result<TokenStream, ParseError> {
-    Ok(build(name(input)?))
-}
+pub use shared::*;
 
 /// Parse an item name followed by a fixed number of generator arguments.
 pub fn named_arguments<const N: usize>(
@@ -66,28 +28,6 @@ pub fn named_arguments<const N: usize>(
         )
     })?;
     Ok((self::name(name)?, rest))
-}
-
-/// Parse the common item-name and crate-path pair of fixture generators.
-pub fn named_root(input: TokenStream) -> Result<(Ident, TokenStream), ParseError> {
-    let [name, root]: [TokenStream; 2] = argument_array(input)?;
-    Ok((self::name(name)?, root))
-}
-
-/// Assemble a fixture function while leaving its signature and body explicit.
-pub fn function(
-    input: TokenStream,
-    visibility: &TokenStream,
-    parameters: &TokenStream,
-    returns: &TokenStream,
-    body: &TokenStream,
-) -> Result<TokenStream, ParseError> {
-    let name = self::name(input)?;
-    Ok(moxy::template! {
-        {{ visibility }} fn {{ name }}({{ parameters }}) -> {{ returns }} {
-            {{ body }}
-        }
-    })
 }
 
 pub fn capture_layer(tokens: TokenStream) -> Result<TokenStream, ParseError> {
@@ -264,43 +204,6 @@ pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
                 Self { records: Vec::new(), ..Self::whole(offset, batch) }
             }
             }
-        }
-    })
-}
-
-/// Generate the first matching header lookup with the caller's UTF-8 policy.
-pub fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let [name_tokens, mode_tokens] = argument_array(tokens)?;
-    let name = name(name_tokens)?;
-    let strict = mode(mode_tokens, [("strict", true), ("lossy", false)])?;
-    Ok(moxy::template! {
-        fn {{ name }}(record: &::krabka_protocol::records::Record, key: &str) -> Option<String> {
-            record.headers.iter()
-                .find(|header| header.key == key)
-                .and_then(|header| header.value.as_ref())
-                .map(|value| {
-                    @if strict { String::from_utf8(value.to_vec()).unwrap() }
-                    @else { String::from_utf8_lossy(value).into_owned() }
-                })
-        }
-    })
-}
-
-/// Generate the three DLQ counter reads with explicit caller types and docs.
-pub fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let [name_tokens, metrics, label] = argument_array(tokens)?;
-    let mut name_tokens = Vec::from(name_tokens);
-    let name = name(name_tokens.pop().into_iter().collect())?;
-    let attributes = TokenStream::from(name_tokens);
-    Ok(moxy::template! {
-        {{ attributes }}
-        fn {{ name }}(metrics: &{{ metrics }}, group: &str) -> (u64, u64, u64) {
-            let label = {{ label }} { group_id: group.to_owned() };
-            (
-                metrics.share_group_dlq_records.get_or_create(&label).get(),
-                metrics.share_group_dlq_produce_requests.get_or_create(&label).get(),
-                metrics.share_group_dlq_failed_produce_requests.get_or_create(&label).get(),
-            )
         }
     })
 }
@@ -560,24 +463,6 @@ pub fn simulation_earliest_timer(input: TokenStream) -> Result<TokenStream, Pars
                     node.check_quorum_deadline,
                 ])
             }))
-        }
-    })
-}
-
-pub fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(tokens)?;
-    Ok(moxy::template! {
-        /// Delete one named topic using both legacy and flexible request fields.
-        fn {{ name }}(topic: &str) -> ::krabka_protocol::owned::delete_topics_request::DeleteTopicsRequest {
-            ::krabka_protocol::owned::delete_topics_request::DeleteTopicsRequest {
-                topics: ::std::vec![::krabka_protocol::owned::delete_topics_request::DeleteTopicState {
-                    name: Some(topic.into()),
-                    ..Default::default()
-                }],
-                topic_names: ::std::vec![topic.into()],
-                timeout_ms: 5_000,
-                ..Default::default()
-            }
         }
     })
 }

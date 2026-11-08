@@ -20,7 +20,7 @@ use {
 /// exclusive. With neither set, the unsecured-JWS validator
 /// (development only) is used, and that fallback is rejected at
 /// config-load unless `allow_unsecured = true`.
-#[krabka_macros::config_table(open)]
+#[krabka_broker_macros::config_table(open)]
 #[derive(Eq)]
 pub struct FileOAuthBearerConfig {
     /// Claim whose value becomes the principal name. Default `sub`.

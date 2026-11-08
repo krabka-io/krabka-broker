@@ -289,7 +289,7 @@ pub(super) struct Active<'a> {
 /// call started.
 ///
 /// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default, krabka_macros::ScheduledLoads)]
+#[derive(Debug, Default, krabka_broker_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__share_group_state load task failed")]
 pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,

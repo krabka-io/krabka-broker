@@ -30,7 +30,7 @@ pub(super) fn request(filters: Vec<DeleteAclsFilter>) -> DeleteAclsRequest {
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 

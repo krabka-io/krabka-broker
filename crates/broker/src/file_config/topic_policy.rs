@@ -26,7 +26,7 @@ use {
 /// `deny_unknown_fields` so a misspelled rule name is rejected at parse time
 /// rather than leaving the broker enforcing nothing where the operator wrote
 /// a rule.
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileTopicPolicyConfig {
     /// Lowest replication factor `CreateTopics` may be asked for. The

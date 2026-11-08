@@ -100,7 +100,7 @@ const KAFKA_TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
 #[derive(Debug)]
 struct DenyDescribeOf(ResourceType);
 
-krabka_macros::test_authorizer!(DenyDescribeOf, request; {
+krabka_broker_macros::test_authorizer!(DenyDescribeOf, request; {
     if request.resource_type == self.0
         && request.operation == AclOperation::Describe
         && request.resource_name == "denied"
@@ -129,7 +129,7 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["admin-client"];
@@ -165,7 +165,7 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
 
 #[tokio::test]
 async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["share-client"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["share-client"]; };
     let version = 5;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -183,7 +183,7 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
 
 #[tokio::test]
 async fn v4_empty_key_array_stays_empty_without_bootstrap() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["txn-client"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["txn-client"]; };
     let version = 4;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
@@ -219,7 +219,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["alice"];
         client ["txn-client"];
@@ -264,7 +264,7 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["alice"];
         client ["share-client"];
@@ -292,7 +292,7 @@ async fn find(
     version: i16,
     principal_name: &str,
 ) -> FindCoordinatorResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user [principal_name];
         client ["find-client"];
@@ -689,7 +689,7 @@ async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
     // the top-level row.
     assert!(
         response
-            == krabka_macros::unthrottled_wire!(FindCoordinatorResponse {
+            == krabka_broker_macros::unthrottled_wire!(FindCoordinatorResponse {
                 error_code: codes::NONE,
                 error_message: Some("NONE".into()),
                 node_id: broker.config.broker_id,
@@ -952,7 +952,7 @@ async fn key_type_seven_is_invalid_on_every_key() {
 /// empty v4+ batch with an unknown key type stays empty.
 #[tokio::test]
 async fn empty_batch_with_unknown_key_type_stays_empty() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["find-client"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_no_audit()]; user ["alice"]; client ["find-client"]; };
     let request = FindCoordinatorRequest {
         key_type: 7,
         coordinator_keys: vec![],

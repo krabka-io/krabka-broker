@@ -170,7 +170,7 @@ pub struct StreamsGroupTopologyValue {
     pub subtopologies: Vec<StoredSubtopology>,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupTopologyValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupTopologyValue")]
 impl StreamsGroupTopologyValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.epoch);

@@ -75,7 +75,8 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-logfmt` | logfmt encoder for structured logs. |
 | `krabka-parse-benches` | Parses Criterion benchmark output into structured JSON summaries. |
 | `krabka-docgen` | Renders the broker reference pages from the broker's own in-process data. |
-| `krabka-macros` | Derive macros for the broker: `RegisterMetrics` builds and registers `BrokerMetrics` from its field attributes. |
+| `krabka-macros` | Derive and function macros that more than one crate uses, such as `FieldDefaults`, `RefinedNewtype` and `cli_main!`. Published with `krabka-log`. |
+| `krabka-broker-macros` | Macros whose expansions name broker modules: `dispatch_table!`, `RegisterMetrics`, the coordinator codecs and the broker's test fixtures. Not published. |
 | `krabka-bdd` | The BDD layer over rstest-bdd: house-style feature lint, generated scenario tests and their runner, hooks, step attributes, `Attempt`, `StepParam` and `Given<T>`. |
 | `krabka-bdd-model` | The Gherkin model behind `krabka-bdd`: loading, rule flattening, outline expansion, the tag glossary and the house-style lint. |
 | `krabka-bdd-macros` | The proc macros behind `krabka-bdd`: `scenarios!`, the step and hook attributes, and `#[derive(StepParam)]`. |

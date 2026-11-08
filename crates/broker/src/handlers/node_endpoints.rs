@@ -17,7 +17,7 @@ use {
 pub mod test_support;
 
 /// One `NodeEndpoints` entry, in the shape the four responses share.
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::NodeEndpoints)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::NodeEndpoints)]
 #[node_endpoints(targets(
     NodeEndpoint,
     owned::produce_response::NodeEndpoint,

@@ -940,7 +940,7 @@ mod tests {
         assert!(!super::should_use_sendfile(64, false, 64));
     }
 
-    krabka_macros::sendfile_platform! {
+    krabka_broker_macros::sendfile_platform! {
     /// On a plaintext connection [`super::read_records`] describes the records
     /// run for the `sendfile` drain instead of `pread`ing it, but only once
     /// the run is long enough to pay for the syscall. Below the threshold it
@@ -981,7 +981,7 @@ mod tests {
     }
     }
 
-    krabka_macros::sendfile_platform! {
+    krabka_broker_macros::sendfile_platform! {
     /// A read below the `sendfile` threshold copies the run the descriptor
     /// walk found, one region per segment, and serves the bytes a `read_raw`
     /// of the same window serves.

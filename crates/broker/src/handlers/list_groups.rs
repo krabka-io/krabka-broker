@@ -280,7 +280,7 @@ mod tests {
 
     const VERSION: i16 = list_groups_response::MAX_VERSION;
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -316,7 +316,7 @@ mod tests {
         let _consumer = coordinator.get_or_create_consumer("consumer-a");
         coordinator.mark_share("share-a");
         let _share = coordinator.get_or_create_share("share-a");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -325,7 +325,7 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = krabka_macros::unthrottled_wire!(ListGroupsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ListGroupsResponse {
             error_code: codes::NONE,
             groups: vec![
                 group("classic-a", "", "Empty", "classic"),
@@ -399,7 +399,7 @@ mod tests {
             }
             let _a = broker.group_coordinator.get_or_create_classic("g-a");
             let _b = broker.group_coordinator.get_or_create_classic("g-b");
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user [user];
             };

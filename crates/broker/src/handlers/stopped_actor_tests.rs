@@ -47,7 +47,7 @@ use {
 /// The group whose actor stops.
 const GROUP: &str = "stopping";
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -97,7 +97,7 @@ impl Rpc {
     /// Sends this RPC for [`GROUP`] and returns the error code it answers for
     /// the group.
     async fn error_code(self, broker: &Broker) -> i16 {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

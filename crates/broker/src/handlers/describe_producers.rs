@@ -256,7 +256,7 @@ mod tests {
 
     const VERSION: i16 = 0;
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -355,7 +355,7 @@ mod tests {
             expected_message,
         } in cases
         {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, p, peer);
                 boot [start_broker(authorizer)];
                 user ["alice"];
@@ -420,7 +420,7 @@ mod tests {
     /// with no message.
     #[tokio::test]
     async fn handle_gives_the_message_only_for_a_topic_the_image_lacks() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -444,7 +444,7 @@ mod tests {
             ])
             .await
             .expect("seed the known topic");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -474,7 +474,7 @@ mod tests {
     /// partition, not only the first.
     #[tokio::test]
     async fn handle_invalid_topic_name_marks_every_requested_partition() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, p, peer);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
             user ["alice"];
@@ -678,7 +678,7 @@ mod tests {
     /// `KAFKA_STORAGE_ERROR`.
     #[tokio::test]
     async fn handle_answers_from_the_log_of_every_hosted_replica() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -759,7 +759,7 @@ mod tests {
             .await
             .expect("replicate an open transaction");
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -838,7 +838,7 @@ mod tests {
     /// is gone does, and the rest of the request is still answered.
     #[tokio::test]
     async fn a_poisoned_log_refuses_only_its_own_row() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -859,7 +859,7 @@ mod tests {
             .expect("hosted partition");
         poison_log(&poisoned);
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };

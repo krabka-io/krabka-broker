@@ -36,7 +36,7 @@ use {
     std::str,
 };
 
-krabka_macros::scram_client_proof_fixture!(scram_client_proof);
+krabka_broker_macros::scram_client_proof_fixture!(scram_client_proof);
 
 const USER_PASSWORD: &str = "user-password";
 /// The broker's `delegation.token.secret.key` in these tests.

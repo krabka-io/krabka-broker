@@ -213,7 +213,7 @@ pub(super) fn alice_peer() -> RequestIdentity {
 /// Kafka's explicit-name Describe check, shared by consumer and share heartbeats.
 pub(super) fn subscribed_names_describe_denied_table() {
     let authorizer = acl_authorizer();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, ctx);
         identity [alice()];
         address [broker_fixture_support::peer()];

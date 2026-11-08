@@ -105,7 +105,7 @@ pub(super) async fn call(
     version: i16,
 ) -> UpdateFeaturesResponse {
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, ctx);
         user ["admin"];
         context [context];

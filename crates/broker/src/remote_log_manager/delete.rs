@@ -682,7 +682,7 @@ mod tests {
         deletes_attempted: AtomicUsize,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for FailingDeleteRsm {
         fn copy_log_segment_data(
             &self,

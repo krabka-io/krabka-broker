@@ -147,7 +147,7 @@ pub fn expected_result(
     error_code: i16,
     error_message: Option<String>,
 ) -> CreatePartitionsTopicResult {
-    krabka_macros::tagged_wire!(CreatePartitionsTopicResult {
+    krabka_broker_macros::tagged_wire!(CreatePartitionsTopicResult {
         name: name.into(),
         error_code,
         error_message,
@@ -155,5 +155,5 @@ pub fn expected_result(
 }
 
 pub fn expected_response(results: Vec<CreatePartitionsTopicResult>) -> CreatePartitionsResponse {
-    krabka_macros::unthrottled_wire!(CreatePartitionsResponse { results })
+    krabka_broker_macros::unthrottled_wire!(CreatePartitionsResponse { results })
 }

@@ -29,7 +29,7 @@ const MAX_DEPTH: usize = 80;
 pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 3_853;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 482_874;
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
 
     pub(super) fn run(model: ClassicModel, label: &str, pinned_unique_states: usize)

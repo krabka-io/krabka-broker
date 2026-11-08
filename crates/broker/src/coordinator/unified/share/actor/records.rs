@@ -339,7 +339,7 @@ fn topic_partitions_infos<'a>(
     topics
 }
 
-#[krabka_macros::flush_group_records(group [&state.group_id]; encode [pending.into_batch(&state.group_id, now_ms)];)]
+#[krabka_broker_macros::flush_group_records(group [&state.group_id]; encode [pending.into_batch(&state.group_id, now_ms)];)]
 pub(super) async fn flush_pending(
     state: &ShareGroupState,
     pending: PendingShareRecords,
@@ -428,7 +428,7 @@ mod tests {
     // The keys of the share-group records write the group id and the member
     // id with an `INT16` length. A string of 32767 bytes encodes, and one of
     // 32768 bytes makes the whole batch an error, not a panic in the actor.
-    krabka_macros::member_key_boundaries!(PendingShareRecords; factory [|| {
+    krabka_broker_macros::member_key_boundaries!(PendingShareRecords; factory [|| {
         PendingShareRecords {
             group_metadata: Some(ShareGroupMetadataValue {
                 epoch: 1,

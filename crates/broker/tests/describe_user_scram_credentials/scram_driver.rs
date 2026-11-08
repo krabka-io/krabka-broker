@@ -11,7 +11,7 @@ use {
     std::net::SocketAddr,
 };
 
-krabka_macros::scram_users_fixture!(describe_request);
+krabka_broker_macros::scram_users_fixture!(describe_request);
 
 /// Drives `DescribeUserScramCredentials` (`api_key=50`) over a SASL/PLAIN
 /// connection.

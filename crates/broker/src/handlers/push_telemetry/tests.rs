@@ -34,7 +34,7 @@ use {
     uuid::Uuid,
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     encode_request(PushTelemetryRequest);
     decode_response(PushTelemetryResponse);
     version [push_telemetry_response::MAX_VERSION];
@@ -333,7 +333,7 @@ async fn push_after_get_follows_kafkas_payload_checks(
 /// `INVALID_REQUEST` only for `Uuid.RESERVED` (#673).
 #[tokio::test]
 async fn push_without_a_get_builds_the_instance() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
     };
@@ -401,7 +401,7 @@ async fn push_without_a_get_builds_the_instance() {
 /// request was given rather than the one the new header would match.
 #[tokio::test]
 async fn push_checks_metrics_against_the_instances_first_attributes() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
     };

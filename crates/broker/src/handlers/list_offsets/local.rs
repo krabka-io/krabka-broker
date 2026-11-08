@@ -342,7 +342,7 @@ mod tests {
         const IMMEDIATE: &str = "list-offsets-delivery-immediate";
         const SCHEDULED: &str = "list-offsets-delivery-scheduled";
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -363,7 +363,7 @@ mod tests {
             DeliveryPolicy::Scheduled,
         )
         .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -459,7 +459,7 @@ mod tests {
         };
 
         const TOPIC: &str = "scheduled-latest-retention";
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -519,7 +519,7 @@ mod tests {
             ) == 1
         );
         assert!(partition.log.lock().unwrap().local_log_start_offset() == Offset(2));
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -619,7 +619,7 @@ mod tests {
                 &partition,
             ));
             assert!(partition.high_watermark().await == Offset(6));
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user ["admin"];
             };
@@ -683,7 +683,7 @@ mod tests {
         // matching what `ListOffsets` now also requires of the image.
         const OTHER_BROKER: u64 = 7;
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -712,7 +712,7 @@ mod tests {
         partition
             .install_leader_change(broker.config.node_id.get(), 0)
             .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

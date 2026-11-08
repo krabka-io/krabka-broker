@@ -401,7 +401,7 @@ const NO_TOPIC_READ: &str = "no-topic-read";
 #[derive(Debug)]
 struct DenyTopicReadToOne;
 
-krabka_macros::test_authorizer!(DenyTopicReadToOne, request; {
+krabka_broker_macros::test_authorizer!(DenyTopicReadToOne, request; {
     let denied = request.principal.name == NO_TOPIC_READ
         && request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read;

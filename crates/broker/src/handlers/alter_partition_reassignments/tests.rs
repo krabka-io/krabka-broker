@@ -147,14 +147,14 @@ async fn seed_cancellable_partition(broker: &Broker) {
 #[tokio::test]
 async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let version = 1;
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker] allow_all;
         ready controller_leader;
     };
     finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -200,18 +200,22 @@ async fn handle_preserves_unknown_partition_response_shape() {
     .await
     .expect("handle");
 
-    let expected = krabka_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
         allow_replication_factor_change: false,
         error_code: 0,
         error_message: None,
-        responses: vec![krabka_macros::tagged_wire!(ReassignableTopicResponse {
-            name: "payments".into(),
-            partitions: vec![krabka_macros::tagged_wire!(ReassignablePartitionResponse {
-                partition_index: 8,
-                error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: Some("Unable to find a topic named payments.".into()),
-            })],
-        })],
+        responses: vec![krabka_broker_macros::tagged_wire!(
+            ReassignableTopicResponse {
+                name: "payments".into(),
+                partitions: vec![krabka_broker_macros::tagged_wire!(
+                    ReassignablePartitionResponse {
+                        partition_index: 8,
+                        error_code: UNKNOWN_TOPIC_OR_PARTITION,
+                        error_message: Some("Unable to find a topic named payments.".into()),
+                    }
+                )],
+            }
+        )],
     });
     assert!(resp == expected);
     broker_handle.shutdown().await;
@@ -231,7 +235,7 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             ReplicationFactorPolicy::Maintain,
             ReplicationFactorPolicy::PermitChange,
         ] {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, ctx);
                 boot [start_broker] deny_all;
                 user ["admin"];
@@ -250,19 +254,24 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             .await
             .expect("handle");
 
-            let expected = krabka_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
-                allow_replication_factor_change: true,
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("alter-reassignment denied".into()),
-                responses: vec![krabka_macros::tagged_wire!(ReassignableTopicResponse {
-                    name: "payments".into(),
-                    partitions: vec![krabka_macros::tagged_wire!(ReassignablePartitionResponse {
-                        partition_index: 8,
-                        error_code: CLUSTER_AUTHORIZATION_FAILED,
-                        error_message: Some("alter-reassignment denied".into()),
-                    })],
-                })],
-            });
+            let expected =
+                krabka_broker_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
+                    allow_replication_factor_change: true,
+                    error_code: CLUSTER_AUTHORIZATION_FAILED,
+                    error_message: Some("alter-reassignment denied".into()),
+                    responses: vec![krabka_broker_macros::tagged_wire!(
+                        ReassignableTopicResponse {
+                            name: "payments".into(),
+                            partitions: vec![krabka_broker_macros::tagged_wire!(
+                                ReassignablePartitionResponse {
+                                    partition_index: 8,
+                                    error_code: CLUSTER_AUTHORIZATION_FAILED,
+                                    error_message: Some("alter-reassignment denied".into()),
+                                }
+                            )],
+                        }
+                    )],
+                });
             assert!(
                 resp == expected,
                 "version={version} allow_rf_change={allow_rf_change:?}"
@@ -275,13 +284,13 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
 #[tokio::test]
 async fn handle_submits_successful_reassignment_records() {
     let version = 1;
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker] allow_all;
         ready controller_leader;
     };
     seed_reassignable_partition(&broker).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -297,18 +306,22 @@ async fn handle_submits_successful_reassignment_records() {
     .await
     .expect("handle");
 
-    let expected = krabka_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
         allow_replication_factor_change: true,
         error_code: 0,
         error_message: None,
-        responses: vec![krabka_macros::tagged_wire!(ReassignableTopicResponse {
-            name: "orders".into(),
-            partitions: vec![krabka_macros::tagged_wire!(ReassignablePartitionResponse {
-                partition_index: 7,
-                error_code: 0,
-                error_message: None,
-            })],
-        })],
+        responses: vec![krabka_broker_macros::tagged_wire!(
+            ReassignableTopicResponse {
+                name: "orders".into(),
+                partitions: vec![krabka_broker_macros::tagged_wire!(
+                    ReassignablePartitionResponse {
+                        partition_index: 7,
+                        error_code: 0,
+                        error_message: None,
+                    }
+                )],
+            }
+        )],
     });
     assert!(resp == expected);
 
@@ -322,7 +335,7 @@ async fn handle_submits_successful_reassignment_records() {
 #[tokio::test]
 async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     let version = 1;
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker] allow_all;
         ready controller_leader;
@@ -342,7 +355,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
         .partition("orders", 7)
         .expect("seeded partition")
         .clone();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };

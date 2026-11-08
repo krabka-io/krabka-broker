@@ -36,7 +36,7 @@ pub const KEY_SHARE_TARGET_ASSIGNMENT_MEMBER: i16 = 13;
 pub const KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT: i16 = 14;
 pub const KEY_SHARE_GROUP_STATE_PARTITION_METADATA: i16 = 15;
 
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::GroupRecordKey)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::GroupRecordKey)]
 #[group_key(invalid = "unknown share-group key version")]
 pub enum ShareGroupKey {
     #[group_key(version = KEY_SHARE_GROUP_METADATA)]

@@ -175,7 +175,7 @@ pub(super) async fn fetch_wire(
     } = setup;
     let version = version.0;
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, peer, context);
         user [user];
         client [client_id];
@@ -217,7 +217,7 @@ pub(super) fn expected_single_topic(
     }
 }
 
-krabka_macros::refused_fetch_partition_fixture!(refused_partition_row);
+krabka_broker_macros::refused_fetch_partition_fixture!(refused_partition_row);
 
 pub(super) fn expected_refused_partition(
     partition_index: PartitionIndex,

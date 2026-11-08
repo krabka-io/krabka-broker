@@ -36,7 +36,7 @@ use {
 /// All fields come directly from records decoded out of `__consumer_offsets`.
 ///
 /// [`actor::GroupActorHandle`]: super::actor::GroupActorHandle
-#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_broker_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "consumer")]
 pub struct GroupSeed {
     pub group_epoch: i32,
@@ -63,7 +63,7 @@ pub struct GroupSeed {
 ///
 /// All fields come from share-group records decoded out of
 /// `__consumer_offsets`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_broker_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "share")]
 pub struct ShareGroupSeed {
     pub group_epoch: i32,
@@ -89,7 +89,7 @@ pub struct ShareGroupSeed {
 ///
 /// All fields come from streams-group records decoded out of
 /// `__consumer_offsets`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_macros::ReplayMemberMaps)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, krabka_broker_macros::ReplayMemberMaps)]
 #[replay_member_maps(protocol = "streams")]
 pub struct StreamsGroupSeed {
     pub group_epoch: i32,

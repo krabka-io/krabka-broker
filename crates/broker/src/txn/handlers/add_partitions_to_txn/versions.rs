@@ -256,13 +256,13 @@ mod tests {
         std::sync::Arc,
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["producer-client"];
     }
 
     macro_rules! anonymous_deny_all_broker {
         ($handle:ident, $dir:ident, $broker:ident, $context:ident) => {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind($handle, $dir, $broker, $context);
                 boot [start_broker(Arc::new(DenyAll))];
                 user ["ANONYMOUS"];
@@ -442,7 +442,7 @@ mod tests {
             dir: _dir,
         } = start_coordinator(Arc::new(ControllerPeerAllowed(DenyAll))).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };

@@ -392,13 +392,13 @@ fn open_partition_impl(
         .call()
 }
 
-krabka_macros::fixture_constructors! { temporary_partition:
+krabka_broker_macros::fixture_constructors! { temporary_partition:
 
     /// Own the temporary directory alongside its replica until the caller drops both.
  pub(crate) temporary_partition -> TemporaryPartition = temporary_partition_impl;
 }
 
-krabka_macros::fixture_constructors! { open_partition:
+krabka_broker_macros::fixture_constructors! { open_partition:
 
     /// Opens a local replica with a running writer in the supplied log directory.
  pub(crate) open_partition -> Arc<Partition> = open_partition_impl;
@@ -526,8 +526,8 @@ pub fn block_log_artifact_paths(
     blocked
 }
 
-krabka_macros::bound_start_fixture!(config, bound_controller_config, crate);
-krabka_macros::bound_start_fixture!(
+krabka_broker_macros::bound_start_fixture!(config, bound_controller_config, crate);
+krabka_broker_macros::bound_start_fixture!(
     start,
     start_bound_controller,
     crate,
@@ -1148,7 +1148,7 @@ pub struct ControllerPeerAllowed<A>(pub(crate) A);
 
 // Wrappers customize individual authorization while forwarding metadata and scans.
 
-#[krabka_macros::delegate_authorizer]
+#[krabka_broker_macros::delegate_authorizer]
 impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
     fn authorize(
         &self,
@@ -1175,7 +1175,7 @@ impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
 #[derive(Debug)]
 struct SharedAuthorizer(Arc<dyn Authorizer>);
 
-#[krabka_macros::delegate_authorizer]
+#[krabka_broker_macros::delegate_authorizer]
 impl Authorizer for SharedAuthorizer {
     fn authorize(
         &self,
@@ -1938,7 +1938,7 @@ pub async fn finalize_share_version(broker: &Broker, level: i16) {
 /// Start an in-process broker with only its authorizer swapped in.
 ///
 /// This is the most common `start_broker` shape across handler test modules;
-/// see [`krabka_macros::wire_codec_helpers`]. A handler test drives an authorization-failure
+/// see [`krabka_broker_macros::wire_codec_helpers`]. A handler test drives an authorization-failure
 /// path with [`DenyAll`] or a custom authorizer, and it otherwise takes
 /// the `for_tests` defaults.
 pub async fn start_broker_with_authorizer(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
@@ -3002,7 +3002,7 @@ impl krabka_raft::OutboundDialer for RecordingDialer {
     }
 }
 
-krabka_macros::keyed_record_batch_fixture!(keyed_records_batch);
+krabka_broker_macros::keyed_record_batch_fixture!(keyed_records_batch);
 
 #[derive(Clone, Copy, Default)]
 pub struct EmptyPayloadBatchSetup {

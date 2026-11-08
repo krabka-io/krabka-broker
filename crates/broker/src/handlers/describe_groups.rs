@@ -231,7 +231,7 @@ mod tests {
     const VERSION: krabka_ids::ApiVersion =
         krabka_ids::ApiVersion(describe_groups_response::MAX_VERSION);
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -268,7 +268,7 @@ mod tests {
     /// A `DescribedGroup` carrying only an error: every projection field keeps
     /// its wire default, `authorized_operations` included.
     fn error_row(group_id: &str, error_code: KafkaErrorCode) -> DescribedGroup {
-        krabka_macros::tagged_wire!(DescribedGroup {
+        krabka_broker_macros::tagged_wire!(DescribedGroup {
             error_code: error_code.0,
             error_message: None,
             group_id: group_id.to_owned(),
@@ -285,7 +285,7 @@ mod tests {
         version: krabka_ids::ApiVersion,
         req: &DescribeGroupsRequest,
     ) -> DescribeGroupsResponse {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -313,7 +313,7 @@ mod tests {
         .await;
 
         assert!(
-            resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
+            resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
                 groups: vec![
                     error_row("group-a", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
                     error_row("group-b", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
@@ -417,7 +417,7 @@ mod tests {
                     .call(),
             ),
         ];
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
         };
@@ -432,7 +432,7 @@ mod tests {
             .await;
 
             assert!(
-                resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
+                resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
                     groups: vec![expected],
                 }),
                 "v{version} {group}"
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn only_a_stable_group_carries_protocol_metadata() {
         let member = |metadata: &'static [u8], assignment: &'static [u8]| {
-            krabka_macros::tagged_wire!(DescribedGroupMember {
+            krabka_broker_macros::tagged_wire!(DescribedGroupMember {
                 member_id: "m-1".into(),
                 group_instance_id: Some("instance-1".into()),
                 client_id: "client-1".into(),
@@ -513,7 +513,7 @@ mod tests {
     /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
     #[tokio::test]
     async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
         };
@@ -522,8 +522,8 @@ mod tests {
         let resp = drive(&broker, VERSION, &request().call()).await;
 
         assert!(
-            resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
-                groups: vec![krabka_macros::tagged_wire!(DescribedGroup {
+            resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
+                groups: vec![krabka_broker_macros::tagged_wire!(DescribedGroup {
                     error_code: codes::NONE,
                     error_message: None,
                     group_id: "classic-a".into(),
@@ -557,7 +557,7 @@ mod tests {
         )
         .await;
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["admin"];
         };
@@ -672,7 +672,7 @@ mod tests {
             .await;
 
             assert!(
-                resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
+                resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
                     groups: expected
                 }),
                 "{acls:?}"

@@ -538,7 +538,7 @@ pub fn docker_run_kafka_tool_allowing_failure_with_image(image: &str, args: &[&s
 /// exception on stderr -- so a case about a refusal searches both.
 pub fn tool_output(out: &Output) -> String { combined_output(out) }
 
-pub const TRANSACTIONAL_PRODUCER_JAVA: &str = krabka_macros::java_string_producer_source!(
+pub const TRANSACTIONAL_PRODUCER_JAVA: &str = krabka_broker_macros::java_string_producer_source!(
     r#"
 
 public final class TransactionalProducer {
@@ -618,7 +618,7 @@ public final class TransactionalProducer {
 /// It prints `STREAMSPROBE OK` once the topology has emitted every expected
 /// output record, and `STREAMSPROBE TIMEOUT remaining=<n>` (exit 1) if it has
 /// not within the latch budget.
-pub const STREAMS_APP_JAVA: &str = krabka_macros::java_string_producer_source!(
+pub const STREAMS_APP_JAVA: &str = krabka_broker_macros::java_string_producer_source!(
     r#"
 import java.time.Duration;
 import java.util.List;

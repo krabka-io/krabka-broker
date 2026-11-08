@@ -66,7 +66,7 @@ use {
 /// The `offset` of a partition row that placed no marker.
 const NO_OFFSET: i64 = -1;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_write_barrier_markers",
     api = "WriteBarrierMarkers",
     level = "debug"

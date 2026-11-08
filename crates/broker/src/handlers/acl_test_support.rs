@@ -56,7 +56,7 @@ pub(super) fn alice_orders_acl() -> AclEntry { allow_acl().call() }
 
 /// Independent wire oracle for a successful deletion of the standard orders ACL.
 pub(super) fn expected_deleted_orders_acl() -> DeleteAclsMatchingAcl {
-    krabka_macros::tagged_wire!(DeleteAclsMatchingAcl {
+    krabka_broker_macros::tagged_wire!(DeleteAclsMatchingAcl {
         error_code: codes::NONE,
         error_message: None,
         resource_type: RESOURCE_TYPE_TOPIC,

@@ -59,7 +59,7 @@ pub struct StreamsGroupMemberMetadataValue {
     pub topology_epoch: i32,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupMemberMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupMemberMetadataValue")]
 impl StreamsGroupMemberMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_compact_nullable_string(buf, self.instance_id.as_deref())?;

@@ -364,7 +364,7 @@ where
         "replicator: skipping out_of_range recovery from stale target",
         RowAction::Drop
     );
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping out_of_range recovery from stale local target"
@@ -497,7 +497,7 @@ where
         "replicator: skipping tiered-storage restart from stale target",
         RowAction::Drop
     );
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping tiered-storage restart from stale local target"

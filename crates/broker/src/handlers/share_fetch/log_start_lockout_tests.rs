@@ -120,7 +120,7 @@ async fn delete_records(
         ..Default::default()
     };
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["admin"];
         client ["admin-client"];

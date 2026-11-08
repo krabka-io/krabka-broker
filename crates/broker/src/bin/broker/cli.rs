@@ -12,7 +12,7 @@ use {
     uuid::Uuid,
 };
 
-#[krabka_macros::runtime_policy_fields(node_cli)]
+#[krabka_broker_macros::runtime_policy_fields(node_cli)]
 #[krabka_macros::krabka_env]
 #[derive(Debug, Parser)]
 #[command(

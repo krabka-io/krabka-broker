@@ -56,7 +56,7 @@ pub(super) fn compressible_batch(codec: krabka_compression::CompressionType) -> 
 /// variant, but refutable on SENDFILE-alias platforms, with two variants.
 /// Clippy stays happy on both.
 pub(super) fn inline_bytes(op: &WriteOp) -> &Bytes {
-    krabka_macros::sendfile_match! { match op {
+    krabka_broker_macros::sendfile_match! { match op {
         WriteOp::Inline(b) => b,
         WriteOp::File(_) => panic!("expected an inline op"),
     }}

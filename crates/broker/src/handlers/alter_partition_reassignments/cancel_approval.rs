@@ -152,7 +152,7 @@ pub(super) fn alter_one(
     }
 }
 
-krabka_macros::partition_gate! {
+krabka_broker_macros::partition_gate! {
 /// KFC-9: find the approved proposal that authorizes a cancel of one partition,
 /// and stamp it consumed.
 ///
@@ -280,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_approved_cancel_appends_the_consume_beside_the_partition_record() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(handle, _dir, broker);
             boot [gated_cancel_broker()];
         );
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unapproved_cancel_appends_nothing_and_carries_the_gate_text() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(handle, _dir, broker);
             boot [gated_cancel_broker()];
         );
@@ -324,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_freeze_refuses_start_and_cancel_before_any_record_or_approval_spend() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(handle, _dir, broker);
             boot [gated_cancel_broker()];
         );
@@ -332,7 +332,7 @@ mod tests {
             BreakGlassAction::CancelReassignment,
             "foo-0",
         )]);
-        krabka_macros::request_test_identity!(
+        krabka_broker_macros::request_test_identity!(
             bind(principal, peer, ctx);
             user ["admin"];
             client ["reassign-client"];
@@ -398,7 +398,7 @@ mod tests {
                 ..Default::default()
             })
             .call();
-        krabka_macros::request_test_identity!(
+        krabka_broker_macros::request_test_identity!(
             bind(principal, peer, ctx);
             user ["admin"];
             client ["reassign-client"];
@@ -461,7 +461,7 @@ mod tests {
     }
 
     fn cancel(broker: &Broker, image: &MetadataImage) -> CancelOutcome {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["admin"];
             client ["reassign-client"];

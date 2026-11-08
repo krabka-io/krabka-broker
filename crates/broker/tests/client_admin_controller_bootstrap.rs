@@ -11,8 +11,14 @@ use {
     std::slice,
 };
 
-krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
-krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, unwrap, bound_config);
+krabka_broker_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
+krabka_broker_macros::bound_start_fixture!(
+    start,
+    start_bound,
+    ::krabka_broker,
+    unwrap,
+    bound_config
+);
 
 /// A running broker and the directory that backs it.
 struct StartedBroker {

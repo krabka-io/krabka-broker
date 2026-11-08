@@ -680,7 +680,7 @@ async fn expose(contract: &mut RegistryContract) {
         .metrics
         .as_ref()
         .expect("all metric families seeded");
-    krabka_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
+    krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
     contract.body = Some(canonical(&body));
 }
 #[then(

@@ -31,7 +31,7 @@ pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 2_222;
 pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 5_012;
 pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 16_238;
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
     /// Run one bounded config to completion. Assert that the run was exhaustive,
     /// that is, that no cap truncated it, and that all properties hold.

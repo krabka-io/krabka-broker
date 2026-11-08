@@ -192,7 +192,7 @@ fn get_last_assignment_configs(
 
 /// Key v20 value: the target-assignment epoch and the KIP-1263
 /// `AssignmentTimestamp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "StreamsGroupTargetAssignmentMetadataValue")]
 pub struct StreamsGroupTargetAssignmentMetadataValue {
     pub assignment_epoch: i32,

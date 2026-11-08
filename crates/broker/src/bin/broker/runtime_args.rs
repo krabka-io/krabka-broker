@@ -24,9 +24,9 @@ fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
 /// and the value parser of its type from `#[krabka_env]`, and every field not
 /// marked `skip` is copied onto the same-named `RuntimeFileConfig` field by
 /// `copy_into`. The `krabka-macros` crate documentation lists both.
-#[krabka_macros::runtime_policy_fields(cli)]
+#[krabka_broker_macros::runtime_policy_fields(cli)]
 #[krabka_macros::krabka_env]
-#[derive(Debug, clap::Args, krabka_macros::RuntimeOverlay)]
+#[derive(Debug, clap::Args, krabka_broker_macros::RuntimeOverlay)]
 #[overlay(target = RuntimeFileConfig)]
 pub struct RuntimeArgs {
     #[arg(

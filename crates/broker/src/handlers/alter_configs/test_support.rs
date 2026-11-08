@@ -27,7 +27,7 @@ use {
     std::sync::Arc,
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 
@@ -163,7 +163,7 @@ pub(super) async fn drive_many(
         dir: _dir,
     } = start_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };

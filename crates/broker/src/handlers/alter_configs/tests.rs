@@ -47,13 +47,15 @@ fn expected_resource_response(
     error_code: i16,
     error_message: Option<&str>,
 ) -> AlterConfigsResponse {
-    krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            resource_type,
-            resource_name: resource_name.into(),
-            error_code,
-            error_message: error_message.map(str::to_owned),
-        })],
+    krabka_broker_macros::unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![krabka_broker_macros::tagged_wire!(
+            AlterConfigsResourceResponse {
+                resource_type,
+                resource_name: resource_name.into(),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+            }
+        )],
     })
 }
 
@@ -76,7 +78,7 @@ async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         ),
         (
             broker_resource("1", &[]),
-            krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+            krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
                 resource_type: ConfigResourceType::Broker.to_wire(),
                 resource_name: "1".into(),
                 error_code: codes::NONE,
@@ -86,7 +88,7 @@ async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         (topic_resource("duplicate", &[]), duplicate_topic.clone()),
         (
             resource(77, "unsupported"),
-            krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+            krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
                 resource_type: 77,
                 resource_name: "unsupported".into(),
                 error_code: codes::INVALID_REQUEST,
@@ -200,13 +202,15 @@ async fn denied_resources_report_their_authorization_error(case: DeniedResourceC
     };
     let resp = drive_one(Arc::new(DenyAll), request).await;
 
-    let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code,
-            error_message: Some(error_message.to_owned()),
-            resource_type,
-            resource_name: resource_name.to_owned(),
-        })],
+    let expected = krabka_broker_macros::unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![krabka_broker_macros::tagged_wire!(
+            AlterConfigsResourceResponse {
+                error_code,
+                error_message: Some(error_message.to_owned()),
+                resource_type,
+                resource_name: resource_name.to_owned(),
+            }
+        )],
     });
     assert2::assert!(resp == expected);
 }

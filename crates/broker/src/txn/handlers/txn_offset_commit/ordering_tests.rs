@@ -45,7 +45,7 @@ const DENIED: &str = "denied";
 #[derive(Debug)]
 struct DenyOneTopic;
 
-krabka_macros::test_authorizer! { DenyOneTopic, request; {
+krabka_broker_macros::test_authorizer! { DenyOneTopic, request; {
     if request.resource_type == ResourceType::Topic
         && request.operation == AclOperation::Read
         && request.resource_name == DENIED

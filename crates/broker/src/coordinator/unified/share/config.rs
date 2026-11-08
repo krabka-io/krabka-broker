@@ -36,9 +36,14 @@ pub(crate) const SHARE_GROUP_ASSIGNMENT_INTERVAL_MS: &str = "group.share.assignm
 /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`, with the
 /// stored config evaluated against the bounds (`GroupConfig.evaluate`). A
 /// group with no override borrows the broker value.
-#[krabka_macros::membership_defaults]
+#[krabka_broker_macros::membership_defaults]
 #[derive(
-    Debug, Clone, PartialEq, Eq, krabka_macros::FieldDefaults, krabka_macros::GroupTimingConfig,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    krabka_macros::FieldDefaults,
+    krabka_broker_macros::GroupTimingConfig,
 )]
 #[group_timing(
         session = KEY_SHARE_SESSION_TIMEOUT_MS,

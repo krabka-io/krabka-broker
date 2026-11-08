@@ -95,7 +95,7 @@ async fn answer_request(
 #[tokio::test]
 async fn denied_handler_preserves_topic_and_partition_response_fields() {
     let version = list_offsets_response::MAX_VERSION;
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -127,7 +127,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     let resp = answer_request(&broker, &req, version, &ctx).await;
 
     let denied_row = |partition_index: i32| {
-        krabka_macros::tagged_wire!(ListOffsetsPartitionResponse {
+        krabka_broker_macros::tagged_wire!(ListOffsetsPartitionResponse {
             partition_index,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             timestamp: -1,
@@ -135,11 +135,13 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
             leader_epoch: -1,
         })
     };
-    let expected = krabka_macros::unthrottled_wire!(ListOffsetsResponse {
-        topics: vec![krabka_macros::tagged_wire!(ListOffsetsTopicResponse {
-            name: "orders".to_owned(),
-            partitions: vec![denied_row(0), denied_row(2)],
-        })],
+    let expected = krabka_broker_macros::unthrottled_wire!(ListOffsetsResponse {
+        topics: vec![krabka_broker_macros::tagged_wire!(
+            ListOffsetsTopicResponse {
+                name: "orders".to_owned(),
+                partitions: vec![denied_row(0), denied_row(2)],
+            }
+        )],
     });
     assert!(resp == expected, "{resp:?}");
     broker_handle.shutdown().await;
@@ -186,7 +188,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
     ];
 
     for case in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker(Arc::new(DenyNamed(HashSet::from([
                         case.denied

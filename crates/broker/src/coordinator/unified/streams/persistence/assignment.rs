@@ -100,7 +100,7 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
     pub warmup: TaskMap,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupTargetAssignmentMemberValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupTargetAssignmentMemberValue")]
 impl StreamsGroupTargetAssignmentMemberValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         encode_task_map(buf, &self.active)?;
@@ -144,7 +144,7 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub active_pending_revocation_epochs: TaskMap,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupCurrentMemberAssignmentValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupCurrentMemberAssignmentValue")]
 impl StreamsGroupCurrentMemberAssignmentValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);

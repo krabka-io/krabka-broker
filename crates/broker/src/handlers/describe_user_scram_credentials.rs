@@ -210,7 +210,7 @@ mod tests {
     #[derive(Debug)]
     struct ClusterDescribeOnly;
 
-    krabka_macros::test_authorizer!(ClusterDescribeOnly, req; {
+    krabka_broker_macros::test_authorizer!(ClusterDescribeOnly, req; {
         if req.resource_type == ResourceType::Cluster
             && req.resource_name == acl_wire::CLUSTER_RESOURCE_NAME
             && req.operation == AclOperation::Describe
@@ -276,7 +276,7 @@ mod tests {
         }
     }
 
-    krabka_macros::scram_users_fixture!(scram_users_request);
+    krabka_broker_macros::scram_users_fixture!(scram_users_request);
 
     const ALICE: SeededUser<'static> = SeededUser {
         user: "alice",
@@ -312,12 +312,12 @@ mod tests {
     #[test]
     fn describe_filter_returns_only_listed_users() {
         let resp = run_handle_filter(Some(vec!["alice".into()]), &ALICE_AND_BOB);
-        let expected = vec![krabka_macros::tagged_wire!(
+        let expected = vec![krabka_broker_macros::tagged_wire!(
             DescribeUserScramCredentialsResult {
                 user: "alice".to_owned(),
                 error_code: 0,
                 error_message: None,
-                credential_infos: vec![krabka_macros::tagged_wire!(CredentialInfo {
+                credential_infos: vec![krabka_broker_macros::tagged_wire!(CredentialInfo {
                     mechanism: 2,
                     iterations: 4096,
                 })],
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn unknown_user_returns_resource_not_found() {
         let resp = run_handle_filter(Some(vec!["ghost".into()]), &ALICE_ONLY);
-        let expected = vec![krabka_macros::tagged_wire!(
+        let expected = vec![krabka_broker_macros::tagged_wire!(
             DescribeUserScramCredentialsResult {
                 user: "ghost".to_owned(),
                 error_code: 91,
@@ -372,7 +372,7 @@ mod tests {
         assert!(bob.error_code == 0);
         assert!(
             bob.credential_infos
-                == vec![krabka_macros::tagged_wire!(CredentialInfo {
+                == vec![krabka_broker_macros::tagged_wire!(CredentialInfo {
                     mechanism: 2,
                     iterations: 8192,
                 })]
@@ -451,7 +451,7 @@ mod tests {
         "the denied response has {rows} anonymous credential-free error rows under cluster authorization failure"
     )]
     fn check_denied_scram(describe_scram: &DescribeScramScenario, rows: usize) {
-        let denied_row = krabka_macros::tagged_wire!(DescribeUserScramCredentialsResult {
+        let denied_row = krabka_broker_macros::tagged_wire!(DescribeUserScramCredentialsResult {
             user: String::new(),
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
@@ -459,7 +459,7 @@ mod tests {
         });
         assert2::assert!(
             describe_scram.response.as_ref().unwrap()
-                == &krabka_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
+                == &krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
                     error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: None,
                     results: vec![denied_row; rows]
@@ -491,7 +491,7 @@ mod tests {
     }
     #[tokio::test]
     async fn handle_allows_cluster_describe_authorization() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(broker_handle, _dir, broker, principal, peer, ctx);
             boot [start_broker_with_authorizer(Arc::new(ClusterDescribeOnly))];
             user ["alice"];
@@ -500,7 +500,7 @@ mod tests {
         let resp = empty_describe_response(&broker, &ctx);
 
         assert!(
-            resp == krabka_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
+            resp == krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
                 error_code: 0,
                 error_message: None,
                 results: Vec::new(),
@@ -512,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_without_cluster_describe_authorization() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(broker_handle, _dir, broker, principal, peer, ctx);
             boot [start_broker_with_authorizer(Arc::new(DenyAll,))];
             user ["alice"];
@@ -521,7 +521,7 @@ mod tests {
         let resp = empty_describe_response(&broker, &ctx);
 
         assert!(
-            resp == krabka_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
+            resp == krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: None,
                 results: Vec::new(),

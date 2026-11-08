@@ -63,7 +63,7 @@ mod settlement;
 #[cfg(test)]
 mod tests;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_approve_break_glass",
     api = "ApproveBreakGlass",
     level = "info"

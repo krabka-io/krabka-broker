@@ -350,7 +350,7 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
         RowAction::Drop
     );
     if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-        let _target_guard = krabka_macros::replication_target_guard!(
+        let _target_guard = krabka_broker_macros::replication_target_guard!(
             part,
             cfg,
             "replicator: skipping diverging_epoch truncation from stale local target"
@@ -392,7 +392,7 @@ async fn append_records(part_resp: &mut PartitionData, cfg: &Config) -> RowActio
             "replicator: local partition vanished between fetches");
         return RowAction::Continue;
     };
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         part,
         cfg,
         "replicator: discarding response for stale local target"

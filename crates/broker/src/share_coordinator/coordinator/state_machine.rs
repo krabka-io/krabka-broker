@@ -74,7 +74,7 @@ impl ShareCoordinator {
     /// [`ShareStateError::Operation`] when this broker is not the active
     /// coordinator of the key, the append fails, or the records of the
     /// partition do not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn initialize(
         &self,
         image: &MetadataImage,
@@ -114,7 +114,7 @@ impl ShareCoordinator {
     /// [`ShareStateError::Operation`] when this broker is not the active
     /// coordinator of the key, the append fails, or the records of the
     /// partition do not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn write(
         &self,
         image: &MetadataImage,
@@ -146,7 +146,7 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// As [`ShareCoordinator::write`].
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn read(
         &self,
         image: &MetadataImage,
@@ -177,7 +177,7 @@ impl ShareCoordinator {
     /// Returns the error of the refused partition, or
     /// [`ShareStateError::Operation`] when the records of the partition do
     /// not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn read_summary_checked(
         &self,
         image: &MetadataImage,
@@ -213,7 +213,7 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// As [`ShareCoordinator::initialize`].
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn delete(
         &self,
         image: &MetadataImage,

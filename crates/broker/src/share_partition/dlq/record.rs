@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    krabka_macros::record_header_text!(header_value, strict);
+    krabka_broker_macros::record_header_text!(header_value, strict);
 
     /// Kafka's `headers`: six headers for each offset, in that order, with the
     /// message of the cause, and no key and no value when nothing was copied.

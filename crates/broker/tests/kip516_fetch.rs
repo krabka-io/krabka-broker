@@ -16,7 +16,7 @@ use {
     support::InProcess,
 };
 
-krabka_macros::refused_fetch_partition_fixture!(refused_partition);
+krabka_broker_macros::refused_fetch_partition_fixture!(refused_partition);
 mod support;
 
 use krabka_protocol::{

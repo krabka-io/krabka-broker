@@ -283,7 +283,7 @@ pub async fn produce_batch(
 /// Read one rendered Prometheus series; a missing series has value zero.
 pub async fn metric_value(handle: &BrokerHandle, series: &str) -> f64 {
     let rendered = {
-        krabka_macros::metric_registry_fixture!(handle.metrics(), rendered, registry; expect("encode registry"));
+        krabka_broker_macros::metric_registry_fixture!(handle.metrics(), rendered, registry; expect("encode registry"));
         rendered
     };
     rendered

@@ -367,7 +367,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyReadOnTopics(HashSet<&'static str>);
 
-    krabka_macros::test_authorizer!(DenyReadOnTopics, request; {
+    krabka_broker_macros::test_authorizer!(DenyReadOnTopics, request; {
         if request.resource_type == ResourceType::Topic
             && request.operation == AclOperation::Read
             && self.0.contains(request.resource_name)
@@ -392,7 +392,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -446,7 +446,7 @@ mod tests {
     fn top_level_preserves_error_fields() {
         let resp = top_level(codes::UNSUPPORTED_VERSION, None);
 
-        let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: Some("The version of API is not supported.".into()),
             responses: Vec::new(),
@@ -524,7 +524,7 @@ mod tests {
             .as_ref()
             .expect("started broker");
         let broker = started.broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
+        krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
         create_topics()
             .broker_handle(&started.broker)
             .ctx(&ctx)
@@ -571,7 +571,7 @@ mod tests {
             .expect("started broker")
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
+        krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
         let topics = topics.split(',').collect::<Vec<_>>();
         share_offsets_deletion.response = Some(
             handle(
@@ -684,7 +684,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_removes_only_requested_state_and_a_retry_finds_none() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [handler_fixture_support::start_share_allow_all()];
             user ["alice"];
@@ -800,7 +800,7 @@ mod tests {
             handler_fixture_support::lead_group_partition_elsewhere(&broker_handle, &broker, "")
                 .await;
         }
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -814,7 +814,7 @@ mod tests {
         .await
         .expect("handle");
 
-        let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
             error_code: codes::INVALID_GROUP_ID,
             error_message: Some("The group id is invalid.".into()),
             responses: Vec::new(),
@@ -861,7 +861,7 @@ mod tests {
                 .call()
                 .await;
             let broker = broker_handle.broker_arc_for_test();
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user ["alice"];
             };
@@ -923,7 +923,7 @@ mod tests {
             .expect("handle delete");
 
             let denied_row = |name: &str| {
-                krabka_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
+                krabka_broker_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
                     topic_name: name.into(),
                     topic_id: Uuid::default(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
@@ -931,7 +931,7 @@ mod tests {
                 })
             };
             let allowed_row = |name: &str, topic_id: uuid::Uuid| {
-                krabka_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
+                krabka_broker_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
                     topic_name: name.into(),
                     topic_id: Uuid(*topic_id.as_bytes()),
                     error_code: codes::NONE,
@@ -958,11 +958,12 @@ mod tests {
                 }
             }
 
-            let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
-                error_code: codes::NONE,
-                error_message: None,
-                responses: expected_responses,
-            });
+            let expected =
+                krabka_broker_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+                    error_code: codes::NONE,
+                    error_message: None,
+                    responses: expected_responses,
+                });
             assert!(response == expected, "case: {case}");
 
             // A denied topic's durable state must be untouched; an allowed

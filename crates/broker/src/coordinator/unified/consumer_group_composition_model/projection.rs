@@ -48,7 +48,7 @@ fn epochs_to_map(epochs: &[AssignmentEpoch]) -> HashMap<Uuid, HashMap<i32, i32>>
     topics
 }
 
-krabka_macros::rebuild_reconciliation_group! {
+krabka_broker_macros::rebuild_reconciliation_group! {
 
     pub(super) fn rebuild_group(s: &CgcState) -> GroupState
     [member = m, built = ms]

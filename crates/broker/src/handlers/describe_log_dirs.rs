@@ -270,7 +270,7 @@ mod tests {
         std::{fs, path::Path, sync::Arc},
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["client-a"];
     }
 
@@ -279,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_cluster_describe_for_whole_request() {
         let version = describe_log_dirs_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker_with_authorizer(Arc::new(DenyAll))];
             user ["ANONYMOUS"];
@@ -327,7 +327,7 @@ mod tests {
     async fn handle_lists_the_loaded_logs_of_a_healthy_dir() {
         let version = describe_log_dirs_response::MAX_VERSION;
         let extra = tempfile::tempdir().expect("extra log dir");
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_with_extra(extra.path())];
             user ["admin"];
@@ -419,7 +419,7 @@ mod tests {
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().join("data");
         fs::create_dir(&extra_dir).expect("create extra log dir");
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_with_extra(&extra_dir)];
             user ["admin"];

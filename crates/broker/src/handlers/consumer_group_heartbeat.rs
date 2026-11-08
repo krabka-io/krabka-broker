@@ -276,7 +276,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["consumer-group-heartbeat-test"];
     }
 
@@ -447,7 +447,7 @@ mod tests {
     #[rstest_bdd_macros::when("the consumer coordinator handles the member heartbeat")]
     async fn handle_consumer_group_creation(consumer_heartbeat: &mut ConsumerHeartbeatScenario) {
         let broker = &consumer_heartbeat.live.as_ref().unwrap().broker;
-        krabka_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
         consumer_heartbeat.response = Some(
             handle(
                 broker,
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn group_read_denied_allows_allow_all_authorizer() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["ANONYMOUS"];
             client ["consumer-client"];
@@ -573,7 +573,7 @@ mod tests {
     }
 
     async fn check_denied_group_response(broker: &Broker, expected: KafkaErrorCode) {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };
@@ -627,7 +627,7 @@ mod tests {
             directory: _dir,
             broker,
         } = versioned_group_broker(Arc::new(AllowAllAuthorizer), GroupFeatureLevel(1)).await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["ANONYMOUS"];
         };

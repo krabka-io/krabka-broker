@@ -160,7 +160,7 @@ impl ListOperation {
     }
 }
 
-krabka_macros::decoded_dispatch! {
+krabka_broker_macros::decoded_dispatch! {
     /// Keep logger changes on this node and validate broker keys against local settings.
     /// Topic, group, and other resource operations use the controller's image.
     pub async fn dispatch(
@@ -171,7 +171,7 @@ krabka_macros::decoded_dispatch! {
     )
         [request = IncrementalAlterConfigsRequest, binding(req)] -> DispatchResult
     {
-        let mut req = krabka_macros::controller_request!(broker, ctx, req, version; self::handle_on_controller, self::request_refusal);
+        let mut req = krabka_broker_macros::controller_request!(broker, ctx, req, version; self::handle_on_controller, self::request_refusal);
         let image = broker.controller.current_image();
         let duplicates = super::config_alter::duplicate_resource_flags(req.resources.iter());
         let mut local = Vec::new();
@@ -341,7 +341,7 @@ fn reaches_unknown_operation(
         })
 }
 
-krabka_macros::config_alter_handler! { request = IncrementalAlterConfigsRequest, response = IncrementalAlterConfigsResponse, operation = "IncrementalAlterConfigs", audit = audit_resources_for, process = process_resource, audits_in_process = false }
+krabka_broker_macros::config_alter_handler! { request = IncrementalAlterConfigsRequest, response = IncrementalAlterConfigsResponse, operation = "IncrementalAlterConfigs", audit = audit_resources_for, process = process_resource, audits_in_process = false }
 
 /// Audit names include the resource and keys, never sensitive config values.
 fn audit_resources_for(
@@ -514,7 +514,7 @@ mod tests {
         tokio::time::Instant,
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -542,13 +542,13 @@ mod tests {
     async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         allow_all_broker_setup!((handle, _dir, broker, ctx), start_broker, "admin");
         let resource = |kind, name| make_scoped_resource(kind, name, vec![]);
-        let duplicate_topic = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+        let duplicate_topic = krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
             resource_type: ConfigResourceType::Topic.to_wire(),
             resource_name: "duplicate".into(),
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Each resource must appear at most once.".into())
         });
-        let duplicate_logger = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+        let duplicate_logger = krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
             resource_type: ConfigResourceType::BrokerLogger.to_wire(),
             resource_name: "2".into(),
             error_code: codes::INVALID_REQUEST,
@@ -557,7 +557,7 @@ mod tests {
         let rows = [
             (
                 resource(ConfigResourceType::BrokerLogger.to_wire(), "1"),
-                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+                krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: ConfigResourceType::BrokerLogger.to_wire(),
                     resource_name: "1".into(),
                     error_code: codes::NONE,
@@ -579,7 +579,7 @@ mod tests {
             ),
             (
                 resource(ConfigResourceType::Broker.to_wire(), "1"),
-                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+                krabka_broker_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: ConfigResourceType::Broker.to_wire(),
                     resource_name: "1".into(),
                     error_code: codes::NONE,
@@ -658,7 +658,7 @@ mod tests {
     ) {
         let started = start_broker(Arc::new(DenyAll)).await;
         let broker = started.broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

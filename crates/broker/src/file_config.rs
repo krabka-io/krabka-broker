@@ -7,7 +7,7 @@
 //!
 //! [`FileConfig`] is the whole document; each `[section]` it names has its own
 //! module below, holding that section's TOML shape and the code that applies
-//! it. The runtime appliers use `krabka_macros::set_runtime!` to apply optional
+//! it. The runtime appliers use `krabka_broker_macros::set_runtime!` to apply optional
 //! fields in table order through their named validators.
 
 use {
@@ -74,7 +74,7 @@ pub use self::{
 /// TOML file, so its JSON Schema is `type: string`. That alone loses the unit,
 /// and the generated reference page has a units column. Each marker type here
 /// keeps the string type and adds a `format` that names the unit.
-/// `#[krabka_macros::human_units]` on a config struct points each
+/// `#[krabka_broker_macros::human_units]` on a config struct points each
 /// `Option<Time>`, `Option<ByteSize>` and `Option<Ratio>` field at its marker
 /// here and at its `krabka_units::serde_units::human` codec.
 pub mod schema_units {
@@ -84,15 +84,15 @@ pub mod schema_units {
     };
 
     #[doc = "A `krabka_units::Time` written with a unit suffix, such as `\"500ms\"` or `\"30s\"`."]
-    #[derive(krabka_macros::UnitSchema)]
+    #[derive(krabka_broker_macros::UnitSchema)]
     #[unit_schema(format = "duration")]
     pub struct Duration;
     #[doc = "A `krabka_units::ByteSize` written with a unit suffix, such as `\"1MiB\"`."]
-    #[derive(krabka_macros::UnitSchema)]
+    #[derive(krabka_broker_macros::UnitSchema)]
     #[unit_schema(format = "byte-size")]
     pub struct ByteSize;
     #[doc = "A `krabka_units::Ratio` written as a percentage or a fraction, such as `\"10%\"`."]
-    #[derive(krabka_macros::UnitSchema)]
+    #[derive(krabka_broker_macros::UnitSchema)]
     #[unit_schema(format = "ratio")]
     pub struct Ratio;
 }
@@ -160,7 +160,7 @@ pub enum FileConfigError {
 /// Top-level shape of `broker.toml`. `serde(deny_unknown_fields)` is
 /// off — new fields may be added and old binaries should warn rather
 /// than refuse to start.
-#[krabka_macros::human_units]
+#[krabka_broker_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 pub struct FileConfig {
     /// Operational runtime policy. Present values replace the current broker

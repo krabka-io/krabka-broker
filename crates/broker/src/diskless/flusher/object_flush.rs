@@ -604,7 +604,7 @@ mod tests {
         .await
         .unwrap();
 
-        krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(!body.contains(&topic_id.to_string()));
     }
 
@@ -642,7 +642,7 @@ mod tests {
         assert!(error.to_string().contains("diskless wal put"));
         assert!(!index.cache().lock().await.reserved_objects().is_empty());
 
-        krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
     }
 

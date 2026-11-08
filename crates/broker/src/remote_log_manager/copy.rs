@@ -833,7 +833,7 @@ mod tests {
         }
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for LeadershipMovingRsm {
         fn copy_log_segment_data(
             &self,
@@ -1038,7 +1038,7 @@ mod tests {
     /// round over it can take.
     struct RefusingRsm;
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
     impl RemoteStorageManager for RefusingRsm {
         fn copy_log_segment_data(
             &self,
@@ -1058,7 +1058,7 @@ mod tests {
         receipt: Option<CustomMetadata>,
     }
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
     impl RemoteStorageManager for AcceptingRsm {
         fn copy_log_segment_data(
             &self,

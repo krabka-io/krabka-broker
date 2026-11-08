@@ -250,7 +250,7 @@ pub mod test_support {
         fn error_row(partition: i32, code: i16, message: Option<&str>) -> Self::Partition;
     }
 
-    krabka_macros::share_fixture_schemas! {
+    krabka_broker_macros::share_fixture_schemas! {
         initialize_share_group_state_response::InitializeShareGroupStateResponse => initialize_share_group_state_response::InitializeStateResult, initialize_share_group_state_response::PartitionResult;
         write_share_group_state_response::WriteShareGroupStateResponse => write_share_group_state_response::WriteStateResult, write_share_group_state_response::PartitionResult;
         delete_share_group_state_response::DeleteShareGroupStateResponse => delete_share_group_state_response::DeleteStateResult, delete_share_group_state_response::PartitionResult;

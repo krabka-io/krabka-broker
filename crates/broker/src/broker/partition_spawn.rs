@@ -122,7 +122,7 @@ fn partition_wal(
 /// # Errors
 ///
 /// As [`try_spawn_partition_with_replication_target`].
-#[krabka_macros::partition_spawn_parameters]
+#[krabka_broker_macros::partition_spawn_parameters]
 pub fn spawn_partition() -> Result<Arc<Partition>, BrokerError> {
     // A test diskless partition needs a topic id for its WAL shard.
     let topic_id = if cfg!(test) {
@@ -151,7 +151,7 @@ pub fn spawn_partition() -> Result<Arc<Partition>, BrokerError> {
 /// # Errors
 ///
 /// As [`try_spawn_partition_with_replication_target`].
-#[krabka_macros::partition_spawn_parameters(target)]
+#[krabka_broker_macros::partition_spawn_parameters(target)]
 #[bon::builder]
 pub fn spawn_partition_with_replication_target() -> Result<Arc<Partition>, BrokerError> {
     let broker_config = BrokerConfig::default();

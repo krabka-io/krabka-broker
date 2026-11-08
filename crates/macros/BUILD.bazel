@@ -11,3 +11,9 @@ crate_tests(
     compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
     lib = "macros",
 )
+
+# The helpers krabka-broker-macros compiles from this crate's sources.
+filegroup(
+    name = "shared_srcs",
+    srcs = glob(["src/shared/*.rs"]),
+)

@@ -67,7 +67,7 @@ impl FromStr for ConsumerGroupMigrationPolicy {
 /// over `GroupCoordinatorConfig`, with the stored config evaluated against
 /// the bounds (`GroupConfig.evaluate`). A group with no override borrows
 /// the broker value.
-#[derive(Clone, derive_more::Debug, krabka_macros::GroupTimingConfig)]
+#[derive(Clone, derive_more::Debug, krabka_broker_macros::GroupTimingConfig)]
 #[group_timing(
     session = KEY_CONSUMER_SESSION_TIMEOUT_MS,
     heartbeat = KEY_CONSUMER_HEARTBEAT_INTERVAL_MS,

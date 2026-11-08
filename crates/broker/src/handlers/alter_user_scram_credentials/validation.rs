@@ -456,7 +456,7 @@ mod tests {
     }
 
     async fn check_empty_username(req: AlterUserScramCredentialsRequest) {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] allow_all;
             ready controller_leader;

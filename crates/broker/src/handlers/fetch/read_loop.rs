@@ -1215,7 +1215,7 @@ mod tests {
         const TOPIC_B: &str = "budget-progress-b";
         const PAYLOAD: &[u8; 512] = &[b'x'; 512];
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1260,7 +1260,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fitting_first_batch_spends_the_exception_for_initial_and_replacement_reads() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1383,7 +1383,7 @@ mod tests {
         const ENTRIES: usize = 64;
         const FITTING: usize = 5;
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1570,7 +1570,7 @@ mod tests {
     async fn a_metadata_only_row_carries_an_empty_reads_aborted_transactions() {
         let cases = aborted_isolation_cases();
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -2109,7 +2109,7 @@ mod tests {
     /// the (here empty) list its read found.
     #[tokio::test]
     async fn a_reread_carries_aborted_transactions_only_for_read_committed() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_broker()];
         };

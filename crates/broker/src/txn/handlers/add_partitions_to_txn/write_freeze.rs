@@ -114,7 +114,7 @@ mod tests {
         tokio::time::sleep,
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["producer-client"];
     }
 
@@ -235,7 +235,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyTopicWrites;
 
-    krabka_macros::test_authorizer! { DenyTopicWrites, req; {
+    krabka_broker_macros::test_authorizer! { DenyTopicWrites, req; {
         if req.resource_type == ResourceType::Topic && req.operation == AclOperation::Write {
             AuthorizationResult::Deny
         } else {
@@ -389,7 +389,7 @@ mod tests {
     }
 
     async fn anonymous_freeze_request(broker: &Broker, version: i16) -> AddPartitionsToTxnResponse {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };
