@@ -22,15 +22,18 @@
 
 use {
     assert2::assert,
-    krabka_broker::metrics::{
-        ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
-        BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
-        CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
-        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, MetadataPartitionLabel,
-        PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
-        ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel,
-        ShareGroupLabel, TopicLabel, TopologyStorageLabel, TopologyStorageOperation, WalShardLabel,
-        WalVoterLabel,
+    krabka_broker::{
+        metrics::{
+            ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
+            BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
+            CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
+            ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, MetadataPartitionLabel,
+            PartitionLabel, QuotaEntityLabel, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
+            SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel,
+            TopicLabel, TopologyStorageLabel, TopologyStorageOperation, WalShardLabel,
+            WalVoterLabel,
+        },
+        quota::QuotaType,
     },
     krabka_metadata::BreakGlassAction as GatedAction,
     prometheus_client::{

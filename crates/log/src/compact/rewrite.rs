@@ -11,6 +11,7 @@ use {
     crate::{
         error::LogError,
         io::{IoTarget, LogIo, write_all},
+        name::SegmentFile,
         record_limit::check_records_read,
         recovery::swap::cleaned_path,
         segment::{FrontierScan, SealedInput, TailScan},
@@ -234,9 +235,9 @@ pub fn rewrite_segments(
     let new_base = first.base_offset();
     tracing::Span::current().record("new_base", new_base.0);
 
-    let log_swap = swap_path(dir, new_base.0, "log");
-    let index_swap = swap_path(dir, new_base.0, "index");
-    let timeindex_swap = swap_path(dir, new_base.0, "timeindex");
+    let log_swap = swap_path(dir, new_base.0, SegmentFile::Log.extension());
+    let index_swap = swap_path(dir, new_base.0, SegmentFile::Index.extension());
+    let timeindex_swap = swap_path(dir, new_base.0, SegmentFile::TimeIndex.extension());
 
     // Truncate (or create) all three .cleaned files. The .log gets the
     // retained batches; the index sidecars get the sparse indexes the walk
@@ -483,7 +484,7 @@ fn write_cleaned_txnindex(
     if retained.is_empty() {
         return Ok(None);
     }
-    let path = swap_path(dir, new_base.0, "txnindex");
+    let path = swap_path(dir, new_base.0, SegmentFile::TxnIndex.extension());
     // Truncate any stale .cleaned file, then append the retained entries.
     create_truncated(&path)?;
     let mut idx = TxnIndex::open(path.clone())?;

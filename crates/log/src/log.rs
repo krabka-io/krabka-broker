@@ -8,13 +8,14 @@
 //! private fields below stay in this module so that every one of those
 //! submodules, as a descendant, can reach them.
 
+#[cfg(not(target_os = "wasi"))]
+use std::collections::VecDeque;
 use {
     crate::{
         config::LogConfig,
         error::LogError,
         io::LogIo,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
-        producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
         segment::Segment,
         stamp_index::{OffsetRange, StampIndex},
         stamp_source::StampSource,
@@ -22,7 +23,7 @@ use {
     },
     krabka_ids::{Offset, ProducerId},
     std::{
-        collections::{BTreeMap, HashMap, VecDeque},
+        collections::{BTreeMap, HashMap},
         path::PathBuf,
         sync::{Arc, RwLock, atomic::AtomicU64},
         time::{Instant, SystemTime},
@@ -46,6 +47,7 @@ mod page_cache;
 mod pending_transactions;
 #[cfg(test)]
 mod preallocation;
+mod producer_state;
 mod read;
 mod rollover_flush;
 mod stamp;
@@ -71,6 +73,7 @@ pub use self::{
     control::BARRIER_CONTROL_TYPE,
     maintenance::{DueDeletions, FailedDeletion},
     read::{RawRead, RawReadPlan, ReadOutput},
+    state::TransactionMarkerState,
     tiering::{ActiveSegmentExport, SegmentExport},
     verbatim::VerbatimBatch,
     verification::{TransactionAppendRefusal, TransactionalBatch, VerificationGuard},
@@ -221,10 +224,6 @@ pub struct Log {
     /// applies a commit or abort marker for that `producer_id`.
     pending: pending_transactions::PendingTransactions,
 
-    /// KIP-890 verification state per producer, from the start of a
-    /// transaction verification to the producer's next transactional append.
-    /// See [`VerificationGuard`].
-    verification_states: HashMap<ProducerId, verification::VerificationState>,
     /// Complete transactions whose marker the high watermark has not passed:
     /// first offset of the transaction → last offset of its marker. They still
     /// hold the last stable offset, as Kafka's `unreplicatedTxns` does, so a
@@ -238,21 +237,8 @@ pub struct Log {
     /// ordinary records never inherit another transaction's commit stamp.
     pending_stamp_ranges: HashMap<ProducerId, Vec<OffsetRange>>,
 
-    /// Last transaction-coordinator epoch observed in a durable commit or
-    /// abort marker for each producer. The marker value carries this field,
-    /// so log recovery can rebuild it without a separate sidecar.
-    coordinator_epochs: HashMap<ProducerId, i32>,
-
-    /// Producer sequence, epoch, and transaction metadata persisted in
-    /// Kafka-compatible `.snapshot` files at segment boundaries.
-    producer_state: HashMap<ProducerId, ProducerSnapshotEntry>,
-
-    /// Up to four data batches each producer appended before the last one
-    /// its `producer_state` entry holds, at that entry's epoch, oldest first.
-    /// With the last batch they are Kafka's retained `BatchMetadata`. No
-    /// snapshot carries them, so a reopen rebuilds them from the replayed
-    /// tail alone.
-    earlier_batches: HashMap<ProducerId, VecDeque<ProducerBatchMetadata>>,
+    /// Each producer's snapshot entry, retained batches and verification.
+    producers: producer_state::ProducerStateManager,
 
     /// Active segment's `TxnIndex`. The log reopens it on segment roll.
     active_txn_index: TxnIndex,

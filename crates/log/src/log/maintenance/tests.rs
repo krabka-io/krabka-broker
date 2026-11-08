@@ -488,3 +488,28 @@ enum RetirementOperation {
     Truncate,
     Reset,
 }
+
+/// A config time becomes a whole-millisecond `Duration`, a negative one zero.
+/// Comparing an elapsed time against it gives the answer that comparing the
+/// elapsed whole milliseconds against the config milliseconds gave.
+#[test]
+fn saturating_duration_reads_whole_milliseconds_and_clamps_negative_times() {
+    for (ms, want) in [
+        (-1, Duration::ZERO),
+        (0, Duration::ZERO),
+        (1_500, Duration::from_millis(1_500)),
+        (86_400_000, Duration::from_hours(24)),
+    ] {
+        assert!(saturating_duration(Time::from_millis(ms)) == want, "{ms}");
+    }
+    for elapsed_micros in [0, 999, 1_000, 1_001, 1_999, 2_000, 2_500] {
+        let elapsed = Duration::from_micros(elapsed_micros);
+        for ms in [-1, 0, 1, 2] {
+            let by_millis = elapsed.as_millis() >= u128::try_from(ms).unwrap_or(0);
+            assert!(
+                (elapsed >= saturating_duration(Time::from_millis(ms))) == by_millis,
+                "{elapsed:?} against {ms}ms"
+            );
+        }
+    }
+}

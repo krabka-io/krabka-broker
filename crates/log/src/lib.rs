@@ -125,7 +125,7 @@ pub use {
         ActiveProducer, ActiveSegmentExport, BARRIER_CONTROL_TYPE, BuiltCompaction,
         CompactionContext, CompactionJob, CompactionOutcome, DueDeletions, FailedDeletion, Log,
         RawRead, RawReadPlan, ReadOutput, SegmentExport, TransactionAppendRefusal,
-        TransactionalBatch, VerbatimBatch, VerificationGuard,
+        TransactionMarkerState, TransactionalBatch, VerbatimBatch, VerificationGuard,
     },
     producer_snapshot::{
         NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,

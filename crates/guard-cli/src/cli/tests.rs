@@ -36,6 +36,27 @@ krabka_macros::bootstrap_parser_fixture!(["krabka-guard", "freeze", "list"], [
     "list"
 ]);
 
+/// `--command-config` is the Kafka client properties file that carries the
+/// connection's TLS and SASL settings, so the principal a signature names can
+/// be one the broker authenticates. Like `--bootstrap-server` it comes before
+/// the subcommand, and without it the tool connects in PLAINTEXT.
+#[yare::parameterized(
+    plaintext = { &[][..], None },
+    secured = {
+        &["--command-config", "/etc/krabka/guard.properties"][..],
+        Some("/etc/krabka/guard.properties"),
+    },
+)]
+fn the_command_config_names_the_connection_properties(extra: &[&str], expected: Option<&str>) {
+    let line = ["krabka-guard", "-b", "localhost:9092"]
+        .iter()
+        .chain(extra)
+        .chain(["freeze", "list"].iter());
+    let cli = Cli::try_parse_from(line).expect("parses");
+    check!(cli.connection.bootstrap_server == "localhost:9092");
+    check!(cli.connection.security.command_config == expected.map(PathBuf::from));
+}
+
 /// `--topic` and `--prefix` name the two pattern types, and exactly one of
 /// them is given. A freeze with neither would have no scope, and a freeze
 /// with both would have two.

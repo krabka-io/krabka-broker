@@ -6,12 +6,12 @@
 
 use {
     super::{
-        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, QuotaType,
+        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
         QuotaTypeLabel, UNKNOWN_LABEL,
     },
     crate::{
         handlers::{ApiKeyCode, KRABKA_PRIVATE_API_KEY_FLOOR, krabka_private_api_name},
-        quota::QuotaDelay,
+        quota::{QuotaDelay, QuotaType},
     },
     krabka_protocol::api_key,
     krabka_units::{Time, convert::TimeExt},

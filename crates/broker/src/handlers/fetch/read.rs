@@ -440,6 +440,16 @@ fn aborted_served(
 /// just past the last batch the byte-copy path served, for the
 /// aborted-transaction scan; the sendfile path, which `read_committed` never
 /// takes, leaves it `None`.
+///
+/// Zero-copy: on a plaintext connection, describe the records run with a cheap
+/// header-only walk (`read_raw_desc`) instead of `pread`ing the payload. If the
+/// run is large enough to amortize the sendfile syscall, return file-backed
+/// regions for the `sendfile` drain; otherwise fall back to the byte-copy
+/// `read_raw` path (small/fragmented fetches stay on the vectored path). The
+/// descriptor is captured here under the log lock so retention can't truncate
+/// the region out from under the later async send (the `Arc<File>` pins the
+/// inode).
+#[krabka_macros::sendfile_cfg]
 fn run_read(
     plan: &RawReadPlan,
     read: &BlockingRead,
@@ -450,107 +460,63 @@ fn run_read(
         sendfile_min_bytes,
         ..
     } = read;
-
-    // Zero-copy (Increments D + E): on a plaintext connection
-    // (SENDFILE alias: Linux + Apple + FreeBSD/DragonFly), describe
-    // the records run with a cheap header-only walk (`read_raw_desc`)
-    // instead of `pread`ing the payload. If the run is large enough
-    // to amortize the sendfile syscall, return file-backed regions
-    // for the `sendfile` drain; otherwise fall back to the byte-copy
-    // `read_raw` path (small/fragmented fetches stay on the vectored
-    // path). The descriptor is captured here under the log lock so
-    // retention can't truncate the region out from under the later
-    // async send (the `Arc<File>` pins the inode).
-    // Set only on the raw-byte path below, which is the only path
-    // `read_committed_aborts` ever takes (the sendfile path is skipped
-    // whenever it is set — see the comment there). It is the offset just
-    // past the last batch this call actually served, which bounds the
-    // aborted-transaction scan below to what the response carries.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    let mut served_upper_bound: Option<Offset> = None;
-    // Every read on the targets without sendfile takes the raw-byte path,
-    // which assigns this exactly once.
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    )))]
-    let served_upper_bound: Option<Offset>;
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    let records: RecordsPayload = {
-        let mut chosen: Option<RecordsPayload> = None;
-        // READ_COMMITTED responses also carry aborted-transaction
-        // metadata and are consumed by ordinary Kafka clients as one
-        // framed response. Keep those on the raw-byte encoder; the
-        // file-region writer can otherwise detach the records payload
-        // from the metadata frame and leave a fresh stable-topic reader
-        // with HW/LSO but no decoded batches.
-        if sendfile_capable && !read_committed_aborts {
-            let desc = plan.read_regions()?;
-            if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
-                chosen = Some(RecordsPayload::FileRegions(desc.regions));
-            } else if !desc.regions.is_empty() {
-                // The walk has already found the run. Copying it costs one
-                // `pread` per region, where `read_raw` would look it up again
-                // from the offset index: a second header scan, readahead hint
-                // and read for every small fetch, the common case of a
-                // follower or consumer at the tail.
-                chosen = Some(RecordsPayload::Raw(read_regions(
-                    &desc.regions,
-                    desc.total,
-                )?));
-            }
+    // READ_COMMITTED responses also carry aborted-transaction metadata and are
+    // consumed by ordinary Kafka clients as one framed response. Keep those on
+    // the raw-byte encoder; the file-region writer can otherwise detach the
+    // records payload from the metadata frame and leave a fresh stable-topic
+    // reader with HW/LSO but no decoded batches.
+    if sendfile_capable && !read_committed_aborts {
+        let desc = plan.read_regions()?;
+        if should_use_sendfile(desc.total, !desc.regions.is_empty(), sendfile_min_bytes) {
+            return Ok((RecordsPayload::FileRegions(desc.regions), None));
         }
-        if let Some(p) = chosen {
-            p
-        } else {
-            let raw = plan.read_bytes()?;
-            served_upper_bound = raw.last_offset.map(|o| o + 1);
-            RecordsPayload::Raw(raw.bytes)
+        if !desc.regions.is_empty() {
+            // The walk has already found the run. Copying it costs one
+            // `pread` per region, where `read_raw` would look it up again
+            // from the offset index: a second header scan, readahead hint
+            // and read for every small fetch, the common case of a
+            // follower or consumer at the tail.
+            return Ok((
+                RecordsPayload::Raw(read_regions(&desc.regions, desc.total)?),
+                None,
+            ));
         }
-    };
-    // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
-    // `read_raw` + copy (the Increment C vectored path drains it).
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    )))]
-    let records: RecordsPayload = {
-        // Both sendfile inputs are consumed only by the platform
-        // branch above, so discard them here or `-D warnings` fails
-        // the build on this target.
-        let _ = (sendfile_capable, sendfile_min_bytes, read_committed_aborts);
-        let raw = plan.read_bytes()?;
-        served_upper_bound = raw.last_offset.map(|o| o + 1);
-        RecordsPayload::Raw(raw.bytes)
-    };
+    }
+    copy_read(plan)
+}
 
-    Ok((records, served_upper_bound))
+/// The read of one partition's plan on a target without a safe
+/// `sendfile`/`TransmitFile`: always the `read_raw` byte copy, which the
+/// vectored write path drains.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+)))]
+fn run_read(
+    plan: &RawReadPlan,
+    read: &BlockingRead,
+) -> Result<(RecordsPayload, Option<Offset>), BrokerError> {
+    // Only the sendfile definition reads these, so discard them here or
+    // `-D warnings` fails the build on this target.
+    let _ = (read.sendfile_capable, read.sendfile_min_bytes);
+    copy_read(plan)
+}
+
+/// The byte-copy read, which is the only path `read_committed_aborts` ever
+/// takes. Beside the bytes it returns the offset just past the last batch it
+/// served, which bounds the aborted-transaction scan to what the response
+/// carries.
+fn copy_read(plan: &RawReadPlan) -> Result<(RecordsPayload, Option<Offset>), BrokerError> {
+    let raw = plan.read_bytes()?;
+    Ok((
+        RecordsPayload::Raw(raw.bytes),
+        raw.last_offset.map(|o| o + 1),
+    ))
 }
 
 fn finish_read(
@@ -724,15 +690,7 @@ fn plan_read(
 
 /// The bytes of `regions`, in order, which a `read_raw` of the same window
 /// would have returned. `total` is their summed length.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-))]
+#[krabka_macros::sendfile_cfg]
 fn read_regions(regions: &[FileRegion], total: usize) -> io::Result<bytes::Bytes> {
     use std::os::unix::fs::FileExt as _;
 

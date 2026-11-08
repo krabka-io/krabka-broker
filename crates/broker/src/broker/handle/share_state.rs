@@ -3,7 +3,21 @@
 //! start offset, delivery-complete count, or acquired-batch count reaches an
 //! expected value.
 
-use crate::broker::BrokerHandle;
+use {
+    crate::{broker::BrokerHandle, share_coordinator::coordinator::ShareStateSummary},
+    std::cell::Cell,
+};
+
+/// Unwraps the summary's `start_offset` to `i64` at this test-helper
+/// boundary: integration tests compare it against raw offset literals.
+fn raw_summary(summary: ShareStateSummary) -> (i32, i32, i64, i32) {
+    (
+        summary.state_epoch,
+        summary.leader_epoch,
+        summary.start_offset.0,
+        summary.delivery_complete_count,
+    )
+}
 
 impl BrokerHandle {
     /// Test-only: read the share-state summary
@@ -22,20 +36,81 @@ impl BrokerHandle {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Option<(i32, i32, i64, i32)> {
-        // Unwrap the summary's `start_offset` -> `i64` at this test-helper
-        // boundary: integration tests compare it against raw offset literals.
         self.broker
             .share_coordinator
             .stored_summary_for_test(group, topic_id, partition)
             .await
-            .map(|summary| {
-                (
-                    summary.state_epoch,
-                    summary.leader_epoch,
-                    summary.start_offset.0,
-                    summary.delivery_complete_count,
-                )
-            })
+            .map(raw_summary)
+    }
+
+    /// Test-only: one read of the share-state summary of
+    /// `(group, topic_id, partition)` as the active share coordinator holds
+    /// it, or `None` when it holds no state for the key.
+    ///
+    /// A load of a `__share_group_state` partition drops its keys and
+    /// replays them, so [`Self::share_state_summary_for_test`] can miss a key
+    /// that the partition holds. This read takes the term guard the
+    /// share-state operations take and does not wait. A caller that drives
+    /// the partition itself, for example with heartbeats that reach the
+    /// persister, retries it in its own loop.
+    ///
+    /// # Errors
+    ///
+    /// The share-state error code the share-state operations answer while
+    /// the key's state partition is not active.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn try_active_share_state_summary_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<(i32, i32, i64, i32)>, i16> {
+        self.broker
+            .share_coordinator
+            .active_summary_for_test(group, topic_id, partition)
+            .await
+            .map(|summary| summary.map(raw_summary))
+    }
+
+    /// Test-only: [`Self::try_active_share_state_summary_for_test`], retried
+    /// for at most 30 seconds until the key's state partition is active. A
+    /// key the active partition does not hold still reads `None` at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the state partition is not active within 30 seconds.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn active_share_state_summary_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Option<(i32, i32, i64, i32)> {
+        let read = Cell::new(None);
+        let last_code = Cell::new(None);
+        let active = super::await_until(|| {
+            let (read, last_code) = (&read, &last_code);
+            async move {
+                match self
+                    .try_active_share_state_summary_for_test(group, topic_id, partition)
+                    .await
+                {
+                    Ok(summary) => read.set(Some(summary)),
+                    Err(code) => last_code.set(Some(code)),
+                }
+                read.get().is_some()
+            }
+        })
+        .await;
+        assert2::assert!(
+            active,
+            "share-state partition of {group}:{topic_id}:{partition} not active within 30s, \
+             last code {:?}",
+            last_code.get()
+        );
+        read.get().flatten()
     }
 
     /// Test-only: await until the persisted share-state summary exists for
@@ -151,6 +226,55 @@ mod tests {
         std::time::{Duration, Instant},
         tokio::{net::TcpListener, time},
     };
+
+    /// The active read waits while this broker leads no state partition, as
+    /// it does before `__share_group_state` exists. Once the partitions are
+    /// active it answers at once: `None` for a key with no state, and the
+    /// summary for an initialized key.
+    #[tokio::test]
+    async fn active_share_state_summary_waits_for_an_active_state_partition() {
+        let StartedBroker {
+            broker: handle,
+            dir: _dir,
+        } = start_broker_with(tolerate_starved_heartbeats).await;
+        let broker = handle.broker_arc_for_test();
+        let group = "handle-active-summary-group";
+        let topic_id = uuid::Uuid::from_u128(0xAC71);
+
+        let before_leading = time::timeout(
+            Duration::from_millis(75),
+            handle.active_share_state_summary_for_test(group, topic_id, 0),
+        )
+        .await;
+        lead_share_state_partitions(&broker).await;
+        let no_state = time::timeout(
+            Duration::from_secs(1),
+            handle.active_share_state_summary_for_test(group, topic_id, 0),
+        )
+        .await;
+        broker
+            .share_coordinator
+            .initialize(
+                &image_with_topic(topic_id, 1),
+                group,
+                topic_id,
+                0,
+                4,
+                krabka_log::Offset(-1),
+            )
+            .await
+            .expect("initialize share state");
+        let initialized = time::timeout(
+            Duration::from_secs(1),
+            handle.active_share_state_summary_for_test(group, topic_id, 0),
+        )
+        .await;
+
+        check!(before_leading.is_err());
+        check!(no_state == Ok(None));
+        check!(initialized == Ok(Some((4, 0, -1, -1))));
+        handle.shutdown().await;
+    }
 
     #[tokio::test]
     async fn single_broker_handle_share_and_raft_helpers_observe_real_state() {

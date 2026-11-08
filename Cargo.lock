@@ -3704,6 +3704,7 @@ dependencies = [
  "futures-util",
  "hex",
  "krabka-audit",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-format",
@@ -3714,7 +3715,6 @@ dependencies = [
  "krabka-raft",
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
- "krabka-security",
  "krabka-units 0.8.0",
  "object_store",
  "rstest",
@@ -3743,6 +3743,7 @@ dependencies = [
  "clap",
  "krabka-bdd",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-log",
@@ -3961,6 +3962,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-cli-connection"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "clap",
+ "krabka-client-core",
+ "krabka-format",
+ "krabka-security",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "yare",
+]
+
+[[package]]
 name = "krabka-client-admin"
 version = "0.8.0"
 source = "git+https://github.com/krabka-io/krabka-client-rs?rev=00cbdc4e9c6cb5ec35f6811431461e584649f11f#00cbdc4e9c6cb5ec35f6811431461e584649f11f"
@@ -4153,6 +4169,7 @@ dependencies = [
  "krabka-audit",
  "krabka-bdd",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-core",
  "krabka-macros",
  "krabka-protocol",
@@ -4574,6 +4591,7 @@ dependencies = [
  "krabka-audit",
  "krabka-backup",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-consumer",
  "krabka-client-core",

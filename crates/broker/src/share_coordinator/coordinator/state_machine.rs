@@ -593,6 +593,39 @@ impl ShareCoordinator {
         .await
     }
 
+    /// Test-only: the summary of the stored state of the key, read under the
+    /// active term of its state partition, or `None` when the active
+    /// partition holds no state for the key.
+    ///
+    /// A load drops every key of its state partition and replays them, so
+    /// [`ShareCoordinator::stored_summary_for_test`] can miss a key that the
+    /// partition holds. This read takes the term guard the share-state
+    /// operations take, and while the partition is not active it answers the
+    /// code those operations answer.
+    ///
+    /// # Errors
+    ///
+    /// The codes of [`ShareCoordinator::active_for_key`]:
+    /// `COORDINATOR_NOT_AVAILABLE` when the key maps to no state partition,
+    /// `COORDINATOR_LOAD_IN_PROGRESS` while the state partition loads, and
+    /// `NOT_COORDINATOR` when this broker does not lead it or its load failed.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) async fn active_summary_for_test(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<ShareStateSummary>, super::ShareErrorCode> {
+        let _active = self.active_for_key(group, &topic_id, partition).await?;
+        Ok(self
+            .summary(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await)
+    }
+
     /// The summary of the stored state of the key, or `None` when the key
     /// has no state.
     async fn summary(&self, key: ShareKeyRef<'_>) -> Option<ShareStateSummary> {

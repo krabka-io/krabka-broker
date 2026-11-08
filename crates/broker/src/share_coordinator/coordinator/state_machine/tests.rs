@@ -1026,3 +1026,51 @@ async fn write_matches_kafka_checks_and_record_rules(
 ) {
     let _ = (share_state_write, case, trunk, request, expected);
 }
+
+/// A load drops the keys of its state partition and replays them. A bare read
+/// of the stored summary in that window finds no state for a key the
+/// partition holds. The active summary answers the load code instead, and
+/// once the replay is installed it answers the replayed summary, or `None`
+/// for a key with no state.
+#[tokio::test]
+async fn active_summary_answers_load_in_progress_while_a_load_has_dropped_the_keys() {
+    let dir = tempdir().unwrap();
+    let CoordinatorWithRegistry {
+        coord,
+        registry: _reg,
+    } = coordinator(dir.path());
+    initialize_led_group()
+        .coordinator(&coord)
+        .topic(TOPIC)
+        .epoch(5)
+        .offset(Offset(100))
+        .call()
+        .await;
+
+    let terms = coord.start_loading_all_for_test(&mut *coord.leader_partitions.write().await);
+    let mid_load = (
+        coord.stored_summary_for_test("g", TOPIC, 0).await,
+        coord.active_summary_for_test("g", TOPIC, 0).await,
+    );
+    for (partition, generation) in terms {
+        coord.load_partition(partition, generation).await;
+    }
+    let loaded = (
+        coord.active_summary_for_test("g", TOPIC, 0).await,
+        coord.active_summary_for_test("no-state", TOPIC, 0).await,
+    );
+
+    check!(mid_load == (None, Err(codes::COORDINATOR_LOAD_IN_PROGRESS)));
+    check!(
+        loaded
+            == (
+                Ok(Some(ShareStateSummary {
+                    state_epoch: 5,
+                    leader_epoch: 0,
+                    start_offset: Offset(100),
+                    delivery_complete_count: 0,
+                })),
+                Ok(None)
+            )
+    );
+}
