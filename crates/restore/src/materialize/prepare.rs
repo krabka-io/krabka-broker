@@ -449,7 +449,10 @@ mod tests {
                 == accepted
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/rewrite_timestamps", fixtures = [rewrite_timestamps: RewriteTimestampScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/rewrite_timestamps",
+        fixtures = [rewrite_timestamps: RewriteTimestampScenario],
+    );
 
     #[test]
     fn owned_rewrite_rejects_control_and_illegal_producer_semantics() {

@@ -356,7 +356,10 @@ mod tests {
         check!(restore_argument.rendered == name);
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/restore_arguments", fixtures = [restore_argument: RestoreArgumentScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/restore_arguments",
+        fixtures = [restore_argument: RestoreArgumentScenario],
+    );
 
     #[test]
     fn partition_refs_split_on_the_colon() {

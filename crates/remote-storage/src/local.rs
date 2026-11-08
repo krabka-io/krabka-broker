@@ -410,7 +410,10 @@ mod tests {
         );
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/local_segment_copy", fixtures = [local_copy: LocalCopyScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/local_segment_copy",
+        fixtures = [local_copy: LocalCopyScenario],
+    );
 
     #[test]
     fn missing_optional_txn_index_is_not_found() {

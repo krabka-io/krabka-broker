@@ -250,7 +250,10 @@ fn remote_uuid_rejected(remote_names: &RemoteNameScenario) {
     );
 }
 
-rstest_bdd_macros::scenarios!("tests/features/remote_tier_names", fixtures = [remote_names: RemoteNameScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/remote_tier_names",
+    fixtures = [remote_names: RemoteNameScenario],
+);
 
 #[yare::parameterized(
     log = { LOG_FILE_SUFFIX },

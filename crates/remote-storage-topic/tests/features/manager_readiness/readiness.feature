@@ -5,12 +5,12 @@ Feature: Remote metadata readiness
     Then the readiness result is <answer>
 
     Examples:
-      | state                                        | answer                               |
-      | caught up                                    | caught up                            |
-      | unassigned                                   | behind                               |
-      | awaiting the assignment high water mark       | not ready for the assigned partition |
-      | unable to fetch the current high water mark   | an I/O error                         |
-      | shut down                                    | an I/O error                         |
+      | case                                    | state                                       | answer                               |
+      | a manager that has caught up            | caught up                                   | caught up                            |
+      | a manager without an assignment         | unassigned                                  | behind                               |
+      | an assignment without a high water mark | awaiting the assignment high water mark     | not ready for the assigned partition |
+      | a failed high water mark fetch          | unable to fetch the current high water mark | an I/O error                         |
+      | a manager that has shut down            | shut down                                   | an I/O error                         |
 
   Scenario: Committed peer writes make a previously caught up manager fall behind
     Given the metadata manager is caught up

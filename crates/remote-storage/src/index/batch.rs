@@ -375,5 +375,8 @@ mod tests {
             .expect("skipped batches accepted");
         assert2::assert!(*found == None);
     }
-    rstest_bdd_macros::scenarios!("tests/features/timestamp_lookup", fixtures = [timestamp_lookup: TimestampLookupScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/timestamp_lookup",
+        fixtures = [timestamp_lookup: TimestampLookupScenario],
+    );
 }

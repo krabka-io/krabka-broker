@@ -5,9 +5,9 @@ Feature: Kafka-compatible restore argument values
     Then the cluster ID is 01020304-0506-0708-090a-0b0c0d0e0f10
 
     Examples:
-      | text                                 |
-      | AQIDBAUGBwgJCgsMDQ4PEA               |
-      | 01020304-0506-0708-090a-0b0c0d0e0f10 |
+      | case                     | text                                 |
+      | Kafka base64 spelling    | AQIDBAUGBwgJCgsMDQ4PEA               |
+      | hyphenated UUID spelling | 01020304-0506-0708-090a-0b0c0d0e0f10 |
 
   Scenario: A malformed cluster ID is rejected
     Given restore cluster ID text not-a-cluster-id
@@ -20,11 +20,11 @@ Feature: Kafka-compatible restore argument values
     Then the restore topic name is retained verbatim
 
     Examples:
-      | name    |
-      | orders  |
-      | a       |
-      | a.b_c-d |
-      | 0       |
+      | case                         | name    |
+      | an ordinary name             | orders  |
+      | a single letter              | a       |
+      | every legal punctuation mark | a.b_c-d |
+      | a single digit               | 0       |
 
   Scenario: A topic name can use the entire Kafka length limit
     Given a restore topic name of 249 x characters
@@ -37,14 +37,14 @@ Feature: Kafka-compatible restore argument values
     Then the restore topic name is rejected
 
     Examples:
-      | name      |
-      | .         |
-      | ..        |
-      | has space |
-      | has/slash |
-      | has:colon |
-      | has=equals |
-      | café      |
+      | case                  | name       |
+      | the current directory | .          |
+      | the parent directory  | ..         |
+      | a space               | has space  |
+      | a slash               | has/slash  |
+      | a colon               | has:colon  |
+      | an equals sign        | has=equals |
+      | a non-ASCII letter    | café       |
 
   Scenario: An empty topic name is rejected
     Given an empty restore argument
@@ -67,9 +67,9 @@ Feature: Kafka-compatible restore argument values
     Then the restore node ID equals <value>
 
     Examples:
-      | text       | value      |
-      | 3          | 3          |
-      | 2147483647 | 2147483647 |
+      | case                   | text       | value      |
+      | a small node ID        | 3          | 3          |
+      | the largest signed int | 2147483647 | 2147483647 |
 
   Scenario Outline: Malformed or out-of-range node IDs are rejected
     Given restore node ID text <text>
@@ -77,10 +77,10 @@ Feature: Kafka-compatible restore argument values
     Then the restore node ID is rejected
 
     Examples:
-      | text       |
-      | -1         |
-      | x          |
-      | 2147483648 |
+      | case                      | text       |
+      | a negative node ID        | -1         |
+      | a non-numeric node ID     | x          |
+      | one past the signed limit | 2147483648 |
 
   Scenario: An empty node ID is rejected
     Given an empty restore argument

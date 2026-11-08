@@ -5,10 +5,10 @@ Feature: Kafka remote metadata topic creation policy
     Then metadata topic creation uses <policy> cleanup with minimum ISR <minimum> and unlimited retention
 
     Examples:
-      | compacted | minimum | policy  |
-      | false     | 2       | delete  |
-      | false     | 1       | delete  |
-      | true      | 2       | compact |
+      | case                 | compacted | minimum | policy  |
+      | the default topic    | false     | 2       | delete  |
+      | a single-replica ISR | false     | 1       | delete  |
+      | a compacted topic    | true      | 2       | compact |
 
   Scenario: An unset minimum ISR does not override the cluster default
     Given metadata topic compaction false and minimum ISR cluster-default

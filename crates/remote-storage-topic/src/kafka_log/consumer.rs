@@ -586,38 +586,14 @@ mod tests {
         check!(state.fetch_retry_backoff == millis(300));
         assert!(consumer_routing.assigned.as_ref().unwrap() == &vec![0]);
     }
-    rstest_bdd_macros::scenarios!("tests/features/consumer_routing",fixtures=[consumer_routing:ConsumerRoutingScenario]);
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/consumer_lifecycle/lifecycle.feature",
-        name = "Initial connection retries without reassignment"
-    )]
-    #[tokio::test]
-    async fn initial_connection_retries_without_reassignment(
-        consumer_connection: ConsumerConnectionScenario,
-    ) {
-        let _ = consumer_connection;
-    }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/consumer_lifecycle/lifecycle.feature",
-        name = "Cancellation interrupts connection and retry waits"
-    )]
-    #[tokio::test]
-    async fn initial_connection_and_retry_delay_are_cancellable(
-        consumer_connection: ConsumerConnectionScenario,
-        stage: String,
-    ) {
-        let _ = (consumer_connection, stage);
-    }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/consumer_lifecycle/lifecycle.feature",
-        name = "Assignments track replacement and removal of partition tasks"
-    )]
-    #[tokio::test]
-    async fn assignment_handle_tracks_spawned_partitions(
-        consumer_routing: ConsumerRoutingScenario,
-    ) {
-        let _ = consumer_routing;
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/consumer_routing",
+        fixtures = [consumer_routing: ConsumerRoutingScenario],
+    );
+    krabka_bdd::scenarios!(
+        "tests/features/consumer_lifecycle",
+        fixtures = [consumer_connection: ConsumerConnectionScenario],
+    );
 
     /// A [`RangeFetcher`] that answers `Fetch` from a script, records the
     /// offset of every `Fetch`, and parks once the script runs out.

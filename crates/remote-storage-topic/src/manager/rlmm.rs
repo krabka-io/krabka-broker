@@ -345,27 +345,11 @@ mod tests {
         catch_up_scenario.manager.as_ref().unwrap().shutdown();
     }
 
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/manager_readiness/readiness.feature",
-        name = "Readiness reflects assignment and current high water mark"
-    )]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn caught_up_answers_from_the_current_high_water_mark(
-        catch_up_scenario: CatchUpScenario,
-        state: String,
-        answer: String,
-    ) {
-        let _ = (catch_up_scenario, state, answer);
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/manager_readiness/readiness.feature",
-        name = "Committed peer writes make a previously caught up manager fall behind"
-    )]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn readiness_accounts_for_unapplied_peer_events(catch_up_scenario: CatchUpScenario) {
-        let _ = catch_up_scenario;
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/manager_readiness",
+        fixtures = [catch_up_scenario: CatchUpScenario],
+        runtime = "tokio-multi-thread",
+    );
 
     #[tokio::test(flavor = "multi_thread")]
     async fn caught_up_turns_true_once_the_pump_applies_a_peer_write() {

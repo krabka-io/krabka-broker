@@ -948,27 +948,10 @@ fn accepted_marker_order(marker_order: &MarkerOrderScenario) {
     check!(verified.is_ok(), "{:?}", verified.as_ref().err());
 }
 
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
-    name = "Sequential transaction aborts are accepted"
-)]
-#[tokio::test]
-async fn transaction_index_accepts_kafka_marker_order(marker_order: MarkerOrderScenario) {}
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
-    name = "Interleaved transactions may start in the opposite order to their abort markers"
-)]
-#[tokio::test]
-async fn transaction_index_accepts_interleaved_starts(marker_order: MarkerOrderScenario) {}
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/transaction_marker_order/transaction_marker_order.feature",
-    name = "A transaction can start before the segment containing its abort marker"
-)]
-#[tokio::test]
-async fn transaction_index_accepts_transaction_spanning_segment(marker_order: MarkerOrderScenario) {
-}
+krabka_bdd::scenarios!(
+    "tests/features/transaction_marker_order",
+    fixtures = [marker_order: MarkerOrderScenario],
+);
 
 #[tokio::test]
 async fn producer_snapshots_require_legal_unique_states_in_any_order() {

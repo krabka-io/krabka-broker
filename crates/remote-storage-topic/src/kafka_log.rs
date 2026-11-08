@@ -820,6 +820,20 @@ mod tests {
             kafka_adapter.bootstrap
         );
     }
+    #[rstest_bdd_macros::then("the bootstrap text is reported as resolving to no address")]
+    fn check_unresolved_bootstrap(kafka_adapter: &KafkaAdapterScenario) {
+        let error = kafka_adapter
+            .resolved
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err();
+        let expected = format!(
+            "bootstrap \"{}\" resolved to no address",
+            kafka_adapter.bootstrap
+        );
+        check!(error.to_string().contains(&expected), "{error}");
+    }
     #[rstest_bdd_macros::then("the numeric address precedes all localhost addresses on port 9093")]
     fn check_resolution_order(kafka_adapter: &KafkaAdapterScenario) {
         let resolved = kafka_adapter.resolved.as_ref().unwrap().as_ref().unwrap();
@@ -875,49 +889,12 @@ mod tests {
             matches!(error, MetadataLogError::PartitionOutOfRange {partition, count: 3} if *partition == kafka_adapter.partition)
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/kafka_adapter_sync", fixtures = [kafka_adapter: KafkaAdapterScenario]);
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/kafka_adapter_network/bootstrap.feature",
-        name = "Invalid policy wins over invalid bootstrap"
-    )]
-    #[tokio::test]
-    async fn invalid_policy_precedes_bootstrap(kafka_adapter: KafkaAdapterScenario, mode: String) {
-        let _ = (kafka_adapter, mode);
-    }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/kafka_adapter_network/bootstrap.feature",
-        name = "Bootstrap resolution identifies unusable addresses"
-    )]
-    #[tokio::test]
-    async fn bootstrap_resolution_names_the_address_it_could_not_use(
-        kafka_adapter: KafkaAdapterScenario,
-        bootstrap: String,
-        message: String,
-    ) {
-        let _ = (kafka_adapter, bootstrap, message);
-    }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/kafka_adapter_network/bootstrap.feature",
-        name = "Empty bootstrap has no resolved addresses"
-    )]
-    #[tokio::test]
-    async fn empty_bootstrap_address(kafka_adapter: KafkaAdapterScenario) { let _ = kafka_adapter; }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/kafka_adapter_network/bootstrap.feature",
-        name = "Separators do not constitute a bootstrap address"
-    )]
-    #[tokio::test]
-    async fn separator_only_bootstrap(kafka_adapter: KafkaAdapterScenario) {
-        let _ = kafka_adapter;
-    }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/kafka_adapter_network/bootstrap.feature",
-        name = "Resolution preserves address order and ignores empty entries"
-    )]
-    #[tokio::test]
-    async fn bootstrap_resolution_keeps_valid_addresses_in_order(
-        kafka_adapter: KafkaAdapterScenario,
-    ) {
-        let _ = kafka_adapter;
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/kafka_adapter_sync",
+        fixtures = [kafka_adapter: KafkaAdapterScenario],
+    );
+    krabka_bdd::scenarios!(
+        "tests/features/kafka_adapter_network",
+        fixtures = [kafka_adapter: KafkaAdapterScenario],
+    );
 }

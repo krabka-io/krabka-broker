@@ -5,10 +5,10 @@ Feature: Local tiered segment copies
     Then the Kafka tiered partition contains segment artifact <suffix>
 
     Examples:
-      | suffix                   |
-      | .log                     |
-      | .index                   |
-      | .timeindex               |
-      | .snapshot                |
-      | .leader_epoch_checkpoint |
-      | .txnindex                |
+      | case                   | suffix                   |
+      | the record log         | .log                     |
+      | the offset index       | .index                   |
+      | the time index         | .timeindex               |
+      | the producer snapshot  | .snapshot                |
+      | the leader epoch cache | .leader_epoch_checkpoint |
+      | the transaction index  | .txnindex                |

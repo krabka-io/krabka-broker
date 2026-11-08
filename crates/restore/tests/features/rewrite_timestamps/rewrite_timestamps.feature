@@ -6,6 +6,6 @@ Feature: Archived timestamp semantics during a restore rewrite
     Then the archived batch rewrite is <decision>
 
     Examples:
-      | timestamp_type | decision |
-      | LogAppendTime  | accepted |
-      | CreateTime     | refused  |
+      | case                         | timestamp_type | decision |
+      | broker-assigned timestamps   | LogAppendTime  | accepted |
+      | producer-assigned timestamps | CreateTime     | refused  |

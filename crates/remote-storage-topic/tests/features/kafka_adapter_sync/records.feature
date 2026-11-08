@@ -13,7 +13,8 @@ Feature: Kafka metadata adapter requests
     Given a record targets partition <partition> of the three-partition index
     When the producer record is built
     Then the requested partition is rejected against a partition count of 3
+
     Examples:
-      | partition |
-      | -1        |
-      | 3         |
+      | case                        | partition |
+      | a negative partition        | -1        |
+      | one past the last partition | 3         |

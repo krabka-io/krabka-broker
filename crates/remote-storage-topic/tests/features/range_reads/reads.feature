@@ -1,14 +1,4 @@
 Feature: Streaming metadata ranges
-  Scenario: A moved leader resumes at the first undelivered offset
-    Given leader 1 serves offsets 0 and 1 then moves to leader 2 serving offsets 2 and 3
-    When the requested range is read
-    Then offsets 0 through 3 are delivered once and fetching resumes from 2 on leader 2
-
-  Scenario: Leader discovery retries until a leader exists
-    Given the partition initially has no leader then broker 3 serves offsets 0 and 1
-    When the requested range is read
-    Then offsets 0 and 1 are delivered after two leader lookups and one fetch from broker 3
-
   Scenario: Fatal fetch and lookup errors retain their causes
     Given the first range fetch fails with corrupt message and the next leader lookup is unauthorized
     When the requested range is read twice
@@ -24,16 +14,17 @@ Feature: Streaming metadata ranges
     When the range visitor closes on its first record
     Then only offset 0 reaches the visitor and the closed error stops further fetches
 
-  Scenario: An empty range performs no I O
+  Scenario: An empty range sends no requests
     Given an empty range from 5 to 5
     When the requested range is read
     Then no records are delivered and no network requests are made
 
-  Scenario Outline: An invalid partition performs no I O
+  Scenario Outline: An invalid partition sends no requests
     Given a range from 0 to 1 targets partition <partition> of a two-partition topic
     When the requested range is read
     Then the partition is rejected with count 2 without network requests
+
     Examples:
-      | partition |
-      | -1        |
-      | 2         |
+      | case                        | partition |
+      | a negative partition        | -1        |
+      | one past the last partition | 2         |

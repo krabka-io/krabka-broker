@@ -427,9 +427,8 @@ fn kafka_accepted_export(jvm_export: &JvmExportScenario) {
     );
 }
 
-#[ignore = "requires Docker, a JDK, and Maven Central"]
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/jvm_tiered_compatibility/jvm_tiered_compatibility.feature",
-    name = "Kafka reads Krabka's offloaded producer segment"
-)]
-fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot(jvm_export: JvmExportScenario) {}
+// The scenario is `@docker`: it also needs a JDK and Maven Central.
+krabka_bdd::scenarios!(
+    "tests/features/jvm_tiered_compatibility",
+    fixtures = [jvm_export: JvmExportScenario],
+);

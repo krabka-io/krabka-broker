@@ -254,14 +254,40 @@ mod tests {
         field: String,
         value: String,
     ) {
+        set_metadata_transport(
+            metadata_config
+                .config
+                .as_mut()
+                .expect("metadata client given"),
+            &field,
+            &value,
+        );
+    }
+    #[rstest_bdd_macros::given("the metadata client has a custom transport policy")]
+    fn metadata_custom_transport(
+        metadata_config: &mut MetadataConfigScenario,
+        datatable: Vec<Vec<String>>,
+    ) {
         let config = metadata_config
             .config
             .as_mut()
             .expect("metadata client given");
-        match field.as_str() {
-            "topic_create_timeout" => config.topic_create_timeout = metadata_policy_time(&value),
-            "fetch_max_wait" => config.fetch_max_wait = metadata_policy_time(&value),
-            "fetch_retry_backoff" => config.fetch_retry_backoff = metadata_policy_time(&value),
+        for row in datatable.iter().skip(1) {
+            set_metadata_transport(config, &row[0], &row[1]);
+        }
+    }
+    /// Sets the transport setting `field` of `config` to the fixture `value`.
+    fn set_metadata_transport(config: &mut KafkaMetadataLogConfig, field: &str, value: &str) {
+        match field {
+            "event_queue_capacity" => {
+                config.event_queue_capacity = MetadataEventQueueCapacity::new(
+                    value.parse().expect("delivery queue capacity fixture"),
+                )
+                .expect("positive delivery queue capacity");
+            }
+            "topic_create_timeout" => config.topic_create_timeout = metadata_policy_time(value),
+            "fetch_max_wait" => config.fetch_max_wait = metadata_policy_time(value),
+            "fetch_retry_backoff" => config.fetch_retry_backoff = metadata_policy_time(value),
             "fetch_max_bytes" => {
                 config.fetch_max_bytes = ByteSize::from_bytes_f64(if value == "infinite" {
                     f64::INFINITY
@@ -274,15 +300,6 @@ mod tests {
             }
             _ => panic!("unknown metadata transport field {field}"),
         }
-    }
-    #[rstest_bdd_macros::given("metadata event delivery capacity {capacity}")]
-    fn metadata_delivery_capacity(metadata_config: &mut MetadataConfigScenario, capacity: usize) {
-        metadata_config
-            .config
-            .as_mut()
-            .expect("metadata client given")
-            .event_queue_capacity =
-            MetadataEventQueueCapacity::new(capacity).expect("positive delivery queue capacity");
     }
     #[rstest_bdd_macros::when("metadata client configuration is validated")]
     fn validate_metadata_client(metadata_config: &mut MetadataConfigScenario) {
@@ -475,5 +492,8 @@ mod tests {
         check!(cfg.fetch_max_bytes.bytes_i32() == 1 << 20);
         check!(cfg.fetch_retry_backoff.to_std() == Duration::from_millis(200));
     }
-    rstest_bdd_macros::scenarios!("tests/features/metadata_client_policy", fixtures = [metadata_config: MetadataConfigScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/metadata_client_policy",
+        fixtures = [metadata_config: MetadataConfigScenario],
+    );
 }

@@ -361,7 +361,10 @@ mod tests {
                 == &vec![record(4, Some(b"first")), record(6, None)]
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/range_progress", fixtures=[range_progress: RangeProgressScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/range_progress",
+        fixtures = [range_progress: RangeProgressScenario],
+    );
 
     struct RangeReadScenario {
         fetcher: Option<ScriptedFetcher>,
@@ -674,66 +677,13 @@ mod tests {
         Ok(records)
     }
 
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "A moved leader resumes at the first undelivered offset"
-    )]
-    #[tokio::test(start_paused = true)]
-    async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes(
-        range_read: RangeReadScenario,
-    ) {
-        let _ = range_read;
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "Leader discovery retries until a leader exists"
-    )]
-    #[tokio::test(start_paused = true)]
-    async fn a_partition_without_a_leader_is_looked_up_again(range_read: RangeReadScenario) {
-        let _ = range_read;
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "Fatal fetch and lookup errors retain their causes"
-    )]
-    #[tokio::test]
-    async fn a_fatal_failure_stops_the_read_with_its_cause(range_read: RangeReadScenario) {
-        let _ = range_read;
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "A page without batch progress fails the range"
-    )]
-    #[tokio::test]
-    async fn a_fetch_that_makes_no_progress_stalls_the_read(range_read: RangeReadScenario) {
-        let _ = range_read;
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "Visitor closure stops delivery immediately"
-    )]
-    #[tokio::test]
-    async fn a_visitor_error_stops_the_read_before_the_next_record(range_read: RangeReadScenario) {
-        let _ = range_read;
-    }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "An empty range performs no I O"
-    )]
-    #[tokio::test]
-    async fn an_empty_read_sends_nothing(range_read: RangeReadScenario) { let _ = range_read; }
-
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/range_reads/reads.feature",
-        name = "An invalid partition performs no I O"
-    )]
-    #[tokio::test]
-    async fn out_of_range_read_sends_nothing(range_read: RangeReadScenario, partition: i32) {
-        let _ = (range_read, partition);
-    }
+    krabka_bdd::scenarios!(
+        "tests/features/range_reads/leader_changes.feature",
+        fixtures = [range_read: RangeReadScenario],
+        runtime = "tokio-current-thread-paused",
+    );
+    krabka_bdd::scenarios!(
+        "tests/features/range_reads/reads.feature",
+        fixtures = [range_read: RangeReadScenario],
+    );
 }

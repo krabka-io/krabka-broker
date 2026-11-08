@@ -5,12 +5,12 @@ Feature: Kafka-compatible remote tier paths
     Then the remote index suffix and kind match Kafka in both directions
 
     Examples:
-      | kind              | suffix                   |
-      | offset            | .index                   |
-      | timestamp         | .timeindex               |
-      | producer-snapshot | .snapshot                |
-      | leader-epoch      | .leader_epoch_checkpoint |
-      | transaction       | .txnindex                |
+      | case                   | kind              | suffix                   |
+      | the offset index       | offset            | .index                   |
+      | the time index         | timestamp         | .timeindex               |
+      | the producer snapshot  | producer-snapshot | .snapshot                |
+      | the leader epoch cache | leader-epoch      | .leader_epoch_checkpoint |
+      | the transaction index  | transaction       | .txnindex                |
 
   Scenario: Local tiered storage uses Kafka partition and snapshot names
     Given orders partition 7 starts at offset 11 with topic ID 1 and segment ID 254
@@ -31,9 +31,9 @@ Feature: Kafka-compatible remote tier paths
     And the segment starts at <offset> with ID <segment> and suffix <suffix>
 
     Examples:
-      | file                                                   | offset | segment | suffix    |
-      | 00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot     | 11     | 254     | .snapshot |
-      | 00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log          | 0      | 30      | .log      |
+      | case                           | file                                                 | offset | segment | suffix    |
+      | a snapshot at a nonzero offset | 00000000000000000011-AAAAAAAAAAAAAAAAAAAA_g.snapshot | 11     | 254     | .snapshot |
+      | a log at offset zero           | 00000000000000000000-AAAAAAAAAAAAAAAAAAAAHg.log      | 0      | 30      | .log      |
 
   Scenario Outline: A remote Kafka UUID needs the exact base64 length
     Given Kafka UUID text <encoded>
@@ -41,8 +41,8 @@ Feature: Kafka-compatible remote tier paths
     Then the malformed Kafka UUID is rejected
 
     Examples:
-      | encoded                  |
-      | empty                    |
-      | AAAA                     |
-      | AAAAAAAAAAAAAAAAAAAAAQAA |
-      | A                        |
+      | case               | encoded                  |
+      | no text            | empty                    |
+      | too short          | AAAA                     |
+      | too long           | AAAAAAAAAAAAAAAAAAAAAQAA |
+      | a single character | A                        |

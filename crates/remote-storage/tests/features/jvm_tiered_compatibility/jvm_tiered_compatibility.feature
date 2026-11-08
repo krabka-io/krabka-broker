@@ -1,4 +1,5 @@
 Feature: Kafka reads Krabka tiered segment exports
+  @docker
   Scenario: Kafka reads Krabka's offloaded producer segment
     Given a sealed Krabka segment containing an idempotent producer batch
     And the segment and producer snapshot are copied to Kafka local tiered storage

@@ -240,5 +240,8 @@ mod tests {
                 .contains_key("min.insync.replicas")
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/metadata_topic_creation", fixtures = [metadata_topic: MetadataTopicScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/metadata_topic_creation",
+        fixtures = [metadata_topic: MetadataTopicScenario],
+    );
 }
