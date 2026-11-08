@@ -473,32 +473,20 @@ mod tests {
         writer: MemoryWriter,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct SignedWriterSetup {
-        #[default(QueueCapacity(16))]
-        capacity: QueueCapacity,
-        #[default(CheckpointFrequency::Every(AuditEventCount(1_000_000)))]
-        frequency: CheckpointFrequency,
-    }
-
     #[bon::builder]
     fn signed_writer(
         #[builder(into, default = QueueCapacity (16))] capacity: QueueCapacity,
         #[builder(default = CheckpointFrequency::Every(AuditEventCount(1_000_000)))]
         frequency: CheckpointFrequency,
     ) -> SignedWriterFixture {
-        let setup = SignedWriterSetup {
-            capacity,
-            frequency,
-        };
         let TestSigner { signer, public_key } = test_signer();
         let directory = tempfile::tempdir().unwrap();
         let writer = memory_writer()
             .directory(directory.path())
-            .capacity(setup.capacity)
+            .capacity(capacity)
             .checkpoints(CheckpointSetup {
                 signer: Some(signer),
-                frequency: setup.frequency,
+                frequency,
                 ..Default::default()
             })
             .call();
