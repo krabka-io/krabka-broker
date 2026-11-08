@@ -76,32 +76,12 @@ pub fn stamp_entry(base: i64, last: i64, stamp: u64) -> StampEntry {
 }
 
 /// The ordinary four-record aborted transaction; fields remain overrideable for malformed fixtures.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AbortedTxnSetup {
-    #[default(ProducerId(1000))]
-    pub producer: ProducerId,
-    #[default(Offset(0)..=Offset(3))]
-    pub bounds: RangeInclusive<Offset>,
-    #[default(Offset(4))]
-    pub stable: Offset,
-}
-
 #[bon::builder]
 pub fn aborted_txn(
     #[builder(into, default = ProducerId (1000))] producer: ProducerId,
     #[builder(default = Offset (0) ..= Offset (3))] bounds: RangeInclusive<Offset>,
     #[builder(into, default = Offset (4))] stable: Offset,
 ) -> AbortedTxn {
-    let setup = AbortedTxnSetup {
-        producer,
-        bounds,
-        stable,
-    };
-    let AbortedTxnSetup {
-        producer,
-        bounds,
-        stable,
-    } = setup;
     let (start_offset, last_offset) = bounds.into_inner();
     AbortedTxn {
         start_offset,
