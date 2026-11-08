@@ -37,8 +37,6 @@ mod auto_rebalance;
 mod kafka_wire;
 #[path = "elect_leaders/preferred.rs"]
 mod preferred;
-#[path = "support/reserved_port.rs"]
-mod reserved_port;
 #[path = "elect_leaders/sasl.rs"]
 mod sasl;
 #[path = "elect_leaders/unclean.rs"]

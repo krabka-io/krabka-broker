@@ -9,8 +9,7 @@
 use {
     crate::{
         OperatorElectionScenario, cluster_lock, operator_election,
-        reserved_port::reserve_port,
-        support::{self, controller_voters, topics::AssignedTopicSetup},
+        support::{self, controller_voters, reserve_port, topics::AssignedTopicSetup},
         wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
         wire::create_topic_plaintext,
     },

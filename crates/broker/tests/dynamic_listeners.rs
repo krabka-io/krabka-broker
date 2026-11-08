@@ -10,20 +10,16 @@
 #![cfg(test)]
 
 mod kafka_wire;
-#[path = "support/reserved_port.rs"]
-mod reserved_port;
 mod support;
 
 use {
-    crate::{
-        reserved_port::reserve_port,
-        support::{
-            configs::{
-                BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request,
-                describe_resource,
-            },
-            wire::HeaderEncoding,
+    crate::support::{
+        configs::{
+            BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request,
+            describe_resource,
         },
+        reserve_port,
+        wire::HeaderEncoding,
     },
     assert2::assert,
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes},
