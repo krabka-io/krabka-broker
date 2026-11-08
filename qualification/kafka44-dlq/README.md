@@ -62,12 +62,19 @@ loader in the stock executable. Keep that deployment boundary explicit.
 
 ## Remaining qualification boundary
 
-Terminal-prefix persistence remains different: released retains ARCHIVED
-rows/start=0/count=1; candidate prunes/start=1/count=0. Both measured restart
-schedules have zero source redelivery and lag0, but exact state parity must not
-be claimed. Native manager registration/lifecycle is implemented and tested
-in this branch (#1982). Arbitrary partitions, uncooperative plugin IO and
+The historical crash receipts retain the earlier terminal-prefix difference.
+The [fresh paired ordering run](ordering-20261107/README.md) supersedes that
+difference for its eight scenarios: both peers durably retain ARCHIVED,
+startOffset=0 and deliveryCompleteCount=1 before/after clean restart. The
+[RF3 denial run](rf3-denial-20261107/README.md) additionally measures destination
+authorization failure and completed-write clean restart on three replicas.
+Neither run measures an RF3 crash during ARCHIVING or failed phase-2 persistence.
+The [phase-2 model](phase2-model-20261108/README.md) covers those persistence cuts
+only at the bounded acquisition-machine level, not as distributed execution.
+Native manager registration/lifecycle is implemented and tested in this branch
+(#1982), not a JVM plugin ABI. Arbitrary partitions, uncooperative plugin IO and
 exhaustive Jepsen schedules remain outside these bounds; #1969 must retain them.
+Full qualification and exactly-once archival are not claimed.
 
 ## Candidate verification
 
