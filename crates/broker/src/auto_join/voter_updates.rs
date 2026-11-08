@@ -371,6 +371,41 @@ mod tests {
         assert2::assert!(count.load(Ordering::Relaxed) >= 2);
     }
 
+    /// While the leader's endpoints are not known, each retry dials the next
+    /// bootstrap server, so a server that keeps refusing the update does not
+    /// stop it from reaching the others.
+    #[tokio::test]
+    async fn run_voter_updates_rotates_across_bootstrap_servers() {
+        let first = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let second = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
+        let controller = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .term(1)
+                .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
+                .build(),
+        );
+        let params = params(controller, vec![
+            first.addr.to_string(),
+            second.addr.to_string(),
+        ]);
+        let shutdown = params.shutdown.clone();
+        let task = tokio::spawn(run_voter_updates(params));
+
+        let reached_both = timeout(Duration::from_secs(10), async {
+            while first.count.load(Ordering::Relaxed) == 0
+                || second.count.load(Ordering::Relaxed) == 0
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        shutdown.cancel();
+        task.await.expect("the loop does not panic");
+
+        assert2::assert!(reached_both.is_ok());
+    }
+
     #[tokio::test]
     async fn run_voter_updates_does_not_advertise_when_leader_is_none() {
         let MockUpdateServer { addr, count } = spawn_mock_update_server(codes::NONE).await;
