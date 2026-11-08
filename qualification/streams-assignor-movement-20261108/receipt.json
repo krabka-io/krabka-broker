@@ -1,0 +1,17 @@
+{
+  "base_revision": "80823a09e5831a0beaa92c874d416f3940eda82e",
+  "bounded_pass": true,
+  "native_binary_sha256": "98586524fd460bfe5d8dbc3f9ccbb3c2397c75b91e4019be02e12dfb29ec2cd7",
+  "native_owner": [
+    3,
+    1
+  ],
+  "oracle_owner": [
+    1,
+    2
+  ],
+  "prepare_scenarios_per_broker": 5,
+  "recovery_scenarios_per_broker": 7,
+  "source_sha256": "bf6a784281db483644e1c725cc69cd80dee04bdf243368eaab783edb16a1b590",
+  "universal_parity": false
+}
