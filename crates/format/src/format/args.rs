@@ -333,7 +333,10 @@ mod tests {
     fn formatter_node_error(formatter_node: &FormatterNodeScenario, error: String) {
         assert2::check!(formatter_node.parsed == Some(Err(error)));
     }
-    rstest_bdd_macros::scenarios!("tests/features/node_id_arguments", fixtures = [formatter_node: FormatterNodeScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/node_id_arguments",
+        fixtures = [formatter_node: FormatterNodeScenario],
+    );
 
     /// `--directory-id` takes either id form and refuses the ids that Kafka
     /// reserves, which the broker would refuse at startup.

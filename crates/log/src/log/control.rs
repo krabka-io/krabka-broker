@@ -426,8 +426,12 @@ mod tests {
         control_marker.before = Some(partition_state(&fixture.log, &[1000]));
         control_marker.log = Some(fixture);
     }
-    #[rstest_bdd_macros::when("the malformed commit marker is appended")]
-    fn append_bad_marker(control_marker: &mut ControlMarkerScenario) {
+    #[rstest_bdd_macros::when(
+        "a commit marker with control key bytes {key} and end-marker value bytes {value} is appended"
+    )]
+    fn append_bad_marker(control_marker: &mut ControlMarkerScenario, key: String, value: String) {
+        control_marker.key = marker_fixture_bytes(&key);
+        control_marker.value = marker_fixture_bytes(&value);
         let log = &mut control_marker
             .log
             .as_mut()
@@ -472,7 +476,10 @@ mod tests {
         check!(control_marker.after == control_marker.before);
         check!(control_marker.end == Some(Offset(1)));
     }
-    rstest_bdd_macros::scenarios!("tests/features/control_marker_contract", fixtures = [control_marker: ControlMarkerScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/control_marker_contract",
+        fixtures = [control_marker: ControlMarkerScenario],
+    );
 
     fn append_open_barrier_transaction(log: &mut Log) {
         let mut data = transactional_batch(1000, 2, &["a", "b"]);

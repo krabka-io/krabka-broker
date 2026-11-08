@@ -1045,7 +1045,10 @@ mod tests {
         check!(reopened_start.removed == Some(2));
         check!(reopened_start.starts == Some((Offset(local), Offset(reported))));
     }
-    rstest_bdd_macros::scenarios!("tests/features/reopened_log_start", fixtures = [reopened_start: ReopenedStartScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/reopened_log_start",
+        fixtures = [reopened_start: ReopenedStartScenario],
+    );
 
     /// How a follower's log came by its start before the leader reports one.
     #[derive(Clone, Copy, Debug)]

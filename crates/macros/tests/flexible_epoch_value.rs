@@ -147,7 +147,10 @@ fn epoch_codec_results(epoch_codec: &EpochCodecScenario) {
     }
 }
 
-rstest_bdd_macros::scenarios!("tests/features/epoch_codec", fixtures = [epoch_codec: EpochCodecScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/epoch_codec",
+    fixtures = [epoch_codec: EpochCodecScenario],
+);
 
 #[test]
 fn retains_record_specific_version_errors_and_codec_errors() {

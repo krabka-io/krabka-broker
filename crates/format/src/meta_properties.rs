@@ -542,7 +542,10 @@ mod tests {
         };
         assert2::check!(meta_file.verified == Some(Err(expected)));
     }
-    rstest_bdd_macros::scenarios!("tests/features/meta_properties_contract", fixtures = [meta_file: MetaFileScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/meta_properties_contract",
+        fixtures = [meta_file: MetaFileScenario],
+    );
 
     /// Every file krabka writes reads back as the same ids.
     #[yare::parameterized(

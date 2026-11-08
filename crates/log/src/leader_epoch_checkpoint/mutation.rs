@@ -320,7 +320,10 @@ mod tests {
             &history,
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/leader_epoch_mutation", fixtures = [epoch_mutation: EpochMutationScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/leader_epoch_mutation",
+        fixtures = [epoch_mutation: EpochMutationScenario],
+    );
 
     #[yare::parameterized(
         negative_epoch = { -1, 5 },

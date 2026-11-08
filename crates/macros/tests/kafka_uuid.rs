@@ -69,7 +69,10 @@ fn formatted_uuid(display: &DisplayScenario) {
     assert!(rendered[5] == "kafka");
 }
 
-rstest_bdd_macros::scenarios!("tests/features/uuid_representation", fixtures = [display: DisplayScenario, codec: CodecScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/uuid_representation",
+    fixtures = [display: DisplayScenario, codec: CodecScenario],
+);
 
 struct CodecScenario {
     cluster: ClusterId,

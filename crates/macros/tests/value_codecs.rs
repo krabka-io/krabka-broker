@@ -248,7 +248,10 @@ fn tag_writer_errors_reach_the_share_state_encoder_caller() {
     assert!(update.encode() == Err("negative delivery count"));
 }
 
-rstest_bdd_macros::scenarios!("tests/features/share_state_codec", fixtures = [share_codec: ShareCodecScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/share_state_codec",
+    fixtures = [share_codec: ShareCodecScenario],
+);
 
 fn write_items(buf: &mut BytesMut, items: &[i32]) -> Result<(), BrokerError> {
     buf.put_u8(u8::try_from(items.len() + 1).map_err(|_| "too many items")?);

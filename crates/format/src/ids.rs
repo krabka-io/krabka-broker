@@ -475,7 +475,10 @@ mod tests {
             check!(classified == encoded, "{index:#x}");
         }
     }
-    rstest_bdd_macros::scenarios!("tests/features/kafka_uuid_contract", fixtures = [uuid_text: UuidTextScenario, uuid_rules: UuidRulesScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/kafka_uuid_contract",
+        fixtures = [uuid_text: UuidTextScenario, uuid_rules: UuidRulesScenario],
+    );
 
     /// The command line also takes the hyphenated form, and only a string of
     /// exactly that shape is read as hex.

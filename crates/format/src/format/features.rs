@@ -601,7 +601,10 @@ mod tests {
         assert2::check!(feature_format.seeded == Some(Ok(expected)));
         assert2::check!(feature_format.parsed_zero == Some(Ok(spec("krabka.version", 0))));
     }
-    rstest_bdd_macros::scenarios!("tests/features/formatter_feature_levels", fixtures = [feature_format: FeatureFormatScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/formatter_feature_levels",
+        fixtures = [feature_format: FeatureFormatScenario],
+    );
 
     #[yare::parameterized(
         group_version_above_maximum = { "group.version", 5 },

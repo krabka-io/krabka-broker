@@ -283,7 +283,10 @@ mod tests {
         };
         assert2::check!(format_ensemble.verdict == Some(Err(expected)));
     }
-    rstest_bdd_macros::scenarios!("tests/features/formatter_directory_ensemble", fixtures = [format_ensemble: FormatEnsembleScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/formatter_directory_ensemble",
+        fixtures = [format_ensemble: FormatEnsembleScenario],
+    );
 
     /// Only what a run writes before `meta.properties` makes a directory with
     /// no marker count as empty.

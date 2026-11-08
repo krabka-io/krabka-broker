@@ -72,6 +72,11 @@ mod tests {
         uuid_derive.source = source;
     }
 
+    #[rstest_bdd_macros::given("a UUID wrapper declared as")]
+    fn wrapper_declaration(uuid_derive: &mut UuidDeriveScenario, docstring: String) {
+        uuid_derive.source = docstring;
+    }
+
     #[rstest_bdd_macros::when("the KafkaUuid derive is expanded")]
     fn derive_uuid(uuid_derive: &mut UuidDeriveScenario) {
         let source = &uuid_derive.source;
@@ -110,5 +115,8 @@ mod tests {
         assert!(output.contains("Deserialize<'de>forId"));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/uuid_derive", fixtures = [uuid_derive: UuidDeriveScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/uuid_derive",
+        fixtures = [uuid_derive: UuidDeriveScenario],
+    );
 }

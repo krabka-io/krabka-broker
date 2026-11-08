@@ -262,7 +262,10 @@ fn restored_producer_snapshot_state(snapshot_lifecycle: &SnapshotLifecycleScenar
     check!(snapshot_lifecycle.before.is_some());
     check!(snapshot_lifecycle.reopened == snapshot_lifecycle.before);
 }
-rstest_bdd_macros::scenarios!("tests/features/producer_snapshot_lifecycle", fixtures = [snapshot_lifecycle: SnapshotLifecycleScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/producer_snapshot_lifecycle",
+    fixtures = [snapshot_lifecycle: SnapshotLifecycleScenario],
+);
 
 #[test]
 fn truncate_to_log_end_is_noop() {

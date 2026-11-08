@@ -300,7 +300,10 @@ mod tests {
             .collect();
         assert2::assert!(named == vec![listener]);
     }
-    rstest_bdd_macros::scenarios!("tests/features/quorum_format", fixtures = [quorum_format: QuorumFormatScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/quorum_format",
+        fixtures = [quorum_format: QuorumFormatScenario],
+    );
 
     #[test]
     fn rejects_initial_controller_without_at() {

@@ -329,6 +329,14 @@ fn one_formatted_directory(format_binary: &mut FormatBinaryScenario) {
 fn check_format_refusal(output: &Output, message: String) {
     assert2::assert!((output.status.code(), stderr(output)) == (Some(3), message));
 }
+#[rstest_bdd_macros::given(
+    "directory a was formatted and directory b joined its cluster with ignore-formatted"
+)]
+fn mixed_formatted_directories(format_binary: &mut FormatBinaryScenario) {
+    one_formatted_directory(format_binary);
+    ignore_and_discover_cluster(format_binary);
+    mixed_directory_format(format_binary);
+}
 #[rstest_bdd_macros::then("the existing directory refuses the run and directory b remains absent")]
 fn refused_existing_directory(format_binary: &FormatBinaryScenario) {
     assert2::assert!(
@@ -427,15 +435,11 @@ fn unchanged_ignored_format(format_binary: &FormatBinaryScenario) {
     );
     assert2::assert!(snapshot(format_binary.root.path()) == format_binary.before);
 }
-#[rstest_bdd_macros::when("the format binary is interrupted after {artifact}")]
+#[rstest_bdd_macros::given("the format binary has been interrupted after {artifact}")]
 fn interrupt_format_binary(format_binary: &mut FormatBinaryScenario, artifact: String) {
-    format_binary.output = Some(format_binary.run(Some(&artifact)));
-}
-#[rstest_bdd_macros::then("the injected interruption exits with code 4")]
-fn injected_format_failure(format_binary: &FormatBinaryScenario) {
-    let output = format_binary.output();
-    assert2::assert!(output.status.code() == Some(4));
-    assert2::assert!(stderr(output).contains("injected failure after"));
+    let output = format_binary.run(Some(&artifact));
+    assert2::assert!(output.status.code() == Some(4), "{}", stderr(&output));
+    assert2::assert!(stderr(&output).contains("injected failure after"));
 }
 #[rstest_bdd_macros::when("the format binary is rerun without interruption")]
 fn rerun_format_binary(format_binary: &mut FormatBinaryScenario) {
@@ -536,7 +540,10 @@ fn binary_property_bytes(format_binary: &FormatBinaryScenario) {
         );
     }
 }
-rstest_bdd_macros::scenarios!("tests/features/format_binary_parity", fixtures = [format_binary: FormatBinaryScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/format_binary_parity",
+    fixtures = [format_binary: FormatBinaryScenario],
+);
 
 /// What one directory of a multi-directory format holds.
 #[derive(Debug, PartialEq, Eq)]

@@ -211,7 +211,10 @@ mod tests {
         check!(topic_name.bytes.len() == 256);
         check!(topic_name.legal == Some(expected));
     }
-    rstest_bdd_macros::scenarios!("tests/features/log_topic_names", fixtures = [topic_name: TopicNameScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/log_topic_names",
+        fixtures = [topic_name: TopicNameScenario],
+    );
 
     #[yare::parameterized(
         dot_to_underscore = { "a.b", "a_b", true },

@@ -234,5 +234,8 @@ mod tests {
         };
         check!(epoch_lookup.answer == Some((expected_epoch, Offset(offset))));
     }
-    rstest_bdd_macros::scenarios!("tests/features/leader_epoch_lookup", fixtures = [epoch_lookup: EpochLookupScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/leader_epoch_lookup",
+        fixtures = [epoch_lookup: EpochLookupScenario],
+    );
 }

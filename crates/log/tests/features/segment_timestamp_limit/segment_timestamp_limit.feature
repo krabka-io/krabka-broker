@@ -5,10 +5,10 @@ Feature: Kafka timestamp lookup limits only the compressed records it reads
     Then segment timestamp lookup returns offset <offset> at timestamp <timestamp>
 
     Examples:
-      | codec        | target | limit     | offset | timestamp |
-      | gzip         | 1000   | 100       | 0      | 1000      |
-      | gzip         | 1001   | unlimited | 1      | 1001      |
-      | uncompressed | 1001   | 100       | 1      | 1001      |
+      | case                                     | codec        | target | limit     | offset | timestamp |
+      | a match before the large record          | gzip         | 1000   | 100       | 0      | 1000      |
+      | no decompression limit                   | gzip         | 1001   | unlimited | 1      | 1001      |
+      | uncompressed records are not limited     | uncompressed | 1001   | 100       | 1      | 1001      |
 
   Scenario: The compressed oversized matching record is refused
     Given a gzip segment with a 10-byte record at timestamp 1000 and a 1000-byte record at 1001

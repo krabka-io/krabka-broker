@@ -6,9 +6,9 @@ Feature: Kafka producer snapshot lifecycle across log mutations
     And reopening restores the complete producer state present before shutdown
 
     Examples:
-      | action                      | offsets |
-      | drop                        | 2,4     |
-      | close                       | 2,4,6   |
-      | truncate-to-2               | 2       |
-      | trim-to-2-then-truncate-to-4 | 4       |
-      | reset-to-10                 | 10      |
+      | case                                     | action                       | offsets |
+      | an unclean shutdown keeps roll snapshots | drop                         | 2,4     |
+      | a clean close adds an end snapshot       | close                        | 2,4,6   |
+      | truncation drops later snapshots         | truncate-to-2                | 2       |
+      | trimming drops earlier snapshots         | trim-to-2-then-truncate-to-4 | 4       |
+      | a reset leaves one snapshot at the start | reset-to-10                  | 10      |

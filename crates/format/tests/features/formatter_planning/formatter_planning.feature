@@ -5,11 +5,11 @@ Feature: Kafka-compatible formatter planning
     Then the first formatter failure has Kafka feature exit code and begins <message>
 
     Examples:
-      | flags | message |
-      | --release-version 9.9-IV0 --feature kraft.version=9 | krabka format: Unknown metadata.version '9.9-IV0'. |
-      | --feature nope.version=1 --feature kraft.version=9 | krabka format: Unsupported feature: nope.version. |
-      | --feature kraft.version=9 | krabka format: kraft.version=9 requires --standalone, |
-      | --no-initial-controllers --feature kraft.version=9 | krabka format: No feature:kraft.version with feature level 9 |
+      | case                                       | flags | message |
+      | an unknown release before a bad level      | --release-version 9.9-IV0 --feature kraft.version=9 | krabka format: Unknown metadata.version '9.9-IV0'. |
+      | an unknown name before a bad level         | --feature nope.version=1 --feature kraft.version=9 | krabka format: Unsupported feature: nope.version. |
+      | a kraft level without a standalone voter   | --feature kraft.version=9 | krabka format: kraft.version=9 requires --standalone, |
+      | an undefined kraft level                   | --no-initial-controllers --feature kraft.version=9 | krabka format: No feature:kraft.version with feature level 9 |
 
   Scenario: The first log directory is metadata by default
     Given log directories a,b with metadata directory first-log-dir in static mode

@@ -10,10 +10,10 @@ Feature: Kafka-compatible initial quorum configuration
     Then the quorum mode error is No feature:kraft.version with feature level <level>
 
     Examples:
-      | level |
-      | -1    |
-      | 2     |
-      | 9     |
+      | case                 | level |
+      | a negative level     | -1    |
+      | one above the latest | 2     |
+      | far above the latest | 9     |
 
   Scenario Outline: Voter endpoints use the normalized controller listener name
     Given formatter quorum mode <mode>
@@ -22,8 +22,8 @@ Feature: Kafka-compatible initial quorum configuration
     Then the sole voter endpoint listener is <listener>
 
     Examples:
-      | mode       | input                | listener             |
-      | standalone | omitted              | CONTROLLER           |
-      | standalone | CONTROLLER_PLAINTEXT | CONTROLLER_PLAINTEXT |
-      | explicit   | controller_plaintext | CONTROLLER_PLAINTEXT |
-      | explicit   | omitted              | CONTROLLER           |
+      | case                                      | mode       | input                | listener             |
+      | the standalone default listener           | standalone | omitted              | CONTROLLER           |
+      | a standalone explicit listener            | standalone | CONTROLLER_PLAINTEXT | CONTROLLER_PLAINTEXT |
+      | an explicit voter listener is upper-cased | explicit   | controller_plaintext | CONTROLLER_PLAINTEXT |
+      | the explicit voter default listener       | explicit   | omitted              | CONTROLLER           |

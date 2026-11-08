@@ -408,7 +408,10 @@ mod tests {
         assert2::assert!(transaction_index.bytes.len() == 3 * ENTRY_BYTES);
         assert2::assert!(transaction_index.reopened.as_ref() == Some(&transaction_index.entries));
     }
-    rstest_bdd_macros::scenarios!("tests/features/transaction_index_wire", fixtures = [transaction_index: TransactionIndexScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/transaction_index_wire",
+        fixtures = [transaction_index: TransactionIndexScenario],
+    );
 
     /// A record whose version prefix is not 0 is refused on open.
     #[test]

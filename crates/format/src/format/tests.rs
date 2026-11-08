@@ -294,35 +294,15 @@ fn whole_format_files(whole_format: &WholeFormatScenario, datatable: Vec<Vec<Str
     );
 }
 
-rstest_bdd_macros::scenarios!("tests/features/formatter_planning", fixtures = [whole_format: WholeFormatScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/formatter_planning",
+    fixtures = [whole_format: WholeFormatScenario],
+);
 
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
-    name = "Static bootstrap files belong only to a separate metadata directory"
-)]
-#[tokio::test]
-async fn only_the_metadata_log_directory_gets_the_bootstrap_files(
-    whole_format: WholeFormatScenario,
-) {
-}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
-    name = "Dynamic bootstrap and the zero checkpoint belong only to the metadata directory"
-)]
-#[tokio::test]
-async fn separate_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
-    name = "The first log directory is the default dynamic metadata directory"
-)]
-#[tokio::test]
-async fn default_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/formatter_bootstrap/formatter_bootstrap.feature",
-    name = "A metadata directory that is also a log directory is formatted once"
-)]
-#[tokio::test]
-async fn shared_dynamic_metadata_gets_bootstrap_files(whole_format: WholeFormatScenario) {}
+krabka_bdd::scenarios!(
+    "tests/features/formatter_bootstrap",
+    fixtures = [whole_format: WholeFormatScenario],
+);
 
 /// The exit code of a run, and the directory it formatted.
 struct FormatRun {

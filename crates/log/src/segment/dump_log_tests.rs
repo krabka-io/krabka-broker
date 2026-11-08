@@ -337,7 +337,10 @@ fn valid_dump_log_indexes(dump_indexes: &DumpIndexScenario) {
         ) == Vec::<String>::new()
     );
 }
-rstest_bdd_macros::scenarios!("tests/features/append_index_contract", fixtures = [dump_indexes: DumpIndexScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/append_index_contract",
+    fixtures = [dump_indexes: DumpIndexScenario],
+);
 
 /// A sparse index takes an entry only once the batches since the last entry
 /// add up to the interval, and what it takes still verifies.

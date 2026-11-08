@@ -561,7 +561,10 @@ fn compacted_empty_headers(empty_compaction: &EmptyBatchCompactionScenario, offs
         .collect();
     assert2::assert!(survivors == expected);
 }
-rstest_bdd_macros::scenarios!("tests/features/compaction_empty_batches", fixtures = [empty_compaction: EmptyBatchCompactionScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/compaction_empty_batches",
+    fixtures = [empty_compaction: EmptyBatchCompactionScenario],
+);
 
 /// The bare header a `RETAIN_EMPTY` batch leaves is Kafka's
 /// `DefaultRecordBatch.writeEmptyHeader`: no compression, no delete horizon

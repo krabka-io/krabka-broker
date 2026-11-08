@@ -722,7 +722,10 @@ mod tests {
                 })
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/producer_snapshot_contract", fixtures = [producer_snapshot: ProducerSnapshotScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/producer_snapshot_contract",
+        fixtures = [producer_snapshot: ProducerSnapshotScenario],
+    );
 
     #[test]
     fn zero_producer_id_snapshot_round_trips() {

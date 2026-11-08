@@ -875,7 +875,10 @@ mod record_limit_tests {
         check!(*found_size == size);
         check!(*found_limit == limit);
     }
-    rstest_bdd_macros::scenarios!("tests/features/segment_timestamp_limit", fixtures = [segment_timestamp: SegmentTimestampScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/segment_timestamp_limit",
+        fixtures = [segment_timestamp: SegmentTimestampScenario],
+    );
 
     /// Kafka's iterator decodes lazily, so a record after the one it returns is
     /// never read, and one before it always is.

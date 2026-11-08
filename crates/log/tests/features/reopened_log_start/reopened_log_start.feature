@@ -6,7 +6,7 @@ Feature: Reopened logs report Kafka's logical start after local retention
     Then two local segments are removed and start <local> is reported as <reported>
 
     Examples:
-      | enabled | checkpoint | local | reported |
-      | true    | untouched  | 6     | 0        |
-      | true    | 4          | 4     | 4        |
-      | false   | untouched  | 6     | 6        |
+      | case                                           | enabled | checkpoint | local | reported |
+      | remote storage keeps the archive start         | true    | untouched  | 6     | 0        |
+      | remote storage reports a checkpointed start    | true    | 4          | 4     | 4        |
+      | local-only storage reports the local start     | false   | untouched  | 6     | 6        |

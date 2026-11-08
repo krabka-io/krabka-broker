@@ -5,10 +5,10 @@ Feature: Kafka topic-name validation in log storage
     Then the log topic name is accepted
 
     Examples:
-      | name     |
-      | orders   |
-      | a.b_c-D9 |
-      | ...      |
+      | case                         | name     |
+      | a plain name                 | orders   |
+      | every legal character class  | a.b_c-D9 |
+      | three dots                   | ...      |
 
   Scenario: The full 249-character topic limit is accepted
     Given a log topic name repeating a 249 times with prefix none
@@ -26,13 +26,13 @@ Feature: Kafka topic-name validation in log storage
     Then the log topic name is refused as <reason>
 
     Examples:
-      | name   | reason            |
-      | .      | dot               |
-      | ..     | dot-dot           |
-      | a/b    | illegal-character |
-      | ../x   | illegal-character |
-      | /tmp/x | illegal-character |
-      | a b    | illegal-character |
+      | case              | name   | reason            |
+      | a single dot      | .      | dot               |
+      | two dots          | ..     | dot-dot           |
+      | a slash           | a/b    | illegal-character |
+      | a relative path   | ../x   | illegal-character |
+      | an absolute path  | /tmp/x | illegal-character |
+      | a space           | a b    | illegal-character |
 
   Scenario Outline: UTF-16 length is checked before illegal characters
     Given a log topic name repeating <fragment> <count> times with prefix <prefix>
@@ -40,12 +40,12 @@ Feature: Kafka topic-name validation in log storage
     Then the log topic name is refused as <reason>
 
     Examples:
-      | fragment | count | prefix | reason            |
-      | a        | 250   | none   | too-long          |
-      | é        | 200   | none   | illegal-character |
-      | a/       | 125   | none   | too-long          |
-      | 😀       | 125   | none   | too-long          |
-      | 😀       | 124   | a      | illegal-character |
+      | case                                         | fragment | count | prefix | reason            |
+      | one unit over the limit                      | a        | 250   | none   | too-long          |
+      | a non-ASCII letter within the limit          | é        | 200   | none   | illegal-character |
+      | an illegal character in an overlong name     | a/       | 125   | none   | too-long          |
+      | surrogate pairs count as two units           | 😀       | 125   | none   | too-long          |
+      | surrogate pairs exactly at the limit         | 😀       | 124   | a      | illegal-character |
 
   Scenario Outline: Topic-name errors display Kafka diagnostics
     Given topic-name error <kind> for text <name>
@@ -53,12 +53,12 @@ Feature: Kafka topic-name validation in log storage
     Then the Kafka topic diagnostic is <message>
 
     Examples:
-      | kind              | name  | message |
-      | empty             | empty | Topic name is invalid: the empty string is not allowed |
-      | dot               | .     | Topic name is invalid: '.' is not allowed |
-      | dot-dot           | ..    | Topic name is invalid: '..' is not allowed |
-      | too-long          | x     | Topic name is invalid: the length of 'x' is longer than the max allowed length 249 |
-      | illegal-character | a/b   | Topic name is invalid: 'a/b' contains one or more characters other than ASCII alphanumerics, '.', '_' and '-' |
+      | case                 | kind              | name  | message |
+      | an empty name        | empty             | empty | Topic name is invalid: the empty string is not allowed |
+      | a single dot         | dot               | .     | Topic name is invalid: '.' is not allowed |
+      | two dots             | dot-dot           | ..    | Topic name is invalid: '..' is not allowed |
+      | an overlong name     | too-long          | x     | Topic name is invalid: the length of 'x' is longer than the max allowed length 249 |
+      | an illegal character | illegal-character | a/b   | Topic name is invalid: 'a/b' contains one or more characters other than ASCII alphanumerics, '.', '_' and '-' |
 
   Scenario: The topic byte lookup table implements exactly Kafka's character class
     Given all 256 possible topic-name byte values
