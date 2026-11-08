@@ -261,50 +261,30 @@ fn offsets_from(
 /// lookup of the end offset answers with. Kafka reads a code it does not
 /// know as `UNKNOWN_SERVER_ERROR`, and so does this.
 pub(super) fn lookup_error(code: i16) -> ErrorAnswer {
-    let message = match code {
-        codes::UNKNOWN_TOPIC_OR_PARTITION => "This server does not host this topic-partition.",
-        codes::LEADER_NOT_AVAILABLE => {
-            "There is no leader for this topic-partition as we are in the middle of a leadership \
-             election."
-        }
-        codes::NOT_LEADER_OR_FOLLOWER => {
-            "For requests intended only for the leader, this error indicates that the broker is \
-             not the current leader. For requests intended for any replica, this error indicates \
-             that the broker is not a replica of the topic partition."
-        }
-        codes::REQUEST_TIMED_OUT => "The request timed out.",
-        codes::NETWORK_EXCEPTION => "The server disconnected before a response was received.",
-        codes::TOPIC_AUTHORIZATION_FAILED => "Topic authorization failed.",
-        codes::UNSUPPORTED_VERSION => "The version of API is not supported.",
-        codes::INVALID_REQUEST => {
-            "This most likely occurs because of a request being malformed by the client library \
-             or the message was sent to an incompatible broker. See the broker logs for more \
-             details."
-        }
-        codes::KAFKA_STORAGE_ERROR => "Disk error when trying to access log file on the disk.",
-        codes::FENCED_LEADER_EPOCH => {
-            "The leader epoch in the request is older than the epoch on the broker."
-        }
-        codes::UNKNOWN_LEADER_EPOCH => {
-            "The leader epoch in the request is newer than the epoch on the broker."
-        }
-        codes::OFFSET_NOT_AVAILABLE => {
-            "The leader high watermark has not caught up from a recent leader election so the \
-             offsets cannot be guaranteed to be monotonically increasing."
-        }
-        _ => {
-            return ErrorAnswer {
-                code: codes::UNKNOWN_SERVER_ERROR,
-                message: UNKNOWN_SERVER_ERROR_MESSAGE,
-            };
-        }
+    let code = match code {
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+        | codes::LEADER_NOT_AVAILABLE
+        | codes::NOT_LEADER_OR_FOLLOWER
+        | codes::REQUEST_TIMED_OUT
+        | codes::NETWORK_EXCEPTION
+        | codes::TOPIC_AUTHORIZATION_FAILED
+        | codes::UNSUPPORTED_VERSION
+        | codes::INVALID_REQUEST
+        | codes::KAFKA_STORAGE_ERROR
+        | codes::FENCED_LEADER_EPOCH
+        | codes::UNKNOWN_LEADER_EPOCH
+        | codes::OFFSET_NOT_AVAILABLE => code,
+        _ => codes::UNKNOWN_SERVER_ERROR,
     };
-    ErrorAnswer { code, message }
+    ErrorAnswer {
+        code,
+        message: codes::default_message(code),
+    }
 }
 
 /// Kafka's `Errors.UNKNOWN_SERVER_ERROR.message()`.
 pub(super) const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
-    "The server experienced an unexpected error when processing the request.";
+    codes::default_message(codes::UNKNOWN_SERVER_ERROR);
 
 #[cfg(test)]
 mod tests {
