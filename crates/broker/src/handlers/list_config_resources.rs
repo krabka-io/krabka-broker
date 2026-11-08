@@ -19,12 +19,8 @@ use {
         broker::Broker,
         codes,
         handlers::{
-            RequestContext, acl_denied,
-            acl_wire::CLUSTER_RESOURCE_NAME,
-            describe_configs::{
-                RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
-                RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
-            },
+            RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME,
+            config_alter::ConfigResourceType,
         },
     },
     krabka_metadata::AclOperation,
@@ -33,17 +29,6 @@ use {
         list_config_resources_response::{ConfigResource, ListConfigResourcesResponse},
     },
 };
-
-/// Default set returned when v1 callers omit `resource_types` (KIP-1142).
-/// Mirrors the JVM admin client's expectation: every supported type the
-/// broker can describe configs for.
-const DEFAULT_RESOURCE_TYPES: [i8; 5] = [
-    RESOURCE_TYPE_TOPIC,
-    RESOURCE_TYPE_BROKER,
-    RESOURCE_TYPE_BROKER_LOGGER,
-    RESOURCE_TYPE_CLIENT_METRICS,
-    RESOURCE_TYPE_GROUP,
-];
 
 pub fn handle(
     broker: &Broker,
@@ -100,9 +85,9 @@ pub fn handle(
 }
 
 /// Whether `rt` is one of the types `ListConfigResourcesRequest.
-/// supportedResourceTypes()` reports at v1: `TOPIC`, `BROKER`,
-/// `BROKER_LOGGER`, `CLIENT_METRICS`, `GROUP`.
-fn is_supported_type(rt: i8) -> bool { DEFAULT_RESOURCE_TYPES.contains(&rt) }
+/// supportedResourceTypes()` reports at v1: every [`ConfigResourceType`].
+/// A v1 caller that omits `resource_types` gets all of them (KIP-1142).
+fn is_supported_type(rt: i8) -> bool { ConfigResourceType::from_wire(rt).is_some() }
 
 /// Resolve the effective filter and enumerate each requested type from the
 /// image, as Kafka's `KafkaApis.handleListConfigResources` does. v0 gives
@@ -122,19 +107,19 @@ fn collect_resources(
     requested: &[i8],
     listener: &str,
 ) -> Vec<ConfigResource> {
-    let wants = |rt: i8| {
+    let wants = |rt: ConfigResourceType| {
         if version < 1 {
             // v0 (legacy ListClientMetricsResources): always client metrics.
-            rt == RESOURCE_TYPE_CLIENT_METRICS
+            rt == ConfigResourceType::ClientMetrics
         } else {
-            requested.is_empty() || requested.contains(&rt)
+            requested.is_empty() || requested.contains(&rt.to_wire())
         }
     };
-    let rows = |resource_type: i8, mut names: Vec<String>| {
+    let rows = |resource_type: ConfigResourceType, mut names: Vec<String>| {
         names.sort();
         names.into_iter().map(move |resource_name| ConfigResource {
             resource_name,
-            resource_type,
+            resource_type: resource_type.to_wire(),
             ..Default::default()
         })
     };
@@ -145,39 +130,39 @@ fn collect_resources(
         .map(|b| b.node_id.0)
         .collect();
     broker_ids.sort_unstable();
-    let broker_rows = |resource_type: i8| {
+    let broker_rows = |resource_type: ConfigResourceType| {
         broker_ids.iter().map(move |id| ConfigResource {
             resource_name: id.to_string(),
-            resource_type,
+            resource_type: resource_type.to_wire(),
             ..Default::default()
         })
     };
 
     let mut out: Vec<ConfigResource> = Vec::new();
-    if wants(RESOURCE_TYPE_GROUP) {
+    if wants(ConfigResourceType::Group) {
         out.extend(rows(
-            RESOURCE_TYPE_GROUP,
+            ConfigResourceType::Group,
             image.group_configs().map(|(id, _)| id.clone()).collect(),
         ));
     }
-    if wants(RESOURCE_TYPE_CLIENT_METRICS) {
+    if wants(ConfigResourceType::ClientMetrics) {
         out.extend(rows(
-            RESOURCE_TYPE_CLIENT_METRICS,
+            ConfigResourceType::ClientMetrics,
             image
                 .client_metrics_subscriptions()
                 .map(|(name, _)| name.clone())
                 .collect(),
         ));
     }
-    if wants(RESOURCE_TYPE_BROKER_LOGGER) {
-        out.extend(broker_rows(RESOURCE_TYPE_BROKER_LOGGER));
+    if wants(ConfigResourceType::BrokerLogger) {
+        out.extend(broker_rows(ConfigResourceType::BrokerLogger));
     }
-    if wants(RESOURCE_TYPE_BROKER) {
-        out.extend(broker_rows(RESOURCE_TYPE_BROKER));
+    if wants(ConfigResourceType::Broker) {
+        out.extend(broker_rows(ConfigResourceType::Broker));
     }
-    if wants(RESOURCE_TYPE_TOPIC) {
+    if wants(ConfigResourceType::Topic) {
         out.extend(rows(
-            RESOURCE_TYPE_TOPIC,
+            ConfigResourceType::Topic,
             image.topics().map(|t| t.name.clone()).collect(),
         ));
     }
@@ -246,7 +231,7 @@ mod tests {
         let topics = collect_resources(
             &broker.controller.current_image(),
             VERSION,
-            &[RESOURCE_TYPE_TOPIC],
+            &[ConfigResourceType::Topic.to_wire()],
             LISTENER,
         );
         assert!(
@@ -274,11 +259,11 @@ mod tests {
     }
     fn requested_resource_type(name: &str) -> i8 {
         match name {
-            "topic" => RESOURCE_TYPE_TOPIC,
-            "broker" => RESOURCE_TYPE_BROKER,
-            "broker_logger" => RESOURCE_TYPE_BROKER_LOGGER,
-            "client_metrics" => RESOURCE_TYPE_CLIENT_METRICS,
-            "group" => RESOURCE_TYPE_GROUP,
+            "topic" => ConfigResourceType::Topic.to_wire(),
+            "broker" => ConfigResourceType::Broker.to_wire(),
+            "broker_logger" => ConfigResourceType::BrokerLogger.to_wire(),
+            "client_metrics" => ConfigResourceType::ClientMetrics.to_wire(),
+            "group" => ConfigResourceType::Group.to_wire(),
             _ => panic!("unknown configuration resource type: {name}"),
         }
     }
@@ -347,7 +332,7 @@ mod tests {
     /// Request the live topic enumeration, including broker-owned topics.
     fn topic_listing_request() -> ListConfigResourcesRequest {
         ListConfigResourcesRequest {
-            resource_types: vec![RESOURCE_TYPE_TOPIC],
+            resource_types: vec![ConfigResourceType::Topic.to_wire()],
             ..Default::default()
         }
     }
@@ -392,9 +377,9 @@ mod tests {
         for (name, resource_types) in [
             ("unsupported type alone", vec![64]),
             ("supported type mixed with unsupported", vec![
-                RESOURCE_TYPE_TOPIC,
+                ConfigResourceType::Topic.to_wire(),
                 64,
-                RESOURCE_TYPE_BROKER,
+                ConfigResourceType::Broker.to_wire(),
             ]),
         ] {
             let req = ListConfigResourcesRequest {
@@ -513,7 +498,7 @@ mod tests {
             .iter()
             .find(|r| r.resource_name == "orders")
             .expect("seeded topic resource");
-        assert!(resource.resource_type == RESOURCE_TYPE_TOPIC);
+        assert!(resource.resource_type == ConfigResourceType::Topic.to_wire());
         broker_handle.shutdown().await;
     }
 }

@@ -175,25 +175,14 @@ impl QuorumStateMachine {
             return Vec::new();
         }
         let epoch = self.state.leader_epoch;
+        // The successors come from the leader state, before the role changes.
         let preferred_successors = self.preferred_successors();
-        self.state.leader_id = None;
-        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
-        self.role = Role::Observer {
-            leader_id: None,
-            fetch_deadline,
-        };
-        vec![
-            Action::SendEndQuorumEpoch {
-                epoch,
-                preferred_successors,
-            },
-            Action::PersistQuorumState,
-            Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Fetch,
-                deadline: fetch_deadline,
-            },
-        ]
+        let mut actions = vec![Action::SendEndQuorumEpoch {
+            epoch,
+            preferred_successors,
+        }];
+        actions.extend(self.become_discovering_observer(now));
+        actions
     }
 }
 

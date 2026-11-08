@@ -29,7 +29,7 @@ use {
             ApiVersion, ErrorResponse as _, RequestContext, acl_denied, leader_endpoints,
             share_fetch::{
                 AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
-                current_leader, names_the_leader,
+                names_the_leader,
             },
         },
         share_partition::group_settings::GroupShareSettings,
@@ -38,8 +38,7 @@ use {
     krabka_protocol::owned::{
         share_acknowledge_request::ShareAcknowledgeRequest,
         share_acknowledge_response::{
-            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareAcknowledgeResponse,
-            ShareAcknowledgeTopicResponse,
+            NodeEndpoint, PartitionData, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
         },
     },
     std::time::Instant,
@@ -104,14 +103,9 @@ fn hint_current_leaders(
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
         for partition in &mut topic.partitions {
             if names_the_leader(partition.error_code) {
-                let (leader_id, leader_epoch) =
-                    current_leader(mgr, topic_id, partition.partition_index);
-                partition.current_leader = LeaderIdAndEpoch {
-                    leader_id,
-                    leader_epoch,
-                    ..Default::default()
-                };
-                leader_ids.push(leader_id);
+                let leader = mgr.current_leader_of(topic_id, partition.partition_index);
+                partition.current_leader = leader.into();
+                leader_ids.push(leader.leader_id);
             }
         }
     }

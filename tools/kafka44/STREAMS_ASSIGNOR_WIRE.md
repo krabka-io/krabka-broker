@@ -75,6 +75,10 @@ This closes the previously missing single-broker custom-callback wire,
 selection, cooperative reassignment, callback-error and repair/retry lane.
 It does **not** close the full custom-assignor gate: RF3 coordinator movement,
 ACL failures combined with these callbacks, invalid-output wire behavior and
-persisted-unavailable-name fallback after restart remain unmeasured here.
+active-member persisted-unavailable-name fallback after restart remain unmeasured here.
+The [Nov 7 paired restart receipt](../../qualification/streams-assignor-restart-20261107/README.md)
+now measures the narrower empty-member clean-restart case: persisted `last`
+remains visible while `sticky` runs after plugin removal, followed by explicit
+override repair (11 matching scenario rows per broker).
 Native actor/model coverage and the released component probe remain separate
 supporting evidence, not substitutes for those executions.

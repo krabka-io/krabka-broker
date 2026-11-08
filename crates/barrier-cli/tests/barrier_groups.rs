@@ -9,7 +9,6 @@ mod support;
 
 use {
     assert2::{assert, check},
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     steps::{BarrierScenario, barrier},
     support::{GROUP, GroupDefinition, Transcript},
@@ -35,13 +34,9 @@ fn over_orders() -> GroupDefinition {
 }
 
 /// Run a definition and keep what the tool printed, whatever it was.
-fn attempt(
-    barrier: &mut BarrierScenario,
-    runtime: &TokioMultiThreadContext,
-    definition: GroupDefinition,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(cluster.operator().define(definition));
+async fn attempt(barrier: &mut BarrierScenario, definition: GroupDefinition) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().define(definition).await;
     barrier.transcript.set(transcript);
 }
 
@@ -76,153 +71,108 @@ fn refused_with(barrier: &BarrierScenario, code: i16) {
 }
 
 #[given("an operator has defined a barrier group without a cadence")]
-fn defined_without_cadence(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    barrier.define(runtime, over_orders());
+async fn defined_without_cadence(barrier: &mut BarrierScenario) {
+    barrier.define(over_orders()).await;
 }
 
 #[given("an operator has defined a barrier group with a cadence of {cadence}")]
-fn defined_with_cadence(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    cadence: String,
-) {
-    barrier.define(
-        runtime,
-        GroupDefinition::builder()
-            .topics(vec![TOPIC.to_owned()])
-            .cadence(cadence)
-            .build(),
-    );
+async fn defined_with_cadence(barrier: &mut BarrierScenario, cadence: String) {
+    barrier
+        .define(
+            GroupDefinition::builder()
+                .topics(vec![TOPIC.to_owned()])
+                .cadence(cadence)
+                .build(),
+        )
+        .await;
 }
 
 #[given("an operator has defined a barrier group without a retention")]
-fn defined_without_retention(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    barrier.define(runtime, over_orders());
+async fn defined_without_retention(barrier: &mut BarrierScenario) {
+    barrier.define(over_orders()).await;
 }
 
 #[given("the operator has deleted the group")]
-fn deleted(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let deleted = runtime.block_on(cluster.operator().delete(GROUP));
+async fn deleted(barrier: &mut BarrierScenario) {
+    let cluster = barrier.cluster.get().await;
+    let deleted = cluster.operator().delete(GROUP).await;
     assert!(deleted.exit == 0, "{deleted:?}");
 }
 
 #[when("the operator defines the group again over the {first} and {second} topics")]
-fn redefine_over_two_topics(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    first: String,
-    second: String,
-) {
+async fn redefine_over_two_topics(barrier: &mut BarrierScenario, first: String, second: String) {
     attempt(
         barrier,
-        runtime,
         GroupDefinition::builder()
             .topics(vec![first, second])
             .build(),
-    );
+    )
+    .await;
 }
 
 #[when("an operator defines a barrier group over a topic that does not exist")]
-fn define_over_missing_topic(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
+async fn define_over_missing_topic(barrier: &mut BarrierScenario) {
     attempt(
         barrier,
-        runtime,
         GroupDefinition::builder()
             .topics(vec![MISSING_TOPIC.to_owned()])
             .build(),
-    );
+    )
+    .await;
 }
 
 #[when("an operator tries to define a barrier group with a cadence of {cadence}")]
-fn try_define_with_cadence(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    cadence: String,
-) {
+async fn try_define_with_cadence(barrier: &mut BarrierScenario, cadence: String) {
     attempt(
         barrier,
-        runtime,
         GroupDefinition::builder()
             .topics(vec![TOPIC.to_owned()])
             .cadence(cadence)
             .build(),
-    );
+    )
+    .await;
 }
 
 #[when("an operator defines a barrier group that retains {retained} cut")]
-fn define_retaining(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    retained: i32,
-) {
-    define_with_retention(barrier, runtime, retained);
+async fn define_retaining(barrier: &mut BarrierScenario, retained: i32) {
+    define_with_retention(barrier, retained).await;
 }
 
 #[when("an operator tries to define a barrier group that retains {retained} cuts")]
-fn try_define_retaining(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    retained: i32,
-) {
-    define_with_retention(barrier, runtime, retained);
+async fn try_define_retaining(barrier: &mut BarrierScenario, retained: i32) {
+    define_with_retention(barrier, retained).await;
 }
 
 /// Define the group over the orders topic with `retained` cuts, keeping the
 /// transcript whether or not the broker accepts it.
-fn define_with_retention(
-    barrier: &mut BarrierScenario,
-    runtime: &TokioMultiThreadContext,
-    retained: i32,
-) {
+async fn define_with_retention(barrier: &mut BarrierScenario, retained: i32) {
     attempt(
         barrier,
-        runtime,
         GroupDefinition::builder()
             .topics(vec![TOPIC.to_owned()])
             .retained_cuts(retained)
             .build(),
-    );
+    )
+    .await;
 }
 
 #[when("an operator tries to define a barrier group over the {topic} topic twice")]
-fn try_define_naming_twice(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    topic: String,
-) {
+async fn try_define_naming_twice(barrier: &mut BarrierScenario, topic: String) {
     attempt(
         barrier,
-        runtime,
         GroupDefinition::builder()
             .topics(vec![topic.clone(), topic])
             .build(),
-    );
+    )
+    .await;
 }
 
 #[then("the group cuts across {first} and {second}")]
-fn cuts_across(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    first: String,
-    second: String,
-) {
+async fn cuts_across(barrier: &mut BarrierScenario, first: String, second: String) {
     let redefined = barrier.transcript.get();
     assert!(redefined.exit == 0, "{redefined:?}");
-    let cluster = barrier.cluster.get(runtime);
-    let description = runtime.block_on(cluster.operator().describe(GROUP));
+    let cluster = barrier.cluster.get().await;
+    let description = cluster.operator().describe(GROUP).await;
     check!(described(&description, "topics") == Some(format!("{first}, {second}")));
 }
 

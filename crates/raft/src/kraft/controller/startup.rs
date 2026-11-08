@@ -13,6 +13,7 @@ use {
             load_latest_checkpoint,
         },
         quorum_state_file::load_quorum_state,
+        record_processing::RecordProcessingStats,
         records::features_epoch_after_snapshot,
         recovery::{
             CommittedReplay, control_state_at, holds_metadata_version_downgrade,
@@ -141,9 +142,7 @@ impl KraftController {
             metadata_raft_command_queue_capacity,
             metadata_raft_fetch_max,
             peers,
-            snapshot_interval_records,
-            max_bytes_between_snapshots,
-            max_snapshot_interval,
+            snapshot_policy,
             metadata_snapshot_fetch_max,
             metadata_log,
             activation,
@@ -234,9 +233,7 @@ impl KraftController {
             was_leader: initial_was_leader,
             held_epoch: initial_epoch,
             registration_writes: BTreeMap::new(),
-            snapshot_interval_records,
-            max_bytes_between_snapshots,
-            max_snapshot_interval,
+            snapshot_policy,
             metadata_snapshot_fetch_max,
             metadata_log,
             noop_at: None,
@@ -244,9 +241,7 @@ impl KraftController {
             last_snapshot_end_offset,
             last_snapshot_timestamp_ms,
             last_applied_record_timestamp_ms,
-            pending_record_processing_time_us_total: 0,
-            pending_record_processing_time_samples: 0,
-            pending_record_processing_time_us_max: 0,
+            record_processing: RecordProcessingStats::default(),
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             snapshot_job: None,
@@ -390,7 +385,7 @@ impl KraftController {
                 }
             } else {
                 image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
-                if let Some((end_offset, _)) = latest_checkpoint_id(data_dir) {
+                if let Some(SnapshotId { end_offset, .. }) = latest_checkpoint_id(data_dir) {
                     features_epoch = features_epoch_after_snapshot(
                         &contents.metadata_records,
                         end_offset,
@@ -402,9 +397,9 @@ impl KraftController {
                 mirror_controls(&mut image, control.kraft_version, control.voters.clone());
                 snapshot_control = Some(control);
             }
-            if let Some((off, _ep)) = latest_checkpoint_id(data_dir) {
+            if let Some(SnapshotId { end_offset, .. }) = latest_checkpoint_id(data_dir) {
                 // Checkpoint filenames encode the raw offset (on-disk boundary).
-                last_snapshot_end_offset = Offset(off);
+                last_snapshot_end_offset = Offset(end_offset);
             }
         }
         check_bootstrap_records(&config.activation.bootstrap_records, bootstrap_source)?;
@@ -536,15 +531,15 @@ fn unfinished_downgrade_prune(
     checkpoint: SnapshotId,
     max: MetadataRaftFetchMax,
 ) -> Result<Option<PendingDowngradeSnapshot>, RaftError> {
-    let (end_offset, epoch) = checkpoint;
+    let SnapshotId { end_offset, epoch } = checkpoint;
     let log_start = log.log_start_offset();
     if log_start >= Offset(end_offset) {
         return Ok(None);
     }
     let base = checkpoint_ids(data_dir)
         .into_iter()
-        .find(|(offset, _)| Offset(*offset) == log_start)
-        .and_then(|(offset, epoch)| load_checkpoint_by_id(data_dir, offset, epoch))
+        .find(|id| Offset(id.end_offset) == log_start)
+        .and_then(|id| load_checkpoint_by_id(data_dir, id))
         .map(|bytes| SnapshotReader::read(&bytes))
         .transpose()?
         .map_or_else(

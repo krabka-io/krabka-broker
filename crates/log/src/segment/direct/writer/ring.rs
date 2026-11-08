@@ -177,7 +177,7 @@ mod tests {
         super::*,
         crate::{
             io::FileIo,
-            segment::direct::{DioAlign, DirectWriter, Job},
+            segment::direct::{DioAlign, DirectWriter, writer::Job},
         },
         assert2::check,
         std::fs,

@@ -136,10 +136,9 @@ pub(super) fn resolve_row(
         // The leader hint belongs to the fetch half: Kafka sets it only on a
         // row whose fetch error is NOT_LEADER_OR_FOLLOWER.
         if fetchable {
-            let (leader_id, leader_epoch) =
-                row.manager.current_leader_of(topic_id, partition_index);
+            let leader = row.manager.current_leader_of(topic_id, partition_index);
             let acknowledge_error_code = out.acknowledge_error_code;
-            out = not_leader_response(partition_index, leader_id, leader_epoch);
+            out = not_leader_response(partition_index, leader);
             out.acknowledge_error_code = acknowledge_error_code;
         }
         // Kafka's `SharePartitionManager.acknowledge` has no leadership check:

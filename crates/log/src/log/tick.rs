@@ -19,7 +19,6 @@ use {
     krabka_verified::retention::{LocalRetentionSegment, local_retention_prefix},
     std::{
         iter,
-        sync::PoisonError,
         time::{Instant, SystemTime},
     },
     tracing::{field, instrument},
@@ -54,12 +53,7 @@ impl Log {
         self.flush_if_due(Instant::now())?;
         self.reap_deleted_files(now)?;
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remote_storage_enable
-        {
+        if self.config().remote_storage_enable {
             return Ok(());
         }
         // Refresh the visibility watermark before retention reads it, so a
@@ -71,7 +65,7 @@ impl Log {
             .watermark;
 
         let now_ms = retention::now_ms(now);
-        let cfg_guard = self.config.read().unwrap_or_else(PoisonError::into_inner);
+        let cfg_guard = self.config();
         // Kafka's `UnifiedLog.deleteOldSegments`: time and size retention run
         // only when `cleanup.policy` holds `delete`. A compact-only log keeps
         // every key however old it is, and loses a segment only when the whole

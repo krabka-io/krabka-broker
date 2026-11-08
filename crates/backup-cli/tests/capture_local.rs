@@ -17,9 +17,12 @@ use {
         BackupError, BackupEvent, EXIT_INTEGRITY,
         archive::{Archive, ArchiveArgs},
         capture::capture_key,
+        cli::CaptureSigningArgs,
         manifest::{MANIFEST, METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, sha256_hex},
+        report::OperationReport,
         run,
     },
+    krabka_cli_connection::SecurityArgs,
     std::{fs, path::Path},
 };
 
@@ -81,11 +84,23 @@ struct CapturedNode {
     capture: String,
 }
 
+/// A capture of `log_dir` alone, with no command config and no signing key.
+async fn capture(log_dir: &Path, archive: &ArchiveArgs) -> OperationReport<String> {
+    run::capture_configured(
+        Some(log_dir),
+        None,
+        &SecurityArgs::default(),
+        &CaptureSigningArgs::default(),
+        archive,
+    )
+    .await
+}
+
 async fn captured_node() -> CapturedNode {
     let node = FixtureNode::build();
     let archive_root = tempfile::tempdir().expect("archive root");
     let args = archive_args(archive_root.path());
-    let capture = run::capture(Some(node.log_dir.path()), None, &args)
+    let capture = capture(node.log_dir.path(), &args)
         .await
         .result
         .expect("capture the node");
@@ -102,12 +117,7 @@ async fn a_capture_copies_both_snapshots_and_records_what_it_wrote() {
     let node = FixtureNode::build();
     let archive_root = tempfile::tempdir().expect("archive root");
 
-    let report = run::capture(
-        Some(node.log_dir.path()),
-        None,
-        &archive_args(archive_root.path()),
-    )
-    .await;
+    let report = capture(node.log_dir.path(), &archive_args(archive_root.path())).await;
     let capture = report.result.expect("capture the node");
     assert!(let [BackupEvent::Capture { manifest, notes, missing }] = report.events.as_slice());
     check!(manifest.capture_id == capture);
@@ -228,7 +238,7 @@ async fn a_capture_that_finds_nothing_is_a_failure_and_not_an_empty_capture() {
     let archive_root = tempfile::tempdir().expect("archive root");
     let args = archive_args(archive_root.path());
 
-    let message = run::capture(Some(empty.path()), None, &args)
+    let message = capture(empty.path(), &args)
         .await
         .result
         .expect_err("a capture that finds nothing fails")
@@ -247,7 +257,7 @@ async fn a_capture_that_finds_nothing_is_a_failure_and_not_an_empty_capture() {
 async fn capture_returns_missing_artifacts_without_another_archive_read() {
     let node = node_with_rlmm();
     let archive_root = tempfile::tempdir().expect("archive root");
-    let report = run::capture(Some(node.path()), None, &archive_args(archive_root.path())).await;
+    let report = capture(node.path(), &archive_args(archive_root.path())).await;
     let id = report.result.expect("capture the available snapshot");
     assert!(let [BackupEvent::Capture { manifest, notes, missing }] = report.events.as_slice());
     check!(manifest.capture_id == id);

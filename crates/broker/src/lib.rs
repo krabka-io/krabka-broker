@@ -218,11 +218,10 @@ pub(crate) mod metrics_server;
 pub(crate) mod model_check;
 pub mod network;
 mod profiling_server;
-// The OAUTHBEARER token introspection client and the JWKS refresher need an
-// HTTP client stack, which wasm32-wasip1 does not have.
+// The OAUTHBEARER token introspection client needs an HTTP client stack, which
+// wasm32-wasip1 does not have. `oauth_jwks` gates its fetching parts itself.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod oauth_introspection;
-#[cfg(not(target_family = "wasm"))]
 pub(crate) mod oauth_jwks;
 pub use krabka_audit::operator_keys;
 mod partition;

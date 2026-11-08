@@ -28,6 +28,7 @@ use {
     krabka_raft::NodeId,
     std::{
         collections::HashMap,
+        hash::Hash,
         path::PathBuf,
         sync::{Arc, Mutex},
     },
@@ -41,6 +42,7 @@ mod materialize;
 mod pruning;
 mod reconcile;
 mod replica_tasks;
+mod task_stop;
 #[cfg(test)]
 mod test_support;
 mod topic_config;
@@ -52,7 +54,10 @@ pub use self::{
     topic_config::{push_topic_configs, topic_log_config},
 };
 use {
-    self::dir_assignments::{AssignDirsReporter, NetworkAssignDirsReporter},
+    self::{
+        dir_assignments::{AssignDirsReporter, NetworkAssignDirsReporter},
+        task_stop::{StoppingTask, TASK_STOP_TIMEOUT, stop_tasks},
+    },
     crate::{
         api_catalog::UnstableApiVersions,
         broker::registered_listener_endpoint,
@@ -115,6 +120,14 @@ struct FetcherTask {
 struct WalFollowerTask {
     shutdown: CancellationToken,
     handle: JoinHandle<()>,
+}
+
+/// Removes every entry of `map` and returns them.
+fn drain<K: Copy + Eq + Hash, V>(map: &DashMap<K, V>) -> Vec<(K, V)> {
+    let keys = map.iter().map(|entry| *entry.key()).collect::<Vec<_>>();
+    keys.into_iter()
+        .filter_map(|key| map.remove(&key))
+        .collect()
 }
 
 fn resolve_leader_endpoint(
@@ -346,30 +359,13 @@ impl ReplicatorSupervisor {
                 }
             }
         }
-        let task_keys = self
-            .tasks
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        for key in task_keys {
-            if let Some((_, task)) = self.tasks.remove(&key) {
-                task.shutdown.cancel();
-                task.handle.abort();
-                let _ = task.handle.await;
-            }
-        }
-        let wal_task_keys = self
-            .wal_tasks
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        for shard in wal_task_keys {
-            if let Some((_, task)) = self.wal_tasks.remove(&shard) {
-                task.shutdown.cancel();
-                task.handle.abort();
-                let _ = task.handle.await;
-            }
-        }
+        let fetchers = drain(&self.tasks)
+            .into_iter()
+            .map(|(key, task)| StoppingTask::fetcher(key, task));
+        let wal_followers = drain(&self.wal_tasks)
+            .into_iter()
+            .map(|(shard, task)| StoppingTask::wal_follower(shard, task));
+        stop_tasks(fetchers.chain(wal_followers), TASK_STOP_TIMEOUT).await;
     }
 
     pub(crate) fn spawn(self) -> JoinHandle<()> { tokio::spawn(self.run()) }

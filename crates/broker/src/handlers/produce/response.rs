@@ -3,7 +3,6 @@
 
 use {
     super::{INVALID_OFFSET, framing::FramedTopic},
-    crate::handlers::map_partition_rows,
     krabka_protocol::owned::produce_response,
 };
 
@@ -23,15 +22,16 @@ pub(super) fn build_topic_error_response(
     TopicProduceResponse {
         name: topic.name.clone(),
         topic_id: topic.topic_id,
-        partition_responses: map_partition_rows(
-            topic.partition_data.iter().map(|p| p.index),
-            |index| PartitionProduceResponse {
-                index,
+        partition_responses: topic
+            .partition_data
+            .iter()
+            .map(|p| PartitionProduceResponse {
+                index: p.index,
                 error_code: code,
                 base_offset: INVALID_OFFSET,
                 ..Default::default()
-            },
-        ),
+            })
+            .collect(),
         ..Default::default()
     }
 }

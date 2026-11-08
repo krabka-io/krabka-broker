@@ -59,9 +59,9 @@ pub use self::{
         ClientMetricsRejection, ClientMetricsRejectionLabel, ClientSoftwareLabel,
         ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
         FetchDrainPath, FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel,
-        QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
-        SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel,
-        WalShardLabel, WalVoterLabel,
+        QuotaEntityLabel, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel,
+        SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel, WalShardLabel,
+        WalVoterLabel,
     },
     lag::LagSeriesIndex,
     remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
@@ -712,6 +712,8 @@ pub struct BrokerMetrics {
     /// unlike [`Self::request_throttle_duration_seconds`] the `_count` of this
     /// family is the number of throttled requests, and `_sum` is the wall
     /// time the broker held clients back.
+    ///
+    /// [`QuotaType`]: crate::quota::QuotaType
     #[metric(help = "Seconds of throttle the broker actually applied, \
         labelled by the client quota that caused it (Produce = \
         producer_byte_rate, Fetch = consumer_byte_rate, Request = \

@@ -7,7 +7,6 @@ mod support;
 
 use {
     assert2::assert,
-    krabka_bdd::TokioMultiThreadContext,
     rstest_bdd_macros::{given, then, when},
     steps::{BarrierScenario, barrier},
     support::CutQuery,
@@ -30,43 +29,32 @@ fn english_epochs(list: &str) -> Vec<i64> {
     "a barrier group over the {topic} topic that retains {retained} cuts has been cut \
      {times} times"
 )]
-fn cut_with_retention(
+async fn cut_with_retention(
     barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
     topic: String,
     retained: i32,
     times: usize,
 ) {
-    barrier.cut_group(runtime, &topic, Some(retained), times);
+    barrier.cut_group(&topic, Some(retained), times).await;
 }
 
 #[when("the operator lists {how_many} cut of the group")]
-fn list_how_many(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    how_many: i32,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(
-        cluster
-            .operator()
-            .list(CutQuery::builder().how_many(how_many).build()),
-    );
+async fn list_how_many(barrier: &mut BarrierScenario, how_many: i32) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster
+        .operator()
+        .list(CutQuery::builder().how_many(how_many).build())
+        .await;
     barrier.transcript.set(transcript);
 }
 
 #[when("the operator lists the cuts of the group from epoch {from}")]
-fn list_from_epoch(
-    barrier: &mut BarrierScenario,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-    from: i64,
-) {
-    let cluster = barrier.cluster.get(runtime);
-    let transcript = runtime.block_on(
-        cluster
-            .operator()
-            .list(CutQuery::builder().from_epoch(from).build()),
-    );
+async fn list_from_epoch(barrier: &mut BarrierScenario, from: i64) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster
+        .operator()
+        .list(CutQuery::builder().from_epoch(from).build())
+        .await;
     barrier.transcript.set(transcript);
 }
 

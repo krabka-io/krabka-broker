@@ -174,42 +174,35 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
     for raw in footer_bytes.as_chunks::<OBJECT_ENTRY_LEN>().0 {
         let entry = WalObjectEntry {
             topic_id: Uuid::from_slice(&raw[..16]).map_err(|_| WalObjectError::BadManifest)?,
-            partition: i32::from_le_bytes(
-                raw[16..20]
-                    .try_into()
-                    .map_err(|_| WalObjectError::BadManifest)?,
-            ),
-            first_offset: i64::from_le_bytes(
-                raw[20..28]
-                    .try_into()
-                    .map_err(|_| WalObjectError::BadManifest)?,
-            ),
-            last_offset: i64::from_le_bytes(
-                raw[28..36]
-                    .try_into()
-                    .map_err(|_| WalObjectError::BadManifest)?,
-            ),
-            byte_start: u64::from_le_bytes(
-                raw[36..44]
-                    .try_into()
-                    .map_err(|_| WalObjectError::BadManifest)?,
-            ),
-            byte_len: u32::from_le_bytes(
-                raw[44..48]
-                    .try_into()
-                    .map_err(|_| WalObjectError::BadManifest)?,
-            ),
+            partition: i32::from_le_bytes(le_field(raw, 16)?),
+            first_offset: i64::from_le_bytes(le_field(raw, 20)?),
+            last_offset: i64::from_le_bytes(le_field(raw, 28)?),
+            byte_start: u64::from_le_bytes(le_field(raw, 36)?),
+            byte_len: u32::from_le_bytes(le_field(raw, 44)?),
         };
         let start = usize::try_from(entry.byte_start).map_err(|_| WalObjectError::BadManifest)?;
-        let end = start
-            .checked_add(usize::try_from(entry.byte_len).map_err(|_| WalObjectError::BadManifest)?)
-            .filter(|end| *end <= footer)
-            .ok_or(WalObjectError::BadManifest)?;
-        let _ = end;
-        if start < HEADER_LEN {
+        let len = usize::try_from(entry.byte_len).map_err(|_| WalObjectError::BadManifest)?;
+        if !entry_within(start, len, footer) || start < HEADER_LEN {
             return Err(WalObjectError::BadManifest);
         }
         entries.push(entry);
     }
     Ok(entries)
 }
+
+/// The `N` bytes of a footer entry at `at`, for a fixed-width little-endian
+/// field.
+fn le_field<const N: usize>(raw: &[u8], at: usize) -> Result<[u8; N], WalObjectError> {
+    raw.get(at..at + N)
+        .and_then(|field| field.try_into().ok())
+        .ok_or(WalObjectError::BadManifest)
+}
+
+/// Whether the run `start..start + len` ends at or before `footer`, the offset
+/// where the footer begins. A run whose end overflows `usize` is not.
+fn entry_within(start: usize, len: usize, footer: usize) -> bool {
+    start.checked_add(len).is_some_and(|end| end <= footer)
+}
+
+#[cfg(test)]
+mod tests;

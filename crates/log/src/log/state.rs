@@ -23,13 +23,27 @@ use {
     std::{
         iter,
         path::Path,
-        sync::{PoisonError, atomic::Ordering},
+        sync::{PoisonError, RwLockReadGuard, atomic::Ordering},
         time::{Instant, SystemTime},
     },
     tracing::instrument,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 use {crate::io::LogIo, std::sync::Arc};
+
+/// What [`Log::transaction_marker_state`] admits a transaction marker
+/// against, for one producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionMarkerState {
+    /// The producer epoch of the producer's entry, or Kafka's `-1` sentinel
+    /// when the log keeps none.
+    pub producer_epoch: i16,
+    /// The coordinator epoch of the producer's last commit or abort marker,
+    /// or `-1` before its first one.
+    pub coordinator_epoch: i32,
+    /// Whether the producer has an open transaction on this partition.
+    pub has_open_transaction: bool,
+}
 
 /// When [`Log::advance_log_start_offset`] writes `log-start-offset-checkpoint`.
 #[derive(Clone, Copy)]
@@ -45,12 +59,9 @@ impl Log {
     /// Empty the volatile state before a hard reset or a durable producer-state reload.
     pub(super) fn clear_producer_and_transaction_state(&mut self) {
         self.pending.clear();
-        self.verification_states.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
-        self.coordinator_epochs.clear();
-        self.producer_state.clear();
-        self.earlier_batches.clear();
+        self.producers.clear();
     }
 
     /// Directory this log was opened against. The broker's intra-broker
@@ -103,14 +114,7 @@ impl Log {
     pub fn reported_log_start(&self) -> Offset {
         match self.established_log_start() {
             Some(start) => start,
-            None if self
-                .config
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remote_storage_enable =>
-            {
-                Offset(0)
-            }
+            None if self.config().remote_storage_enable => Offset(0),
             None => self.start_offset,
         }
     }
@@ -255,12 +259,7 @@ impl Log {
     /// fetch response, so it only reads.
     #[must_use]
     pub fn differs_from_leader_log_start(&self, leader_start: Offset) -> bool {
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remote_storage_enable
-        {
+        if self.config().remote_storage_enable {
             self.established_log_start() != Some(leader_start)
         } else {
             leader_start > self.start_offset
@@ -297,13 +296,7 @@ impl Log {
     /// and [`LogError::Io`] if the log-start checkpoint cannot be written or
     /// a raise fails.
     pub fn follow_leader_log_start(&mut self, leader_start: Offset) -> Result<Offset, LogError> {
-        if !self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remote_storage_enable
-            || leader_start > self.start_offset
-        {
+        if !self.config().remote_storage_enable || leader_start > self.start_offset {
             return self.trim_to_offset(leader_start);
         }
         if leader_start < 0 {
@@ -399,7 +392,7 @@ impl Log {
         // snapshot offset to 0, so `takeSnapshot` writes one at any base above
         // 0.
         if new_base.0 > 0 {
-            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producers.entries)?;
         }
         self.reap_deleted_files(SystemTime::now())
     }
@@ -416,7 +409,7 @@ impl Log {
         let log_end = self.log_end_offset();
         if log_end.0 > self.producer_reload_range(log_end).log_start {
             self.sync()?;
-            producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producer_state)?;
+            producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producers.entries)?;
         }
         Ok(())
     }
@@ -538,7 +531,7 @@ impl Log {
         verbatim: Option<&VerbatimBatch>,
     ) -> bool {
         let (flushes, segment_size, roll_interval, index_size) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             let storage_may_block = match config.segment_allocation {
                 SegmentAllocation::Preallocate => {
                     verbatim.is_none_or(|batch| !self.can_queue_verbatim(batch, &config))
@@ -618,21 +611,19 @@ impl Log {
     /// marker, plus whether that producer currently has an open transaction.
     /// Missing generations use Kafka's `-1` sentinel.
     #[must_use]
-    pub fn transaction_marker_state(&self, producer_id: ProducerId) -> (i16, i32, bool) {
-        let producer_epoch = self
-            .producer_state
+    pub fn transaction_marker_state(&self, producer_id: ProducerId) -> TransactionMarkerState {
+        let (producer_epoch, coordinator_epoch) = self
+            .producers
+            .entries
             .get(&producer_id)
-            .map_or(-1, |entry| entry.producer_epoch);
-        let coordinator_epoch = self
-            .coordinator_epochs
-            .get(&producer_id)
-            .copied()
-            .unwrap_or(-1);
-        (
+            .map_or((-1, -1), |entry| {
+                (entry.producer_epoch, entry.coordinator_epoch)
+            });
+        TransactionMarkerState {
             producer_epoch,
             coordinator_epoch,
-            self.pending.contains_key(producer_id),
-        )
+            has_open_transaction: self.pending.contains_key(producer_id),
+        }
     }
 
     /// The producer state this log holds for `producer_id`, if any.
@@ -641,14 +632,14 @@ impl Log {
     /// value after a live append equals the value that a reopen rebuilds.
     #[must_use]
     pub fn producer_state_entry(&self, producer_id: ProducerId) -> Option<ProducerSnapshotEntry> {
-        self.producer_state.get(&producer_id).copied()
+        self.producers.entries.get(&producer_id).copied()
     }
 
     /// Producer state restored from the newest valid Kafka-compatible
     /// snapshot and the uncovered local log tail.
     #[must_use]
     pub fn producer_state_snapshot(&self) -> Vec<ProducerSnapshotEntry> {
-        self.producer_state.values().copied().collect()
+        self.producers.entries.values().copied().collect()
     }
 
     /// Every producer's state with the batches it appended before its last
@@ -657,18 +648,7 @@ impl Log {
     /// reopen they are the batches the replay past the loaded snapshot
     /// rebuilt.
     #[must_use]
-    pub fn recovered_producers(&self) -> Vec<RecoveredProducer> {
-        self.producer_state
-            .values()
-            .map(|entry| RecoveredProducer {
-                entry: *entry,
-                earlier: self
-                    .earlier_batches
-                    .get(&entry.producer_id)
-                    .map_or_default(|earlier| earlier.iter().copied().collect()),
-            })
-            .collect()
-    }
+    pub fn recovered_producers(&self) -> Vec<RecoveredProducer> { self.producers.recovered() }
 
     /// Close all segments, first taking a producer-state snapshot at the log
     /// end as Kafka's `UnifiedLog.close` does. A snapshot that cannot be
@@ -708,15 +688,16 @@ impl Log {
         *self.config.write().unwrap_or_else(PoisonError::into_inner) = new;
     }
 
+    /// Read the current config. A writer that panicked left a whole value
+    /// behind, so a poisoned lock is read through.
+    pub(super) fn config(&self) -> RwLockReadGuard<'_, LogConfig> {
+        self.config.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Snapshot the current config. This allocates a clone, which is cheap
     /// because `LogConfig` is small and `Clone`.
     #[must_use]
-    pub fn config_snapshot(&self) -> LogConfig {
-        self.config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
+    pub fn config_snapshot(&self) -> LogConfig { self.config().clone() }
 
     /// Replace the log's I/O implementation for fault-injection tests.
     ///
@@ -1233,7 +1214,14 @@ mod tests {
 
         let TempLog { dir: _dir, mut log } = test_log();
         let pid = ProducerId(42);
-        assert2::assert!(log.transaction_marker_state(pid) == (-1, -1, false));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: -1,
+                    coordinator_epoch: -1,
+                    has_open_transaction: false,
+                }
+        );
         assert2::assert!(log.producer_state_entry(pid).is_none());
 
         let mut batch = sample_batch(1);
@@ -1243,7 +1231,14 @@ mod tests {
         batch.attributes = batch.attributes.with_transactional(true);
         log.append(&mut batch).unwrap();
 
-        assert2::assert!(log.transaction_marker_state(pid) == (2, -1, true));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: 2,
+                    coordinator_epoch: -1,
+                    has_open_transaction: true,
+                }
+        );
         let entry = log
             .producer_state_entry(pid)
             .expect("producer state exists");
@@ -1252,7 +1247,14 @@ mod tests {
 
         let mut marker = commit_marker(42, 2);
         log.append(&mut marker).unwrap();
-        assert2::assert!(log.transaction_marker_state(pid) == (2, 17, false));
+        assert2::assert!(
+            log.transaction_marker_state(pid)
+                == TransactionMarkerState {
+                    producer_epoch: 2,
+                    coordinator_epoch: 17,
+                    has_open_transaction: false,
+                }
+        );
 
         log.close();
     }

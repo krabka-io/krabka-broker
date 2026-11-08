@@ -65,11 +65,10 @@ struct LongPollState {
     max_wait_ms: i32,
     sendfile_capable: bool,
     /// Bytes the latest read of each pending entry produced, indexed like
-    /// `pending`. A re-read replaces its entry rather than adding to it,
-    /// because the re-read replaces the records too.
+    /// `pending`, and whether the cold tier served them. A re-read replaces
+    /// its entry rather than adding to it, because the re-read replaces the
+    /// records too.
     bytes: PartitionBytes,
-    /// `true` where the cold tier, and not the local log, answered the entry.
-    cold_served: Vec<bool>,
     /// What is left of the whole response's byte budget: `min(request
     /// max_bytes, fetch.max.bytes)`, run down as partitions are read.
     ///
@@ -95,6 +94,14 @@ struct LongPollState {
     checked_image: Option<Arc<krabka_metadata::MetadataImage>>,
 }
 
+/// What the latest read of one pending entry served.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EntryBytes {
+    bytes: usize,
+    /// `true` where the cold tier, and not the local log, served the bytes.
+    cold: bool,
+}
+
 /// Bytes per pending entry, with their sum kept alongside.
 ///
 /// The read loop asks for the sum before every partition read, to decide
@@ -103,32 +110,45 @@ struct LongPollState {
 /// additions; the running total makes each question O(1) and each update O(1).
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PartitionBytes {
-    entries: Vec<usize>,
+    entries: Vec<EntryBytes>,
     total: usize,
 }
 
 impl PartitionBytes {
     fn new(len: usize) -> Self {
         Self {
-            entries: vec![0; len],
+            entries: vec![EntryBytes::default(); len],
             total: 0,
         }
     }
 
     fn total(&self) -> usize { self.total }
 
-    fn get(&self, index: usize) -> usize { self.entries.get(index).copied().unwrap_or(0) }
+    fn get(&self, index: usize) -> usize { self.entries.get(index).map_or(0, |entry| entry.bytes) }
 
-    /// Replaces entry `index` with `bytes` and moves the total by the
-    /// difference.
+    /// Whether the cold tier served entry `index`.
+    fn cold(&self, index: usize) -> bool { self.entries.get(index).is_some_and(|entry| entry.cold) }
+
+    /// Replaces entry `index` with `bytes` the local log served, and moves the
+    /// total by the difference.
     fn set(&mut self, index: usize, bytes: usize) {
+        self.replace(index, EntryBytes { bytes, cold: false });
+    }
+
+    /// Replaces entry `index` with `bytes` the cold tier served, and moves the
+    /// total by the difference.
+    fn set_cold(&mut self, index: usize, bytes: usize) {
+        self.replace(index, EntryBytes { bytes, cold: true });
+    }
+
+    fn replace(&mut self, index: usize, next: EntryBytes) {
         let Some(entry) = self.entries.get_mut(index) else {
             return;
         };
         // Every entry is part of the total, so the total never falls below
         // the entry it gives back.
-        self.total = self.total - *entry + bytes;
-        *entry = bytes;
+        self.total = self.total - entry.bytes + next.bytes;
+        *entry = next;
     }
 }
 
@@ -136,7 +156,13 @@ impl PartitionBytes {
 impl From<Vec<usize>> for PartitionBytes {
     fn from(entries: Vec<usize>) -> Self {
         let total = entries.iter().sum();
-        Self { entries, total }
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|bytes| EntryBytes { bytes, cold: false })
+                .collect(),
+            total,
+        }
     }
 }
 
@@ -169,19 +195,7 @@ impl LongPollState {
         self.remaining_response_bytes = self.remaining_response_bytes.saturating_sub(served);
     }
 
-    /// Whether the cold tier answered entry `index`.
-    fn cold_served(&self, index: usize) -> bool {
-        self.cold_served.get(index).copied().unwrap_or(false)
-    }
-
-    fn set_cold_served(&mut self, index: usize, served: bool) {
-        if let Some(entry) = self.cold_served.get_mut(index) {
-            *entry = served;
-        }
-    }
-
     fn record_read(&mut self, index: usize, read: &mut PendingRead, result: ReadAccounting) {
-        self.set_cold_served(index, result.cold_bytes > 0);
         let served = result.local_bytes + result.cold_bytes;
         // A withheld read is Kafka's `MemoryRecords.EMPTY` row: it adds
         // nothing toward `min_bytes`, so a fetch with nothing else to send
@@ -192,9 +206,12 @@ impl LongPollState {
         {
             discard_to_metadata_only(read);
             self.bytes.set(index, 0);
-            self.set_cold_served(index, false);
         } else {
-            self.bytes.set(index, served);
+            if result.cold_bytes > 0 {
+                self.bytes.set_cold(index, served);
+            } else {
+                self.bytes.set(index, served);
+            }
             self.charge(served);
         }
     }
@@ -322,7 +339,7 @@ async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollSt
     for (index, read) in pending.iter_mut().enumerate() {
         if !read.reader.is_follower()
             || read.out.error_code != codes::NONE
-            || state.cold_served(index)
+            || state.bytes.cold(index)
         {
             continue;
         }
@@ -384,7 +401,6 @@ pub(super) async fn execute_pending_reads(
         max_wait_ms,
         sendfile_capable,
         bytes: PartitionBytes::new(pending.len()),
-        cold_served: vec![false; pending.len()],
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
         remote_wait: RemoteFetchWait::default(),
@@ -402,86 +418,10 @@ pub(super) async fn execute_pending_reads(
     if max_wait_ms > 0 {
         arm_forgotten_waits(forgotten, &mut waits);
     }
-    // The one image every row of the pass was checked against, or `None` once
-    // two rows saw different images. The epoch recheck reuses the checks only
-    // against that image.
-    let mut pass_image: Option<Arc<krabka_metadata::MetadataImage>> = None;
-    let mut pass_image_mixed = false;
-    for (index, read) in pending.iter_mut().enumerate() {
-        let Some(partition) = read.partition.clone() else {
-            continue;
-        };
-        // Check the leader again right before the first read, so a leadership
-        // change after planning does not serve a follower fetch or an old
-        // consumer fetch from this replica. Each row reads the image as it is
-        // now: a fetch that the first pass answers is not checked again, and
-        // the image can name a new leader before the role is installed.
-        // The image is dropped before the read below, so the read loop's
-        // future does not carry it across the await.
-        let refused = {
-            let image = broker.controller.current_image();
-            match &pass_image {
-                Some(seen) if !Arc::ptr_eq(seen, &image) => pass_image_mixed = true,
-                Some(_) => {}
-                None => pass_image = Some(Arc::clone(&image)),
-            }
-            leader_refusal(
-                &image,
-                TopicPartitionRef {
-                    topic: &read.topic_name,
-                    partition_index: read.partition_index,
-                },
-                &partition,
-                required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
-            )
-        };
-        if let Some(refused) = refused {
-            read.out = refused;
-            continue;
-        }
-        // Kafka's `Partition.readRecords` takes the log end offset with the
-        // high watermark before it reads. The follower update after the read
-        // compares the fetch offset with that log end offset. Only the log end
-        // is kept across the read: the follower's position stays on `read`.
-        let leader_log_end = read.follower_position.map(|_| partition.log_end_offset());
-        read_and_account(broker, read, &partition, index, &mut state, phases).await;
-        // Kafka's `Partition.fetchRecords` records the follower's position
-        // only after its read succeeded, so the row this read just filled
-        // reports the high watermark from before that position counted.
-        if let Some(position) = read.follower_position
-            && let Some(leader_log_end) = leader_log_end
-            && read.out.error_code == codes::NONE
-            && partition
-                .record_follower_position(position.position, read.fetch_offset, leader_log_end)
-                .await
-        {
-            // The high watermark moved, which woke the `acks=all` produces
-            // waiting for it, usually onto this worker's next slot. Yield so
-            // that they answer their producers now; the rest of this fetch
-            // usually has nothing to send and parks.
-            task::yield_now().await;
-        }
-    }
-    state.checked_image = pass_image.filter(|_| !pass_image_mixed);
-    // KIP-392: a partition that named a preferred read replica was never
-    // read locally and never will be while it keeps naming one, so parking
-    // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
-    // `hasPreferredReadReplica` into its own completion check for exactly
-    // this reason and answers the whole fetch at once rather than waiting
-    // out `max_wait_ms` for bytes this broker cannot supply.
-    let has_preferred_read_replica = pending
-        .iter()
-        .any(|read| read.out.preferred_read_replica >= 0);
-    // Kafka parks a fetch that handed any read to the remote tier as a
-    // `DelayedRemoteFetch`, not a `DelayedFetch`: it answers once the remote
-    // reads finish or `remote.fetch.max.wait.ms` passes, and neither
-    // `min.bytes` nor the request's `max.wait.ms` holds it any longer.
-    let remote_fetch = state.remote_wait.dispatched();
-    let long_poll_active = if state.total() < state.min_bytes
-        && max_wait_ms > 0
-        && !has_preferred_read_replica
-        && !remote_fetch
-    {
+    // Boxed like the long poll below: the pass's state stays off the
+    // connection task's future, which the fetch handler's future sits in.
+    state.checked_image = Box::pin(first_read_pass(broker, &mut pending, &mut state, phases)).await;
+    let long_poll_active = if should_park(&state, &pending) {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
         // Kafka's `DelayedFetch` completes off the request-handler thread:
@@ -504,6 +444,118 @@ pub(super) async fn execute_pending_reads(
         long_poll_active,
         ..group_into_topic_responses(pending)
     }
+}
+
+/// The one metadata image every row of a pass was checked against.
+///
+/// The epoch recheck after a park reuses the pass's checks only against that
+/// image, so a pass whose rows saw two different images agrees on none.
+#[derive(Default)]
+struct ImageAgreement {
+    first: Option<Arc<krabka_metadata::MetadataImage>>,
+    mixed: bool,
+}
+
+impl ImageAgreement {
+    /// Notes that a row was checked against `image`.
+    fn observe(&mut self, image: &Arc<krabka_metadata::MetadataImage>) {
+        match &self.first {
+            Some(seen) if !Arc::ptr_eq(seen, image) => self.mixed = true,
+            Some(_) => {}
+            None => self.first = Some(Arc::clone(image)),
+        }
+    }
+
+    /// The image every observed row saw, or `None` if no row was checked or
+    /// two rows saw different images.
+    fn agreed(self) -> Option<Arc<krabka_metadata::MetadataImage>> {
+        self.first.filter(|_| !self.mixed)
+    }
+}
+
+/// Reads every planned partition once, checking its leader right before the
+/// read, and returns the image all of those checks agreed on.
+async fn first_read_pass(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    state: &mut LongPollState,
+    phases: &RequestPhases,
+) -> Option<Arc<krabka_metadata::MetadataImage>> {
+    let mut images = ImageAgreement::default();
+    for (index, read) in pending.iter_mut().enumerate() {
+        let Some(partition) = read.partition.clone() else {
+            continue;
+        };
+        // Check the leader again right before the first read, so a leadership
+        // change after planning does not serve a follower fetch or an old
+        // consumer fetch from this replica. Each row reads the image as it is
+        // now: a fetch that the first pass answers is not checked again, and
+        // the image can name a new leader before the role is installed.
+        // The image is dropped before the read below, so the read loop's
+        // future does not carry it across the await.
+        let refused = {
+            let image = broker.controller.current_image();
+            images.observe(&image);
+            leader_refusal(
+                &image,
+                TopicPartitionRef {
+                    topic: &read.topic_name,
+                    partition_index: read.partition_index,
+                },
+                &partition,
+                required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
+            )
+        };
+        if let Some(refused) = refused {
+            read.out = refused;
+            continue;
+        }
+        // Kafka's `Partition.readRecords` takes the log end offset with the
+        // high watermark before it reads. The follower update after the read
+        // compares the fetch offset with that log end offset. Only the log end
+        // is kept across the read: the follower's position stays on `read`.
+        let leader_log_end = read.follower_position.map(|_| partition.log_end_offset());
+        read_and_account(broker, read, &partition, index, state, phases).await;
+        // Kafka's `Partition.fetchRecords` records the follower's position
+        // only after its read succeeded, so the row this read just filled
+        // reports the high watermark from before that position counted.
+        if let Some(position) = read.follower_position
+            && let Some(leader_log_end) = leader_log_end
+            && read.out.error_code == codes::NONE
+            && partition
+                .record_follower_position(position.position, read.fetch_offset, leader_log_end)
+                .await
+        {
+            // The high watermark moved, which woke the `acks=all` produces
+            // waiting for it, usually onto this worker's next slot. Yield so
+            // that they answer their producers now; the rest of this fetch
+            // usually has nothing to send and parks.
+            task::yield_now().await;
+        }
+    }
+    images.agreed()
+}
+
+/// Whether a fetch that has read once parks for more bytes.
+fn should_park(state: &LongPollState, pending: &[PendingRead]) -> bool {
+    // KIP-392: a partition that named a preferred read replica was never
+    // read locally and never will be while it keeps naming one, so parking
+    // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
+    // `hasPreferredReadReplica` into its own completion check for exactly
+    // this reason and answers the whole fetch at once rather than waiting
+    // out `max_wait_ms` for bytes this broker cannot supply.
+    let has_preferred_read_replica = pending
+        .iter()
+        .any(|read| read.out.preferred_read_replica >= 0);
+    // Kafka parks a fetch that handed any read to the remote tier as a
+    // `DelayedRemoteFetch`, not a `DelayedFetch`: it answers once the remote
+    // reads finish or `remote.fetch.max.wait.ms` passes, and neither
+    // `min.bytes` nor the request's `max.wait.ms` holds it any longer.
+    let remote_fetch = state.remote_wait.dispatched();
+    state.total() < state.min_bytes
+        && state.max_wait_ms > 0
+        && !has_preferred_read_replica
+        && !remote_fetch
 }
 
 /// Park on the armed waiters until the fetch has `min_bytes` to answer with,
@@ -678,7 +730,7 @@ async fn reread_woken(
     // log does not hold the offset -- that is what sent it to the tier in the
     // first place -- so a re-read would trade a served batch for another
     // object-store round trip.
-    if state.cold_served(index) {
+    if state.bytes.cold(index) {
         return;
     }
     // `do_read` fills `aborted_transactions` only for a `read_committed`
@@ -1053,7 +1105,6 @@ mod tests {
                 max_wait_ms: 0,
                 sendfile_capable: false,
                 bytes: super::PartitionBytes::default(),
-                cold_served: Vec::new(),
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
                 remote_wait: super::RemoteFetchWait::default(),
@@ -1248,7 +1299,6 @@ mod tests {
             max_wait_ms: 0,
             sendfile_capable: false,
             bytes: super::PartitionBytes::from(vec![first_bytes, 0]),
-            cold_served: vec![false; 2],
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
             remote_wait: super::RemoteFetchWait::default(),
@@ -2200,7 +2250,6 @@ mod tests {
             max_wait_ms: setup.wait.0,
             sendfile_capable: false,
             bytes: super::PartitionBytes::new(pending.len()),
-            cold_served: vec![false; pending.len()],
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
             remote_wait: super::RemoteFetchWait::default(),

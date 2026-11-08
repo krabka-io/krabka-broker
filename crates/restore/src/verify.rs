@@ -296,3 +296,10 @@ pub async fn fetch_capped(
 /// has to render something sensible for corrupt input, never panic, and never
 /// allocate.
 fn offset_as_u64(value: i64) -> u64 { u64::try_from(value).unwrap_or(0) }
+
+/// Convert a batch header's `records_count` to `u64`, treating a
+/// corrupt-but-CRC-valid negative count as zero rather than panicking. Every
+/// caller sees the batch only after its CRC has been checked.
+pub fn batch_record_count(records_count: i32) -> u64 {
+    u64::try_from(records_count.max(0)).unwrap_or(0)
+}

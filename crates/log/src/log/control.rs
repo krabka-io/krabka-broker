@@ -77,8 +77,8 @@ pub enum ControlBatchKind {
     /// because Kafka writes no other control type into a data partition.
     Transaction,
     /// A krabka barrier marker, control type [`BARRIER_CONTROL_TYPE`]. The log
-    /// leaves `pending`, `pending_stamp_ranges`, `coordinator_epochs`, the
-    /// active `.txnindex`, and the producer state unchanged for it.
+    /// leaves `pending`, `pending_stamp_ranges`, the active `.txnindex`, and
+    /// the producer state, its coordinator epoch included, unchanged for it.
     Barrier,
 }
 

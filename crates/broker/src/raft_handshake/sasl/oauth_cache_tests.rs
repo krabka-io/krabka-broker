@@ -3,6 +3,7 @@
 use {
     super::*,
     crate::{
+        oauth_jwks::JwksSnapshotState,
         raft_handshake::test_support::{
             HandshakeHeader, read_response_frame, request_frame, sasl_test_config,
         },
@@ -52,12 +53,13 @@ fn signed_token() -> SignedToken {
 
 #[tokio::test]
 async fn signed_validation_rechecks_the_publication_after_crypto_success() {
-    use std::sync::atomic::{AtomicI64, AtomicU64};
-
     let SignedToken { validator, token } = signed_token();
     for (finished_generation, admitted) in [(2, true), (3, false), (4, false)] {
-        let generation = AtomicU64::new(2);
-        let fetched = AtomicI64::new(1000);
+        let snapshot = JwksSnapshotState::default();
+        snapshot.generation.store(2, Ordering::Release);
+        snapshot
+            .last_successful_fetch_ms
+            .store(1000, Ordering::Release);
         let calls = Cell::new(0);
         let mut auth = ConnectionAuth::Anonymous;
         let handshake = handle_handshake(
@@ -81,12 +83,13 @@ async fn signed_validation_rechecks_the_publication_after_crypto_success() {
             &request,
             &mut auth,
             &validator,
-            &generation,
-            &fetched,
+            &snapshot,
             || {
                 if calls.get() == 1 {
                     // The completion clock is read after successful signature validation.
-                    generation.store(finished_generation, Ordering::Release);
+                    snapshot
+                        .generation
+                        .store(finished_generation, Ordering::Release);
                 }
                 calls.set(calls.get() + 1);
                 1000
@@ -122,9 +125,11 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
         let mut cfg = sasl_test_config();
         cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
         cfg.oauthbearer_validator = validator.clone();
-        cfg.oauthbearer_jwks_cache_generation
+        cfg.oauthbearer_jwks_snapshot
+            .generation
             .store(generation, Ordering::Release);
-        cfg.oauthbearer_jwks_last_successful_fetch_ms
+        cfg.oauthbearer_jwks_snapshot
+            .last_successful_fetch_ms
             .store(fetched, Ordering::Release);
         let ControllerExchange { mut client, task } = start_oauthbearer_exchange(cfg).await;
         let mut body = bytes::BytesMut::new();

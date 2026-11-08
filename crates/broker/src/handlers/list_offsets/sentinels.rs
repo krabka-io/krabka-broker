@@ -52,9 +52,71 @@ pub(super) fn timestamp_kind(timestamp: i64, version: i16) -> krabka_verified::L
     krabka_verified::list_offsets_kind(timestamp, version)
 }
 
+/// What a row asks for, once its version is known to carry it: every
+/// [`krabka_verified::ListOffsetsKind`] except `Unsupported`, which the row
+/// answers with `UNSUPPORTED_VERSION` before it looks anything up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SupportedKind {
+    Earliest,
+    Latest,
+    MaxTimestamp,
+    EarliestLocal,
+    LatestTiered,
+    EarliestPendingUpload,
+    Timestamp,
+}
+
+impl SupportedKind {
+    /// The kind `timestamp` names at `version`, or `None` when that version
+    /// does not carry it.
+    pub(super) fn of(timestamp: i64, version: i16) -> Option<Self> {
+        use krabka_verified::ListOffsetsKind as Kind;
+        match timestamp_kind(timestamp, version) {
+            Kind::Unsupported => None,
+            Kind::Earliest => Some(Self::Earliest),
+            Kind::Latest => Some(Self::Latest),
+            Kind::MaxTimestamp => Some(Self::MaxTimestamp),
+            Kind::EarliestLocal => Some(Self::EarliestLocal),
+            Kind::LatestTiered => Some(Self::LatestTiered),
+            Kind::EarliestPendingUpload => Some(Self::EarliestPendingUpload),
+            Kind::Timestamp => Some(Self::Timestamp),
+        }
+    }
+}
+
+impl From<SupportedKind> for krabka_verified::ListOffsetsKind {
+    fn from(kind: SupportedKind) -> Self {
+        match kind {
+            SupportedKind::Earliest => Self::Earliest,
+            SupportedKind::Latest => Self::Latest,
+            SupportedKind::MaxTimestamp => Self::MaxTimestamp,
+            SupportedKind::EarliestLocal => Self::EarliestLocal,
+            SupportedKind::LatestTiered => Self::LatestTiered,
+            SupportedKind::EarliestPendingUpload => Self::EarliestPendingUpload,
+            SupportedKind::Timestamp => Self::Timestamp,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert, krabka_verified::ListOffsetsKind};
+
+    /// `SupportedKind` is `timestamp_kind` with `Unsupported` taken out, for
+    /// every sentinel, an ordinary timestamp, and every version.
+    #[test]
+    fn supported_kind_is_the_kind_minus_unsupported() {
+        for version in 0..=11 {
+            for timestamp in [-7, -6, -5, -4, -3, -2, -1, 0, 1_700_000_000_000] {
+                let kind = timestamp_kind(timestamp, version);
+                let expected = (kind != ListOffsetsKind::Unsupported).then_some(kind);
+                assert!(
+                    SupportedKind::of(timestamp, version).map(ListOffsetsKind::from) == expected,
+                    "timestamp {timestamp} at v{version}"
+                );
+            }
+        }
+    }
 
     struct OffsetTimestampContract {
         position: String,

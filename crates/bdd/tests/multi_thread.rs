@@ -8,8 +8,7 @@
 
 use {
     assert2::assert,
-    krabka_bdd::{Given, TokioMultiThreadContext},
-    rstest_bdd_macros::{given, then, when},
+    krabka_bdd::Given,
     std::{
         sync::mpsc::{self, Receiver},
         time::Duration,
@@ -23,6 +22,8 @@ use {
 /// Long enough for any loaded runner, short enough to fail rather than hang.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(10);
 
+const SPAWNED: &str = "Given a background task has been spawned that waits for a release signal";
+
 struct World {
     task: Given<JoinHandle<()>>,
     running: Given<Receiver<()>>,
@@ -31,22 +32,18 @@ struct World {
 
 #[rstest::fixture]
 fn world() -> World {
-    let step = "Given a background task has been spawned that waits for a release signal";
     World {
-        task: Given::new("task", step),
-        running: Given::new("running", step),
-        release: Given::new("release", step),
+        task: Given::new("task", SPAWNED),
+        running: Given::new("running", SPAWNED),
+        release: Given::new("release", SPAWNED),
     }
 }
 
-#[given("a background task has been spawned that waits for a release signal")]
-fn spawn_task(
-    world: &mut World,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
+#[krabka_bdd::given("a background task has been spawned that waits for a release signal")]
+fn spawn_task(world: &mut World) {
     let (running_tx, running_rx) = mpsc::channel();
     let (release_tx, release_rx) = oneshot::channel();
-    world.task.set(runtime.spawn(async move {
+    world.task.set(tokio::spawn(async move {
         running_tx.send(()).unwrap();
         release_rx.await.unwrap();
     }));
@@ -54,19 +51,16 @@ fn spawn_task(
     world.release.set(release_tx);
 }
 
-#[when("the test thread waits for the task to report that it runs")]
+#[krabka_bdd::when("the test thread waits for the task to report that it runs")]
 fn wait_for_report(world: &World) {
     assert!(world.running.get().recv_timeout(REPORT_TIMEOUT) == Ok(()));
 }
 
-#[then("the background task is still running")]
-fn task_still_running(
-    world: &mut World,
-    #[from(rstest_bdd_harness_context)] runtime: &TokioMultiThreadContext,
-) {
+#[krabka_bdd::then("the background task is still running")]
+async fn task_still_running(world: &mut World) {
     assert!(!world.task.get().is_finished());
     world.release.take().send(()).unwrap();
-    assert!(runtime.block_on(world.task.take()).is_ok());
+    assert!(world.task.take().await.is_ok());
 }
 
 krabka_bdd::scenarios!(

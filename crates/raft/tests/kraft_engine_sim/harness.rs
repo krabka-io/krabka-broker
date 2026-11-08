@@ -8,7 +8,7 @@
 
 use {
     crate::sim_net::SimNet,
-    krabka_raft::kraft::Activation,
+    krabka_raft::kraft::{Activation, SnapshotPolicy},
     krabka_units::{
         prelude,
         prelude::{Time, millis},
@@ -199,9 +199,9 @@ pub fn build_engine(
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
             metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
             peers: Arc::new(net.as_peer(me)),
-            snapshot_interval_records: snapshot_interval_records.0,
-            max_bytes_between_snapshots: prelude::bytes(0),
-            max_snapshot_interval: millis(0),
+            snapshot_policy: SnapshotPolicy::builder()
+                .interval_records(snapshot_interval_records.0)
+                .build(),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             metadata_log: metadata_log(),
             activation: Activation::default(),

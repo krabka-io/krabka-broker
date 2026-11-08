@@ -1,5 +1,6 @@
-//! The `DescribeConfigs` wire vocabulary: the `ConfigSource` and
-//! `ResourceType` bytes Kafka defines.
+//! The `DescribeConfigs` wire vocabulary: the `ConfigSource` bytes Kafka
+//! defines. The resource-type bytes every config handler shares are
+//! [`crate::handlers::config_alter::ConfigResourceType`].
 //!
 //! These values are the response's contract with the JVM `AdminClient`, so
 //! they sit apart from the code that decides which configs to report.
@@ -25,16 +26,6 @@ pub(super) const CONFIG_SOURCE_DEFAULT: i8 = 5;
 pub(super) const CONFIG_SOURCE_CLIENT_METRICS: i8 = 7;
 /// `ConfigSource::DYNAMIC_GROUP_CONFIG`.
 pub(super) const CONFIG_SOURCE_DYNAMIC_GROUP: i8 = 8;
-
-/// Config resource-type bytes, from the JVM
-/// `org.apache.kafka.common.config.ConfigResource.Type` enum. Every config
-/// handler (`DescribeConfigs`, `AlterConfigs`, `IncrementalAlterConfigs`,
-/// `ListConfigResources`) shares this one set.
-pub const RESOURCE_TYPE_TOPIC: i8 = 2;
-pub const RESOURCE_TYPE_BROKER: i8 = 4;
-pub const RESOURCE_TYPE_BROKER_LOGGER: i8 = 8;
-pub const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
-pub const RESOURCE_TYPE_GROUP: i8 = 32;
 
 #[cfg(test)]
 mod tests {

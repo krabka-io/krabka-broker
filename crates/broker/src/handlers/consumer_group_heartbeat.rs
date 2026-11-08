@@ -231,7 +231,7 @@ mod tests {
         crate::{
             authorizer::AllowAllAuthorizer,
             broker::{Broker, BrokerHandle},
-            coordinator::unified::config::NextGenConfig,
+            coordinator::unified::{config::NextGenConfig, share::actor::ShareGroupActorHandle},
             handlers::{
                 encode_response,
                 group_heartbeat_test_support::{
@@ -298,6 +298,7 @@ mod tests {
         validation: Vec<Option<ConsumerGroupHeartbeatResponse>>,
         live: Option<LiveBrokerFixture>,
         response: Option<ConsumerGroupHeartbeatResponse>,
+        share_actor: Option<Arc<ShareGroupActorHandle>>,
     }
     #[rstest::fixture]
     fn consumer_heartbeat() -> ConsumerHeartbeatScenario {
@@ -422,7 +423,7 @@ mod tests {
         let coordinator = &fixture.broker.group_coordinator;
         coordinator.mark_share("share");
         coordinator.mark_streams("streams");
-        let _share_actor = coordinator.get_or_create_share("share-actor");
+        consumer_heartbeat.share_actor = Some(coordinator.get_or_create_share("share-actor"));
         consumer_heartbeat.live = Some(fixture);
     }
     #[rstest_bdd_macros::given("consumer member m1 sends epoch {epoch} for group {group}")]
@@ -497,20 +498,23 @@ mod tests {
             .shutdown()
             .await;
     }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/handler_consumer_group_creation/creation.feature",
-        name = "Only joins can create consumer groups and other group kinds are refused"
-    )]
-    #[tokio::test]
-    async fn handle_creates_consumer_group_only_on_join_as_kafka_does(
-        consumer_heartbeat: ConsumerHeartbeatScenario,
-        epoch: i32,
-        group: String,
-        code: i16,
-        message: String,
-    ) {
-        let _ = (consumer_heartbeat, epoch, group, code, message);
+    /// The actor the Given spawned still takes messages: its task runs on
+    /// the scenario's runtime, which lives until the last step.
+    #[rstest_bdd_macros::then("the live share actor is still running")]
+    fn check_share_actor_running(consumer_heartbeat: &ConsumerHeartbeatScenario) {
+        assert!(
+            !consumer_heartbeat
+                .share_actor
+                .as_ref()
+                .unwrap()
+                .tx
+                .is_closed()
+        );
     }
+    krabka_bdd::scenarios!(
+        "tests/features/handler_consumer_group_creation",
+        fixtures = [consumer_heartbeat: ConsumerHeartbeatScenario],
+    );
 
     /// Kafka's `String.trim` blank: a control character is blank and a
     /// no-break space is not.

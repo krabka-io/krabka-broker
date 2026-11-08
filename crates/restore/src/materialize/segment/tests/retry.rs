@@ -42,7 +42,7 @@ async fn filtered_and_empty_restore_batches_preserve_retry_coordinates_after_reo
     original.producer_epoch = 2;
     original.base_sequence = sequence;
     let segment = verified_segment(9, slice::from_ref(&original));
-    let outcome = write_segment(&args, &partition, &segment, &predicates)
+    let outcome = write_segment(&args, &partition, &segment, &predicates, false)
         .await
         .unwrap();
     assert2::assert!(outcome.end_offset == Offset(11));
