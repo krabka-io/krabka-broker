@@ -49,10 +49,7 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
     if rate <= 0.0 {
         return None;
     }
-    let bucket =
-        broker
-            .quota_buckets
-            .get_or_create(QuotaType::ConnectionCreation, &entity_key, rate);
+    let bucket = broker.quota_buckets.connection_bucket(&entity_key, rate);
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
 }
@@ -274,11 +271,9 @@ pub(super) async fn accept_loop(
 /// All failures are non-fatal and logged at debug level. A connection that the
 /// broker cannot tune still serves correctly, but less efficiently.
 fn tune_accepted_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
-    tune_socket(stream, send_buffer, receive_buffer, [
-        |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on accepted socket"),
-        |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on accepted socket"),
-        |e| tracing::debug!(error = %e, "SO_RCVBUF set failed on accepted socket"),
-    ]);
+    tune_socket(stream, send_buffer, receive_buffer, |option, error| {
+        tracing::debug!(%error, "{option} set failed on accepted socket");
+    });
 }
 
 #[cfg(test)]

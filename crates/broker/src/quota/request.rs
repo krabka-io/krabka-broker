@@ -8,9 +8,9 @@
 //! `throttle_time_ms` and one channel mute (KIP-219).
 
 use {
-    super::{QuotaConsumption, QuotaType, buckets::QuotaBuckets, consume_configured_quota},
+    super::{QuotaConsumption, QuotaType, buckets::QuotaBuckets, record_client_quota},
     krabka_metadata::MetadataImage,
-    krabka_units::{Time, convert::TimeExt},
+    krabka_units::Time,
     std::{
         future,
         future::Future,
@@ -18,17 +18,23 @@ use {
     },
 };
 
-/// Consumes `elapsed_micros` of request-handler time from the
-/// `request_percentage` bucket for `(principal, client_id)`.
+/// Records `elapsed_micros` of request-handler time on the
+/// `request_percentage` quota for `(principal, client_id)`.
 ///
 /// It returns the throttle delay to apply before the broker sends the
 /// response. The delay is a zero extent when no quota is configured, when the
-/// rate is not positive, or when there was no overage. `maximum_delay`, one
-/// `quota.window.size.seconds` in Kafka, caps the returned delay.
+/// rate is not positive, or when the measured rate is within the quota.
+/// `maximum_delay`, one `quota.window.size.seconds` in Kafka, caps the
+/// returned delay, as Kafka's `ClientRequestQuotaManager` takes
+/// `QuotaUtils.boundedThrottleTime`, the only client quota it bounds. The
+/// samples expire on their own, so a client that stops overrunning is not
+/// throttled past the window.
 ///
-/// `request_percentage` is a percentage of one thread-second, so `100.0` gives
-/// a budget of 1 000 000 µs per second. The bucket therefore meters in
-/// microseconds, the same unit as `elapsed_micros`.
+/// `request_percentage` is a percentage of one thread-second, so `100.0` is a
+/// bound of 1 000 000 µs per second. The quota therefore records
+/// microseconds, the same unit as `elapsed_micros`. Kafka records the
+/// percentage itself, and the throttle, a ratio of the measured rate to the
+/// bound, is the same in either unit.
 #[must_use]
 pub fn consume_request_quota(
     image: &MetadataImage,
@@ -38,30 +44,22 @@ pub fn consume_request_quota(
     elapsed_micros: u64,
     maximum_delay: Time,
 ) -> super::QuotaDelay {
-    consume_configured_quota(
-        QuotaConsumption {
-            image,
-            buckets,
-            principal,
-            client_id,
-            quota_type: QuotaType::Request,
-            amount: elapsed_micros,
-            max_debt_wait: Some(maximum_delay),
-        },
-        request_percentage_token_rate,
-        |overage_micros, _, rate_micros_per_sec| {
-            Time::from_secs_f64(overage_micros / rate_micros_per_sec)
-                // Kafka's `ClientRequestQuotaManager` bounds this throttle at
-                // one quota window (`boundedThrottleTime`), the only client
-                // quota it bounds.
-                .min(maximum_delay)
-        },
-    )
+    let mut recorded = record_client_quota(QuotaConsumption {
+        image,
+        buckets,
+        principal,
+        client_id,
+        quota_type: QuotaType::Request,
+        amount: elapsed_micros,
+    })
+    .delay;
+    recorded.delay = recorded.delay.min(maximum_delay);
+    recorded
 }
 
-/// The token rate of a `request_percentage` bucket: microseconds of handler
-/// time per second, so `100.0` is 1 000 000.
-pub(super) fn request_percentage_token_rate(rate_pct: f64) -> f64 { rate_pct * 10_000.0 }
+/// The bound of a `request_percentage` quota: microseconds of handler time
+/// per second, so `100.0` is 1 000 000.
+pub(super) fn request_percentage_bound(rate_pct: f64) -> f64 { rate_pct * 10_000.0 }
 
 /// The output of a future, and the time spent inside its `poll` calls.
 pub struct Timed<T> {
@@ -122,10 +120,10 @@ mod tests {
     use {
         super::*,
         crate::quota::test_support::{
-            QuotaEntityInput, image_with_quotas, image_with_rate, quota_record,
+            QuotaEntityInput, image_with_quotas, image_with_rate, manual_buckets, quota_record,
         },
-        assert2::assert,
-        krabka_units::{millis, secs},
+        assert2::{assert, check},
+        krabka_units::{convert::TimeExt, millis, secs},
         std::{thread, time::Duration},
         tokio::time,
     };
@@ -178,24 +176,26 @@ mod tests {
         check_request_delay(&img, 1_000_000, millis(25), millis(25));
     }
 
-    /// Kafka's quota window forgets what a client recorded more than
-    /// `quota.window.num * quota.window.size.seconds` ago, so a client that
-    /// stops overrunning is not throttled for the size of the overrun. The
-    /// throttle is capped at `maximum_delay`, so debt past what `maximum_delay`
-    /// repays only kept the cap in force after the overload had ended.
+    /// Kafka's quota window forgets a sample whose last record is
+    /// `quota.window.num * quota.window.size.seconds` old, so a client that
+    /// stops overrunning is not throttled for the size of the overrun: 1000
+    /// seconds of handler time in one request keep the capped throttle for
+    /// 11 s, and not after.
     #[test]
-    fn an_overload_is_forgotten_once_the_maximum_delay_has_repaid_it() {
+    fn an_overload_is_forgotten_once_its_sample_leaves_the_window() {
         let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 100.0);
-        let buckets = QuotaBuckets::with_window(secs(1));
+        let (clock, buckets) = manual_buckets();
         let bound = millis(20);
+        let consume_after = |millis, micros| {
+            check!(let Ok(()) = clock.advance(Duration::from_millis(millis)));
+            consume_request_quota(&img, &buckets, "alice", Some(""), micros, bound).delay
+        };
 
-        // 1000 seconds of handler time in one request: the throttle is capped.
-        let during = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000_000, bound);
-        thread::sleep(Duration::from_millis(100));
-        let after = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000, bound);
+        let during = consume_after(0, 1_000_000_000);
+        let last_moment = consume_after(10_999, 1_000);
+        let after = consume_after(1, 1_000);
 
-        assert!(during == bound, "{during:?}");
-        assert!(after == <Time as TimeExt>::ZERO, "{after:?}");
+        check!((during, last_moment, after) == (bound, bound, <Time as TimeExt>::ZERO));
     }
 
     /// The overage of one request stays charged for the next (#1212), as it
@@ -204,17 +204,17 @@ mod tests {
     /// for everything it has overrun, not for its last request alone.
     #[test]
     fn overage_stays_charged_for_the_next_request() {
-        // rate=100% gives a 1_000_000 us/sec budget and a one-second window a
-        // one-second burst: 1_500_000 us is 500_000 over, and 500_000 more
-        // leaves 1_000_000 of debt.
+        // rate=100% is a bound of 1_000_000 us/sec. Over the padded 10 s
+        // window, 12_000_000 us are 1_200_000 us/sec, a
+        // `(1.2 - 1) / 1 * 10 s` = 2 s throttle, and 3_000_000 more are
+        // 1_500_000 us/sec, 5 s.
         let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 100.0);
-        let buckets = QuotaBuckets::with_window(secs(1));
+        let (_, buckets) = manual_buckets();
 
-        let first = consume_request_quota(&img, &buckets, "alice", Some(""), 1_500_000, secs(10));
-        let second = consume_request_quota(&img, &buckets, "alice", Some(""), 500_000, secs(10));
+        let first = consume_request_quota(&img, &buckets, "alice", Some(""), 12_000_000, secs(60));
+        let second = consume_request_quota(&img, &buckets, "alice", Some(""), 3_000_000, secs(60));
 
-        assert!(first > millis(490) && first <= millis(500), "{first:?}");
-        assert!(second > millis(990) && second <= secs(1), "{second:?}");
+        assert!((first.delay, second.delay) == (secs(2), secs(5)));
     }
 
     /// Kafka's `DefaultQuotaCallback` gives a request with a null client id the
@@ -256,13 +256,13 @@ mod tests {
 
     #[test]
     fn overage_returns_scaled_uncapped_delay() {
-        // rate=100% gives a 1_000_000 us/sec budget. A one-second window
-        // starts the bucket with one second of burst, so 1_500_000 us leaves
-        // a 500_000 us overage.
+        // rate=100% is a bound of 1_000_000 us/sec. Over the padded 10 s
+        // window, 10_500_000 us are 1_050_000 us/sec, Kafka's
+        // `(1.05 - 1) / 1 * 10 s` = 500 ms, under the 1 s cap.
         let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 100.0);
-        let buckets = QuotaBuckets::with_window(secs(1));
+        let (_, buckets) = manual_buckets();
 
-        let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_500_000, secs(1));
+        let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 10_500_000, secs(1));
 
         assert!(delay == millis(500));
     }

@@ -66,14 +66,15 @@ pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Parse
     pub unclean_recovery_balanced_deadline: Option<Time>,
     /// Deadline for an operator-triggered unclean recovery.
     pub operator_recovery_deadline: Option<Time>,
-    /// Maximum request-quota throttle delay, which bounds how long one
-    /// response over `request_percentage` mutes a client. Equivalent to
-    /// Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation
-    /// throttles are not bounded.
+    /// Length of one client-quota sample, Kafka's `quota.window.size.seconds`.
+    /// It is also the maximum request-quota throttle delay, which bounds how
+    /// long one response over `request_percentage` mutes a client; byte-rate
+    /// and controller-mutation throttles are not bounded.
     pub quota_throttle_max: Option<Time>,
-    /// Time window that sizes the client byte-rate quota token bucket's burst
-    /// capacity. Equivalent to Kafka's sampling window `quota.window.num *
-    /// quota.window.size.seconds`.
+    /// Whole sampled window of the client quotas, Kafka's `quota.window.num *
+    /// quota.window.size.seconds`: the quotas keep `quota_window /
+    /// quota_throttle_max` samples of `quota_throttle_max` each. It also sizes
+    /// the burst of the `connection_creation_rate` token bucket.
     pub quota_window: Option<Time>,
     /// Time window whose throughput defines the KIP-599 controller-mutation
     /// quota burst capacity (default 11 s), Kafka's

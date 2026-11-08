@@ -26,7 +26,7 @@ Feature: Kafka feature negotiation compatibility
       | streams.version                 | 0                | 1                   |
       | eligible.leader.replicas.version | 0                | 1                   |
       | kraft.version                   | 0                | 1                   |
-      | krabka.version                  | 0                | 2                   |
+      | krabka.version                  | 0                | 3                   |
 
     Examples:
       | version |

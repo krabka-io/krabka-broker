@@ -14,7 +14,7 @@ use {
         checkpoint::Checkpoint,
         event::AuditEvent,
         ids::{EpochMs, Seq},
-        ocsf::ProductInfo,
+        ocsf::{OcsfVersionSwitch, ProductInfo},
         signing::FileEd25519Signer,
         sink::{AuditError, AuditRecord, AuditSink},
         spool::{PendingLosses, Spool},
@@ -30,6 +30,10 @@ use {
 pub struct AuditWriterParams {
     pub sink: Arc<dyn AuditSink>,
     pub product: ProductInfo,
+    /// The OCSF record version each event is serialized with. The writer
+    /// reads it when it first serializes an event, so a record keeps that
+    /// version through the spool and its replay.
+    pub ocsf_version: OcsfVersionSwitch,
     pub signer: Option<Arc<FileEd25519Signer>>,
     /// Emit a checkpoint after the writer chains this many records since the
     /// last checkpoint. This field is a count, not an extent. `0` disables the
@@ -58,6 +62,7 @@ pub struct AuditWriter {
     rx: AuditReceiver,
     pub(super) sink: Arc<dyn AuditSink>,
     product: ProductInfo,
+    ocsf_version: OcsfVersionSwitch,
     chain: ChainState,
     signer: Option<Arc<FileEd25519Signer>>,
     checkpoint_every_n: u64,
@@ -83,6 +88,7 @@ impl AuditWriter {
             rx,
             sink: params.sink,
             product: params.product,
+            ocsf_version: params.ocsf_version,
             chain: params.chain,
             signer: params.signer,
             checkpoint_every_n: params.checkpoint_every_n,
@@ -234,7 +240,7 @@ impl AuditWriter {
     )]
     async fn write_chained(&mut self, event: &AuditEvent, durable: bool) -> Result<(), AuditError> {
         self.write_pending_loss_marker(durable).await?;
-        let record = AuditRecord::from_event(event, &self.product);
+        let record = AuditRecord::from_event(event, &self.product, self.ocsf_version.get());
         tracing::Span::current().record("seq", self.chain.next_seq());
         self.append_chained(record, durable).await
     }

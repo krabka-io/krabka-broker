@@ -9,11 +9,8 @@ use {
     crate::{broker::BrokerHandle, partition::Partition},
     krabka_ids::PartitionIndex,
     krabka_protocol::records::{Record, RecordBatch},
-    krabka_units::convert::TimeExt,
-    std::{
-        sync::{Arc, atomic::Ordering},
-        time::Duration,
-    },
+    krabka_units::Time,
+    std::sync::{Arc, atomic::Ordering},
 };
 
 impl BrokerHandle {
@@ -211,24 +208,21 @@ impl BrokerHandle {
 
     /// Test-only: return the `retention.ms` override currently active in
     /// `(topic, partition)`'s log config. Returns `None` if the partition is
-    /// not hosted on this broker. The inner `Option<Duration>` is `None` when
+    /// not hosted on this broker. The inner `Option<Time>` is `None` when
     /// no retention override has been applied (topic uses broker default).
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn partition_retention_ms_for_test(
+    pub fn partition_retention_for_test(
         &self,
         topic: &str,
         partition: i32,
-    ) -> Option<Option<Duration>> {
+    ) -> Option<Option<Time>> {
         let part = self
             .broker
             .partitions
             .get(topic, PartitionIndex(partition))?;
         let snap = part.log.lock().ok()?.config_snapshot();
-        // `krabka-log` holds this as a `Time` now, but the helper's signature is
-        // public under `test-helpers`, so the extent converts back at the seam
-        // rather than churning the callers.
-        Some(snap.retention.map(TimeExt::to_std))
+        Some(snap.retention)
     }
 
     /// Test-only: full `LogConfig` snapshot for `(topic, partition)`.

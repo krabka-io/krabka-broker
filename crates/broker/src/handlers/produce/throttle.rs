@@ -114,18 +114,17 @@ mod tests {
             ])
             .value(1024.0)
             .call();
-        // A one-second window, so 4096 bytes at 1024 B/s is 3072 over the
-        // burst rather than inside the default 11-second one.
-        let buckets = QuotaBuckets::with_window(secs(1));
-        // Tuple match → 3072 bytes overage at 1024 B/s → throttle > 0.
-        let delay_match = consume_producer_quota(&img, &buckets, "alice", Some("app-x"), 4096);
+        // Tuple match: 20 480 bytes over Kafka's padded 10 s window are
+        // 2048 B/s, a `(2048 - 1024) / 1024 * 10 s` = 10 s throttle.
+        let buckets = QuotaBuckets::new();
+        let delay_match = consume_producer_quota(&img, &buckets, "alice", Some("app-x"), 20_480);
         assert!(
-            delay_match.delay > <Time as TimeExt>::ZERO,
+            delay_match.delay == secs(10),
             "tuple quota match should throttle on overage; got {delay_match:?}"
         );
         // No tuple match for client_id="other"; no (user=alice)-only quota exists.
-        let buckets2 = QuotaBuckets::with_window(secs(1));
-        let delay_other = consume_producer_quota(&img, &buckets2, "alice", Some("other"), 4096);
+        let buckets2 = QuotaBuckets::new();
+        let delay_other = consume_producer_quota(&img, &buckets2, "alice", Some("other"), 20_480);
         assert!(
             delay_other.delay == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"

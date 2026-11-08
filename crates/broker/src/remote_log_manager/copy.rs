@@ -510,7 +510,9 @@ pub async fn copy_eligible_delayed(
             // sealed its manifest all the same, and the chain runs through it.
             CopyOutcome::Withdrawn { next } => chain = next,
             CopyOutcome::Failed => {}
-            CopyOutcome::Fenced => break,
+            // The tier failed the upload itself, and the next segment would
+            // meet the same tier: the next tick retries from this segment.
+            CopyOutcome::TierFailed | CopyOutcome::Fenced => break,
         }
     }
     copied

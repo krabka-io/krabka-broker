@@ -37,28 +37,32 @@ same chain and signature primitives.
 Every admin RPC that changes cluster state emits one `AdminOperation` event —
 OCSF `ApiActivity`, `class_uid` 6003 — on its success path, naming the
 principal, the source endpoint, the api, and the resources it changed. A
-request that changed nothing writes nothing.
+request that changed nothing writes nothing. From `krabka.version` 3 the record
+carries the OCSF API Activity of the api in the last column; below it, every
+row is activity 0. See [OCSF record versions](#ocsf-record-versions).
 
-| RPC | Audited resources |
-| --- | --- |
-| `CreateTopics` | Topic per created topic |
-| `DeleteTopics` | Topic per deleted topic |
-| `CreatePartitions` | Topic per grown topic |
-| `AlterConfigs` | The config resource, then a `ConfigKey` per changed key |
-| `IncrementalAlterConfigs` | The config resource, then a `ConfigKey` per changed key |
-| `AlterClientQuotas` | `ClientQuotaEntity` per changed entity, as `type=name` |
-| `AlterUserScramCredentials` | User per changed credential |
-| `CreateAcls` | Acl per created binding |
-| `DeleteAcls` | Acl per deleted binding |
-| `CreateDelegationToken` | `DelegationToken`, by token id |
-| `RenewDelegationToken` | `DelegationToken`, by token id |
-| `ExpireDelegationToken` | `DelegationToken`, by token id |
-| `UpdateFeatures` | Feature per finalized feature |
-| `ElectLeaders` | Partition per partition that changed leader |
-| `AlterPartitionReassignments` | Partition per altered partition |
-| `DeleteRecords` | Partition per trimmed partition |
-| `UnregisterBroker` | The broker id |
-| `AddRaftVoter`, `RemoveRaftVoter` | `RaftVoter`, by voter id |
+| RPC | Audited resources | Activity from `krabka.version` 3 |
+| --- | --- | --- |
+| `CreateTopics` | Topic per created topic | 1 Create |
+| `DeleteTopics` | Topic per deleted topic | 4 Delete |
+| `CreatePartitions` | Topic per grown topic | 1 Create |
+| `AlterConfigs` | The config resource, then a `ConfigKey` per changed key | 3 Update |
+| `IncrementalAlterConfigs` | The config resource, then a `ConfigKey` per changed key | 3 Update |
+| `AlterClientQuotas` | `ClientQuotaEntity` per changed entity, as `type=name` | 3 Update |
+| `AlterUserScramCredentials` | User per changed credential | 3 Update |
+| `CreateAcls` | Acl per created binding | 1 Create |
+| `DeleteAcls` | Acl per deleted binding | 4 Delete |
+| `CreateDelegationToken` | `DelegationToken`, by token id | 1 Create |
+| `RenewDelegationToken` | `DelegationToken`, by token id | 3 Update |
+| `ExpireDelegationToken` | `DelegationToken`, by token id | 3 Update |
+| `UpdateFeatures` | Feature per finalized feature | 3 Update |
+| `ElectLeaders` | Partition per partition that changed leader | 3 Update |
+| `AlterPartitionReassignments` | Partition per altered partition | 3 Update |
+| `DeleteRecords` | Partition per trimmed partition | 4 Delete |
+| `UnregisterBroker` | The broker id | 4 Delete |
+| `UnregisterController` | `Controller`, by controller id | 4 Delete |
+| `AddRaftVoter`, `RemoveRaftVoter` | `RaftVoter`, by voter id | 3 Update |
+| `SetTopicFreeze` | `TopicFreeze`, by target, then the `break-glass-proposal` that approved a thaw | 3 Update |
 
 Values never reach the record — only names and, for a config change, the names
 of the keys that moved. A SCRAM `salt`, `salted_password`, `stored_key` and
@@ -84,6 +88,32 @@ event — OCSF `class_uid` 3002 — naming the mechanism, the principal in the
 A failed exchange names the principal it claimed only where the mechanism sent
 it in the clear, which is PLAIN. An anonymous connection presents no credential
 and writes no row.
+
+## OCSF record versions
+
+`__krabka_audit` records are a persisted format. A broker writes the krabka
+1.0.0 record, version 1, until the cluster finalizes `krabka.version` 3, and
+writes version 2 from then on. Each record keeps the version it was serialized
+in, including one that waited in the spool across the upgrade. The hash chain
+commits to a record's bytes, so a partition that mixes the two verifies like
+any other.
+
+| Event | Version 1 activity | Version 2 activity |
+| --- | --- | --- |
+| Application Lifecycle (6002) broker start | 1 `BrokerStarted` | 3 `Start` |
+| Application Lifecycle (6002) broker stop | 4 `BrokerStopping` | 4 `Stop` |
+| Application Lifecycle (6002) configuration change | 3 `ConfigApplied` | 99 `ConfigApplied` |
+| Application Lifecycle (6002) TLS reload | 3 `TlsReloaded` | 99 `TlsReloaded` |
+| Authorize Session (3003) ACL denial | 2 `Deny` | 99 `Deny` |
+| API Activity (6003) admin operation | 0 | 1, 3 or 4 by api, as above; 0 for any other |
+| API Activity (6003) privileged action | 0 | 0 |
+| Authentication (3002) logon | 1 `Logon` | 1 `Logon` |
+
+The `type_uid` is always `class_uid * 100 + activity_id`. A version 2
+Application Lifecycle record also names the broker in `app`, with its product
+name and version. Every version 2 record carries `"log_version": "2"` in its
+`metadata` object, OCSF's event log schema version. A version 1 record has no
+`log_version`.
 
 ## The `krabka-audit` binary
 
