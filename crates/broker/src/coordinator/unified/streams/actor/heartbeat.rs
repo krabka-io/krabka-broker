@@ -37,7 +37,7 @@ use {
         streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Topology},
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
-    std::{collections::BTreeMap, sync::Arc, time::Instant},
+    std::{collections::BTreeMap, ops::ControlFlow, sync::Arc, time::Instant},
     tokio::time,
 };
 
@@ -107,118 +107,187 @@ async fn handle_heartbeat_inner(
     req: &StreamsGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
+    let beat = Heartbeat {
+        req,
+        client,
+        now: Instant::now(),
+        now_ms: chrono_now_ms(),
+        // Kafka's `groups.containsKey`: a group that this heartbeat creates
+        // reports endpoint information epoch 0. A new group already holds its
+        // initial group epoch, so the epoch alone does not tell.
+        group_existed: !actor.holds_nothing(),
+    };
+    // -1 leaves, and -2 is the temporary leave of a static member.
+    if req.member_epoch < 0 {
+        return handle_leave(actor, turn, req, beat.now_ms).await;
+    }
+    let static_recorder = match resolve_static_member(actor, req, turn.metadata_source) {
+        ControlFlow::Continue(recorder) => recorder,
+        ControlFlow::Break(response) => return Ok(response),
+    };
+    let known_member = actor.state.members.contains_key(&req.member_id);
+    if let Some(response) = check_group_capacity(actor, turn.config, req, known_member) {
+        return Ok(response);
+    }
+    // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
+    // join, with the member id that the client generated. Epoch 0 from a
+    // known member is a rejoin and takes the existing-member path.
+    if req.member_epoch == 0 && !known_member {
+        return join_new_member(actor, turn, beat).await;
+    }
+    let before = match validate_existing_member(actor, req, turn.metadata_source) {
+        ControlFlow::Continue(before) => before,
+        ControlFlow::Break(response) => return Ok(response),
+    };
+    heartbeat_existing_member(actor, turn, beat, static_recorder, &before).await
+}
+
+/// What one heartbeat brings to the paths of a member that stays in the
+/// group: the request, the client that sent it, when it arrived, and whether
+/// the group existed before it.
+#[derive(Clone, Copy)]
+struct Heartbeat<'a> {
+    req: &'a StreamsGroupHeartbeatRequest,
+    client: ClientIdentity<'a>,
+    now: Instant,
+    now_ms: i64,
+    group_existed: bool,
+}
+
+/// Kafka's `getOrMaybeCreateStaticStreamsGroupMember`: resolves the instance
+/// id before the member id. A released static member is replaced by the
+/// joining member.
+///
+/// It continues with the recorder of a replacement, which holds both member
+/// ids, or with `None` when the heartbeat replaces no member. It breaks with
+/// the response of a heartbeat that the instance id or the topology refuses.
+fn resolve_static_member(
+    actor: &mut ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> ControlFlow<StreamsGroupHeartbeatResponse, Option<StreamsRecorder>> {
+    let Some(instance_id) = &req.instance_id else {
+        return ControlFlow::Continue(None);
+    };
+    let StaticMemberCheck { existing, error } = checked_static_member(actor, req, instance_id);
+    if let Some(response) = error {
+        return ControlFlow::Break(response);
+    }
+    if req.member_epoch == 0
+        && let Some(previous) = existing
+    {
+        if let Some(resp) = topology_error(actor, req, metadata_source) {
+            return ControlFlow::Break(resp);
+        }
+        let recorder = StreamsRecorder::start(actor, &[&previous, &req.member_id]);
+        replace_static_member(actor, &previous, &req.member_id);
+        return ControlFlow::Continue(Some(recorder));
+    }
+    ControlFlow::Continue(None)
+}
+
+/// The `GROUP_MAX_SIZE_REACHED` answer to a join of a full group, or `None`.
+///
+/// Kafka 4.4 exempts a `known_member`, one already in the group, from the
+/// capacity check. Static replacements have already replaced their previous
+/// id.
+fn check_group_capacity(
+    actor: &ActorState,
+    config: &StreamsGroupConfig,
+    req: &StreamsGroupHeartbeatRequest,
+    known_member: bool,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    (req.member_epoch == 0 && actor.state.members.len() >= config.max_size && !known_member).then(
+        || {
+            error_resp(
+                codes::GROUP_MAX_SIZE_REACHED,
+                Some(format!(
+                    "The streams group has reached its maximum capacity of {} members.",
+                    config.max_size
+                )),
+            )
+        },
+    )
+}
+
+/// The first join of a member the group does not hold, under the member id
+/// that the client generated.
+async fn join_new_member(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    beat: Heartbeat<'_>,
+) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
     let StreamsTurn {
         config,
         metadata_source,
         ..
     } = turn;
-    let ClientIdentity {
-        id: client_id,
-        host: client_host,
-    } = client;
-    let now = Instant::now();
-    let now_ms = chrono_now_ms();
-    // Kafka's `groups.containsKey`: a group that this heartbeat creates
-    // reports endpoint information epoch 0. A new group already holds its
-    // initial group epoch, so the epoch alone does not tell.
-    let group_existed = !actor.holds_nothing();
-
-    // ─── Leave path ──────────────────────────────────────────────
-    // -1 leaves, and -2 is the temporary leave of a static member.
-    if req.member_epoch < 0 {
-        return handle_leave(actor, turn, req, now_ms).await;
+    let Heartbeat {
+        req,
+        client,
+        now,
+        now_ms,
+        group_existed,
+    } = beat;
+    if let Some(resp) = topology_error(actor, req, metadata_source) {
+        return Ok(resp);
     }
-
-    // ─── Static membership ───────────────────────────────────────
-    // Kafka's `getOrMaybeCreateStaticStreamsGroupMember`: resolve the instance
-    // id before the member id. A released static member is replaced by the
-    // joining member.
-    let mut static_recorder = None;
-    if let Some(instance_id) = &req.instance_id {
-        let StaticMemberCheck { existing, error } = checked_static_member(actor, req, instance_id);
-        if let Some(response) = error {
-            return Ok(response);
-        }
-        if req.member_epoch == 0
-            && let Some(previous) = existing
-        {
-            if let Some(resp) = topology_error(actor, req, metadata_source) {
-                return Ok(resp);
-            }
-            static_recorder = Some(StreamsRecorder::start(actor, &[&previous, &req.member_id]));
-            replace_static_member(actor, &previous, &req.member_id);
-        }
+    let new_member_id = req.member_id.clone();
+    let recorder = StreamsRecorder::start(actor, &[&new_member_id]);
+    // Kafka schedules the initial rebalance delay when a member joins an
+    // empty group, unless it is already scheduled.
+    if actor.state.members.is_empty()
+        && !config.initial_rebalance_delay.is_zero()
+        && actor.initial_rebalance_deadline.is_none()
+    {
+        actor.initial_rebalance_deadline =
+            Some(time::Instant::now() + config.initial_rebalance_delay);
     }
-
-    // ─── Group size ──────────────────────────────────────────────
-    // Kafka 4.4 exempts a member already in the group from the capacity
-    // check. Static replacements have already replaced their previous id.
-    let known_member = actor.state.members.contains_key(&req.member_id);
-    if req.member_epoch == 0 && actor.state.members.len() >= config.max_size && !known_member {
-        return Ok(error_resp(
-            codes::GROUP_MAX_SIZE_REACHED,
-            Some(format!(
-                "The streams group has reached its maximum capacity of {} members.",
-                config.max_size
-            )),
-        ));
+    let m = build_member(&new_member_id, req, client.id, client.host, now);
+    actor.state.add_or_update_member(m);
+    // Kafka's `maybeUpdateTopology`: a join initializes the topology of a
+    // group that has none. A join with an older topology keeps the group
+    // topology, and its responses carry `STALE_TOPOLOGY`.
+    if actor.topology.is_none()
+        && let Some(topo) = &req.topology
+    {
+        accept_topology(actor, topo);
     }
-
-    // ─── First-join path ─────────────────────────────────────────
-    // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
-    // join, with the member id that the client generated. Epoch 0 from a
-    // known member is a rejoin and takes the existing-member path below.
-    if req.member_epoch == 0 && !known_member {
-        if let Some(resp) = topology_error(actor, req, metadata_source) {
-            return Ok(resp);
-        }
-        let new_member_id = req.member_id.clone();
-        let recorder = StreamsRecorder::start(actor, &[&new_member_id]);
-        // Kafka schedules the initial rebalance delay when a member joins an
-        // empty group, unless it is already scheduled.
-        if actor.state.members.is_empty()
-            && !config.initial_rebalance_delay.is_zero()
-            && actor.initial_rebalance_deadline.is_none()
-        {
-            actor.initial_rebalance_deadline =
-                Some(time::Instant::now() + config.initial_rebalance_delay);
-        }
-        let m = build_member(&new_member_id, req, client_id, client_host, now);
-        actor.state.add_or_update_member(m);
-        // Kafka's `maybeUpdateTopology`: a join initializes the topology of a
-        // group that has none. A join with an older topology keeps the group
-        // topology, and its responses carry `STALE_TOPOLOGY`.
-        if actor.topology.is_none()
-            && let Some(topo) = &req.topology
-        {
-            accept_topology(actor, topo);
-        }
-        reconcile(actor, config, metadata_source)?;
-        if req.shutdown_application {
-            actor.state.request_shutdown(&new_member_id);
-        }
-        if actor
-            .state
-            .reconcile_member(&new_member_id, owned_role_tasks(req).as_ref())
-        {
-            actor.state.track_rebalance_timeout(&new_member_id, now);
-        }
-        let pending = recorder.finish(actor);
-        turn.flush(actor, pending, now_ms).await?;
-        return Ok(accepted_response(
-            actor,
-            config,
-            metadata_source,
-            req,
-            &new_member_id,
-            &MemberBefore::default(),
-            group_existed,
-        ));
+    reconcile(actor, config, metadata_source)?;
+    if req.shutdown_application {
+        actor.state.request_shutdown(&new_member_id);
     }
+    if actor
+        .state
+        .reconcile_member(&new_member_id, owned_role_tasks(req).as_ref())
+    {
+        actor.state.track_rebalance_timeout(&new_member_id, now);
+    }
+    let pending = recorder.finish(actor);
+    turn.flush(actor, pending, now_ms).await?;
+    Ok(accepted_response(
+        actor,
+        config,
+        metadata_source,
+        req,
+        &new_member_id,
+        &MemberBefore::default(),
+        group_existed,
+    ))
+}
 
-    // ─── Existing-member: validate epoch ─────────────────────────
-    // The owned-task maps matter only for a heartbeat at the previous member
-    // epoch, so a heartbeat at epoch 0 or at the member epoch builds none.
+/// Validates the epoch of a heartbeat from a member the group holds, and
+/// checks its topology.
+///
+/// It continues with the member as it was before the heartbeat, and breaks
+/// with the response of a heartbeat that the epoch or the topology refuses.
+/// The owned-task maps matter only for a heartbeat at the previous member
+/// epoch, so a heartbeat at epoch 0 or at the member epoch builds none.
+fn validate_existing_member(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> ControlFlow<StreamsGroupHeartbeatResponse, MemberBefore> {
     let needs_owned = actor.state.members.get(&req.member_id).is_some_and(|m| {
         req.member_epoch != 0
             && req.member_epoch != m.member_epoch
@@ -246,23 +315,46 @@ async fn handle_heartbeat_inner(
             .state
             .validate_heartbeat_epoch(&req.member_id, req.member_epoch, owned)
     {
-        return Ok(error_resp(
+        return ControlFlow::Break(error_resp(
             error_code,
             epoch_error_message(actor, req, error_code),
         ));
     }
     let Some(member) = actor.state.members.get(&req.member_id) else {
-        return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, None));
+        return ControlFlow::Break(error_resp(codes::UNKNOWN_MEMBER_ID, None));
     };
     let before = MemberBefore::of(member);
     if let Some(resp) = topology_error(actor, req, metadata_source) {
-        return Ok(resp);
+        return ControlFlow::Break(resp);
     }
+    ControlFlow::Continue(before)
+}
+
+/// The steady-state heartbeat of a member the group holds, whose epoch and
+/// topology [`validate_existing_member`] accepted. A static replacement hands
+/// in its `static_recorder`; otherwise the heartbeat records the member alone.
+async fn heartbeat_existing_member(
+    actor: &mut ActorState,
+    turn: StreamsTurn<'_>,
+    beat: Heartbeat<'_>,
+    static_recorder: Option<StreamsRecorder>,
+    before: &MemberBefore,
+) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
+    let StreamsTurn {
+        config,
+        metadata_source,
+        ..
+    } = turn;
+    let Heartbeat {
+        req,
+        client,
+        now,
+        now_ms,
+        group_existed,
+    } = beat;
     let recorder =
         static_recorder.unwrap_or_else(|| StreamsRecorder::start(actor, &[req.member_id.as_str()]));
-
-    // ─── Steady state ────────────────────────────────────────────
-    update_member_steady_state(actor, req, client_id, client_host, now);
+    update_member_steady_state(actor, req, client.id, client.host, now);
     refresh_topic_metadata(actor, config, metadata_source);
 
     if actor.state.dirty || actor.assignment_pending() {
@@ -287,7 +379,7 @@ async fn handle_heartbeat_inner(
         metadata_source,
         req,
         &req.member_id,
-        &before,
+        before,
         group_existed,
     ))
 }
