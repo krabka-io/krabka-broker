@@ -444,43 +444,18 @@ pub struct KafkaErrorCode(pub i16);
 #[krabka_macros::test_scalar]
 pub struct UnixMillis(pub i64);
 
+/// The topic a standalone partition fixture opens when the caller names none.
+pub const STANDALONE_TOPIC: &str = "orders";
+
 /// Start a standalone writer over the caller's already-opened log.
-#[derive(Clone, Copy)]
-pub struct StandalonePartitionSetup<'a> {
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    pub storage: StorageMode,
-}
-
-impl Default for StandalonePartitionSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "orders",
-            partition: krabka_ids::PartitionIndex::default(),
-            storage: StorageMode::Local,
-        }
-    }
-}
-
 #[bon::builder]
 pub fn spawn_standalone_partition(
     log_dir: &Path,
     log: krabka_log::Log,
-    #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = StandalonePartitionSetup::default().partition)]
-    partition: krabka_ids::PartitionIndex,
-    #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
+    #[builder(default = STANDALONE_TOPIC)] topic: &'_ str,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+    #[builder(default)] storage: StorageMode,
 ) -> Arc<Partition> {
-    let setup = StandalonePartitionSetup {
-        topic,
-        partition,
-        storage,
-    };
-    let StandalonePartitionSetup {
-        topic,
-        partition,
-        storage,
-    } = setup;
     spawn_partition(
         topic.to_owned(),
         partition,
@@ -572,22 +547,14 @@ impl Default for RecordCount {
 struct RecordOffsetDelta(i32);
 
 /// Partition fixtures append records with a deterministic wall-clock timestamp.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct PartitionRecordsSetup {
-    pub count: RecordCount,
-    #[default(UnixMillis(1_700_000_000))]
-    pub timestamp: UnixMillis,
-}
-
 #[bon::builder]
 pub fn partition_records_batch(
     #[builder(into, default)] count: RecordCount,
-    #[builder(into, default = UnixMillis (1_700_000_000))] timestamp: UnixMillis,
+    #[builder(into, default = UnixMillis(1_700_000_000))] timestamp: UnixMillis,
 ) -> RecordBatch {
-    let setup = PartitionRecordsSetup { count, timestamp };
     repeated_records_batch()
-        .count(setup.count)
-        .timestamp(setup.timestamp)
+        .count(count)
+        .timestamp(timestamp)
         .call()
 }
 
@@ -747,55 +714,13 @@ pub fn topic_thaw_record(
 }
 
 /// A topic-only image for policy tests, before any partitions are installed.
-#[derive(Clone, Copy)]
-pub struct TopicSetup<'a> {
-    pub topic: &'a str,
-    pub topic_id: uuid::Uuid,
-    pub partitions: PartitionCount,
-    pub replication_factor: ReplicationFactor,
-}
-
-impl Default for TopicSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "orders",
-            topic_id: uuid::Uuid::from_u128(1),
-            partitions: PartitionCount::default(),
-            replication_factor: ReplicationFactor::default(),
-        }
-    }
-}
-
-impl TopicSetup<'_> {
-    /// Topic metadata for fixtures whose partition records have one replica.
-    pub(crate) fn single_replica() -> Self {
-        Self {
-            replication_factor: ReplicationFactor(1),
-            ..Self::default()
-        }
-    }
-}
-
 #[bon::builder]
 pub fn topic_image(
-    #[builder(default = TopicSetup::default().topic)] topic: &'_ str,
-    #[builder(default = TopicSetup::default().topic_id)] topic_id: uuid::Uuid,
-    #[builder(into, default = TopicSetup::default().partitions)] partitions: PartitionCount,
-    #[builder(into, default = TopicSetup::default().replication_factor)]
-    replication_factor: ReplicationFactor,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = uuid::Uuid::from_u128(1))] topic_id: uuid::Uuid,
+    #[builder(into, default)] partitions: PartitionCount,
+    #[builder(into, default)] replication_factor: ReplicationFactor,
 ) -> MetadataImage {
-    let setup = TopicSetup {
-        topic,
-        topic_id,
-        partitions,
-        replication_factor,
-    };
-    let TopicSetup {
-        topic,
-        topic_id,
-        partitions,
-        replication_factor,
-    } = setup;
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: topic.into(),

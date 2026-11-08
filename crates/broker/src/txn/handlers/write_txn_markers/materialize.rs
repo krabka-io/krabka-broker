@@ -284,7 +284,6 @@ mod tests {
             },
             handlers::test_support::StartedBroker,
             partition::Partition,
-            test_support::StandalonePartitionSetup,
             txn::{
                 handlers::write_txn_markers::{
                     CommittedOffsets,
@@ -365,11 +364,9 @@ mod tests {
             dir,
         } = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_setup = StandalonePartitionSetup {
-            topic: "stamped-orders",
-            ..Default::default()
-        };
-        open_partition(&broker, dir.path(), part_setup);
+        open_partition(&broker, dir.path())
+            .topic("stamped-orders")
+            .call();
         let part = broker
             .partitions
             .get("stamped-orders", PartitionIndex(0))
@@ -450,10 +447,7 @@ mod tests {
             cases.into_iter().enumerate()
         {
             let topic = format!("tv-marker-{index}");
-            let part = open_partition(&broker, dir.path(), StandalonePartitionSetup {
-                topic: &topic,
-                ..Default::default()
-            });
+            let part = open_partition(&broker, dir.path()).topic(&topic).call();
             part.produce_batch(single_transactional_batch((producer_id, 4), Record {
                 value: Some(Bytes::from_static(b"event")),
                 ..Record::default()
@@ -497,10 +491,9 @@ mod tests {
             dir,
         } = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        open_partition(&broker, dir.path(), StandalonePartitionSetup {
-            topic: "fenced-orders",
-            ..Default::default()
-        });
+        open_partition(&broker, dir.path())
+            .topic("fenced-orders")
+            .call();
         let part = broker
             .partitions
             .get("fenced-orders", PartitionIndex(0))

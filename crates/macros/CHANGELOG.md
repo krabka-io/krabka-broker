@@ -8,6 +8,11 @@ release that contains `krabka-macros`.
 
 ### Changed (breaking)
 
+- `fixture_constructors!`'s `temporary_partition` and `open_partition`
+  domains default their builder members directly (`STANDALONE_TOPIC`, the
+  partition index's and storage mode's `Default`) instead of reading
+  `StandalonePartitionSetup::default()`. A caller needs `STANDALONE_TOPIC` in
+  scope instead of `StandalonePartitionSetup`.
 - `single_partition_produce_fixture!` no longer generates
   `SinglePartitionProduceSetup`: the generated function is a `bon` builder
   over the same fields and defaults, and `.acknowledgements(AllReplicas)`

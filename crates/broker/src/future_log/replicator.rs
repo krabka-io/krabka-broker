@@ -5,8 +5,6 @@
 //! directories with `WriterMessage::SwapFutureLog` and acts on the outcome it
 //! acknowledges.
 
-#[cfg(test)]
-use crate::test_support::PartitionRecordsSetup;
 use {
     super::{
         FutureLogRegistry, FutureLogState, MovePolicy,
@@ -339,7 +337,7 @@ mod tests {
                 == canonicalize_or_self(target.path())
         );
         assert!(source.partition.stamp_for_offset(Offset(0)) == Some(101));
-        append_records(&source.partition, PartitionRecordsSetup::default());
+        append_records(&source.partition).call();
         assert!(source.partition.stamp_for_offset(Offset(3)) == Some(102));
     }
 

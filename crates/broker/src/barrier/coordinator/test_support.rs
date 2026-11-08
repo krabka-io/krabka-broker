@@ -17,7 +17,7 @@ use {
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
-        test_support::{FakeMetadataSource, StandalonePartitionSetup},
+        test_support::FakeMetadataSource,
     },
     krabka_metadata::{MetadataRecord, NodeId},
     krabka_units::{Time, millis},
@@ -98,19 +98,17 @@ impl Fixture {
         let dir = tempdir().expect("tempdir");
         let registry = Arc::new(PartitionRegistry::new());
         for p in 0..4 {
-            open_partition(&registry, dir.path(), StandalonePartitionSetup {
-                topic: STATE_TOPIC,
-                partition: krabka_ids::PartitionIndex(p),
-                ..Default::default()
-            });
+            open_partition(&registry, dir.path())
+                .topic(STATE_TOPIC)
+                .partition(krabka_ids::PartitionIndex(p))
+                .call();
         }
         for DataTopic { name, partitions } in data {
             for p in 0..*partitions {
-                open_partition(&registry, dir.path(), StandalonePartitionSetup {
-                    topic: name,
-                    partition: krabka_ids::PartitionIndex(p),
-                    ..Default::default()
-                });
+                open_partition(&registry, dir.path())
+                    .topic(name)
+                    .partition(krabka_ids::PartitionIndex(p))
+                    .call();
             }
         }
         Self {

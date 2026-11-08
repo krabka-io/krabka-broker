@@ -55,12 +55,11 @@ use {
         producer_state::ProducerState,
         share_partition::state::RecordState,
         test_support::{
-            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, StandalonePartitionSetup,
-            StorageMode, broker_registration, decode_response, encode_request,
-            initialize_share_state, peer, principal, request_context, sasl_principal,
-            start_broker_no_audit_with, start_broker_with as start_test_broker_with,
-            start_group_broker_no_audit, start_share_broker, tolerate_starved_heartbeats,
-            try_dispatch_context,
+            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, STANDALONE_TOPIC, StorageMode,
+            broker_registration, decode_response, encode_request, initialize_share_state, peer,
+            principal, request_context, sasl_principal, start_broker_no_audit_with,
+            start_broker_with as start_test_broker_with, start_group_broker_no_audit,
+            start_share_broker, tolerate_starved_heartbeats, try_dispatch_context,
         },
         topic_policy::TopicPolicy,
     },
@@ -1165,26 +1164,21 @@ pub fn record_batch(count: i32) -> RecordBatch {
 }
 
 pub fn local_partition(broker: &Broker, root: &Path, topic: &str) -> Arc<Partition> {
-    partition(broker, root, StandalonePartitionSetup {
-        topic,
-        ..Default::default()
-    })
+    partition(broker, root).topic(topic).call()
 }
 
+#[bon::builder]
 pub fn partition(
-    broker: &Broker,
-    root: &Path,
-    setup: StandalonePartitionSetup<'_>,
+    #[builder(start_fn)] broker: &Broker,
+    #[builder(start_fn)] root: &Path,
+    #[builder(default = STANDALONE_TOPIC)] topic: &str,
+    #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+    #[builder(default)] storage: StorageMode,
 ) -> Arc<Partition> {
-    let StandalonePartitionSetup {
-        topic,
-        partition: index,
-        storage,
-    } = setup;
     spawn_partition()
         .root(root)
         .topic(topic)
-        .index(index)
+        .index(partition)
         .log_dir_status(broker.log_dir_status.clone())
         .producer_state(Arc::clone(&broker.producer_state))
         .storage(storage)

@@ -326,7 +326,7 @@ mod tests {
             },
             handlers::test_support::StartedBroker,
             replica_state::LeaderPolicy,
-            test_support::{StandalonePartitionSetup, peer, principal, request_context},
+            test_support::{peer, principal, request_context},
             time_util::now_ms,
             txn::handlers::write_txn_markers::test_support::{
                 PartitionAnswer, answer, open_partition, start_broker,
@@ -505,10 +505,9 @@ mod tests {
             let part = match hosting {
                 Hosting::NotHosted => None,
                 Hosting::Led | Hosting::Followed | Hosting::LedInOfflineLogDir => {
-                    let part = open_partition(&broker, &log_dir, StandalonePartitionSetup {
-                        partition: krabka_ids::PartitionIndex(1),
-                        ..Default::default()
-                    });
+                    let part = open_partition(&broker, &log_dir)
+                        .partition(krabka_ids::PartitionIndex(1))
+                        .call();
                     let leader = if matches!(hosting, Hosting::Followed) {
                         node_id + 1
                     } else {
@@ -581,14 +580,9 @@ mod tests {
             let broker = broker_handle.broker_arc_for_test();
             let node_id = broker.config.node_id;
             let follower = krabka_metadata::NodeId(node_id.0 + 1);
-            let part = open_partition(
-                &broker,
-                &dir.path().join("markers"),
-                StandalonePartitionSetup {
-                    partition: krabka_ids::PartitionIndex(1),
-                    ..Default::default()
-                },
-            );
+            let part = open_partition(&broker, &dir.path().join("markers"))
+                .partition(krabka_ids::PartitionIndex(1))
+                .call();
             part.install_replication_target(None, node_id.0, 3).await;
             // The follower has not fetched, so it holds the high watermark at
             // zero.
@@ -655,12 +649,11 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let node_id = broker.config.node_id.0;
         for partition in [1, 2] {
-            open_partition(&broker, dir.path(), StandalonePartitionSetup {
-                partition: krabka_ids::PartitionIndex(partition),
-                ..Default::default()
-            })
-            .install_replication_target(None, node_id, 3)
-            .await;
+            open_partition(&broker, dir.path())
+                .partition(krabka_ids::PartitionIndex(partition))
+                .call()
+                .install_replication_target(None, node_id, 3)
+                .await;
         }
 
         let bytes = handle_allowed(&broker, WriteTxnMarkersRequest {

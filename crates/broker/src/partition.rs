@@ -471,10 +471,7 @@ impl Partition {
 mod tests {
     use {
         super::*,
-        crate::{
-            partition::test_support::{append_records, poison_log, test_partition},
-            test_support::{PartitionRecordsSetup, RecordCount},
-        },
+        crate::partition::test_support::{append_records, poison_log, test_partition},
         assert2::{assert, check},
         tokio::sync::Notify,
     };
@@ -498,10 +495,7 @@ mod tests {
             .expect("log mutex")
             .set_stamp_source(Arc::new(FixedStamp(4242)))
             .expect("set stamp source");
-        append_records(&p, PartitionRecordsSetup {
-            count: RecordCount(3),
-            ..Default::default()
-        }); // offsets 0..=2, each stamped 4242
+        append_records(&p).count(3).call(); // offsets 0..=2, each stamped 4242
 
         check!(p.stamp_for_offset(Offset(0)) == Some(4242));
         check!(p.stamp_for_offset(Offset(2)) == Some(4242));
@@ -541,10 +535,7 @@ mod tests {
     #[tokio::test]
     async fn every_query_on_a_poisoned_log_reports_the_writer_died() {
         let (p, _dir) = test_partition(Arc::new(Notify::new()));
-        append_records(&p, PartitionRecordsSetup {
-            count: RecordCount(3),
-            ..Default::default()
-        });
+        append_records(&p).count(3).call();
         poison_log(&p);
         let died = Err(BrokerError::PartitionWriterDied {
             topic: p.topic.clone(),

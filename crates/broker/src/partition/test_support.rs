@@ -16,7 +16,7 @@ use {
         },
         partition_writer::{WriterServices, run},
         replica_state::ReplicaState,
-        test_support::{PartitionRecordsSetup, partition_records_batch},
+        test_support::{RecordCount, partition_records_batch},
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
@@ -134,11 +134,13 @@ pub async fn install_three_replica_isr(partition: &Partition) {
         .await;
 }
 
-pub(super) fn append_records(p: &Partition, setup: PartitionRecordsSetup) {
-    let mut batch = partition_records_batch()
-        .count(setup.count)
-        .timestamp(setup.timestamp)
-        .call();
+/// Append `count` records, stamped with the batch fixture's default timestamp.
+#[bon::builder]
+pub(super) fn append_records(
+    #[builder(start_fn)] p: &Partition,
+    #[builder(into, default)] count: RecordCount,
+) {
+    let mut batch = partition_records_batch().count(count).call();
     p.log
         .lock()
         .expect("log mutex")

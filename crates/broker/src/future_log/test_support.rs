@@ -8,9 +8,7 @@ use {
         log_dir::future_partition_dir,
         partition::Partition,
         partition_registry::PartitionRegistry,
-        test_support::{
-            PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch,
-        },
+        test_support::{RecordCount, open_partition, partition_records_batch},
         testing::single_value_batch,
         throttle::ReplicationQuota,
     },
@@ -58,11 +56,13 @@ pub(super) fn fixture_partition(
         .call()
 }
 
-pub(super) fn append_records(part: &Arc<Partition>, setup: PartitionRecordsSetup) {
-    let mut batch = partition_records_batch()
-        .count(setup.count)
-        .timestamp(setup.timestamp)
-        .call();
+/// Append `count` records, stamped with the batch fixture's default timestamp.
+#[bon::builder]
+pub(super) fn append_records(
+    #[builder(start_fn)] part: &Arc<Partition>,
+    #[builder(into, default)] count: RecordCount,
+) {
+    let mut batch = partition_records_batch().count(count).call();
     part.log
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -84,10 +84,7 @@ pub(super) fn source_partition(
             .set_stamp_source(stamp_source)
             .expect("source stamp index");
     }
-    append_records(&part, PartitionRecordsSetup {
-        count,
-        ..Default::default()
-    });
+    append_records(&part).count(count).call();
     part
 }
 

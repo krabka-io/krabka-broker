@@ -7,8 +7,8 @@ use {
         codes,
         handlers::test_support::StartedBroker,
         test_support::{
-            GrantsInPrincipalName, StandalonePartitionSetup, decode_response, dispatch_context,
-            encode_request, peer, principal, request_context, start_broker_no_audit_with,
+            GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer,
+            principal, request_context, start_broker_no_audit_with,
         },
     },
     assert2::check,
@@ -97,15 +97,10 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
         dir,
     } = start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsInPrincipalName)).await;
     let broker = handle.broker_arc_for_test();
-    let local = super::write_txn_markers::test_support::open_partition(
-        &broker,
-        dir.path(),
-        StandalonePartitionSetup {
-            topic: TOPIC,
-            partition: krabka_ids::PartitionIndex(1),
-            ..Default::default()
-        },
-    );
+    let local = super::write_txn_markers::test_support::open_partition(&broker, dir.path())
+        .topic(TOPIC)
+        .partition(krabka_ids::PartitionIndex(1))
+        .call();
     // A marker appends only to a partition this broker leads.
     local
         .install_replication_target(None, broker.config.node_id.0, 0)

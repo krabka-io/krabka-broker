@@ -940,7 +940,7 @@ mod tests {
             metrics::RequestPhases,
             partition::{Partition, test_support::test_partition},
             producer_state::ProducerState,
-            test_support::{StandalonePartitionSetup, StorageMode},
+            test_support::{STANDALONE_TOPIC, StorageMode},
         },
         assert2::assert,
         bytes::{Bytes, BytesMut},
@@ -1144,20 +1144,23 @@ mod tests {
         Log::open(&part_dir, LogConfig::default()).expect("open partition log")
     }
 
+    #[bon::builder]
     fn spawn_fixture_partition(
-        broker: &Broker,
-        dir: &FsPath,
-        log: Log,
-        setup: StandalonePartitionSetup<'_>,
+        #[builder(start_fn)] broker: &Broker,
+        #[builder(start_fn)] dir: &FsPath,
+        #[builder(start_fn)] log: Log,
+        #[builder(default = STANDALONE_TOPIC)] topic: &str,
+        #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+        #[builder(default)] storage: StorageMode,
     ) -> Arc<Partition> {
         spawn_partition(
-            setup.topic.to_owned(),
-            setup.partition,
+            topic.to_owned(),
+            partition,
             dir.to_path_buf(),
             log,
             broker.log_dir_status.clone(),
             Arc::clone(&broker.producer_state),
-            setup.storage == StorageMode::Diskless,
+            storage == StorageMode::Diskless,
         )
         .unwrap()
     }
@@ -1172,15 +1175,9 @@ mod tests {
         #[builder(default = "orders")] topic: &'_ str,
         #[builder(default = b"v")] payload: &'static [u8],
     ) -> Arc<Partition> {
-        let part = spawn_fixture_partition(
-            broker,
-            dir,
-            open_fixture_log(dir, topic),
-            StandalonePartitionSetup {
-                topic,
-                ..Default::default()
-            },
-        );
+        let part = spawn_fixture_partition(broker, dir, open_fixture_log(dir, topic))
+            .topic(topic)
+            .call();
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
         part.produce_batch(sized_batch(payload))
@@ -1626,11 +1623,10 @@ mod tests {
         let limit = log.log_end_offset();
         log.trim_to_offset(limit)
             .expect("trim the whole log away from under the fetch");
-        spawn_fixture_partition(broker, dir, log, StandalonePartitionSetup {
-            topic,
-            storage: StorageMode::Diskless,
-            ..Default::default()
-        })
+        spawn_fixture_partition(broker, dir, log)
+            .topic(topic)
+            .storage(StorageMode::Diskless)
+            .call()
     }
 
     /// One encoded batch of a single record.
@@ -1849,11 +1845,10 @@ mod tests {
             }],
         });
 
-        let part = partition(&broker, dir.path(), StandalonePartitionSetup {
-            topic: "cold",
-            storage: StorageMode::Diskless,
-            ..Default::default()
-        });
+        let part = partition(&broker, dir.path())
+            .topic("cold")
+            .storage(StorageMode::Diskless)
+            .call();
         let mut pending = super::PendingRead {
             topic_name: "cold".into(),
             topic_id: WireUuid(topic_id.into_bytes()),

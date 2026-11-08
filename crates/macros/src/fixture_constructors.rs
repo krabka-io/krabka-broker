@@ -33,9 +33,9 @@ fn body(domain: &Domain) -> ConstructorBody {
             ConstructorBody {
                 parameters: moxy::template! {
                     @if directory { log_dir: &::std::path::Path, }
-                    #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
-                    #[builder(into, default = StandalonePartitionSetup::default().partition)] partition: ::krabka_ids::PartitionIndex,
-                    #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
+                    #[builder(default = STANDALONE_TOPIC)] topic: &'_ str,
+                    #[builder(into, default)] partition: ::krabka_ids::PartitionIndex,
+                    #[builder(default)] storage: StorageMode,
                 },
                 arguments: moxy::template! { @if directory { log_dir, } topic, partition, storage },
             }

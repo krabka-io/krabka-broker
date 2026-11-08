@@ -434,7 +434,7 @@ mod tests {
                 RequestContext,
                 test_support::{replicated_partition, single_replica_partition},
             },
-            test_support::{PartitionCount, TopicSetup},
+            test_support::{PartitionCount, ReplicationFactor},
         },
         assert2::assert,
         krabka_ids::{LeaderEpoch, PartitionIndex},
@@ -497,6 +497,19 @@ mod tests {
             ])
             .await
             .expect("seed topic + partition");
+    }
+
+    /// Topic metadata for fixtures whose partition records have one replica.
+    #[derive(Clone, Copy, bon::Builder)]
+    struct TopicSetup<'a> {
+        #[builder(default = "orders")]
+        topic: &'a str,
+        #[builder(default = uuid::Uuid::from_u128(1))]
+        topic_id: uuid::Uuid,
+        #[builder(into, default)]
+        partitions: PartitionCount,
+        #[builder(into, default = ReplicationFactor(1))]
+        replication_factor: ReplicationFactor,
     }
 
     /// Seed a topic with `partitions` single-replica partitions, leader node
@@ -646,15 +659,11 @@ mod tests {
 
     fn ordered_a_b_topics() -> [TopicSetup<'static>; 2] {
         [
-            TopicSetup {
-                topic: "a",
-                ..TopicSetup::single_replica()
-            },
-            TopicSetup {
-                topic: "b",
-                topic_id: uuid::Uuid::from_u128(2),
-                ..TopicSetup::single_replica()
-            },
+            TopicSetup::builder().topic("a").build(),
+            TopicSetup::builder()
+                .topic("b")
+                .topic_id(uuid::Uuid::from_u128(2))
+                .build(),
         ]
     }
 
@@ -723,17 +732,15 @@ mod tests {
             broker: broker_handle,
             dir: _dir,
         } = start_broker(Arc::new(DenyTopics(&["a"]))).await;
-        seed_topic(&broker_handle, TopicSetup {
-            topic: "a",
-            ..TopicSetup::single_replica()
-        })
-        .await;
-        seed_topic(&broker_handle, TopicSetup {
-            topic: "b",
-            topic_id: uuid::Uuid::from_u128(2),
-            partitions: PartitionCount(3),
-            ..TopicSetup::single_replica()
-        })
+        seed_topic(&broker_handle, TopicSetup::builder().topic("a").build()).await;
+        seed_topic(
+            &broker_handle,
+            TopicSetup::builder()
+                .topic("b")
+                .topic_id(uuid::Uuid::from_u128(2))
+                .partitions(3)
+                .build(),
+        )
         .await;
         let broker = broker_handle.broker_arc_for_test();
         krabka_macros::request_test_identity! {
@@ -827,10 +834,7 @@ mod tests {
     )]
     #[test_macro(tokio::test)]
     async fn invalid_cursor_fails_the_whole_request(cursor: Option<RequestCursor>) {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup {
-                topic: "a",
-                ..TopicSetup::single_replica()
-            }])]; user ["admin"];);
+        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").build()])]; user ["admin"];);
         let req = request().maybe_cursor(cursor).call();
 
         let resp = describe(&broker, req, &ctx).await;
@@ -852,11 +856,7 @@ mod tests {
     /// response_partition_limit), 1)`.
     #[tokio::test]
     async fn zero_partition_limit_floors_to_one() {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup {
-                topic: "a",
-                partitions: PartitionCount(2),
-                ..TopicSetup::single_replica()
-            }])]; user ["admin"];);
+        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").partitions(2).build()])]; user ["admin"];);
         let req = request().response_partition_limit(0).call();
 
         let resp = describe(&broker, req, &ctx).await;
@@ -898,17 +898,15 @@ mod tests {
             broker: broker_handle,
             dir: _dir,
         } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_topic(&broker_handle, TopicSetup {
-            topic: "a",
-            ..TopicSetup::single_replica()
-        })
-        .await;
+        seed_topic(&broker_handle, TopicSetup::builder().topic("a").build()).await;
         if next_topic_exists {
-            seed_topic(&broker_handle, TopicSetup {
-                topic: "b",
-                topic_id: uuid::Uuid::from_u128(2),
-                ..TopicSetup::single_replica()
-            })
+            seed_topic(
+                &broker_handle,
+                TopicSetup::builder()
+                    .topic("b")
+                    .topic_id(uuid::Uuid::from_u128(2))
+                    .build(),
+            )
             .await;
         }
         let broker = broker_handle.broker_arc_for_test();
