@@ -7,7 +7,7 @@
 //! before the answer, so the older share-partition leader is fenced.
 
 use {
-    crate::share_coordinator::coordinator::ShareCoordinator,
+    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_request::ReadShareGroupStateRequest,
@@ -55,12 +55,15 @@ async fn read_state(
                 },
                 // Kafka's `toErrorResponseData`: the code and the message,
                 // and the default for every other field.
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.row_message("read")),
-                    ..Default::default()
-                },
+                Err(error) => {
+                    let verdict = super::OperationVerdict::refused(error, ShareStateOp::Read);
+                    PartitionResult {
+                        partition: pd.partition,
+                        error_code: verdict.code,
+                        error_message: verdict.message,
+                        ..Default::default()
+                    }
+                }
             }
         });
 

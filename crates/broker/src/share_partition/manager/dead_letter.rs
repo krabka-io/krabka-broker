@@ -28,11 +28,14 @@
 //! that share a request.
 
 use {
-    super::{LeaderKey, SharePartitionLeaderManager},
-    crate::share_partition::{
-        dlq::DlqRequest,
-        group_settings::GroupShareSettings,
-        state::{AcquisitionState, DlqCause, DlqRange},
+    super::SharePartitionLeaderManager,
+    crate::{
+        share_coordinator::key::{ShareKey, ShareKeyRef},
+        share_partition::{
+            dlq::DlqRequest,
+            group_settings::GroupShareSettings,
+            state::{AcquisitionState, DlqCause, DlqRange},
+        },
     },
     futures_util::future::join_all,
     krabka_log::Offset,
@@ -70,7 +73,7 @@ impl SharePartitionLeaderManager {
     /// the writes of the task run side by side, up to the limit of the broker.
     pub(super) fn dispatch_dead_letters(
         &self,
-        key: &LeaderKey,
+        key: ShareKeyRef<'_>,
         cell: &Arc<Mutex<AcquisitionState>>,
         ranges: Vec<DlqRange>,
     ) {
@@ -84,7 +87,7 @@ impl SharePartitionLeaderManager {
         let Some(manager) = self.me.upgrade() else {
             return;
         };
-        let (key, cell) = (key.clone(), Arc::clone(cell));
+        let (key, cell) = (key.to_key(), Arc::clone(cell));
         self.background_tasks.spawn(async move {
             join_all(
                 ranges
@@ -98,12 +101,17 @@ impl SharePartitionLeaderManager {
     /// Writes `range` to the queue, then archives it and makes that durable.
     async fn dead_letter(
         &self,
-        (group, topic_id, partition): &LeaderKey,
+        key: &ShareKey,
         cell: &Arc<Mutex<AcquisitionState>>,
         range: DlqRange,
     ) {
         // The cause of a run that came back from the coordinator is not
         // stored, so it follows the group's delivery count limit.
+        let ShareKey {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let limit =
             GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config)
                 .delivery_count_limit;
@@ -154,7 +162,7 @@ impl SharePartitionLeaderManager {
         // carries the archived run to the coordinator. The state stays in
         // memory until then, as in Kafka.
         let _ = self
-            .persist_if_dirty(group, *topic_id, *partition, Some(cell), &mut state)
+            .persist_if_dirty(key.as_key_ref(), Some(cell), &mut state)
             .await;
         state.prune_terminal_prefix();
         drop(state);
@@ -164,7 +172,7 @@ impl SharePartitionLeaderManager {
 #[cfg(test)]
 mod tests {
     use {
-        super::{MAX_CONCURRENT_DEAD_LETTER_WRITES, coalesce},
+        super::{MAX_CONCURRENT_DEAD_LETTER_WRITES, ShareKey, ShareKeyRef, coalesce},
         crate::{
             codes,
             share_coordinator::coordinator::test_support::{
@@ -267,7 +275,7 @@ mod tests {
     /// Dispatches the durable ranges, then waits for `done` or fails the test.
     async fn dispatch_and_wait(
         mgr: &super::SharePartitionLeaderManager,
-        key: &super::LeaderKey,
+        key: ShareKeyRef<'_>,
         cell: &Arc<Mutex<AcquisitionState>>,
         ranges: Vec<DlqRange>,
         done: impl Fn(&[(i64, RecordState)]) -> bool,
@@ -369,7 +377,11 @@ mod tests {
             tid,
             cell,
         } = acquired_manager::<RecordingDlq>(RecordCount(3)).await;
-        let key = ("g1".to_owned(), tid, 0);
+        let key = ShareKey {
+            group: "g1".to_owned(),
+            topic_id: tid,
+            partition: 0,
+        };
         let ranges = {
             let mut state = cell.lock().await;
             state
@@ -379,7 +391,7 @@ mod tests {
         };
 
         let is_single = |st: &[_]| st.len() == 1;
-        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, is_single).await;
+        let states = dispatch_and_wait(&mgr, key.as_key_ref(), &cell, ranges, is_single).await;
 
         assert!(
             (states, dlq.requests(), cell.lock().await.start_offset)
@@ -499,7 +511,11 @@ mod tests {
             tid,
             cell,
         } = acquired_manager::<RecordingDlq>(RecordCount(4)).await;
-        let key = ("g1".to_owned(), tid, 0);
+        let key = ShareKey {
+            group: "g1".to_owned(),
+            topic_id: tid,
+            partition: 0,
+        };
         let ranges = {
             let mut state = cell.lock().await;
             for offset in 0..3 {
@@ -510,7 +526,10 @@ mod tests {
             state.take_pending_dlq()
         };
 
-        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, |states| states.len() == 1).await;
+        let states = dispatch_and_wait(&mgr, key.as_key_ref(), &cell, ranges, |states| {
+            states.len() == 1
+        })
+        .await;
 
         assert!(
             (states, dlq.requests())
@@ -531,7 +550,11 @@ mod tests {
             tid,
             cell,
         } = acquired_manager::<GaugeDlq>(RecordCount(40)).await;
-        let key = ("g1".to_owned(), tid, 0);
+        let key = ShareKey {
+            group: "g1".to_owned(),
+            topic_id: tid,
+            partition: 0,
+        };
         // Every other record, so no two runs are neighbours.
         let ranges = {
             let mut state = cell.lock().await;
@@ -544,7 +567,7 @@ mod tests {
         };
         assert!(ranges.len() == 20);
 
-        mgr.dispatch_dead_letters(&key, &cell, ranges);
+        mgr.dispatch_dead_letters(key.as_key_ref(), &cell, ranges);
         // The writes end before each run is archived and persisted, and the
         // test manager's persister takes its time to fail, so the writes are
         // what to wait for.
@@ -573,7 +596,11 @@ mod tests {
         let mgr = manager_with_dlq(Arc::<RecordingDlq>::clone(&dlq));
         let tid = uuid::Uuid::from_bytes([61; 16]);
         let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
-        let key = ("g1".to_owned(), tid, 0);
+        let key = ShareKey {
+            group: "g1".to_owned(),
+            topic_id: tid,
+            partition: 0,
+        };
         let ranges = {
             let mut state = cell.lock().await;
             state.load_from(Offset(0), 1, 1, &[
@@ -591,7 +618,8 @@ mod tests {
             state.take_pending_dlq()
         };
 
-        let states = dispatch_and_wait(&mgr, &key, &cell, ranges, <[_]>::is_empty).await;
+        let states =
+            dispatch_and_wait(&mgr, key.as_key_ref(), &cell, ranges, <[_]>::is_empty).await;
         let mut written = dlq.requests();
         written.sort_by_key(|request| request.first.0);
 

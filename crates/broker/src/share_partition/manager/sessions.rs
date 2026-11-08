@@ -8,10 +8,13 @@
 
 use {
     super::SharePartitionLeaderManager,
-    crate::share_partition::{
-        group_settings::GroupShareSettings,
-        session::{
-            ResponseRow, ShareFetchSessionRequest, ShareFetchSessionUpdate, SharePartitionKey,
+    crate::{
+        share_coordinator::key::ShareKeyRef,
+        share_partition::{
+            group_settings::GroupShareSettings,
+            session::{
+                ResponseRow, ShareFetchSessionRequest, ShareFetchSessionUpdate, SharePartitionKey,
+            },
         },
     },
     std::{collections::HashSet, sync::Arc},
@@ -67,9 +70,14 @@ impl SharePartitionLeaderManager {
         let settings =
             GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config);
         for &(topic_id, partition) in partitions {
+            let key = ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            };
             let cell = self
                 .leaders
-                .get(&(group.to_owned(), topic_id, partition))
+                .get(key.lookup())
                 .map(|entry| Arc::clone(entry.value()));
             let Some(cell) = cell else {
                 continue;
@@ -78,9 +86,7 @@ impl SharePartitionLeaderManager {
             state.set_dlq_enabled(settings.dlq_enabled);
             state.release_member(member, settings.delivery_count_limit);
             // Best-effort: a failed write keeps the state dirty for a retry.
-            let _ = self
-                .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)
-                .await;
+            let _ = self.persist_if_dirty(key, Some(&cell), &mut state).await;
             drop(state);
         }
     }

@@ -7,7 +7,8 @@
 //! A named group that another broker coordinates gets `NOT_COORDINATOR` (16),
 //! and a named group that no coordinator holds gets `RESOURCE_NOT_FOUND` (91).
 //! The two codes tell a caller whether to retry against another broker or to
-//! stop.
+//! stop. Before `__barrier_state` exists no broker holds any group, so every
+//! named group gets `RESOURCE_NOT_FOUND`.
 //!
 //! Authorization: `Describe` on `Cluster("kafka-cluster")`. On a deny every row
 //! carries `CLUSTER_AUTHORIZATION_FAILED` (31).
@@ -17,7 +18,7 @@ use {
         barrier::{
             STATE_TOPIC,
             coordinator::{BarrierCoordinator, GroupDescription},
-            handlers::{cluster_describe_image, interval_to_wire},
+            handlers::{cluster_describe_image, error_code, error_text, interval_to_wire},
         },
         broker::Broker,
         codes,
@@ -79,14 +80,11 @@ pub async fn handle(
                     description,
                     coordinator_id(coordinator, &image, description),
                 )
-            } else if coordinator.is_coordinator_for(name).await {
-                error_row(name, codes::RESOURCE_NOT_FOUND, "no such barrier group")
             } else {
-                error_row(
-                    name,
-                    codes::NOT_COORDINATOR,
-                    "this broker does not coordinate the barrier group",
-                )
+                match coordinator.require_coordinator(name).await {
+                    Ok(()) => error_row(name, codes::RESOURCE_NOT_FOUND, "no such barrier group"),
+                    Err(error) => error_row(name, error_code(&error), &error_text(&error)),
+                }
             };
             rows.push(row);
         }

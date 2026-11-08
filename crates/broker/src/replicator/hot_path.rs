@@ -75,8 +75,12 @@ impl ReplicaSeam {
     ///
     /// `append_at` rejects a batch whose `base_offset` is not the log end, so
     /// a caller stamps this into the batch the way the leader already has.
-    #[must_use]
-    pub fn next_offset(&self) -> Offset { self.partition.log_end_offset() }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned.
+    pub fn next_offset(&self) -> Result<Offset, BrokerError> { self.partition.log_end_offset() }
 
     /// Append one leader-assigned batch through the writer actor.
     ///

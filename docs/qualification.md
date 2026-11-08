@@ -162,7 +162,7 @@ The broker enforces the same rule, so an operator cannot take an unsupported
 rollback by mistake. A node that runs a controller replays the finalized levels
 when it opens its log, and it stops with Kafka's fatal-fault message before it
 binds a listener:
-`Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30`.
+`Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=34), but this controller only supports versions 7-30`.
 A broker-only node cannot register: the controller answers its
 `BrokerRegistration` with `UNSUPPORTED_VERSION`, as Kafka's
 `ClusterControlManager.registerBroker` does. Every 1.0.x release has both
@@ -170,7 +170,7 @@ checks. `crates/broker/tests/fatal_feature_level_exit.rs` and
 `crates/raft/tests/unsupported_feature_level.rs` test them in process.
 
 The gate also proves the refusal on the release images. The candidate formats a
-node at `metadata.version` `4.4-IV2` (33) with
+node at `metadata.version` `4.5-IV0` (34) with
 `unstable.feature.versions.enable`, and writes a record. The source then starts
 on the same directory without that setting. The source must exit with a failure
 status and Kafka's message. It must not change one byte of a log segment, a

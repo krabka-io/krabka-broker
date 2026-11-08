@@ -603,7 +603,7 @@ mod tests {
             .await
             .expect("set log start");
 
-        assert!(p.log_start_offset() == 5);
+        assert!(p.log_start_offset().unwrap() == 5);
     }
 
     /// Kafka trunk's `UnifiedLog.appendAsFollower` skips `LogValidator`, the one

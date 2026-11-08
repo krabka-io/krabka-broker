@@ -316,11 +316,7 @@ fn replayed_classic_state(state: &ClassicGroup) -> Result<ClassicGroup, BrokerEr
     let now_ms = chrono_now_ms();
     let encoded = classic_group_metadata_record(state, now_ms).encode_value()?;
     let mut replayed = ClassicGroup::new(state.group_id.clone());
-    apply_group_metadata(
-        &mut replayed,
-        GroupMetadataValue::decode_value(&encoded)?,
-        now_ms,
-    );
+    apply_group_metadata(&mut replayed, GroupMetadataValue::decode_value(&encoded)?);
     Ok(replayed)
 }
 

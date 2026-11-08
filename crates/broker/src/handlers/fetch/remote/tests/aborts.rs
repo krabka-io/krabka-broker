@@ -14,6 +14,7 @@ use {
         owned::fetch_response::AbortedTransaction,
         records::{Attributes, Record, RecordBatch},
     },
+    krabka_verified::{FetchReader, Isolation},
     std::sync::Arc,
 };
 
@@ -110,7 +111,7 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
         .unwrap();
         part.replica_state.lock().await.hw = end;
         let mut pending = out_of_range_at(&part, 0);
-        pending.read_committed = true;
+        pending.reader = FetchReader::Consumer(Isolation::ReadCommitted);
         assert!(
             super::super::try_remote_read(
                 &broker,

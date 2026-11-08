@@ -126,11 +126,12 @@ impl BrokerHandle {
                         LocalFrontier::HighWatermark => &part.hw_advance_notify,
                     };
                     let notified = notify.notified();
+                    // A poisoned log has not reached anything; the wait times out.
                     let offset = match frontier {
-                        LocalFrontier::LogEnd => part.log_end_offset(),
-                        LocalFrontier::HighWatermark => part.high_watermark().await,
+                        LocalFrontier::LogEnd => part.log_end_offset().ok(),
+                        LocalFrontier::HighWatermark => Some(part.high_watermark().await),
                     };
-                    if offset >= krabka_log::Offset(min) {
+                    if offset >= Some(krabka_log::Offset(min)) {
                         return;
                     }
                     notified.await;
@@ -175,7 +176,7 @@ impl BrokerHandle {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notified = part.append_notify.notified();
-                    if part.log_end_offset() == krabka_log::Offset(target) {
+                    if part.log_end_offset().ok() == Some(krabka_log::Offset(target)) {
                         return;
                     }
                     // Truncation does not fire append_notify; fall back to a short

@@ -61,7 +61,7 @@ async fn cli(client: &Client, command_args: &[&str]) -> i32 {
     let mut argv = vec!["krabka-guard", "--bootstrap-server", "test-client"];
     argv.extend_from_slice(command_args);
     let parsed = Cli::try_parse_from(argv).expect("test CLI arguments parse");
-    dispatch(client, parsed.command)
+    dispatch(client, parsed.command, &mut Vec::new(), &mut Vec::new())
         .await
         .expect("command returns an exit code")
 }

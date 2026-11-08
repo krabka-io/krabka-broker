@@ -62,17 +62,19 @@ mod leader_read_tests;
 mod leader_throttle_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
+#[cfg(test)]
+mod zstd_topic_tests;
 
 pub use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
 use {
     self::{
         node_endpoints::fetch_node_endpoints,
-        plan::{FetchMode, PendingPlanContext, build_pending_reads},
+        plan::{PendingPlanContext, build_pending_reads},
         read_loop::{ReadBudget, execute_pending_reads},
         request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
             GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
-            withhold_current_leader_before_kip_951,
+            refuse_zstd_topics_before_kip_110, withhold_current_leader_before_kip_951,
         },
         session::{
             FetchKind, commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics,
@@ -235,10 +237,10 @@ pub async fn handle(
         image,
         authorization,
         effective_replica_id,
-        is_follower_fetch,
-        read_committed,
+        reader,
         forgotten,
     } = preparation;
+    let is_follower_fetch = reader.is_follower();
 
     if version >= KIP_595_FETCH_VERSION && decode_fetch_request(&req).is_some() {
         // A KIP-595 fetch always names a replica, so `prepare_fetch` has
@@ -277,10 +279,7 @@ pub async fn handle(
         authorization: &authorization,
         rack_id: &req.rack_id,
         version,
-        mode: FetchMode {
-            read_committed,
-            is_follower_fetch,
-        },
+        reader,
         follower_id: effective_replica_id,
         follower_broker_epoch: req.replica_state.replica_epoch,
     };
@@ -328,6 +327,9 @@ pub async fn handle(
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
 
+    if !is_follower_fetch {
+        refuse_zstd_topics_before_kip_110(broker, &image, version, &mut responses);
+    }
     downconvert_legacy_responses(broker, version, &mut responses);
     withhold_current_leader_before_kip_951(version, &mut responses);
 
@@ -531,6 +533,21 @@ pub const fn fetch_reader(is_follower: bool, read_committed: bool) -> FetchReade
     } else {
         FetchReader::Consumer(Isolation::ReadUncommitted)
     }
+}
+
+/// The two questions the fetch path asks of a [`FetchReader`].
+pub trait FetchReaderExt {
+    /// A follower replica, which reads to the log end.
+    fn is_follower(&self) -> bool;
+    /// A consumer under `read_committed`, which reads below the last stable
+    /// offset and gets the aborted transactions of what it reads.
+    fn is_read_committed(&self) -> bool;
+}
+
+impl FetchReaderExt for FetchReader {
+    fn is_follower(&self) -> bool { *self == Self::Follower }
+
+    fn is_read_committed(&self) -> bool { *self == Self::Consumer(Isolation::ReadCommitted) }
 }
 
 pub fn compute_visibility_window(

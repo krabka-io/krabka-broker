@@ -112,3 +112,27 @@ Feature: Truthful static Kafka configuration descriptions
       | key                              | value    |
       | replica.fetch.max.bytes           | 2097152  |
       | replica.fetch.response.max.bytes | 20971520 |
+
+  Scenario: Kafka-default replication quota windows need no static-value disclosure
+    Given the broker has no operator-supplied static configuration overrides
+    And the static-config query selects the replication quota windows
+    When the broker describes the selected static Kafka settings
+    Then the ordered stated static settings are:
+      | key | value |
+
+  Scenario: Changed replication quota windows report sample counts and whole-second sample sizes
+    Given the broker has no operator-supplied static configuration overrides
+    And the static-config query selects the replication quota windows
+    And the replication quota windows run with these changed settings:
+      | key                                                  | value |
+      | replication.quota.window.num                         | 5     |
+      | replication.quota.window.size.seconds                | 2     |
+      | alter.log.dirs.replication.quota.window.num          | 7     |
+      | alter.log.dirs.replication.quota.window.size.seconds | 3     |
+    When the broker describes the selected static Kafka settings
+    Then the ordered stated static settings are:
+      | key                                                  | value |
+      | replication.quota.window.num                         | 5     |
+      | replication.quota.window.size.seconds                | 2     |
+      | alter.log.dirs.replication.quota.window.num          | 7     |
+      | alter.log.dirs.replication.quota.window.size.seconds | 3     |

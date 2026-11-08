@@ -162,8 +162,9 @@ impl BrokerHandle {
             .broker
             .partitions
             .get(topic, PartitionIndex(partition))?;
-        // Unwrap `Offset` -> `i64` at this test-helper boundary.
-        Some(part.log_start_offset().0)
+        // Unwrap `Offset` -> `i64` at this test-helper boundary. A poisoned
+        // log answers `None`.
+        Some(part.log_start_offset().ok()?.0)
     }
 
     /// Test-only: hold `(topic, partition)`'s high watermark at `offset`,

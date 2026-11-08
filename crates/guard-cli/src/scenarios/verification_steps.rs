@@ -50,7 +50,7 @@ async fn registry_holds(guard: &mut GuardScenario, entries: RegistryContents) {
     let cluster = guard.cluster().await;
     for (operator, scope, signing) in freezes_in(entries) {
         let scope: Scope = scope.parse().expect("a scope the driver names");
-        assert!(cluster.freeze(operator, &scope, signing).await == Outcome::Success);
+        assert!(cluster.freeze(operator, &scope, signing).await.outcome == Outcome::Success);
     }
 }
 
@@ -67,8 +67,8 @@ fn no_broker_listens(guard: &mut GuardScenario) { guard.unreachable = true; }
 async fn operator_verifies(guard: &mut GuardScenario) {
     let trust_file = guard.trust_file.get().clone();
     let cluster = guard.cluster().await;
-    let outcome = cluster.verify(Operator::Alice, &trust_file).await;
-    guard.outcome.set(outcome);
+    let run = cluster.verify(Operator::Alice, &trust_file).await;
+    guard.record(run);
 }
 
 #[when("the broker answers a request with {answer}")]

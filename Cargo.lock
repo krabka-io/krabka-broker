@@ -4727,6 +4727,7 @@ name = "krabka-throttle"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "bon",
  "derive_more",
  "krabka-bdd",
  "krabka-macros",

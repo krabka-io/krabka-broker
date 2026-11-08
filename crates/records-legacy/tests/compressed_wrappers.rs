@@ -478,5 +478,4 @@ fn wrapper_timestamp_is(compressed_wrappers: &CompressedWrapperScenario, timesta
 krabka_bdd::scenarios!(
     "tests/features/compressed_wrappers",
     fixtures = [compressed_wrappers: CompressedWrapperScenario],
-    tags = "not @formulated and not @inprogress"
 );

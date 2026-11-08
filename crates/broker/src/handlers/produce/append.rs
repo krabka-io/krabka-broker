@@ -337,7 +337,12 @@ impl AppendCommit {
         if self.pid < 0 {
             return;
         }
-        if part.log_end_offset() < target {
+        // A poisoned log can say nothing about the batch, so the commit is
+        // skipped as for a truncated one, and a retry re-appends.
+        let Ok(log_end) = part.log_end_offset() else {
+            return;
+        };
+        if log_end < target {
             // Evidence for the on-cluster failover verification: the appended
             // batch was truncated before its dedup commit, so we skip the
             // commit (the retry re-appends). Seeing this fire confirms the
@@ -347,7 +352,7 @@ impl AppendCommit {
                 partition = self.partition,
                 base_offset = self.base_offset.0,
                 target = target.0,
-                leo = part.log_end_offset().0,
+                leo = log_end.0,
                 "produce: appended batch truncated before dedup commit; skipping commit so retry re-appends"
             );
             return;
@@ -381,8 +386,12 @@ impl AppendCommit {
 /// log_append_time_ms=-1 log_start_offset=3`.
 ///
 /// The read is one brief lock on the partition's log, the same one
-/// `log_end_offset()` takes.
-fn stamp_log_start(part: &Partition) -> i64 { part.log_start_offset().0 }
+/// `log_end_offset()` takes. A poisoned log stamps the `-1` of
+/// `UNKNOWN_LOG_APPEND_INFO`: there is no log start to report.
+pub(super) fn stamp_log_start(part: &Partition) -> i64 {
+    part.log_start_offset()
+        .map_or(INVALID_OFFSET, |start| start.0)
+}
 
 /// The log start offset of a row whose append the log refused.
 ///

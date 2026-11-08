@@ -69,7 +69,7 @@ use {
         secs,
     },
     krabka_verified::FreezeMutationKind,
-    std::sync::{Arc, PoisonError, atomic::Ordering},
+    std::sync::{Arc, MutexGuard, atomic::Ordering},
     tokio::{
         sync::{AcquireError, Semaphore, SemaphorePermit},
         time,
@@ -136,15 +136,32 @@ async fn disable_and_delete_remote(
     )
     .await;
 
-    let local_start = {
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.local_log_start_offset()
+    // One hold of the lock for the read and the write: a local-retention pass
+    // or a truncation between two holds could move the local start, and the
+    // stale value would become the global floor.
+    let Some(mut log) = lock_log_or_skip(partition) else {
+        return;
     };
-    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let local_start = log.local_log_start_offset();
     if let Err(error) = log.set_log_start_offset(local_start) {
         warn!(topic = %tp.topic, partition = tp.partition, %error,
               "remote-log-manager: failed to raise the log start offset after disabling tiering");
     }
+}
+
+/// The partition's log, locked, or `None` after a warning when a panicked
+/// task left the mutex poisoned. The sweep tiers, trims and moves floors from
+/// what it reads under this lock, so it leaves such a partition alone rather
+/// than act on a log some writer stopped halfway through changing. See
+/// [`Partition::lock_log`].
+fn lock_log_or_skip(partition: &Partition) -> Option<MutexGuard<'_, krabka_log::Log>> {
+    partition
+        .lock_log()
+        .inspect_err(|error| {
+            warn!(topic = %partition.topic, partition = partition.index.0, %error,
+                  "remote-log-manager: skipping a partition whose log mutex is poisoned");
+        })
+        .ok()
 }
 
 #[cfg(test)]
@@ -424,11 +441,7 @@ impl CopyFence for LeaderFence<'_> {
     }
 
     fn established_log_start(&self) -> Option<krabka_log::Offset> {
-        self.partition
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .established_log_start()
+        lock_log_or_skip(self.partition)?.established_log_start()
     }
 }
 
@@ -486,7 +499,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         local_log_size,
         lso,
     ) = {
-        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut log) = lock_log_or_skip(&partition) else {
+            return;
+        };
         let cfg = log.config_snapshot();
         (
             cfg,
@@ -755,8 +770,9 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     // `handleLogStartOffsetUpdate`). `set_log_start_offset` only moves
     // forward, so a `DeleteRecords` that landed while the pass ran
     // keeps the higher of the two floors.
-    if let Some(new_start) = outcome.log_start {
-        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(new_start) = outcome.log_start
+        && let Some(mut log) = lock_log_or_skip(partition)
+    {
         if let Err(error) = log.set_log_start_offset(new_start) {
             debug!(topic = %partition.topic, partition = tp.partition, %error,
                    "remote-log-manager: could not advance the log start after a remote delete");
@@ -815,7 +831,9 @@ async fn follow_unenforced_floor(
     if remote_retention::archive_enforces_floor(&segments, floor) {
         return;
     }
-    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut log) = lock_log_or_skip(partition) else {
+        return;
+    };
     if let Err(error) = log.follow_leader_log_start(krabka_log::Offset(reported)) {
         debug!(topic = %partition.topic, partition = tp.partition, %error,
                "remote-log-manager: could not take the leader's log start");
@@ -857,7 +875,8 @@ async fn follow_unenforced_floor(
 /// was raised or needed no raise. Kafka checks once per leadership, and the
 /// caller records the epoch on `true` so the next tick skips the listing. A
 /// listing the RLMM cannot give yet, a fence that fell, or a start that moved
-/// answers `false`, and a later tick checks again.
+/// answers `false`, and a later tick checks again, as does a log whose mutex
+/// a panicked task poisoned ([`lock_log_or_skip`]).
 async fn raise_start_over_unheld_offsets(
     fence: &LeaderFence<'_>,
     tp: &TopicIdPartition,
@@ -865,7 +884,9 @@ async fn raise_start_over_unheld_offsets(
 ) -> bool {
     let partition = fence.partition;
     let (reported, local_start) = {
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(log) = lock_log_or_skip(partition) else {
+            return false;
+        };
         (log.reported_log_start(), log.local_log_start_offset())
     };
     if reported >= local_start {
@@ -875,7 +896,9 @@ async fn raise_start_over_unheld_offsets(
         return false;
     };
     let remote_start = archived_start(&segments, reported).unwrap_or(local_start);
-    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut log) = lock_log_or_skip(partition) else {
+        return false;
+    };
     if !fence.holds() {
         return false;
     }
@@ -998,6 +1021,7 @@ mod tests {
         std::{
             fs,
             path::Path,
+            sync::PoisonError,
             time::{Duration, SystemTime},
         },
         tokio::{task, time},
@@ -1070,7 +1094,7 @@ mod tests {
         follow_unenforced_floor(&partition, &tp(), deleted_below, &rlmm).await;
 
         assert2::assert!(
-            partition.log_start_offset() == Offset(start),
+            partition.log_start_offset().unwrap() == Offset(start),
             "{metadata:?}"
         );
     }

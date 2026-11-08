@@ -71,7 +71,7 @@
           "type": "boolean"
         },
         "failure_mode": {
-          "description": "Whether privileged operations continue when audit processing fails.",
+          "description": "Whether privileged operations continue when audit processing fails:\n`fail-open` or `fail-closed`. A `fail-closed` broker needs an\n`[audit.signing]` key and refuses to start without one. A `fail-open`\nbroker without a key starts with checkpoints disabled.",
           "type": "string"
         },
         "signing": {
@@ -83,7 +83,7 @@
               "type": "null"
             }
           ],
-          "description": "Ed25519 checkpoint signing key. An absent table keeps the current key.\nThe broker has none by default: chaining only, no checkpoints."
+          "description": "Ed25519 checkpoint signing key. An absent table keeps the current key.\nThe broker has none by default: chaining only, no checkpoints. The\nbroker loads a configured key at startup and refuses to start, in\neither failure mode, when the key does not load."
         },
         "spool": {
           "anyOf": [
@@ -113,7 +113,7 @@
           "type": "string"
         },
         "key_path": {
-          "description": "Path to the PKCS#8 Ed25519 private key that signs audit checkpoints.",
+          "description": "Path to the PKCS#8 Ed25519 private key that signs audit checkpoints.\nThe broker reads it at startup, so a key that does not load stops the\nbroker at boot whatever the audit failure mode.",
           "type": "string"
         }
       },

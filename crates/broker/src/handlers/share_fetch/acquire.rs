@@ -23,6 +23,7 @@ use {
         error::BrokerError,
         handlers::log_read_failure::local_read_failure,
         partition::Partition,
+        share_coordinator::key::ShareKeyRef,
         share_partition::{
             group_settings::GroupShareSettings,
             manager::{SharePartitionLeaderManager, persistence::fences_the_partition},
@@ -403,12 +404,17 @@ fn tiered_source<'a>(
 /// classic group to offset order, and a share group is exactly the reader that
 /// does not need it: the window runs to the high watermark and the deferral
 /// marks hold the waiting records back one range at a time.
-async fn read_upper_bound(part: &Partition, read_committed: bool) -> Offset {
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] under `read_committed` if the
+/// log mutex is poisoned: with no last stable offset, nothing is safe to read.
+async fn read_upper_bound(part: &Partition, read_committed: bool) -> Result<Offset, BrokerError> {
     let hwm = part.high_watermark().await;
     if read_committed {
         part.last_stable_offset(hwm)
     } else {
-        hwm
+        Ok(hwm)
     }
 }
 
@@ -477,7 +483,7 @@ async fn acquire_with_log_start_recovery<'a>(
     // record below the new start stays locked until it times out.
     let floor = match broker.diskless_read.as_deref().filter(|_| part.diskless) {
         Some(reader) => diskless_logical_start(reader, part, topic_id).await,
-        None => Ok(part.log_start_offset()),
+        None => part.log_start_offset(),
     }?;
     st.advance_past_log_start(floor);
     *fresh = PartitionData::default();
@@ -627,7 +633,14 @@ async fn acquire_partition(
         fail_share_row(p, codes::KAFKA_STORAGE_ERROR);
         return;
     }
-    let upper = read_upper_bound(&part, read_committed).await;
+    let upper = match read_upper_bound(&part, read_committed).await {
+        Ok(upper) => upper,
+        Err(error) => {
+            persist_best_effort(mgr, group, p, &cell, &mut st).await;
+            fail_share_row(p, codes::from_broker_error(&error));
+            return;
+        }
+    };
     // A released or expired record at the delivery limit is archived
     // first, so it cannot hold the window shut.
     st.archive_exhausted(settings.delivery_count_limit);
@@ -707,7 +720,7 @@ async fn acquire_partition(
     // fenced write drops the cell, and the records acquired on it must not
     // reach the client.
     let persisted = mgr
-        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
+        .persist_if_dirty(share_key(group, p), Some(&cell), &mut st)
         .await;
     drop(st);
     match persisted {
@@ -735,7 +748,7 @@ async fn persist_best_effort(
     st: &mut AcquisitionState,
 ) {
     let _ = mgr
-        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(cell), st)
+        .persist_if_dirty(share_key(group, p), Some(cell), st)
         .await;
 }
 
@@ -764,6 +777,15 @@ fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, 
     };
     out.records = Some(RecordsPayload::Raw(joined));
     Ok(added_len)
+}
+
+/// The share key of `p` in `group`.
+fn share_key<'a>(group: &'a str, p: &PendingPartition) -> ShareKeyRef<'a> {
+    ShareKeyRef {
+        group,
+        topic_id: p.topic_id,
+        partition: p.partition_index,
+    }
 }
 
 /// Fails one partition row's fetch half with a share-partition error, and

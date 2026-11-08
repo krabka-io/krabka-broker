@@ -34,9 +34,10 @@ use {
         share_coordinator::{
             bootstrap,
             coordinator::{
-                LoadStatus, ShareCoordinator, ShareStateSummary, ShareWrite,
-                UNINITIALIZED_START_OFFSET,
+                LoadStatus, ShareCoordinator, ShareStateError, ShareStateOp, ShareStateSummary,
+                ShareWrite, UNINITIALIZED_START_OFFSET,
             },
+            key::ShareKeyRef,
             persistence::StateBatch,
             state::SharePartitionState,
         },
@@ -158,7 +159,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
@@ -171,14 +178,7 @@ impl SharePersister {
                     start_offset,
                 )
                 .await
-                .map_err(|error| {
-                    refused(
-                        "InitializeShareGroupState",
-                        partition,
-                        error.code(),
-                        &error.row_message("initialize"),
-                    )
-                });
+                .map_err(|error| refuse_local(ShareStateOp::Initialize, partition, error));
         }
 
         let req = krabka_macros::share_state_request! {
@@ -191,7 +191,7 @@ impl SharePersister {
                 start_offset: start_offset.0,
             };
         };
-        self.send_to_leader(state_partition, req, "InitializeShareGroupState", partition)
+        self.send_to_leader(state_partition, req, ShareStateOp::Initialize, partition)
             .await
     }
 
@@ -212,19 +212,18 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         let result = if local {
             self.share_coordinator
                 .delete(&self.controller.current_image(), group, topic_id, partition)
                 .await
-                .map_err(|error| {
-                    refused(
-                        "DeleteShareGroupState",
-                        partition,
-                        error.code(),
-                        &error.row_message("delete"),
-                    )
-                })
+                .map_err(|error| refuse_local(ShareStateOp::Delete, partition, error))
         } else {
             let req = krabka_macros::share_state_request! {
                 DeleteShareGroupStateRequest, DeleteStateData, DeletePartitionData;
@@ -234,7 +233,7 @@ impl SharePersister {
                     partition,
                 };
             };
-            self.send_to_leader(state_partition, req, "DeleteShareGroupState", partition)
+            self.send_to_leader(state_partition, req, ShareStateOp::Delete, partition)
                 .await
         };
         // The coordinator refuses a topic that the image no longer holds, and
@@ -258,12 +257,12 @@ impl SharePersister {
     }
 
     /// Refresh leadership before choosing the local coordinator or its remote leader.
-    async fn route(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Result<RoutedPartition, BrokerError> {
+    async fn route(&self, key: ShareKeyRef<'_>) -> Result<RoutedPartition, BrokerError> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let state_partition = self
             .share_coordinator
             .state_partition_for(group, &topic_id, partition)
@@ -380,7 +379,13 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
@@ -392,14 +397,7 @@ impl SharePersister {
                     leader_epoch,
                 )
                 .await
-                .map_err(|error| {
-                    refused(
-                        "ReadShareGroupState",
-                        partition,
-                        error.code(),
-                        &error.row_message("read"),
-                    )
-                });
+                .map_err(|error| refuse_local(ShareStateOp::Read, partition, error));
         }
 
         let req = krabka_macros::share_state_request! {
@@ -414,7 +412,7 @@ impl SharePersister {
         let resp = self.send_to_leader_resp(state_partition, req).await?;
         let pr = checked_partition(
             resp.results.into_iter().flat_map(|topic| topic.partitions),
-            "ReadShareGroupState",
+            ShareStateOp::Read,
             partition,
             |row| PartitionStatus {
                 partition: row.partition,
@@ -454,20 +452,19 @@ impl SharePersister {
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self
+            .route(ShareKeyRef {
+                group,
+                topic_id,
+                partition,
+            })
+            .await?;
         if local {
             return self
                 .share_coordinator
                 .read_summary_checked(&self.controller.current_image(), group, topic_id, partition)
                 .await
-                .map_err(|error| {
-                    refused(
-                        "ReadShareGroupStateSummary",
-                        partition,
-                        error.code(),
-                        &error.summary_row_message(),
-                    )
-                });
+                .map_err(|error| refuse_local(ShareStateOp::ReadSummary, partition, error));
         }
 
         let req = krabka_macros::share_state_request! {
@@ -481,7 +478,7 @@ impl SharePersister {
         let resp = self.send_to_leader_resp(state_partition, req).await?;
         let pr = checked_partition(
             resp.results.into_iter().flat_map(|topic| topic.partitions),
-            "ReadShareGroupStateSummary",
+            ShareStateOp::ReadSummary,
             partition,
             |row| PartitionStatus {
                 partition: row.partition,
@@ -496,16 +493,16 @@ impl SharePersister {
         if pr.state_epoch == 0 && pr.start_offset == UNINITIALIZED_START_OFFSET {
             return Ok(None);
         }
-        Ok(Some((
-            pr.state_epoch,
-            pr.leader_epoch,
-            Offset(pr.start_offset),
-            pr.delivery_complete_count,
-        )))
+        Ok(Some(ShareStateSummary {
+            state_epoch: pr.state_epoch,
+            leader_epoch: pr.leader_epoch,
+            start_offset: Offset(pr.start_offset),
+            delivery_complete_count: pr.delivery_complete_count,
+        }))
     }
 
-    /// Persist a `WriteShareGroupState` delta for `(group, topic_id,
-    /// partition)`. The call is local when this broker leads the target
+    /// Persist the `WriteShareGroupState` partition `request` for `key`. The
+    /// call is local when this broker leads the target
     /// `__share_group_state` partition. If it does not, the client routes the
     /// call to the leader over RPC.
     ///
@@ -518,27 +515,19 @@ impl SharePersister {
     #[cfg_attr(test, mutants::skip)]
     pub(crate) async fn write_state(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        epochs: (i32, i32),
-        progress: (Offset, i32),
-        batches: Vec<StateBatch>,
+        key: ShareKeyRef<'_>,
+        request: ShareWrite,
     ) -> Result<(), BrokerError> {
-        let (state_epoch, leader_epoch) = epochs;
-        let (start_offset, delivery_complete_count) = progress;
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         let RoutedPartition {
             state_partition,
             local,
-        } = self.route(group, topic_id, partition).await?;
+        } = self.route(key).await?;
         if local {
-            let request = ShareWrite {
-                state_epoch,
-                leader_epoch,
-                start_offset,
-                delivery_complete_count,
-                batches,
-            };
             return self
                 .share_coordinator
                 .write(
@@ -549,14 +538,7 @@ impl SharePersister {
                     request,
                 )
                 .await
-                .map_err(|error| {
-                    refused(
-                        "WriteShareGroupState",
-                        partition,
-                        error.code(),
-                        &error.row_message("write"),
-                    )
-                });
+                .map_err(|error| refuse_local(ShareStateOp::Write, partition, error));
         }
 
         let req = krabka_macros::share_state_request! {
@@ -565,17 +547,18 @@ impl SharePersister {
             topic [topic_id];
             fields {
                 partition,
-                state_epoch,
-                leader_epoch,
-                start_offset: start_offset.0,
-                delivery_complete_count,
-                state_batches: batches
+                state_epoch: request.state_epoch,
+                leader_epoch: request.leader_epoch,
+                start_offset: request.start_offset.0,
+                delivery_complete_count: request.delivery_complete_count,
+                state_batches: request
+                    .batches
                     .into_iter()
                     .map(ProtoStateBatch::from)
                     .collect(),
             };
         };
-        self.send_to_leader(state_partition, req, "WriteShareGroupState", partition)
+        self.send_to_leader(state_partition, req, ShareStateOp::Write, partition)
             .await
     }
 
@@ -624,7 +607,7 @@ impl SharePersister {
     }
 
     /// Send `req` to the `state_partition` leader and turn the leader's answer
-    /// for `partition` into a `Result`. `what` names the RPC for the error
+    /// for `partition` into a `Result`. `op` names the RPC in the error
     /// message.
     ///
     /// A transport-level `Ok` says only that the bytes made the round trip.
@@ -639,7 +622,7 @@ impl SharePersister {
         &self,
         state_partition: PartitionIndex,
         req: R,
-        what: &str,
+        op: ShareStateOp,
         partition: i32,
     ) -> Result<(), BrokerError>
     where
@@ -647,7 +630,7 @@ impl SharePersister {
         R::Response: PartitionResults,
     {
         let resp = self.send_to_leader_resp(state_partition, req).await?;
-        check_partition_result(resp, what, partition)
+        check_partition_result(resp, op, partition)
     }
 
     /// Send `req` to the `state_partition` leader and return the typed
@@ -704,11 +687,21 @@ krabka_macros::share_partition_results!(
 /// The error for a share-state call on `partition` that the coordinator
 /// refused with `error_code`. The share-partition leader maps the code as
 /// Kafka's `SharePartition.fetchPersisterError` does.
-fn refused(what: &str, partition: i32, error_code: i16, message: &str) -> BrokerError {
+fn refused(op: ShareStateOp, partition: i32, error_code: i16, message: &str) -> BrokerError {
     BrokerError::SharePartitionState {
         code: error_code,
-        message: format!("{what} for partition {partition} refused by the leader: {message}"),
+        message: format!(
+            "{} for partition {partition} refused by the leader: {message}",
+            op.api_name()
+        ),
     }
+}
+
+/// The error for a share-state call on `partition` that the local
+/// coordinator refused with `error`: its code, and the message of its
+/// response row.
+fn refuse_local(op: ShareStateOp, partition: i32, error: ShareStateError) -> BrokerError {
+    refused(op, partition, error.code(), &error.row_message(op))
 }
 
 /// A partition's verdict, borrowed from its row.
@@ -721,7 +714,7 @@ struct PartitionStatus<'a> {
 /// Finds the requested row and checks the leader's verdict without changing its payload.
 fn checked_partition<T>(
     rows: impl IntoIterator<Item = T>,
-    what: &str,
+    op: ShareStateOp,
     partition: i32,
     status: impl Fn(&T) -> PartitionStatus<'_>,
 ) -> Result<T, BrokerError> {
@@ -730,13 +723,14 @@ fn checked_partition<T>(
         .find(|row| status(row).partition == partition)
         .ok_or_else(|| {
             BrokerError::Share(format!(
-                "{what} for partition {partition}: leader answered for no such partition"
+                "{} for partition {partition}: leader answered for no such partition",
+                op.api_name()
             ))
         })?;
     let PartitionStatus { code, message, .. } = status(&row);
     if code != 0 {
         return Err(refused(
-            what,
+            op,
             partition,
             code,
             message.unwrap_or("no error message"),
@@ -754,10 +748,10 @@ fn checked_partition<T>(
 /// the lifecycle hook retries on the next heartbeat.
 fn check_partition_result<R: PartitionResults>(
     resp: R,
-    what: &str,
+    op: ShareStateOp,
     partition: i32,
 ) -> Result<(), BrokerError> {
-    checked_partition(resp.partition_results(), what, partition, |row| {
+    checked_partition(resp.partition_results(), op, partition, |row| {
         PartitionStatus {
             partition: row.partition,
             code: row.error_code,
@@ -831,7 +825,9 @@ mod tests {
 
     #[test]
     fn leader_accepting_the_partition_is_success() {
-        assert2::assert!(check_partition_result(response(&[code(0, 0)]), "Initialize", 0).is_ok());
+        assert2::assert!(
+            check_partition_result(response(&[code(0, 0)]), ShareStateOp::Initialize, 0).is_ok()
+        );
     }
 
     /// The bug this guards: the group-coordinator lifecycle hook records a
@@ -843,9 +839,68 @@ mod tests {
         // 16 is NOT_COORDINATOR: the state-partition leader has not caught up
         // with its own leadership yet. It is transient, and the caller only
         // retries if it hears about it.
-        let error = check_partition_result(response(&[code(0, 16)]), "Initialize", 0)
+        let error = check_partition_result(response(&[code(0, 16)]), ShareStateOp::Initialize, 0)
             .expect_err("a refused partition must not read as success");
         assert2::assert!(error.to_string().contains("16"));
+    }
+
+    /// A local refusal names the RPC and keeps the coordinator's row message:
+    /// a refusal's own message, or an operation error after the prefix that
+    /// Kafka's `ShareCoordinatorService` gives each RPC.
+    #[yare::parameterized(
+        initialize = {
+            ShareStateOp::Initialize,
+            "InitializeShareGroupState for partition 3 refused by the leader: \
+             Unable to initialize share group state: busy",
+        },
+        read = {
+            ShareStateOp::Read,
+            "ReadShareGroupState for partition 3 refused by the leader: \
+             Unable to read share group state: busy",
+        },
+        read_summary = {
+            ShareStateOp::ReadSummary,
+            "ReadShareGroupStateSummary for partition 3 refused by the leader: \
+             Unable to read share group state summary: busy",
+        },
+        write = {
+            ShareStateOp::Write,
+            "WriteShareGroupState for partition 3 refused by the leader: \
+             Unable to write share group state: busy",
+        },
+        delete = {
+            ShareStateOp::Delete,
+            "DeleteShareGroupState for partition 3 refused by the leader: \
+             Unable to delete share group state: busy",
+        },
+    )]
+    fn a_local_refusal_names_the_rpc_and_keeps_the_row_message(
+        op: ShareStateOp,
+        operation_message: &str,
+    ) {
+        let api = op.api_name();
+        let refusals = [
+            refuse_local(op, 3, ShareStateError::Operation {
+                code: COORDINATOR_LOAD_IN_PROGRESS,
+                message: "busy",
+            }),
+            refuse_local(op, 3, ShareStateError::Refused {
+                code: INVALID_REQUEST,
+                message: "bad",
+            }),
+        ];
+        assert2::assert!(
+            refusals.map(|refusal| match refusal {
+                BrokerError::SharePartitionState { code, message } => Some((code, message)),
+                _ => None,
+            }) == [
+                Some((COORDINATOR_LOAD_IN_PROGRESS, operation_message.to_owned())),
+                Some((
+                    INVALID_REQUEST,
+                    format!("{api} for partition 3 refused by the leader: bad")
+                )),
+            ]
+        );
     }
 
     /// A refused `Read`, `Write` or `ReadSummary` keeps the coordinator code,
@@ -854,21 +909,33 @@ mod tests {
     #[test]
     fn a_refused_share_state_call_keeps_the_coordinator_code() {
         let cases = [
-            ("ReadShareGroupState", INVALID_REQUEST),
-            ("ReadShareGroupState", FENCED_LEADER_EPOCH),
-            ("WriteShareGroupState", FENCED_STATE_EPOCH),
-            ("ReadShareGroupStateSummary", COORDINATOR_LOAD_IN_PROGRESS),
+            (ShareStateOp::Read, "ReadShareGroupState", INVALID_REQUEST),
+            (
+                ShareStateOp::Read,
+                "ReadShareGroupState",
+                FENCED_LEADER_EPOCH,
+            ),
+            (
+                ShareStateOp::Write,
+                "WriteShareGroupState",
+                FENCED_STATE_EPOCH,
+            ),
+            (
+                ShareStateOp::ReadSummary,
+                "ReadShareGroupStateSummary",
+                COORDINATOR_LOAD_IN_PROGRESS,
+            ),
         ];
         let actual: Vec<_> = cases
             .iter()
-            .map(|&(what, code)| match refused(what, 3, code, "detail") {
+            .map(|&(op, _, code)| match refused(op, 3, code, "detail") {
                 BrokerError::SharePartitionState { code, message } => Some((code, message)),
                 _ => None,
             })
             .collect();
         let expected: Vec<_> = cases
             .iter()
-            .map(|&(what, code)| {
+            .map(|&(_, what, code)| {
                 Some((
                     code,
                     format!("{what} for partition 3 refused by the leader: detail"),
@@ -1035,7 +1102,11 @@ mod tests {
 
     #[test]
     fn a_leader_silent_about_the_partition_is_an_error() {
-        assert2::assert!(check_partition_result(response(&[code(1, 0)]), "Initialize", 0).is_err());
-        assert2::assert!(check_partition_result(response(&[]), "Initialize", 0).is_err());
+        assert2::assert!(
+            check_partition_result(response(&[code(1, 0)]), ShareStateOp::Initialize, 0).is_err()
+        );
+        assert2::assert!(
+            check_partition_result(response(&[]), ShareStateOp::Initialize, 0).is_err()
+        );
     }
 }

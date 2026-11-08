@@ -51,26 +51,32 @@ const TOPIC: &str = "throttled";
 /// The node id of the follower.
 const FOLLOWER: u64 = 2;
 
-/// The leader's throttle, in bytes per second. The bucket bursts one second
-/// of it.
+/// The leader's throttle, in bytes per second.
 const LEADER_RATE: u32 = 1_000;
 
 /// How long a fetch may park. A fetch that comes back sooner than
 /// [`MIN_PARK`] did not wait for its `min_bytes`.
-const MAX_WAIT_MS: i32 = 1_000;
-const MIN_PARK: Duration = Duration::from_millis(900);
+///
+/// The quota's `SimpleRate` divides what it recorded by at least one second,
+/// so a batch over the bound keeps the quota exceeded for longer than a
+/// second. The wait is two seconds so that a batch a little over the bound
+/// leaves the quota within the wait.
+const MAX_WAIT_MS: i32 = 2_000;
+const MIN_PARK: Duration = Duration::from_millis(1_800);
 
-/// A record value three times the leader's one-second burst: the debt its
-/// batch leaves takes about two seconds to repay, longer than a fetch waits.
-static DEEP_DEBT_VALUE: [u8; 3_000] = [7; 3_000];
+/// A record value three times what the bound allows in a second: the
+/// measured rate stays above the bound for about three seconds after the
+/// first quota check, longer than the second fetch waits.
+static LONG_EXCESS_VALUE: [u8; 3_000] = [7; 3_000];
 
-/// A record value a quarter over the burst: the debt its batch leaves takes
-/// about a third of a second to repay, well inside a fetch's wait.
-static SHALLOW_DEBT_VALUE: [u8; 1_250] = [7; 1_250];
+/// A record value a quarter over what the bound allows in a second: the
+/// measured rate falls to the bound about 1.3 seconds after the first quota
+/// check, well inside the second fetch's wait.
+static SHORT_EXCESS_VALUE: [u8; 1_250] = [7; 1_250];
 
 /// Create the topic with replicas 1 and 2 and only the leader in the ISR,
 /// throttle every replica of it on the leader at [`LEADER_RATE`], and wait
-/// until the broker leads the partition and runs at that rate.
+/// until the broker leads the partition and bounds its quota at that rate.
 async fn throttled_partition(broker: &BrokerHandle) -> Arc<Partition> {
     let replicas = [NodeId(1), NodeId(FOLLOWER)];
     for record in [
@@ -108,7 +114,7 @@ async fn throttled_partition(broker: &BrokerHandle) -> Arc<Partition> {
     wait_for_bound_partition(
         &shared,
         TOPIC,
-        async |_| shared.throttle_state.leader_out.byte_rate() == bytes_per_sec(LEADER_RATE),
+        async |_| shared.throttle_state.leader_out.bound() == Some(bytes_per_sec(LEADER_RATE)),
         "the broker leads the partition and throttles it",
     )
     .await
@@ -174,7 +180,7 @@ async fn fetch_two_batches(value: &'static [u8]) -> TwoFetches {
         partition
             .produce_batch(single_value_batch(value))
             .await
-            .expect("append a batch over the burst");
+            .expect("append a batch over the bound");
     };
 
     append().await;
@@ -189,22 +195,24 @@ async fn fetch_two_batches(value: &'static [u8]) -> TwoFetches {
     }
 }
 
-/// A batch larger than the throttle's whole burst still replicates: the
+/// A batch larger than the bound allows in a second still replicates: the
 /// quota is not exceeded when the first fetch reads, so the batch goes out
-/// whole and its size is recorded past the bound. The overshoot is paid
-/// back by throttling: the next fetch finds the quota exceeded, and its
+/// whole and its size is recorded after the read, which puts the measured
+/// rate above the bound. The next fetch finds the quota exceeded, and its
 /// read is withheld, so it parks for its `max_wait_ms` instead of coming
 /// straight back for an immediate retry. Kafka's `DelayedFetch` reads again
-/// when the wait expires, so the second batch goes out then if the debt was
-/// repaid in the meantime, and the fetch is empty if it was not.
+/// when the wait expires, so the second batch goes out then if the elapsed
+/// time has brought the measured rate down to the bound, and the fetch is
+/// empty if it has not.
 #[tokio::test]
 async fn an_oversized_batch_replicates_and_the_overshoot_parks_the_next_fetch() {
-    // (label, record value, whether the debt outlasts the second fetch's wait)
+    // (label, record value, whether the quota stays exceeded past the second
+    // fetch's wait)
     let cases: [(&str, &'static [u8], bool); 2] = [
-        ("the debt outlasts the wait", &DEEP_DEBT_VALUE, true),
+        ("the excess outlasts the wait", &LONG_EXCESS_VALUE, true),
         (
-            "the debt is repaid within the wait",
-            &SHALLOW_DEBT_VALUE,
+            "the rate falls to the bound within the wait",
+            &SHORT_EXCESS_VALUE,
             false,
         ),
     ];

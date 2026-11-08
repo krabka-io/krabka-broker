@@ -5,6 +5,7 @@
 
 use {
     crate::{
+        BrokerError,
         audit_authorizer::AuditingAuthorizer,
         audit_recovery::{ChainResume, recover_from_partition_tail},
         audit_sink::KafkaTopicAuditSink,
@@ -28,18 +29,41 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-fn audit_signer(config: &BrokerConfig) -> Option<Arc<krabka_audit::FileEd25519Signer>> {
-    let (Some(path), Some(key_id)) = (&config.audit_signing_key_path, &config.audit_signing_key_id)
-    else {
-        tracing::info!("no audit signing key configured; checkpoints disabled");
-        return None;
-    };
-    match krabka_audit::FileEd25519Signer::from_pkcs8_file(path, key_id.clone()) {
-        Ok(signer) => Some(Arc::new(signer)),
-        Err(error) => {
-            tracing::error!(%error, "failed to load audit signing key; checkpoints disabled");
-            None
+/// The checkpoint signing key the audit writer signs with.
+pub(super) type AuditSigner = Arc<krabka_audit::FileEd25519Signer>;
+
+/// Loads the configured audit checkpoint signing key.
+///
+/// [`crate::Broker::start`] calls it right after it validates the config and
+/// before any side effect. With audit disabled, or with no key configured, it
+/// returns `None`: checkpoints are disabled. `BrokerConfig::validate` has
+/// already refused a `fail-closed` broker without a key.
+///
+/// # Errors
+///
+/// [`BrokerError::AuditSigningKey`] when a configured key does not load, in
+/// every audit failure mode, and [`BrokerError::InvalidRuntimeConfig`] when
+/// only one of the key path and the key id is set.
+pub(super) fn load_audit_signer(config: &BrokerConfig) -> Result<Option<AuditSigner>, BrokerError> {
+    if !config.audit_enabled {
+        return Ok(None);
+    }
+    match (&config.audit_signing_key_path, &config.audit_signing_key_id) {
+        (None, None) => {
+            tracing::info!("no audit signing key configured; checkpoints disabled");
+            Ok(None)
         }
+        (Some(path), Some(key_id)) => {
+            krabka_audit::FileEd25519Signer::from_pkcs8_file(path, key_id.clone())
+                .map(|signer| Some(Arc::new(signer)))
+                .map_err(|source| BrokerError::AuditSigningKey {
+                    path: path.clone(),
+                    source,
+                })
+        }
+        _ => Err(BrokerError::InvalidRuntimeConfig(
+            "audit_signing_key_path and audit_signing_key_id must be set together".to_owned(),
+        )),
     }
 }
 
@@ -127,6 +151,7 @@ pub(super) struct AuditPipeline {
 
 pub(super) fn start_audit_pipeline(
     config: &mut BrokerConfig,
+    signer: Option<AuditSigner>,
     controller: &dyn MetadataSource,
     partitions: &Arc<PartitionRegistry>,
     metrics: &BrokerMetrics,
@@ -240,7 +265,7 @@ pub(super) fn start_audit_pipeline(
             sink,
             product: Broker::audit_product(),
             ocsf_version,
-            signer: audit_signer(config),
+            signer,
             checkpoint_every_n: config.audit_checkpoint_every_n,
             checkpoint_every: config.audit_checkpoint_every,
             chain,
@@ -274,12 +299,15 @@ pub(super) fn start_audit_pipeline(
 mod tests {
     use {
         super::*,
+        crate::file_config::{FileConfig, FileConfigError},
         assert2::assert,
         krabka_metadata::{
             FeatureLevelRecord, MetadataRecord, krabka_version::KRABKA_VERSION_FEATURE,
         },
         krabka_units::minutes,
-        std::time::Duration,
+        ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+        std::{fs, path::PathBuf, time::Duration},
+        tempfile::TempDir,
         tokio::{task, time},
         uuid::Uuid,
     };
@@ -371,4 +399,140 @@ mod tests {
 
         assert!(weak_log.upgrade().is_none());
     }
+
+    /// The audit failure mode a scenario's broker runs in.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum FailureMode {
+        FailOpen,
+        FailClosed,
+    }
+
+    impl FailureMode {
+        const fn toml(self) -> &'static str {
+            match self {
+                Self::FailOpen => "fail-open",
+                Self::FailClosed => "fail-closed",
+            }
+        }
+    }
+
+    /// Why startup refused, from the config file or from loading the key.
+    #[derive(Debug)]
+    enum StartupRefusal {
+        File(FileConfigError),
+        Broker(BrokerError),
+    }
+
+    /// Whether the broker that started signs its checkpoints.
+    type StartupAttempt = krabka_bdd::Attempt<bool, StartupRefusal>;
+
+    struct AuditStartupScenario {
+        dir: TempDir,
+        mode: krabka_bdd::Given<FailureMode>,
+        key_path: Option<PathBuf>,
+    }
+
+    #[rstest::fixture]
+    fn audit_startup() -> AuditStartupScenario {
+        AuditStartupScenario {
+            dir: TempDir::new().expect("scenario directory"),
+            mode: krabka_bdd::Given::new("mode", "Given the broker audits in <mode> mode"),
+            key_path: None,
+        }
+    }
+
+    #[rstest::fixture]
+    fn startup() -> StartupAttempt {
+        // The When step replaces it with what the start attempt returned.
+        StartupAttempt::NotExecuted
+    }
+
+    impl AuditStartupScenario {
+        fn key_file(&mut self, contents: Option<&[u8]>) {
+            let path = self.dir.path().join("audit.pk8");
+            if let Some(contents) = contents {
+                fs::write(&path, contents).expect("write the audit signing key file");
+            }
+            self.key_path = Some(path);
+        }
+
+        /// The broker.toml the operator wrote, applied, validated, and its
+        /// signing key loaded, the order `Broker::start` runs them in.
+        fn start(&self) -> Result<bool, StartupRefusal> {
+            let signing = self.key_path.as_ref().map_or_else(String::new, |path| {
+                format!(
+                    "[audit.signing]\nkey_path = {:?}\nkey_id = \"audit-2026\"\n",
+                    path.display().to_string()
+                )
+            });
+            let toml = format!(
+                "[audit]\nfailure_mode = \"{}\"\n{signing}",
+                self.mode.get().toml()
+            );
+            let file: FileConfig = toml::from_str(&toml).expect("parse broker.toml");
+            let mut config = BrokerConfig::for_tests(self.dir.path().join("log"));
+            file.apply_to(&mut config).map_err(StartupRefusal::File)?;
+            config.validate().map_err(StartupRefusal::Broker)?;
+            load_audit_signer(&config)
+                .map(|signer| signer.is_some())
+                .map_err(StartupRefusal::Broker)
+        }
+    }
+
+    #[krabka_bdd::given("the broker audits in {mode} mode")]
+    fn audits_in(audit_startup: &mut AuditStartupScenario, mode: FailureMode) {
+        audit_startup.mode.set(mode);
+    }
+
+    #[krabka_bdd::given("the audit signing key file the broker names does not exist")]
+    fn key_file_missing(audit_startup: &mut AuditStartupScenario) { audit_startup.key_file(None); }
+
+    #[krabka_bdd::given("the audit signing key file the broker names holds no key")]
+    fn key_file_not_a_key(audit_startup: &mut AuditStartupScenario) {
+        audit_startup.key_file(Some(b"not a PKCS#8 key"));
+    }
+
+    #[krabka_bdd::given("the broker names an Ed25519 audit signing key")]
+    fn key_file_valid(audit_startup: &mut AuditStartupScenario) {
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate key");
+        audit_startup.key_file(Some(pkcs8.as_ref()));
+    }
+
+    #[krabka_bdd::when("the broker attempts to start")]
+    fn attempts_to_start(
+        audit_startup: &AuditStartupScenario,
+    ) -> krabka_bdd::Attempt<bool, StartupRefusal> {
+        StartupAttempt::of(|| audit_startup.start())
+    }
+
+    #[krabka_bdd::then("startup is refused because the audit signing key did not load")]
+    fn refused_key_did_not_load(audit_startup: &AuditStartupScenario, startup: &StartupAttempt) {
+        let failed = startup.failed();
+        assert!(let StartupRefusal::Broker(BrokerError::AuditSigningKey { path, .. }) = failed);
+        assert!(Some(path) == audit_startup.key_path.as_ref());
+    }
+
+    #[krabka_bdd::then(
+        "startup is refused because a fail-closed broker needs an audit signing key"
+    )]
+    fn refused_key_required(startup: &StartupAttempt) {
+        let failed = startup.failed();
+        assert!(let StartupRefusal::File(FileConfigError::InvalidConfig(message)) = failed);
+        assert!(*message == BrokerError::AuditSigningKeyRequired.to_string());
+    }
+
+    #[krabka_bdd::then("the broker starts with checkpoint signing enabled")]
+    fn starts_signed(startup: &StartupAttempt) {
+        assert!(*startup.succeeded());
+    }
+
+    #[krabka_bdd::then("the broker starts with checkpoint signing disabled")]
+    fn starts_unsigned(startup: &StartupAttempt) {
+        assert!(!*startup.succeeded());
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/audit_signing_startup",
+        fixtures = [audit_startup: AuditStartupScenario, startup: StartupAttempt],
+    );
 }
