@@ -590,18 +590,30 @@ mod tests {
         assert!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
     }
 
-    #[tokio::test]
-    async fn cascade_partition_delete_stays_started_when_a_segment_delete_fails() {
-        let rsm_impl = Arc::new(fixtures::RefusesDeleteRsm::default());
-        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+    /// Two segments copied through `rsm` into a fresh in-memory metadata
+    /// manager, and the tier resources the copy counted into.
+    async fn two_copied_segments(
+        rsm: &Arc<dyn RemoteStorageManager>,
+    ) -> (
+        Arc<InmemoryRemoteLogMetadataManager>,
+        fixtures::OwnedTierResources,
+    ) {
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let resources = fixtures::OwnedTierResources {
             rlmm: Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>,
             metrics: BrokerMetrics::new(),
             index_cache: disabled_index_cache(),
         };
-        let copied = copy_exports(&resources.tier(&rsm), fixtures::two_exports()).await;
-        check!(copied == 2);
+        let copied = copy_exports(&resources.tier(rsm), fixtures::two_exports()).await;
+        assert!(copied == 2);
+        (rlmm_impl, resources)
+    }
+
+    #[tokio::test]
+    async fn cascade_partition_delete_stays_started_when_a_segment_delete_fails() {
+        let rsm_impl = Arc::new(fixtures::RefusesDeleteRsm::default());
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+        let (rlmm_impl, resources) = two_copied_segments(&rsm).await;
 
         cascade_remote_partition_delete(
             tp(),
@@ -716,14 +728,7 @@ mod tests {
             deletes_attempted: AtomicUsize::new(0),
         });
         let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
-        let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let resources = fixtures::OwnedTierResources {
-            rlmm: Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>,
-            metrics: BrokerMetrics::new(),
-            index_cache: disabled_index_cache(),
-        };
-        let copied = copy_exports(&resources.tier(&rsm), fixtures::two_exports()).await;
-        check!(copied == 2);
+        let (rlmm_impl, resources) = two_copied_segments(&rsm).await;
         let capture = LogCapture::default();
         let dispatch = capture.dispatch();
         let span = dispatcher::with_default(&dispatch, LogCapture::span);
