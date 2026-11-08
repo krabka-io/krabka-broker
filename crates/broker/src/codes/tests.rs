@@ -16,7 +16,7 @@ mod kafka_error_table;
 
 use {
     super::*,
-    crate::error::BrokerError,
+    crate::error::{BrokerError, ConfigError},
     assert2::assert,
     kafka_error_table::{KAFKA_ERROR_TABLE, KAFKA_ERROR_TABLE_IMAGE_DIGEST},
     std::io::Error,
@@ -256,29 +256,29 @@ rstest_bdd_macros::scenarios!("tests/features/migrated/src/codes/tests.feature",
 // stay fixed.
 #[yare::parameterized(
     listener_conflict = {
-        BrokerError::ListenerConflict { a: "A".into(), b: "B".into() },
+        BrokerError::Config(ConfigError::ListenerConflict { a: "A".into(), b: "B".into() }),
         "listener bind conflict: A and B share bind_addr",
     },
-    empty_roles = { BrokerError::EmptyRoles, "process.roles must list at least one role" },
+    empty_roles = { BrokerError::Config(ConfigError::EmptyRoles), "process.roles must list at least one role" },
     broker_id_node_id_mismatch = {
-        BrokerError::BrokerIdNodeIdMismatch { broker_id: 1, node_id: krabka_raft::NodeId(2) },
+        BrokerError::Config(ConfigError::BrokerIdNodeIdMismatch { broker_id: 1, node_id: krabka_raft::NodeId(2) }),
         "broker_id 1 must equal node_id 2",
     },
     stretch_requires_rack = {
-        BrokerError::StretchRequiresRack,
+        BrokerError::Config(ConfigError::StretchRequiresRack),
         "stretch profile is configured but rack is unset: a node in a stretch cluster must name \
          the site it runs in",
     },
     stretch_rack_not_in_profile = {
-        BrokerError::StretchRackNotInProfile { rack: "r".into() },
+        BrokerError::Config(ConfigError::StretchRackNotInProfile { rack: "r".into() }),
         "rack r is not one of stretch.sites",
     },
     gssapi_config_missing = {
-        BrokerError::GssapiConfigMissing,
+        BrokerError::Config(ConfigError::GssapiConfigMissing),
         "GSSAPI is an enabled SASL mechanism but gssapi config is missing",
     },
     invalid_leader_rebalance_interval = {
-        BrokerError::InvalidLeaderRebalanceInterval { value: 0 },
+        BrokerError::Config(ConfigError::InvalidLeaderRebalanceInterval { value: 0 }),
         "invalid leader_imbalance_check_interval = 0: must be >= 1",
     },
 )]

@@ -279,7 +279,7 @@ pub use {
     broker::{Broker, BrokerHandle},
     config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
     config_keys::{TopicConfigDoc, topic_config_docs},
-    error::BrokerError,
+    error::{BrokerError, ConfigError},
 };
 /// Benchmark seam over the zero-copy fetch drain, driven by
 /// `benches/fetch_drain.rs`.

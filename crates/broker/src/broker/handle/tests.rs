@@ -9,6 +9,7 @@ use {
             },
         },
         config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
+        error::ConfigError,
         partition::{Partition, WriterMessage, test_support::poison_log},
         test_support::{
             UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
@@ -578,10 +579,13 @@ async fn a_broker_whose_broker_id_differs_from_its_node_id_is_refused_at_startup
     let Err(refused) = started else {
         panic!("a broker whose broker_id differs from its node_id started");
     };
-    check!(matches!(refused, BrokerError::BrokerIdNodeIdMismatch {
-        broker_id: 42,
-        node_id: krabka_raft::NodeId(1),
-    }));
+    check!(matches!(
+        refused,
+        BrokerError::Config(ConfigError::BrokerIdNodeIdMismatch {
+            broker_id: 42,
+            node_id: krabka_raft::NodeId(1),
+        })
+    ));
 }
 
 /// A node whose log finalized a level above its range never starts. The

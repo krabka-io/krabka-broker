@@ -2,7 +2,7 @@
 //! predicates the rest of the broker gates on, and the check that a witness
 //! carries the roles it depends on.
 
-use crate::{BrokerError, config::BrokerConfig};
+use crate::{BrokerError, config::BrokerConfig, error::ConfigError};
 
 /// `KRaft` `process.roles`. A node is a metadata-quorum `Controller`, a data
 /// `Broker`, or both. Default is the combined set `[Controller, Broker]`.
@@ -53,10 +53,12 @@ impl BrokerConfig {
     pub(super) fn validate_witness_roles(&self) -> Result<(), BrokerError> {
         if self.is_witness() {
             if !self.is_broker() {
-                return Err(BrokerError::WitnessRequiresBrokerRole);
+                return Err(BrokerError::Config(ConfigError::WitnessRequiresBrokerRole));
             }
             if !self.is_controller() {
-                return Err(BrokerError::WitnessRequiresControllerRole);
+                return Err(BrokerError::Config(
+                    ConfigError::WitnessRequiresControllerRole,
+                ));
             }
         }
         Ok(())
@@ -115,7 +117,10 @@ mod tests {
             roles: vec![],
             ..BrokerConfig::default()
         };
-        assert!(matches!(c.validate(), Err(BrokerError::EmptyRoles)));
+        assert!(matches!(
+            c.validate(),
+            Err(BrokerError::Config(ConfigError::EmptyRoles))
+        ));
     }
 
     #[test]
@@ -130,9 +135,9 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::NonControllerIsVoter {
+            Err(BrokerError::Config(ConfigError::NonControllerIsVoter {
                 node_id: krabka_raft::NodeId(1)
-            })
+            }))
         ));
     }
 
@@ -260,7 +265,7 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::WitnessRequiresBrokerRole)
+            Err(BrokerError::Config(ConfigError::WitnessRequiresBrokerRole))
         ));
     }
 
@@ -272,7 +277,9 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::WitnessRequiresControllerRole)
+            Err(BrokerError::Config(
+                ConfigError::WitnessRequiresControllerRole
+            ))
         ));
     }
 }

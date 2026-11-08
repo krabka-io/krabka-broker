@@ -697,30 +697,9 @@ pub fn from_broker_error(err: &BrokerError) -> i16 {
         | BrokerError::MarkerWriteRefused { .. }
         | BrokerError::Share(_)
         | BrokerError::SharePartitionState { .. }
-        | BrokerError::ListenerConflict { .. }
-        | BrokerError::InvalidInterBrokerListener { .. }
-        | BrokerError::EmptyRoles
-        | BrokerError::NonControllerIsVoter { .. }
-        | BrokerError::BrokerIdNodeIdMismatch { .. }
-        | BrokerError::ControllerOnlyNodeListeners { .. }
-        | BrokerError::WitnessRequiresBrokerRole
-        | BrokerError::WitnessRequiresControllerRole
-        | BrokerError::StretchProfileNeedsThreeSites { .. }
-        | BrokerError::StretchProfileDuplicateSite { .. }
-        | BrokerError::StretchWitnessSiteUnknown { .. }
-        | BrokerError::StretchPreferredSiteUnknown { .. }
-        | BrokerError::StretchPreferredSiteIsWitness { .. }
-        | BrokerError::StretchRequiresRack
-        | BrokerError::StretchRackNotInProfile { .. }
-        | BrokerError::StretchWitnessSiteNeedsWitnessRole
-        | BrokerError::StretchWitnessRoleOutsideWitnessSite { .. }
-        | BrokerError::StretchMinInsyncUnsafe { .. }
-        | BrokerError::SaslListenerNoMechanisms { .. }
-        | BrokerError::PlainListenerNoCredentials { .. }
-        | BrokerError::GssapiConfigMissing
+        | BrokerError::Config(_)
         | BrokerError::Tls(_)
         | BrokerError::BootstrapFile { .. }
-        | BrokerError::InvalidLeaderRebalanceInterval { .. }
         | BrokerError::InvalidRuntimeConfig(_)
         | BrokerError::AuditSigningKey { .. }
         | BrokerError::AuditSigningKeyRequired
