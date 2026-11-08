@@ -15,12 +15,12 @@ use {
                 state::{StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState},
             },
         },
+        task_util::{AskError, ask},
     },
     std::{
         cmp::Ordering,
         collections::{BTreeMap, HashSet},
     },
-    tokio::sync::oneshot,
 };
 
 /// Validates a `TxnOffsetCommit` of `partitions`, each a `(topic name,
@@ -95,24 +95,28 @@ async fn send_validate_commit(
     identity: CommitIdentity<'_>,
     partitions: Vec<(String, i32)>,
 ) -> Option<i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::ValidateCommit {
+    let asked = ask(&handle.tx, |reply| {
+        StreamsGroupActorMessage::ValidateCommit {
             member_id: identity.member_id.to_owned(),
             group_instance_id: identity.group_instance_id.map(str::to_owned),
             member_epoch: identity.member_epoch,
             fence: identity.fence,
             partitions,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Some(codes::UNKNOWN_SERVER_ERROR);
+            reply,
+        }
+    })
+    .await;
+    validation_answer(&asked)
+}
+
+/// The answer of a commit or fetch check that `asked` the actor. A closed
+/// mailbox answers `UNKNOWN_SERVER_ERROR`; a reply, or a reply the actor
+/// dropped, answers as [`commit_validation_reply`] does.
+fn validation_answer(asked: &Result<Result<(), i16>, AskError>) -> Option<i16> {
+    match asked {
+        Err(AskError::Closed) => Some(codes::UNKNOWN_SERVER_ERROR),
+        reply => commit_validation_reply(reply),
     }
-    let result = rx.await;
-    commit_validation_reply(&result)
 }
 
 /// Validates the v9+ member fields of an `OffsetFetch` against a streams
@@ -130,21 +134,15 @@ pub(crate) async fn validate_streams_group_offset_fetch(
     member_id: Option<&str>,
     member_epoch: i32,
 ) -> Option<i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::ValidateFetch {
+    let asked = ask(&handle.tx, |reply| {
+        StreamsGroupActorMessage::ValidateFetch {
             member_id: member_id.map(str::to_owned),
             member_epoch,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Some(codes::UNKNOWN_SERVER_ERROR);
-    }
-    let result = rx.await;
-    commit_validation_reply(&result)
+            reply,
+        }
+    })
+    .await;
+    validation_answer(&asked)
 }
 
 /// Kafka's `StreamsGroup.validateOffsetFetch`.
@@ -187,16 +185,11 @@ pub(crate) fn validate_offset_fetch(
 pub(crate) async fn streams_offset_delete_guard(
     handle: &StreamsGroupActorHandle,
 ) -> Result<SubscribedTopics, i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::OffsetDeleteGuard { reply: tx })
-        .await
-        .is_err()
-    {
-        return Err(codes::GROUP_ID_NOT_FOUND);
-    }
-    rx.await.map_err(|_| codes::GROUP_ID_NOT_FOUND)
+    ask(&handle.tx, |reply| {
+        StreamsGroupActorMessage::OffsetDeleteGuard { reply }
+    })
+    .await
+    .map_err(|_| codes::GROUP_ID_NOT_FOUND)
 }
 
 /// Kafka's `StreamsGroup.isSubscribedToTopic`, for every topic at once.
