@@ -411,6 +411,13 @@ impl StreamsGroupConfig {
             .unwrap_or(BUILTIN_STICKY_ASSIGNOR)
     }
 
+    /// Whether the selected assignor can fail. The built-in sticky assignor
+    /// cannot, so only a native extension makes a reconcile worth undoing.
+    #[must_use]
+    pub fn assignor_may_fail(&self) -> bool {
+        self.selected_task_assignor_name() != BUILTIN_STICKY_ASSIGNOR
+    }
+
     /// Execute the selected implementation without fallback on failure.
     /// # Errors
     /// Returns implementation failures or an unregistered selection.

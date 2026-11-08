@@ -22,7 +22,6 @@ use {
         coordinator::unified::{
             ClientIdentity,
             streams::{
-                assignor::BUILTIN_STICKY_ASSIGNOR,
                 config::StreamsGroupConfig,
                 persistence::{
                     PendingStreamsRecords, StoredSubtopology, StreamsGroupTopologyValue,
@@ -86,8 +85,7 @@ pub(super) async fn handle_heartbeat(
     req: &StreamsGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
-    let before = (turn.config.selected_task_assignor_name() != BUILTIN_STICKY_ASSIGNOR)
-        .then(|| actor.clone());
+    let before = turn.config.assignor_may_fail().then(|| actor.clone());
     match handle_heartbeat_inner(actor, turn, req, client).await {
         Err(error @ BrokerError::StreamsTaskAssignment { .. }) => {
             let Some(before) = before else {
