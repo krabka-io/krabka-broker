@@ -409,6 +409,17 @@ impl Partition {
         krabka_ids::LeaderEpoch(self.leader_slot.epoch.load(Ordering::Acquire))
     }
 
+    /// Whether `node` leads this partition at `epoch`. The epoch is read only
+    /// when `node` is the leader.
+    #[must_use]
+    pub fn is_leader_at(
+        &self,
+        node: impl Into<krabka_ids::NodeId>,
+        epoch: impl Into<krabka_ids::LeaderEpoch>,
+    ) -> bool {
+        self.leader() == node.into() && self.leader_epoch() == epoch.into()
+    }
+
     /// Test-only: directly set the partition's leader and do not use the
     /// supervisor's metadata-image-driven path.
     #[cfg(test)]

@@ -133,7 +133,7 @@ impl PendingMarker {
         let waited = self
             .partition
             .await_committed_while(self.end_offset, deadline, None, |partition, _| {
-                partition.leader() == leader && partition.leader_epoch() == epoch
+                partition.is_leader_at(leader, epoch)
             })
             .await;
         let code = match waited {

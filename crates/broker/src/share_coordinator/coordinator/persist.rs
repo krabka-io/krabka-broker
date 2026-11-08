@@ -246,7 +246,7 @@ impl ShareCoordinator {
 
     /// Whether `part` leads on this broker at the leader epoch of `term`.
     pub(super) fn leads(&self, part: &Partition, term: Term) -> bool {
-        part.leader() == self.node_id.0 && part.leader_epoch() == term.leader_epoch
+        part.is_leader_at(self.node_id, term.leader_epoch)
     }
 
     /// Waits until the high watermark of the state partition of `term`

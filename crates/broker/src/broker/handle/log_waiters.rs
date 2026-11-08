@@ -74,9 +74,7 @@ impl BrokerHandle {
                 self.broker
                     .partitions
                     .get(topic, PartitionIndex(partition))
-                    .is_some_and(|part| {
-                        part.leader() == leader.0 && part.leader_epoch() == leader_epoch.0
-                    }),
+                    .is_some_and(|part| part.is_leader_at(leader, leader_epoch.0)),
             )
         })
         .await;

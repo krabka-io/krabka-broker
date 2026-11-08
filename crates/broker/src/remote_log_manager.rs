@@ -436,8 +436,7 @@ struct LeaderFence<'a> {
 impl CopyFence for LeaderFence<'_> {
     fn holds(&self) -> bool {
         !self.shutdown.is_cancelled()
-            && self.partition.leader() == self.node_id
-            && self.partition.leader_epoch() == self.leader_epoch
+            && self.partition.is_leader_at(self.node_id, self.leader_epoch)
     }
 
     fn established_log_start(&self) -> Option<krabka_log::Offset> {

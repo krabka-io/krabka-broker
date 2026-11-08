@@ -99,10 +99,7 @@ impl TxnCoordinator {
             };
             self.partitions
                 .get(bootstrap::TOPIC, partition)
-                .is_some_and(|local| {
-                    local.leader() == self.node_id.0
-                        && local.leader_epoch() == record.leader_epoch.0
-                })
+                .is_some_and(|local| local.is_leader_at(self.node_id, record.leader_epoch.0))
         };
         // Most refreshes change nothing. Check that under the read guard, so
         // a refresh does not wait for the appends that publish.

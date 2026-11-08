@@ -168,7 +168,7 @@ pub(super) fn diskless_role_ready(
     partition: &Partition,
     record: &krabka_metadata::PartitionRecord,
 ) -> bool {
-    partition.leader() == record.leader && partition.leader_epoch() == record.leader_epoch.0
+    partition.is_leader_at(record.leader, record.leader_epoch.0)
 }
 
 pub(super) fn replication_target_matches_image(
