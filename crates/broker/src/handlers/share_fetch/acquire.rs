@@ -636,7 +636,7 @@ async fn acquire_partition(
         Ok(upper) => upper,
         Err(error) => {
             persist_best_effort(mgr, group, p, &cell, &mut st).await;
-            fail_partition(p, false, codes::from_broker_error(&error));
+            fail_share_row(p, codes::from_broker_error(&error));
             return;
         }
     };
