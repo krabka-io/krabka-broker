@@ -1062,9 +1062,10 @@ fn token_column(line: &str, needle: &str) -> Option<usize> {
     })
 }
 
-/// The words of `text`, split at every character that is not alphanumeric.
+/// The words of `text`, split at every character that is neither alphanumeric
+/// nor `_`, so an identifier such as `NOT_LEADER_OR_FOLLOWER` is one word.
 fn words(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|character: char| !character.is_alphanumeric())
+    text.split(|character: char| !(character.is_alphanumeric() || character == '_'))
         .filter(|word| !word.is_empty())
 }
 
@@ -1265,6 +1266,12 @@ Feature: Logs roll
     When a producer appends past the size OR the age
     Then the log rolls a new segment
 ", vec![("or-in-step", 3)])]
+    #[case::or_inside_an_identifier("\
+Feature: Logs roll
+  Scenario: A follower refuses a produce
+    When a producer sends to a follower
+    Then the produce fails with NOT_LEADER_OR_FOLLOWER
+", vec![])]
     #[case::quote_in_step("\
 Feature: Logs roll
   Scenario: A full segment rolls
