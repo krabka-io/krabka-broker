@@ -47,7 +47,7 @@
 use {
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    krabka_log::Offset,
+    krabka_log::{Offset, epoch_ms},
     krabka_metadata::MetadataImage,
     qubit_clock::WallClock,
     std::{
@@ -78,7 +78,6 @@ use crate::{
         bootstrap, config::ShareCoordinatorConfig, key::ShareKey,
         partitioner::partition_for_share_key, persistence::StateBatch, state::SharePartitionState,
     },
-    time_util::epoch_millis,
 };
 
 /// KIP-932 share-group state epoch.
@@ -370,7 +369,7 @@ impl ShareCoordinator {
     }
 
     /// The current time in milliseconds since the epoch.
-    fn now_ms(&self) -> i64 { epoch_millis(self.wall_clock.now()) }
+    fn now_ms(&self) -> i64 { epoch_ms(self.wall_clock.now()) }
 
     fn state_key_revision(&self, partition: PartitionIndex) -> u64 {
         self.key_revisions

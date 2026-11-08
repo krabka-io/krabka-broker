@@ -7,11 +7,10 @@
 use {
     crate::{
         delivery::{PartitionDelivery, waker::DeliveryWaker},
-        time_util,
     },
     arc_swap::ArcSwapOption,
     krabka_ids::Offset,
-    krabka_log::{DeliveryPolicy, Log},
+    krabka_log::{DeliveryPolicy, Log, epoch_ms},
     qubit_clock::{StdWallClock, WallClock},
     std::{
         fmt::{Debug, Formatter, Result},
@@ -112,7 +111,7 @@ impl DeliveryHandles {
     /// [`Self::publish`] against this handle's own clock, for a caller that has
     /// none. The partition writer uses it after an append.
     pub(crate) fn publish_now(&self, log: &Mutex<Log>) -> Option<PartitionDelivery> {
-        self.publish(log, time_util::epoch_millis(self.clock.now()))
+        self.publish(log, epoch_ms(self.clock.now()))
     }
 
     /// This partition's clock reading, for a caller that already holds the log
@@ -122,7 +121,7 @@ impl DeliveryHandles {
     /// already has, and it must take its reading from the same clock the
     /// writer and the scheduler read, or a test that drives a manual timeline
     /// across an activation boundary cannot reach the fetch path at all.
-    pub(crate) fn now_ms(&self) -> i64 { time_util::epoch_millis(self.clock.now()) }
+    pub(crate) fn now_ms(&self) -> i64 { epoch_ms(self.clock.now()) }
 
     /// Install the scheduler's poke, so an append to this partition can re-arm
     /// the task. Idempotent: re-installing the same waker stores nothing.
