@@ -900,6 +900,19 @@ mod tests {
             ])
             .await;
 
+            // A `Deleted` outcome evicts the cached acquisition-state cell so
+            // the next `ShareFetch` re-reads the durable SPSO; a denied topic
+            // keeps its cell.
+            let leaders = &broker.share_partition_leaders;
+            for topic_id in [allow_id, deny_id] {
+                leaders.insert_for_test(
+                    "g-authz",
+                    topic_id,
+                    0,
+                    AcquisitionState::new(krabka_log::Offset(10)),
+                );
+            }
+
             let response = handle(
                 &broker,
                 request("g-authz", &["allow-topic", "deny-topic"]),
@@ -963,80 +976,15 @@ mod tests {
                 let expected = denied.contains(name).then_some((4, krabka_log::Offset(10)));
                 assert!(state == expected, "case: {case}, topic: {name}");
             }
+            for (name, topic_id) in [("allow-topic", allow_id), ("deny-topic", deny_id)] {
+                let cached = leaders.peek_for_test("g-authz", topic_id, 0).is_some();
+                assert!(
+                    cached == denied.contains(name),
+                    "case: {case}, topic: {name}"
+                );
+            }
 
             broker_handle.shutdown().await;
         }
-    }
-
-    /// A `Deleted` outcome evicts the cached acquisition-state cell of each
-    /// deleted partition, so the next `ShareFetch` re-reads the durable SPSO.
-    /// A topic the per-topic `Read` gate refused keeps its cell.
-    #[tokio::test]
-    async fn delete_evicts_the_cached_leader_of_each_deleted_partition_only() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_share_broker()
-            .authorizer(Arc::new(DenyReadOnTopics(HashSet::from(["deny-topic"]))))
-            .call()
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["alice"];
-        };
-        let persister = create_share_topics()
-            .handle(&broker_handle)
-            .ctx(&ctx)
-            .names(&["delete-topic", "deny-topic"])
-            .call()
-            .await;
-        let image = broker.controller.current_image();
-        let delete_id = image.topic("delete-topic").expect("delete topic").topic_id;
-        let deny_id = image.topic("deny-topic").expect("deny topic").topic_id;
-        drop(image);
-        for topic_id in [delete_id, deny_id] {
-            persister
-                .initialize("g-evict", topic_id, 0, 4, krabka_log::Offset(10))
-                .await
-                .expect("seed state");
-        }
-        let actor = broker.group_coordinator.get_or_create_share("g-evict");
-        seed_initialized_topics(&actor, vec![
-            TopicPartitionsInfo {
-                topic_id: delete_id,
-                topic_name: "delete-topic".into(),
-                partitions: vec![0],
-            },
-            TopicPartitionsInfo {
-                topic_id: deny_id,
-                topic_name: "deny-topic".into(),
-                partitions: vec![0],
-            },
-        ])
-        .await;
-        let leaders = &broker.share_partition_leaders;
-        for topic_id in [delete_id, deny_id] {
-            leaders.insert_for_test(
-                "g-evict",
-                topic_id,
-                0,
-                AcquisitionState::new(krabka_log::Offset(10)),
-            );
-        }
-
-        handle(
-            &broker,
-            request("g-evict", &["delete-topic", "deny-topic"]),
-            delete_share_group_offsets_response::MAX_VERSION,
-            &ctx,
-        )
-        .await
-        .expect("handle delete");
-
-        let cached = [delete_id, deny_id]
-            .map(|topic_id| leaders.peek_for_test("g-evict", topic_id, 0).is_some());
-        assert!(cached == [false, true]);
-        broker_handle.shutdown().await;
     }
 }
