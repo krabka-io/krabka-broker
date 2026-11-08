@@ -98,6 +98,7 @@ async fn seeded_orders() -> SeededOrders {
     }
 }
 
+#[derive(Default)]
 struct LogStartScenario {
     seeded: Option<SeededOrders>,
     trimmed: Option<DeleteRecordsPartitionResult>,
@@ -107,13 +108,8 @@ struct LogStartScenario {
 
 #[fixture]
 fn log_start() -> LogStartScenario {
-    // Start this scenario with fresh inputs and observations.
-
     LogStartScenario {
-        seeded: None,
-        trimmed: None,
-        appended: None,
-        retried: None,
+        ..LogStartScenario::default()
     }
 }
 

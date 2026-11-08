@@ -1,0 +1,105 @@
+//! The active-term and commit boundary around visible share coordinator methods.
+
+use {
+    crate::meta::{edit_native_body, function_signature, is_plain_async, parameter_ident},
+    moxy::{
+        ast::{FnParam, ParseError, Signature},
+        token::{Ident, Span, Spanner, TokenStream},
+    },
+    proc_macro::{TokenStream as NativeTokenStream, TokenTree},
+};
+
+struct Boundaries {
+    admission: TokenStream,
+    answer: TokenStream,
+}
+
+fn boundaries(meta: &TokenStream, signature: &Signature) -> Result<Boundaries, ParseError> {
+    let active: Ident = moxy::parse!({ meta })?;
+    let parameters = &signature.params.inner.inputs;
+    if !is_plain_async(signature)
+        || parameters.len() < 3
+        || !matches!(parameters.first(), Some(FnParam::Receiver(receiver)) if receiver.reference.is_some() && receiver.mutability.is_none())
+    {
+        return Err(ParseError::new(
+            signature.span(),
+            "expected an async share-state method with a borrowed self receiver, a metadata image and a share key",
+        ));
+    }
+    parameter_ident(&parameters[1], "expected named metadata image")?;
+    let key = parameter_ident(&parameters[2], "expected named share key")?;
+    let result = Ident::new("result").with_span(Span::mixed_site());
+    Ok(Boundaries {
+        admission: moxy::template! {
+            let {{ active }} = self
+                .active_for_key({{ key }})
+                .await
+                .map_err(ShareStateError::inactive)?;
+            let {{ result }} =
+        },
+        answer: moxy::template! { ; self.answer({{ active }}, {{ result }}).await },
+    })
+}
+
+pub fn expand(
+    meta: &TokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    let signature = function_signature(&item.clone().into())?;
+    let boundary = boundaries(meta, &signature)?;
+    Ok(edit_native_body(item, |body| {
+        let mut operations: NativeTokenStream = boundary.admission.into();
+        let mut group = proc_macro::Group::new(proc_macro::Delimiter::Brace, body);
+        group.set_span(proc_macro::Span::call_site());
+        operations.extend([TokenTree::Group(group)]);
+        operations.extend(NativeTokenStream::from(boundary.answer));
+        operations
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::boundaries,
+        crate::meta::{compact, function_signature},
+        assert2::assert,
+    };
+
+    #[test]
+    fn admission_precedes_the_native_operation_and_answer_follows_it() {
+        let signature = function_signature(&"pub(crate) async fn read(&self, image: &Image, key: ShareKeyRef<'_>) -> Result<Value, Error> {}".parse().unwrap()).unwrap();
+        let boundary = boundaries(&"active".parse().unwrap(), &signature).unwrap();
+        assert!(
+            compact(&boundary.admission)
+                .contains("self.active_for_key(key).await.map_err(ShareStateError::inactive)?")
+        );
+        assert!(compact(&boundary.answer).contains("self.answer(active,result).await"));
+        assert!(boundaries(&"active extra".parse().unwrap(), &signature).is_err());
+    }
+
+    #[yare::parameterized(
+        sync = { "fn read(&self, image: &Image, key: Key) {}" },
+        owned_receiver = { "async fn read(self, image: &Image, key: Key) {}" },
+        missing_arguments = { "async fn read(&self, image: &Image) {}" },
+        unsafe_signature = { "async unsafe fn read(&self, image: &Image, key: Key) {}" },
+        extern_signature = { "async extern \"C\" fn read(&self, image: &Image, key: Key) {}" },
+        generic = { "async fn read<T>(&self, image: &Image, key: Key) {}" },
+        mutable_receiver = { "async fn read(&mut self, image: &Image, key: Key) {}" },
+        missing_image_binding = { "async fn read(&self, _: &Image, key: Key) {}" },
+        missing_key_binding = { "async fn read(&self, image: &Image, _: Key) {}" },
+    )]
+    fn rejects_unsupported_operation_signatures(source: &str) {
+        let signature = function_signature(&source.parse().unwrap()).unwrap();
+        assert2::assert!(boundaries(&"active".parse().unwrap(), &signature).is_err());
+    }
+
+    #[test]
+    fn uses_caller_key_and_guard_names_without_exposing_private_result_bindings() {
+        let signature = function_signature(&"async fn erase(&self, view: &Image, row_key: Key, extra: i16) -> Result<(), Error> {}".parse().unwrap()).unwrap();
+        let boundary = boundaries(&"term_guard".parse().unwrap(), &signature).unwrap();
+        let admission = compact(&boundary.admission);
+        assert!(admission.contains("active_for_key(row_key)"));
+        assert!(admission.contains("letterm_guard="));
+        assert!(compact(&boundary.answer).contains("self.answer(term_guard,result).await"));
+    }
+}

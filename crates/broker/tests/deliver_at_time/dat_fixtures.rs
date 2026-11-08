@@ -114,6 +114,7 @@ use {
     std::time::Duration,
     tempfile::TempDir,
 };
+#[derive(Default)]
 pub struct DeliveryScenario {
     pub directory: Option<TempDir>,
     pub broker: Option<BrokerHandle>,
@@ -139,21 +140,8 @@ impl DeliveryScenario {
 }
 #[rstest::fixture]
 pub fn delivery() -> DeliveryScenario {
-    // Start this scenario with fresh inputs and observations.
-
     DeliveryScenario {
-        directory: None,
-        broker: None,
-        client: None,
-        topic: String::new(),
-        topic_id: None,
-        mode: None,
-        due_at: None,
-        snapshot: None,
-        read_at: None,
-        served_at: None,
-        values: None,
-        elapsed: None,
+        ..DeliveryScenario::default()
     }
 }
 #[rstest_bdd_macros::given("topic {topic} has delivery mode {mode}")]

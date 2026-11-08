@@ -159,11 +159,8 @@ struct OperatorExamples {
 
 #[fixture]
 fn examples() -> OperatorExamples {
-    // Start this scenario with fresh inputs and observations.
-
     OperatorExamples {
-        documents: Vec::new(),
-        schema: None,
+        ..OperatorExamples::default()
     }
 }
 

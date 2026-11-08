@@ -74,28 +74,16 @@ impl ShareCoordinator {
     /// [`ShareStateError::Operation`] when this broker is not the active
     /// coordinator of the key, the append fails, or the records of the
     /// partition do not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn initialize(
         &self,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         state_epoch: StateEpoch,
         start_offset: Offset,
     ) -> Result<(), ShareStateError> {
-        self.initialize_in_term(
-            active.term,
-            image,
-            ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            },
-            state_epoch,
-            start_offset,
-        )
-        .await
+        self.initialize_in_term(active.term, image, key, state_epoch, start_offset)
+            .await
     }
 
     /// Applies a `WriteShareGroupState` partition, as Kafka's
@@ -114,20 +102,13 @@ impl ShareCoordinator {
     /// [`ShareStateError::Operation`] when this broker is not the active
     /// coordinator of the key, the append fails, or the records of the
     /// partition do not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn write(
         &self,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         request: ShareWrite,
     ) -> Result<(), ShareStateError> {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         self.write_in_term(active.term, image, key, request).await
     }
 
@@ -146,20 +127,13 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// As [`ShareCoordinator::write`].
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn read(
         &self,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         leader_epoch: LeaderEpoch,
     ) -> Result<SharePartitionState, ShareStateError> {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         self.read_in_term(active.term, image, key, leader_epoch)
             .await
     }
@@ -177,25 +151,17 @@ impl ShareCoordinator {
     /// Returns the error of the refused partition, or
     /// [`ShareStateError::Operation`] when the records of the partition do
     /// not commit.
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn read_summary_checked(
         &self,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Option<ShareStateSummary>, ShareStateError> {
-        if partition < 0 {
+        if key.partition < 0 {
             Err(invalid_request(message::NEGATIVE_PARTITION_ID))
         } else {
-            match check_topic_partition(image, topic_id, partition) {
-                Ok(()) => Ok(self
-                    .summary(ShareKeyRef {
-                        group,
-                        topic_id,
-                        partition,
-                    })
-                    .await),
+            match check_topic_partition(image, key.topic_id, key.partition) {
+                Ok(()) => Ok(self.summary(key).await),
                 Err(error) => Err(error),
             }
         }
@@ -213,19 +179,12 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// As [`ShareCoordinator::initialize`].
-    #[krabka_macros::share_state_operation(active)]
+    #[krabka_broker_macros::share_state_operation(active)]
     pub(crate) async fn delete(
         &self,
         image: &MetadataImage,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<(), ShareStateError> {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         self.delete_in_term(active.term, image, key).await
     }
 
@@ -558,17 +517,8 @@ impl ShareCoordinator {
     /// Test-only: the in-memory state of a key, with no status check and no
     /// side effect.
     #[cfg(test)]
-    pub(crate) async fn state_for_test(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Option<SharePartitionState> {
-        let entry = self.entry(ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        })?;
+    pub(crate) async fn state_for_test(&self, key: ShareKeyRef<'_>) -> Option<SharePartitionState> {
+        let entry = self.entry(key)?;
         let st = entry.lock().await;
         Some(st.clone())
     }
@@ -581,16 +531,9 @@ impl ShareCoordinator {
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) async fn stored_summary_for_test(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Option<ShareStateSummary> {
-        self.summary(ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        })
-        .await
+        self.summary(key).await
     }
 
     /// Test-only: the summary of the stored state of the key, read under the
@@ -612,18 +555,10 @@ impl ShareCoordinator {
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) async fn active_summary_for_test(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Option<ShareStateSummary>, super::ShareErrorCode> {
-        let _active = self.active_for_key(group, &topic_id, partition).await?;
-        Ok(self
-            .summary(ShareKeyRef {
-                group,
-                topic_id,
-                partition,
-            })
-            .await)
+        let _active = self.active_for_key(key).await?;
+        Ok(self.summary(key).await)
     }
 
     /// The summary of the stored state of the key, or `None` when the key

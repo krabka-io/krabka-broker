@@ -61,6 +61,7 @@ type QuotaEntity = Vec<(String, Option<String>)>;
 type AlteredQuotas = Vec<(QuotaEntity, i16)>;
 type DescribedQuotas = Vec<(QuotaEntity, Vec<(String, f64)>)>;
 
+#[derive(Default)]
 struct QuotaAdministration {
     broker: Option<IpBroker>,
     altered: Option<AlteredQuotas>,
@@ -68,12 +69,8 @@ struct QuotaAdministration {
 }
 #[fixture]
 fn quotas() -> QuotaAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     QuotaAdministration {
-        broker: None,
-        altered: None,
-        described: None,
+        ..QuotaAdministration::default()
     }
 }
 #[given("a SASL PLAIN quota administrator connects as admin")]
@@ -167,6 +164,7 @@ const OTHER_SOURCE: [u8; 4] = [127, 0, 0, 2];
 /// padded samples of 1 s.
 const SERVED_AT_ONCE: usize = 10;
 
+#[derive(Default)]
 struct ConnectionRate {
     broker: Option<IpBroker>,
     entity: String,
@@ -177,15 +175,8 @@ struct ConnectionRate {
 }
 #[fixture]
 fn rate() -> ConnectionRate {
-    // Start this scenario with fresh inputs and observations.
-
     ConnectionRate {
-        broker: None,
-        entity: String::new(),
-        served: Vec::new(),
-        throttled: None,
-        other: None,
-        other_elapsed: None,
+        ..ConnectionRate::default()
     }
 }
 fn api_versions() -> BytesMut {
@@ -323,6 +314,7 @@ fn rate_outcomes(rate: &ConnectionRate) {
     );
 }
 
+#[derive(Default)]
 struct ConnectionSlots {
     broker: Option<IpBroker>,
     held: Option<TcpStream>,
@@ -331,13 +323,8 @@ struct ConnectionSlots {
 }
 #[fixture]
 fn slots() -> ConnectionSlots {
-    // Start this scenario with fresh inputs and observations.
-
     ConnectionSlots {
-        broker: None,
-        held: None,
-        result: None,
-        elapsed: None,
+        ..ConnectionSlots::default()
     }
 }
 #[given("a plaintext broker has no connection creation rate quota")]

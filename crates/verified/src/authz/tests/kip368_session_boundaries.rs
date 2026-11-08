@@ -15,13 +15,8 @@ struct SessionBoundary {
 
 #[fixture]
 fn session() -> SessionBoundary {
-    // Start this scenario with fresh inputs and observations.
-
     SessionBoundary {
-        expiry_ms: None,
-        last_reauth_start_ms: None,
-        expired: None,
-        reauthentication: None,
+        ..SessionBoundary::default()
     }
 }
 

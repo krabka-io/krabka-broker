@@ -14,15 +14,6 @@ use krabka_protocol::{
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct TransactionTimeoutMillis(pub i32);
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct InitProducerSetup {
-    pub transactional_id: Option<String>,
-    #[default(TransactionTimeoutMillis(60_000))]
-    pub timeout: TransactionTimeoutMillis,
-    #[default(ProducerIdentity::from_wire((InitProducerIdRequest::default().producer_id, InitProducerIdRequest::default().producer_epoch)))]
-    pub producer: ProducerIdentity,
-}
-
 #[bon::builder]
 pub fn init_producer_request(
     transactional_id: Option<String>,
@@ -30,16 +21,11 @@ pub fn init_producer_request(
     #[builder(default = ProducerIdentity :: from_wire ((InitProducerIdRequest :: default () . producer_id , InitProducerIdRequest :: default () . producer_epoch)))]
     producer: ProducerIdentity,
 ) -> InitProducerIdRequest {
-    let setup = InitProducerSetup {
-        transactional_id,
-        timeout,
-        producer,
-    };
     InitProducerIdRequest {
-        transactional_id: setup.transactional_id,
-        transaction_timeout_ms: setup.timeout.0,
-        producer_id: setup.producer.id.0,
-        producer_epoch: setup.producer.epoch.0,
+        transactional_id,
+        transaction_timeout_ms: timeout.0,
+        producer_id: producer.id.0,
+        producer_epoch: producer.epoch.0,
         ..Default::default()
     }
 }
@@ -167,15 +153,6 @@ pub enum PartitionRegistration {
 }
 
 /// Transaction marker identity, result and fencing fields.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct TransactionMarkerSetup {
-    pub producer: ProducerIdentity,
-    pub outcome: TransactionOutcome,
-    pub coordinator_epoch: CoordinatorEpoch,
-    pub transaction_version: TransactionVersion,
-    pub topics: Vec<WritableTxnMarkerTopic>,
-}
-
 #[bon::builder]
 pub fn transaction_marker(
     #[builder(default)] producer: ProducerIdentity,
@@ -184,20 +161,6 @@ pub fn transaction_marker(
     #[builder(into, default)] transaction_version: TransactionVersion,
     #[builder(default)] topics: Vec<WritableTxnMarkerTopic>,
 ) -> WritableTxnMarker {
-    let setup = TransactionMarkerSetup {
-        producer,
-        outcome,
-        coordinator_epoch,
-        transaction_version,
-        topics,
-    };
-    let TransactionMarkerSetup {
-        producer,
-        outcome,
-        coordinator_epoch,
-        transaction_version,
-        topics,
-    } = setup;
     WritableTxnMarker {
         producer_id: producer.id.0,
         producer_epoch: producer.epoch.0,

@@ -75,7 +75,7 @@ pub fn down_convert_payload_for_fetch(
     payload: &RecordsPayload,
     request_version: i16,
 ) -> Result<Option<RecordsPayload>, i16> {
-    let batches: Cow<'_, [RecordBatch]> = krabka_macros::records_payload_match! { match payload {
+    let batches: Cow<'_, [RecordBatch]> = krabka_broker_macros::records_payload_match! { match payload {
         RecordsPayload::V2(b) => Cow::Borrowed(b),
         RecordsPayload::Raw(bytes) => match RecordsPayload::from_bytes(bytes.clone()) {
             Ok(RecordsPayload::V2(b)) => Cow::Owned(b),

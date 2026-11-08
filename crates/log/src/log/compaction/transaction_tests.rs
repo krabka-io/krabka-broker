@@ -31,15 +31,6 @@ use {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct ProducerSequence(i32);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct KeyedTransactionSetup<'a> {
-    #[default(ProducerId(1000))]
-    producer: ProducerId,
-    sequence: ProducerSequence,
-    #[default(KeyValue { key: b"k", value: b"v" })]
-    payload: KeyValue<'a>,
-}
-
 /// One keyed transactional record; `Log::append` assigns its offset.
 #[bon::builder]
 fn transactional_keyed(
@@ -47,20 +38,15 @@ fn transactional_keyed(
     #[builder(into, default)] sequence: ProducerSequence,
     #[builder(default = KeyValue { key: b"k", value: b"v" })] payload: KeyValue<'_>,
 ) -> RecordBatch {
-    let setup = KeyedTransactionSetup {
-        producer,
-        sequence,
-        payload,
-    };
-    let KeyValue { key, value } = setup.payload;
+    let KeyValue { key, value } = payload;
     let mut batch = keyed_batch(0, &[KeyedRecord {
         offset_delta: 0,
         key,
         value,
     }]);
-    batch.producer_id = setup.producer.0;
+    batch.producer_id = producer.0;
     batch.producer_epoch = 0;
-    batch.base_sequence = setup.sequence.0;
+    batch.base_sequence = sequence.0;
     batch.attributes = Attributes::default().with_transactional(true);
     batch
 }

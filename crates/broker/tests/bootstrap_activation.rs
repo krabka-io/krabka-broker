@@ -390,6 +390,7 @@ struct Case {
     min_insync_replicas: MinimumInsyncReplicas,
 }
 
+#[derive(Default)]
 struct BootstrapActivation {
     case: Option<Case>,
     pending_controllers: Vec<Node>,
@@ -405,20 +406,8 @@ struct BootstrapActivation {
 }
 #[rstest::fixture]
 fn activation() -> BootstrapActivation {
-    // Start this scenario with fresh inputs and observations.
-
     BootstrapActivation {
-        case: None,
-        pending_controllers: Vec::new(),
-        pending_brokers: Vec::new(),
-        addresses: Vec::new(),
-        controllers: Vec::new(),
-        brokers: Vec::new(),
-        expected_activation: Vec::new(),
-        expected_levels: BTreeMap::new(),
-        expected_minimum: None,
-        committed: None,
-        config: None,
+        ..BootstrapActivation::default()
     }
 }
 #[rstest_bdd_macros::given(

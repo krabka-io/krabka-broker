@@ -84,6 +84,7 @@ fn without_partitions(row: &MetadataResponseTopic) -> MetadataResponseTopic {
     }
 }
 
+#[derive(Default)]
 struct TopicClassification {
     process: Option<InProcess>,
     configured: Option<BrokerConfig>,
@@ -97,17 +98,8 @@ struct TopicClassification {
 
 #[fixture]
 fn classification() -> TopicClassification {
-    // Start this scenario with fresh inputs and observations.
-
     TopicClassification {
-        process: None,
-        configured: None,
-        custom_broker: None,
-        directory: None,
-        audit_topic: String::new(),
-        metadata: Vec::new(),
-        described: Vec::new(),
-        startup_error: None,
+        ..TopicClassification::default()
     }
 }
 

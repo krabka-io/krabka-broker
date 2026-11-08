@@ -42,7 +42,7 @@ use {
     std::slice,
 };
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_alter_barrier_groups",
     api = "AlterBarrierGroups",
     level = "info"

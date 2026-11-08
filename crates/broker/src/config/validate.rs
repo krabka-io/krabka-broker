@@ -6,6 +6,7 @@ use {
     crate::{
         BrokerError,
         config::{BrokerConfig, ListenerSpec, RlmmKind},
+        error::ConfigError,
         file_config::require_signing_key_when_fail_closed,
         internal_topics::validate_audit_topic_name,
     },
@@ -95,10 +96,10 @@ impl BrokerConfig {
     /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode.
     fn validate_broker_id(&self) -> Result<(), BrokerError> {
         if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
-            return Err(BrokerError::BrokerIdNodeIdMismatch {
+            return Err(BrokerError::Config(ConfigError::BrokerIdNodeIdMismatch {
                 broker_id: self.broker_id,
                 node_id: self.node_id,
-            });
+            }));
         }
         Ok(())
     }
@@ -130,7 +131,7 @@ impl BrokerConfig {
     /// only a controller is a voter, and only a broker names `[[listeners]]`.
     fn validate_node_roles(&self) -> Result<(), BrokerError> {
         if self.roles.is_empty() {
-            return Err(BrokerError::EmptyRoles);
+            return Err(BrokerError::Config(ConfigError::EmptyRoles));
         }
         self.validate_witness_roles()?;
         if !self.is_controller()
@@ -139,19 +140,21 @@ impl BrokerConfig {
                 .iter()
                 .any(|(id, _)| *id == self.node_id)
         {
-            return Err(BrokerError::NonControllerIsVoter {
+            return Err(BrokerError::Config(ConfigError::NonControllerIsVoter {
                 node_id: self.node_id,
-            });
+            }));
         }
         if !self.is_broker() && !self.listeners.is_empty() {
-            return Err(BrokerError::ControllerOnlyNodeListeners {
-                names: self
-                    .listeners
-                    .iter()
-                    .map(|listener| listener.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::ControllerOnlyNodeListeners {
+                    names: self
+                        .listeners
+                        .iter()
+                        .map(|listener| listener.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                },
+            ));
         }
         Ok(())
     }
@@ -166,10 +169,10 @@ impl BrokerConfig {
         for (i, listener) in listeners.iter().enumerate() {
             for other in listeners.iter().skip(i + 1) {
                 if listener.bind_addr == other.bind_addr {
-                    return Err(BrokerError::ListenerConflict {
+                    return Err(BrokerError::Config(ConfigError::ListenerConflict {
                         a: listener.name.clone(),
                         b: other.name.clone(),
-                    });
+                    }));
                 }
             }
         }
@@ -178,8 +181,10 @@ impl BrokerConfig {
         listeners
             .iter()
             .find(|listener| listener.name == self.inter_broker_listener_name)
-            .ok_or_else(|| BrokerError::InvalidInterBrokerListener {
-                name: self.inter_broker_listener_name.clone(),
+            .ok_or_else(|| {
+                BrokerError::Config(ConfigError::InvalidInterBrokerListener {
+                    name: self.inter_broker_listener_name.clone(),
+                })
             })
     }
 
@@ -202,7 +207,7 @@ impl BrokerConfig {
                 .enabled_sasl_mechanisms
                 .contains(&SaslMechanism::Gssapi);
         if gssapi_enabled && self.gssapi.is_none() {
-            return Err(BrokerError::GssapiConfigMissing);
+            return Err(BrokerError::Config(ConfigError::GssapiConfigMissing));
         }
         Ok(())
     }
@@ -218,9 +223,9 @@ impl BrokerConfig {
         }
         if cp.requires_sasl() {
             if self.enabled_sasl_mechanisms.is_empty() {
-                return Err(BrokerError::SaslListenerNoMechanisms {
+                return Err(BrokerError::Config(ConfigError::SaslListenerNoMechanisms {
                     name: "controller".into(),
-                });
+                }));
             }
             // As `validate_sasl_listener` checks for a SASL listener, but the
             // controller listener is configured on its own and is not in
@@ -229,9 +234,11 @@ impl BrokerConfig {
             if self.enabled_sasl_mechanisms.contains(&SaslMechanism::Plain)
                 && self.plain_credentials.is_empty()
             {
-                return Err(BrokerError::PlainListenerNoCredentials {
-                    name: "controller".into(),
-                });
+                return Err(BrokerError::Config(
+                    ConfigError::PlainListenerNoCredentials {
+                        name: "controller".into(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -270,18 +277,20 @@ impl BrokerConfig {
             return Ok(());
         }
         if self.listener_sasl_mechanisms(listener).is_empty() {
-            return Err(BrokerError::SaslListenerNoMechanisms {
+            return Err(BrokerError::Config(ConfigError::SaslListenerNoMechanisms {
                 name: listener.name.clone(),
-            });
+            }));
         }
         // PLAIN has no dynamic credential path the way SCRAM does, so an
         // empty table means every PLAIN login fails at runtime.
         if self.listener_enables(listener, SaslMechanism::Plain)
             && self.plain_credentials.is_empty()
         {
-            return Err(BrokerError::PlainListenerNoCredentials {
-                name: listener.name.clone(),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::PlainListenerNoCredentials {
+                    name: listener.name.clone(),
+                },
+            ));
         }
         Ok(())
     }
@@ -317,7 +326,7 @@ impl BrokerConfig {
         }
         self.validate_sasl_listener(listener)?;
         if self.listener_enables(listener, SaslMechanism::Gssapi) && self.gssapi.is_none() {
-            return Err(BrokerError::GssapiConfigMissing);
+            return Err(BrokerError::Config(ConfigError::GssapiConfigMissing));
         }
         Ok(())
     }
@@ -578,9 +587,10 @@ mod tests {
             config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_owned())];
             let got = match config.validate() {
                 Ok(()) => None,
-                Err(BrokerError::BrokerIdNodeIdMismatch { broker_id, node_id }) => {
-                    Some((broker_id, node_id.0))
-                }
+                Err(BrokerError::Config(ConfigError::BrokerIdNodeIdMismatch {
+                    broker_id,
+                    node_id,
+                })) => Some((broker_id, node_id.0)),
                 Err(other) => panic!("{name}: unexpected error {other}"),
             };
             assert!(got == want, "{name}");
@@ -638,7 +648,9 @@ mod tests {
         let mut config = base();
         config.plain_credentials = PlainCredentials::default();
 
-        let Err(BrokerError::PlainListenerNoCredentials { name }) = config.validate() else {
+        let Err(BrokerError::Config(ConfigError::PlainListenerNoCredentials { name })) =
+            config.validate()
+        else {
             panic!("expected PlainListenerNoCredentials");
         };
         assert!(name == "EXTERNAL");
@@ -752,7 +764,9 @@ mod tests {
 
             let result = config.validate();
             if refused {
-                let Err(BrokerError::PlainListenerNoCredentials { name }) = result else {
+                let Err(BrokerError::Config(ConfigError::PlainListenerNoCredentials { name })) =
+                    result
+                else {
                     panic!("expected PlainListenerNoCredentials for {protocol:?}");
                 };
                 assert!(name == "controller");

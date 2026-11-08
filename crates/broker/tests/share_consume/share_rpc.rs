@@ -69,13 +69,6 @@ pub async fn acquire_three_and_acknowledge<'a>(
     setup.session
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ShareRenewSetup<'a> {
-    pub session: ShareSessionSetup<'a>,
-    pub first: krabka_ids::Offset,
-    pub last: krabka_ids::Offset,
-}
-
 /// A renew-ack `ShareAcknowledge` (`is_renew_ack = true`) over `[first, last]`
 /// with *empty* ack types. The broker renew path extends each batch's lock
 /// without changing record state. Returns the partition row.
@@ -86,20 +79,15 @@ pub async fn share_renew(
     #[builder(into, default)] first: krabka_ids::Offset,
     #[builder(into, default)] last: krabka_ids::Offset,
 ) -> share_acknowledge_response::PartitionData {
-    let setup = ShareRenewSetup {
-        session,
-        first,
-        last,
-    };
     let req = acknowledge_request()
-        .maybe_group_id(Some(Some(setup.session.group.into())))
-        .maybe_member_id(Some(Some(setup.session.member.into())))
-        .epoch(setup.session.epoch)
+        .maybe_group_id(Some(Some(session.group.into())))
+        .maybe_member_id(Some(Some(session.member.into())))
+        .epoch(session.epoch)
         .mode(RenewalMode::Renew)
-        .topics(vec![acknowledge_topic(wire(setup.session.topic_id), vec![
-            acknowledge_partition(setup.session.partition.0, vec![acknowledgement(
-                setup.first.0,
-                setup.last.0,
+        .topics(vec![acknowledge_topic(wire(session.topic_id), vec![
+            acknowledge_partition(session.partition.0, vec![acknowledgement(
+                first.0,
+                last.0,
                 vec![RENEW],
             )]),
         ])])
@@ -117,4 +105,4 @@ pub async fn share_renew(
 // retries until the acquire pass actually returns records. Leadership and
 // materialization of both the data partition and `__share_group_state` may
 // still be settling. Asserts the supplied invariant on the resulting row.
-krabka_macros::share_first_fetch!(fetch_until_acquired, Incremental);
+krabka_broker_macros::share_first_fetch!(fetch_until_acquired, Incremental);

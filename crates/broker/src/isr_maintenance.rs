@@ -20,10 +20,7 @@ use {
     },
     krabka_raft::NodeId,
     krabka_units::{Time, convert::TimeExt as _},
-    std::{
-        collections::HashSet,
-        sync::{Arc, atomic},
-    },
+    std::{collections::HashSet, sync::Arc},
     tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::warn,
@@ -77,7 +74,7 @@ pub async fn run(cfg: Config) {
         snapshot.clear();
         snapshot.extend(cfg.partitions.arcs());
         for part in snapshot.drain(..) {
-            if part.current_leader.load(atomic::Ordering::Acquire) != cfg.node_id {
+            if part.leader() != cfg.node_id {
                 continue;
             }
             let image = cfg.controller.current_image();

@@ -9,17 +9,10 @@ use {
     crate::{
         harness::round_trip,
         kafka_wire::{decode_named, encode_named},
-        support::{
-            sasl::sasl_plaintext_mechanisms,
-            wire::{
-                CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup,
-            },
-        },
+        support::{sasl::sasl_plaintext_mechanisms, wire::HeaderEncoding as RequestHeaderEncoding},
     },
     base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64},
     krabka_broker::{Broker, BrokerHandle},
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
@@ -102,15 +95,12 @@ pub async fn oauthbearer_handshake(
 ) -> Result<(), io::Error> {
     let av_req = ApiVersionsRequest::default();
     let av_body = encode_named(&av_req, 0, "ApiVersions")?;
-    let av = round_trip(
-        stream,
-        SocketExchangeSetup {
-            correlation: WireCorrelationId(*corr),
-            ..Default::default()
-        },
-        &av_body,
-    )
-    .await?;
+    let av = round_trip()
+        .stream(stream)
+        .correlation(*corr)
+        .body(&av_body)
+        .call()
+        .await?;
     *corr += 1;
     decode_named::<ApiVersionsResponse>(&av, 0, "ApiVersions")?;
 
@@ -119,17 +109,14 @@ pub async fn oauthbearer_handshake(
         ..Default::default()
     };
     let sh_body = encode_named(&sh_req, 1, "SaslHandshake")?;
-    let sh = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(*corr),
-            ..Default::default()
-        },
-        &sh_body,
-    )
-    .await?;
+    let sh = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(1)
+        .correlation(*corr)
+        .body(&sh_body)
+        .call()
+        .await?;
     *corr += 1;
     let sh_resp = decode_named::<SaslHandshakeResponse>(&sh, 1, "SaslHandshake")?;
     if sh_resp.error_code != 0 {
@@ -156,17 +143,15 @@ pub async fn oauthbearer_authenticate(
         ..Default::default()
     };
     let body = encode_named(&req, 2, "SaslAuthenticate")?;
-    let resp_bytes = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(36),
-            version: WireApiVersion(2),
-            correlation: WireCorrelationId(*corr),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &body,
-    )
-    .await?;
+    let resp_bytes = round_trip()
+        .stream(stream)
+        .api_key(36)
+        .version(2)
+        .correlation(*corr)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&body)
+        .call()
+        .await?;
     *corr += 1;
     decode_named::<SaslAuthenticateResponse>(&resp_bytes, 2, "SaslAuthenticate")
 }
@@ -232,17 +217,14 @@ pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Res
         ..Default::default()
     };
     let handshake_body = encode_named(&handshake_request, 1, "SaslHandshake")?;
-    let handshake_response_bytes = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(100),
-            ..Default::default()
-        },
-        &handshake_body,
-    )
-    .await?;
+    let handshake_response_bytes = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(1)
+        .correlation(100)
+        .body(&handshake_body)
+        .call()
+        .await?;
     let handshake_response =
         decode_named::<SaslHandshakeResponse>(&handshake_response_bytes, 1, "SaslHandshake")?;
     if handshake_response.error_code != 0 {
@@ -257,17 +239,15 @@ pub async fn drive_inband_reauth(stream: &mut TcpStream, new_token: &str) -> Res
         ..Default::default()
     };
     let authenticate_body = encode_named(&authenticate_request, 2, "SaslAuthenticate")?;
-    let authenticate_response_bytes = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(36),
-            version: WireApiVersion(2),
-            correlation: WireCorrelationId(101),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &authenticate_body,
-    )
-    .await?;
+    let authenticate_response_bytes = round_trip()
+        .stream(stream)
+        .api_key(36)
+        .version(2)
+        .correlation(101)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&authenticate_body)
+        .call()
+        .await?;
     let authenticate_response = decode_named::<SaslAuthenticateResponse>(
         &authenticate_response_bytes,
         2,

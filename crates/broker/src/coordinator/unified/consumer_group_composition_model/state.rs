@@ -30,8 +30,8 @@ pub(super) struct CommittedPartitionOffset {
     pub(super) offset: Offset,
 }
 
-#[krabka_macros::reconciliation_fields(member)]
-#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_macros::ReconciliationMember)]
+#[krabka_broker_macros::reconciliation_fields(member)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_broker_macros::ReconciliationMember)]
 pub(super) struct MemberProj {
     /// `(partition, assignment epoch)` of every held partition, sorted.
     #[reconciliation(extra)]
@@ -40,7 +40,7 @@ pub(super) struct MemberProj {
     pub(super) target: Vec<i32>,
 }
 
-#[krabka_macros::reconciliation_fields(group)]
+#[krabka_broker_macros::reconciliation_fields(group)]
 pub(super) struct CgcState {
     /// Coordinator-side members, sorted by id.
     pub(super) members: Vec<MemberProj>,
@@ -64,7 +64,7 @@ pub(super) enum EpochKind {
     Forward,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_macros::ReconciliationAction)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_broker_macros::ReconciliationAction)]
 pub(super) enum CgcAction {
     Join(String),
     Leave(String),

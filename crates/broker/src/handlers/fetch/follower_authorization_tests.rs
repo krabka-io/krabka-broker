@@ -87,7 +87,7 @@ impl Caller {
 #[derive(Debug)]
 struct Grants;
 
-krabka_macros::test_authorizer!(Grants, request; {
+krabka_broker_macros::test_authorizer!(Grants, request; {
     let allowed = match request.principal.name.as_str() {
         "reader" => {
             request.resource_type == ResourceType::Topic && request.operation == AclOperation::Read

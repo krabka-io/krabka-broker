@@ -12,6 +12,7 @@ use {
     tempfile::TempDir,
 };
 const TOPIC: &str = "krabka-sasl-ssl-itest";
+#[derive(Default)]
 struct EncryptedRecords {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -23,16 +24,8 @@ struct EncryptedRecords {
 }
 #[rstest::fixture]
 fn records() -> EncryptedRecords {
-    // Start this scenario with fresh inputs and observations.
-
     EncryptedRecords {
-        broker: None,
-        directory: None,
-        admin: None,
-        client: None,
-        truststore_mount: String::new(),
-        produced: None,
-        consumed: None,
+        ..EncryptedRecords::default()
     }
 }
 #[rstest_bdd_macros::given(

@@ -1714,8 +1714,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn hosted_classic_join() -> HostedClassicJoin {
-        // Start this scenario with fresh inputs and observations.
-        HostedClassicJoin::default()
+        HostedClassicJoin {
+            ..HostedClassicJoin::default()
+        }
     }
     #[given(
         "consumer group g subscribes to topic t with {members} native members and migration policy {policy}"

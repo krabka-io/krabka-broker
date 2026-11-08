@@ -215,7 +215,7 @@ mod tests {
         // `Histogram::sum`/`count` are behind prometheus-client's `test-util`
         // feature, so the rendered exposition is what a test reads — the same
         // text an operator scrapes.
-        krabka_macros::metric_registry_fixture!(metrics, rendered, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(metrics, rendered, registry; unwrap());
 
         for expected in [
             "krabka_broker_request_local_duration_seconds_count{api_key=\"Produce\"} 1",

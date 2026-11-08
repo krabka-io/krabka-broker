@@ -12,6 +12,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct TopicAdministration {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -23,15 +24,8 @@ struct TopicAdministration {
 
 #[fixture]
 fn topics() -> TopicAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     TopicAdministration {
-        broker: None,
-        directory: None,
-        topic: String::new(),
-        description: String::new(),
-        configuration: String::new(),
-        listing: String::new(),
+        ..TopicAdministration::default()
     }
 }
 

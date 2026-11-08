@@ -13,8 +13,9 @@
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
 use {
-    crate::share_coordinator::coordinator::{
-        ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET,
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET},
+        key::ShareKeyRef,
     },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
@@ -25,7 +26,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     ReadShareGroupStateSummaryRequest,
     ReadShareGroupStateSummaryResponse,
     ReadStateSummaryResult,
@@ -45,12 +46,12 @@ async fn read_summaries(
     {
         return ReadShareGroupStateSummaryResponse::default();
     }
-    let results = krabka_macros::share_state_results!(
+    let results = krabka_broker_macros::share_state_results!(
         req,
         ReadStateSummaryResult,
         |group_id, topic_id, pd| {
             match coordinator
-                .read_summary_checked(image, group_id, topic_id, pd.partition)
+                .read_summary_checked(image, ShareKeyRef::new(group_id, topic_id, pd.partition))
                 .await
             {
                 Ok(Some(summary)) => PartitionResult {
@@ -117,7 +118,7 @@ mod tests {
     const WIRE_TOPIC: ProtoUuid = ProtoUuid([41; 16]);
 
     fn request(group_id: &str, partitions: &[i32]) -> ReadShareGroupStateSummaryRequest {
-        krabka_macros::share_state_request! {
+        krabka_broker_macros::share_state_request! {
             ReadShareGroupStateSummaryRequest, ReadStateSummaryData;
             group [group_id];
             topic [WIRE_TOPIC];

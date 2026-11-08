@@ -60,14 +60,13 @@ use {
     krabka_verified::{
         BarrierMarkerFenceDecision, BarrierMarkerFenceFacts, barrier_marker_fence_decision,
     },
-    std::sync::atomic::Ordering,
     tracing::warn,
 };
 
 /// The `offset` of a partition row that placed no marker.
 const NO_OFFSET: i64 = -1;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_write_barrier_markers",
     api = "WriteBarrierMarkers",
     level = "debug"
@@ -186,8 +185,8 @@ fn leadership_fault(
     index: PartitionIndex,
     expected_leader_epoch: i32,
 ) -> Option<i16> {
-    let local_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-    let local_leader = partition.current_leader.load(Ordering::Acquire);
+    let local_epoch = partition.leader_epoch().get();
+    let local_leader = partition.leader().get();
     let image_partition = image.partition(topic, index.get());
     let decision = barrier_marker_fence_decision(BarrierMarkerFenceFacts {
         image_present: image_partition.is_some(),
@@ -276,7 +275,6 @@ mod tests {
             codes,
             coordinator::unified::persistence::MAX_STRING_BYTES,
             partition_registry::PartitionRegistry,
-            test_support::StandalonePartitionSetup,
         },
     };
 
@@ -311,7 +309,7 @@ mod tests {
         leader_epoch: i32,
     ) -> PartitionRegistry {
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir, StandalonePartitionSetup::default());
+        open_partition(&registry, dir).call();
         let partition = registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open");

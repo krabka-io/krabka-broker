@@ -4,7 +4,7 @@ use {
     crate::support::{
         client::{connect_client, create_topic_with},
         start_n_node_customized_with_retry,
-        topics::{CreateTopicSetup, TopicPartitionCount},
+        topics::configured_topic_request,
         wait_for_all_brokers_registered,
     },
     assert2::assert,
@@ -191,11 +191,13 @@ pub async fn start_leader_routing_cluster(
     let bootstrap = cluster[0].1.listen_addr.to_string();
     let admin = connect_client(bootstrap.clone(), None).await;
     let n_partitions = 6;
-    let topic_id = create_topic_with(&admin, CreateTopicSetup {
-        topic,
-        num_partitions: TopicPartitionCount(n_partitions),
-        ..Default::default()
-    })
+    let topic_id = create_topic_with(
+        &admin,
+        configured_topic_request()
+            .topic(topic)
+            .num_partitions(n_partitions)
+            .call(),
+    )
     .await;
     wait_for_partition_leaders(&cluster[0].0, topic, n_partitions).await;
     (cluster, bootstrap, topic_id, n_partitions)

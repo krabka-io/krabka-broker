@@ -32,7 +32,7 @@ use {
     std::{
         collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         mem,
-        sync::{Arc, atomic},
+        sync::Arc,
         time::Duration,
     },
     tokio::time::Instant,
@@ -437,7 +437,7 @@ struct PartitionRow {
 /// to fetch from, a row would ask the leader for the log from offset 0.
 fn partition_row(cfg: &Config) -> Option<PartitionRow> {
     let entry = cfg.partitions.get(&cfg.topic, cfg.partition)?;
-    let leader_epoch = entry.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let leader_epoch = entry.leader_epoch().get();
     let (fetch_offset, log_start_offset, last_fetched_epoch) = {
         let log = entry
             .lock_log()

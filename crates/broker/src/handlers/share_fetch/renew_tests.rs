@@ -22,6 +22,7 @@ use {
             create_topic as create_topic_from_test_support, produce_records,
             share_acknowledge_wire, share_fetch_wire,
         },
+        share_coordinator::key::ShareKeyRef,
         share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
         test_support::{KafkaErrorCode, initialize_share_state},
     },
@@ -380,7 +381,11 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
         };
         let states = shared
             .share_partition_leaders
-            .peek_for_test(&group, uuid::Uuid::from_bytes(topic_id.0), 0)
+            .peek_for_test(ShareKeyRef::new(
+                &group,
+                uuid::Uuid::from_bytes(topic_id.0),
+                0,
+            ))
             .expect("the fetch cached the share partition")
             .lock()
             .await
@@ -401,7 +406,7 @@ const NO_TOPIC_READ: &str = "no-topic-read";
 #[derive(Debug)]
 struct DenyTopicReadToOne;
 
-krabka_macros::test_authorizer!(DenyTopicReadToOne, request; {
+krabka_broker_macros::test_authorizer!(DenyTopicReadToOne, request; {
     let denied = request.principal.name == NO_TOPIC_READ
         && request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read;

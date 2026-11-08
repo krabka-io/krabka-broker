@@ -14,6 +14,7 @@ use {
     tokio::sync::MutexGuard,
 };
 
+#[derive(Default)]
 struct CredentialInspection {
     port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
@@ -23,14 +24,8 @@ struct CredentialInspection {
 }
 #[fixture]
 fn credentials() -> CredentialInspection {
-    // Start this scenario with fresh inputs and observations.
-
     CredentialInspection {
-        port_ownership: None,
-        cluster: None,
-        admin: None,
-        altered: None,
-        described: None,
+        ..CredentialInspection::default()
     }
 }
 #[given("a three broker SASL cluster accepts the administrator's PLAIN identity")]

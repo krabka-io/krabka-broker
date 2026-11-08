@@ -12,7 +12,7 @@ use {
     uuid::Uuid,
 };
 
-#[krabka_macros::runtime_policy_fields(node_cli)]
+#[krabka_broker_macros::runtime_policy_fields(node_cli)]
 #[krabka_macros::krabka_env]
 #[derive(Debug, Parser)]
 #[command(
@@ -404,8 +404,6 @@ mod tests {
 
     #[rstest::fixture]
     fn cluster_id_command() -> ClusterIdCommand {
-        // Start this scenario with fresh inputs and observations.
-
         ClusterIdCommand {
             _environment: env_guard(),
             value: String::new(),

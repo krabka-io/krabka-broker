@@ -88,8 +88,6 @@ struct ClassicDescription {
 
 #[fixture]
 fn classic() -> ClassicDescription {
-    // Start this scenario with fresh inputs and observations.
-
     ClassicDescription {
         broker: None,
         directory: None,

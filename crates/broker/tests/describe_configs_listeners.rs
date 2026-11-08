@@ -221,16 +221,6 @@ fn unset(name: &str, kind: ConfigKind) -> DescribeConfigsResourceResult {
 
 // The listener keys that a node reports. `advertised` is `None` on a node that
 // names no advertised listener.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ExpectedListenersSetup<'a> {
-    #[default(NodeId(1))]
-    node: NodeId,
-    #[default(DEFAULT_LISTENERS)]
-    listeners: &'a str,
-    advertised: Option<&'a str>,
-    #[default(DEFAULT_PROTOCOL_MAP)]
-    protocol_map: &'a str,
-}
 
 #[bon::builder]
 fn expected(
@@ -239,19 +229,13 @@ fn expected(
     advertised: Option<&'_ str>,
     #[builder(default = DEFAULT_PROTOCOL_MAP)] protocol_map: &'_ str,
 ) -> DescribeConfigsResult {
-    let setup = ExpectedListenersSetup {
-        node,
-        listeners,
-        advertised,
-        protocol_map,
-    };
     DescribeConfigsResult {
         error_code: 0,
         error_message: None,
         resource_type: RESOURCE_TYPE_BROKER,
-        resource_name: setup.node.0.to_string(),
+        resource_name: node.0.to_string(),
         configs: vec![
-            setup.advertised.map_or_else(
+            advertised.map_or_else(
                 || unset("advertised.listeners", ConfigKind::List),
                 |advertised| {
                     named()
@@ -269,12 +253,12 @@ fn expected(
             unset("inter.broker.listener.name", ConfigKind::String),
             named()
                 .name("listener.security.protocol.map")
-                .value(setup.protocol_map)
+                .value(protocol_map)
                 .kind(ConfigKind::String)
                 .maybe_builtin_default(Some(DEFAULT_PROTOCOL_MAP))
                 .call(),
             named()
-                .value(setup.listeners)
+                .value(listeners)
                 .maybe_builtin_default(Some(DEFAULT_LISTENERS))
                 .call(),
         ],
@@ -289,6 +273,7 @@ enum Roles {
     Combined,
 }
 
+#[derive(Default)]
 struct ListenerDescription {
     roles: Option<Roles>,
     nodes: Vec<Node>,
@@ -300,15 +285,8 @@ struct ListenerDescription {
 
 #[fixture]
 fn listeners() -> ListenerDescription {
-    // Start this scenario with fresh inputs and observations.
-
     ListenerDescription {
-        roles: None,
-        nodes: Vec::new(),
-        described: 0,
-        dialed: Vec::new(),
-        expected: None,
-        observed: Vec::new(),
+        ..ListenerDescription::default()
     }
 }
 

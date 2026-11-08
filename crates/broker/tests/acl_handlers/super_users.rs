@@ -17,6 +17,7 @@ use {
     },
 };
 
+#[derive(Default)]
 struct SuperUserProvisioning {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -24,12 +25,8 @@ struct SuperUserProvisioning {
 }
 #[rstest::fixture]
 fn provisioning() -> SuperUserProvisioning {
-    // Start this scenario with fresh inputs and observations.
-
     SuperUserProvisioning {
-        directory: None,
-        broker: None,
-        response: None,
+        ..SuperUserProvisioning::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -83,11 +80,15 @@ async fn ops_bot_provisions(provisioning: &mut SuperUserProvisioning) {
         creations: vec![topic_allow_creation("t-ops", "User:carol", OPERATION_WRITE)],
         ..Default::default()
     };
-    let ops_resp = drive_create_acls_as_plain(addr, ops_req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user: "ops-bot",
-        password: (b"ops-secret").to_vec(),
-    })
+    let ops_resp = drive_create_acls_as_plain(
+        addr,
+        ops_req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user("ops-bot")
+            .password(b"ops-secret")
+            .build(),
+    )
     .await
     .expect("CreateAcls as ops-bot must round-trip");
 
@@ -107,10 +108,13 @@ async fn alice_provisions(provisioning: &mut SuperUserProvisioning) {
         ],
         ..Default::default()
     };
-    let alice_resp = drive_create_acls_as_plain(addr, alice_req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let alice_resp = drive_create_acls_as_plain(
+        addr,
+        alice_req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("CreateAcls request must round-trip even when denied");
 

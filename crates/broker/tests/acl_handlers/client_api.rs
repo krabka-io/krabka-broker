@@ -23,7 +23,7 @@ use {
     },
 };
 
-krabka_macros::wire_test_driver!(plain pub drive_fetch_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_fetch_as_plain {
     request: FetchRequest,
     response: FetchResponse,
     api: ApiRequestSetup {
@@ -33,7 +33,7 @@ krabka_macros::wire_test_driver!(plain pub drive_fetch_as_plain {
     operation: "Fetch",
 });
 
-krabka_macros::wire_test_driver!(plain pub drive_metadata_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_metadata_as_plain {
     request: MetadataRequest,
     response: MetadataResponse,
     api: ApiRequestSetup {
@@ -43,7 +43,7 @@ krabka_macros::wire_test_driver!(plain pub drive_metadata_as_plain {
     operation: "Metadata",
 });
 
-krabka_macros::wire_test_driver!(plain pub drive_join_group_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_join_group_as_plain {
     request: JoinGroupRequest,
     response: JoinGroupResponse,
     api: ApiRequestSetup {
@@ -53,7 +53,7 @@ krabka_macros::wire_test_driver!(plain pub drive_join_group_as_plain {
     operation: "JoinGroup",
 });
 
-krabka_macros::wire_test_driver!(plain pub drive_init_producer_id_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_init_producer_id_as_plain {
     request: InitProducerIdRequest,
     response: InitProducerIdResponse,
     api: ApiRequestSetup {

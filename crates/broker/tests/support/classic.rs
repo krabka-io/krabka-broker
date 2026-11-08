@@ -196,19 +196,6 @@ pub fn sync_assignment(
     }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct ClassicSyncSetup {
-    #[default("group".into())]
-    pub group_id: String,
-    pub generation_id: GenerationId,
-    pub member_id: String,
-    #[default(Some("consumer".into()))]
-    pub protocol_type: Option<String>,
-    #[default(Some("range".into()))]
-    pub protocol_name: Option<String>,
-    pub assignments: Vec<SyncGroupRequestAssignment>,
-}
-
 #[bon::builder]
 pub fn classic_sync_request(
     #[builder(default = "group" . into ())] group_id: String,
@@ -218,22 +205,6 @@ pub fn classic_sync_request(
     #[builder(required, default = Some ("range" . into ()))] protocol_name: Option<String>,
     #[builder(default)] assignments: Vec<SyncGroupRequestAssignment>,
 ) -> SyncGroupRequest {
-    let setup = ClassicSyncSetup {
-        group_id,
-        generation_id,
-        member_id,
-        protocol_type,
-        protocol_name,
-        assignments,
-    };
-    let ClassicSyncSetup {
-        group_id,
-        generation_id,
-        member_id,
-        protocol_type,
-        protocol_name,
-        assignments,
-    } = setup;
     SyncGroupRequest {
         group_id,
         generation_id: generation_id.0,

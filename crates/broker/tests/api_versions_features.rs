@@ -39,6 +39,7 @@ mod support;
 
 use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
 
+#[derive(Default)]
 struct FeatureDiscovery {
     broker: Option<InProcess>,
     response: Option<ApiVersionsResponse>,
@@ -46,11 +47,8 @@ struct FeatureDiscovery {
 
 #[fixture]
 fn features() -> FeatureDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     FeatureDiscovery {
-        broker: None,
-        response: None,
+        ..FeatureDiscovery::default()
     }
 }
 

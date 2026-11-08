@@ -36,45 +36,13 @@ fn configs(pairs: &[ConfigPair<'_>]) -> Vec<CreatableTopicConfig> {
         .collect()
 }
 
-struct AutoTopicSetup<'a> {
-    name: &'a str,
-    num_partitions: PartitionCount,
-    replication_factor: ReplicationFactor,
-    configs: Vec<CreatableTopicConfig>,
-}
-
-impl Default for AutoTopicSetup<'_> {
-    fn default() -> Self {
-        Self {
-            name: "orders",
-            num_partitions: PartitionCount(-1),
-            replication_factor: ReplicationFactor(-1),
-            configs: vec![],
-        }
-    }
-}
-
 #[bon::builder]
 fn topic(
-    #[builder(default = AutoTopicSetup::default().name)] name: &'_ str,
-    #[builder(into, default = AutoTopicSetup::default().num_partitions)]
-    num_partitions: PartitionCount,
-    #[builder(into, default = AutoTopicSetup::default().replication_factor)]
-    replication_factor: ReplicationFactor,
-    #[builder(default = AutoTopicSetup::default().configs)] configs: Vec<CreatableTopicConfig>,
+    #[builder(default = "orders")] name: &'_ str,
+    #[builder(into, default = PartitionCount(-1))] num_partitions: PartitionCount,
+    #[builder(into, default = ReplicationFactor(-1))] replication_factor: ReplicationFactor,
+    #[builder(default = vec![])] configs: Vec<CreatableTopicConfig>,
 ) -> CreatableTopic {
-    let setup = AutoTopicSetup {
-        name,
-        num_partitions,
-        replication_factor,
-        configs,
-    };
-    let AutoTopicSetup {
-        name,
-        num_partitions,
-        replication_factor,
-        configs,
-    } = setup;
     CreatableTopic {
         name: name.to_owned(),
         num_partitions: num_partitions.0,

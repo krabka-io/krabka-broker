@@ -574,7 +574,7 @@ impl Quiescence for EosModel {
     fn is_fault(&self, _action: &Act) -> bool { false }
 }
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
 
     fn run(model: EosModel, label: &str, pinned_unique_states: usize)

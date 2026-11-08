@@ -37,8 +37,6 @@ pub struct Authentication {
 
 #[fixture]
 pub fn authentication() -> Authentication {
-    // Start this scenario with fresh inputs and observations.
-
     Authentication {
         broker: None,
         directory: None,

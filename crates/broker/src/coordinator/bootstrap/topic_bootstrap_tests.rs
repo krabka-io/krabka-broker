@@ -178,9 +178,9 @@ struct CoordinatorTopicCreation {
 }
 #[rstest::fixture]
 fn topic_creation() -> CoordinatorTopicCreation {
-    // Start this scenario with fresh inputs and observations.
-
-    CoordinatorTopicCreation::default()
+    CoordinatorTopicCreation {
+        ..CoordinatorTopicCreation::default()
+    }
 }
 #[given("a running broker configures transaction and Share state minimum ISR to Kafka default two")]
 async fn coordinator_topic_broker(topic_creation: &mut CoordinatorTopicCreation) {

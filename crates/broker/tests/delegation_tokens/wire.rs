@@ -29,7 +29,7 @@ use {
 const CLIENT_ID: &str = "krabka-deltok-test";
 
 // One length-prefixed request/response exchange, bound to this suite.
-krabka_macros::wire_test_driver!(socket pub(crate) round_trip, CLIENT_ID);
+krabka_broker_macros::wire_test_driver!(socket pub(crate) round_trip, CLIENT_ID);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SASL handshake drivers. Both walk ApiVersions → SaslHandshake →
@@ -44,11 +44,14 @@ pub async fn sasl_plain_authenticate(
     user: &str,
     password: &[u8],
 ) -> io::Result<TcpStream> {
-    kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (password).to_vec(),
-    })
+    kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(password)
+            .build(),
+    )
     .await
 }
 
@@ -187,4 +190,4 @@ impl TokenScramClient {
     }
 }
 
-krabka_macros::scram_client_proof_fixture!(scram_client_proof);
+krabka_broker_macros::scram_client_proof_fixture!(scram_client_proof);

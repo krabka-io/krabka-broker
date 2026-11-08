@@ -9,14 +9,16 @@
 //! `KRaft` controller.
 
 use {
-    crate::{BrokerError, config::BrokerConfig},
+    crate::{BrokerError, config::BrokerConfig, error::ConfigError},
     krabka_units::{Time, convert::TimeExt},
 };
 
 impl BrokerConfig {
     pub(super) fn validate_leader_rebalance(&self) -> Result<(), BrokerError> {
         if self.leader_imbalance_check_interval <= <Time as TimeExt>::ZERO {
-            return Err(BrokerError::InvalidLeaderRebalanceInterval { value: 0 });
+            return Err(BrokerError::Config(
+                ConfigError::InvalidLeaderRebalanceInterval { value: 0 },
+            ));
         }
         Ok(())
     }
@@ -52,7 +54,9 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::InvalidLeaderRebalanceInterval { value: 0 })
+            Err(BrokerError::Config(
+                ConfigError::InvalidLeaderRebalanceInterval { value: 0 }
+            ))
         ));
     }
 }

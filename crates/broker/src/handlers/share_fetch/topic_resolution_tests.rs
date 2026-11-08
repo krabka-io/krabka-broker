@@ -89,17 +89,6 @@ enum AcknowledgementPresence {
     AcceptFirstRecord,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct TopicResolutionSetup<'a> {
-    #[default("member")]
-    member: &'a str,
-    #[default(ShareSessionEpoch(0))]
-    epoch: ShareSessionEpoch,
-    #[default(WireUuid::ZERO)]
-    topic_id: WireUuid,
-    acknowledgements: AcknowledgementPresence,
-}
-
 #[bon::builder]
 fn request(
     #[builder(default = "member")] member: &'_ str,
@@ -107,18 +96,6 @@ fn request(
     #[builder(default = WireUuid :: ZERO)] topic_id: WireUuid,
     #[builder(default)] acknowledgements: AcknowledgementPresence,
 ) -> ShareFetchRequest {
-    let setup = TopicResolutionSetup {
-        member,
-        epoch,
-        topic_id,
-        acknowledgements,
-    };
-    let TopicResolutionSetup {
-        member,
-        epoch,
-        topic_id,
-        acknowledgements,
-    } = setup;
     let acknowledgement_batches = match acknowledgements {
         AcknowledgementPresence::None => Vec::new(),
         AcknowledgementPresence::AcceptFirstRecord => vec![AcknowledgementBatch {

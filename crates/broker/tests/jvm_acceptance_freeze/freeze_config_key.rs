@@ -21,6 +21,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
 };
 
+#[derive(Default)]
 struct FrozenConfig {
     broker: Option<JvmBroker>,
     described: Option<ToolRun>,
@@ -29,13 +30,8 @@ struct FrozenConfig {
 }
 #[fixture]
 fn frozen_config() -> FrozenConfig {
-    // Start this scenario with fresh inputs and observations.
-
     FrozenConfig {
-        broker: None,
-        described: None,
-        altered: Vec::new(),
-        after: None,
+        ..FrozenConfig::default()
     }
 }
 

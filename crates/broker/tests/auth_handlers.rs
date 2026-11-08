@@ -1,8 +1,7 @@
 //! Broker-side auth tests. No Docker.
 //!
 //! The binary root carries only what the whole suite shares: the dev TLS
-//! keypair, whose `include_str!` paths resolve against this directory, and
-//! the module tree below. Each child covers one authentication surface --
+//! keypair from `support::tls`, and the module tree below. Each child covers one authentication surface --
 //! TLS termination, SASL/PLAIN, SASL/SCRAM, SASL/OAUTHBEARER token
 //! validation and KIP-368 sessions, `AlterUserScramCredentials`, the
 //! pre-auth SASL gate, inter-broker authentication, GSSAPI, and a
@@ -43,5 +42,4 @@ mod tls;
 #[path = "auth_handlers/two_broker_sasl.rs"]
 mod two_broker_sasl;
 
-const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
-const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
+use support::tls::{DEV_CERT, DEV_KEY};

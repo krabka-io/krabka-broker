@@ -102,6 +102,7 @@ pub mod produce;
 pub mod producer;
 pub mod quorum;
 pub mod records;
+pub mod repository;
 mod reserved_port;
 pub mod retry;
 pub mod sasl;

@@ -45,13 +45,13 @@ use {
     tokio::{net::TcpStream, time},
 };
 
-krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
+krabka_broker_macros::assignment_dirs_fixture!(assignment_dirs_request);
 
 const CLIENT_ID: &str = "krabka-jbod-disk-failure-test";
 const PRODUCE_VERSION: i16 = 9; // flexible, acks=1
 
 // Flexible headers and correlation ID 1 for every request in this suite.
-krabka_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
+krabka_broker_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
 
 /// Lists the partition indices of `topic` whose data dir lives directly under
 /// `dir`.
@@ -125,6 +125,7 @@ use {
     tempfile::TempDir,
     tokio::sync::watch,
 };
+#[derive(Default)]
 struct DirectoryFailure {
     paired: Option<(BrokerHandle, TempDir, TempDir, SocketAddr)>,
     single: Option<SingleDirectoryBroker>,
@@ -137,17 +138,8 @@ struct DirectoryFailure {
 }
 #[fixture]
 fn failure() -> DirectoryFailure {
-    // Start this scenario with fresh inputs and observations.
-
     DirectoryFailure {
-        paired: None,
-        single: None,
-        topic: String::new(),
-        primary_partition: None,
-        extra_partition: None,
-        marked: None,
-        produced: None,
-        shutdown: None,
+        ..DirectoryFailure::default()
     }
 }
 #[given("topic {topic} has six partitions spread across primary and extra log directories")]
@@ -257,6 +249,7 @@ async fn shutdown_failure(failure: DirectoryFailure) {
     }
 }
 
+#[derive(Default)]
 struct DirectoryController {
     broker: Option<SingleDirectoryBroker>,
     topic: Option<uuid::Uuid>,
@@ -266,14 +259,8 @@ struct DirectoryController {
 }
 #[fixture]
 fn controller() -> DirectoryController {
-    // Start this scenario with fresh inputs and observations.
-
     DirectoryController {
-        broker: None,
-        topic: None,
-        epoch: None,
-        assignment: None,
-        heartbeat: None,
+        ..DirectoryController::default()
     }
 }
 #[given("a controller leader broker has topic {topic} with two partitions")]

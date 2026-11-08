@@ -161,6 +161,7 @@ fn registry_reports_missing_keys() {
     assert!(registry.get(9999).is_none());
 }
 
+#[derive(Default)]
 struct RegistryContract {
     registry: Option<DispatchRegistry>,
     registered: Option<BTreeSet<ApiKeyCode>>,
@@ -170,13 +171,8 @@ struct RegistryContract {
 
 #[rstest::fixture]
 fn registry_contract() -> RegistryContract {
-    // Start this scenario with fresh inputs and observations.
-
     RegistryContract {
-        registry: None,
-        registered: None,
-        advertised: None,
-        policies: None,
+        ..RegistryContract::default()
     }
 }
 

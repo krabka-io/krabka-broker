@@ -154,7 +154,7 @@ async fn transaction_initialization_coordinator(
     let started = transaction_v2_broker().await;
     wait_for_transaction_v2_coordinator(&started.broker).await;
     let broker = started.broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
     let request = FindCoordinatorRequest {
         key_type: 1,
         coordinator_keys: vec![transaction.clone()],
@@ -186,7 +186,7 @@ async fn initialize_transaction_identity(
     two_phase: bool,
 ) {
     let broker = transaction_initialization.coordinator_broker();
-    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
     let request = transaction_initialization.initialization_request(timeout, two_phase, false);
     transaction_initialization.initialized = Some(
         init_producer_id_handle(
@@ -289,7 +289,7 @@ async fn recover_two_phase_transaction(
     transaction_initialization: &mut TransactionInitializationScenario,
 ) {
     let broker = transaction_initialization.coordinator_broker();
-    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
     let request = transaction_initialization.initialization_request(500, true, true);
     for _ in 0..2 {
         transaction_initialization.recovered.push(
@@ -331,7 +331,7 @@ async fn complete_recovered_transaction(
     transaction_initialization: &mut TransactionInitializationScenario,
 ) {
     let broker = transaction_initialization.coordinator_broker();
-    krabka_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, context); user ["admin"]; client ["txn-client"]; };
     let [first, second] = transaction_initialization.recovered.as_slice() else {
         panic!("two recovery responses required")
     };
@@ -361,7 +361,7 @@ async fn completed_recovered_transaction(
     };
     assert!(
         fenced
-            == &krabka_macros::unthrottled_wire!(EndTxnResponse {
+            == &krabka_broker_macros::unthrottled_wire!(EndTxnResponse {
                 error_code: codes::PRODUCER_FENCED,
                 producer_id: -1,
                 producer_epoch: -1
@@ -370,7 +370,7 @@ async fn completed_recovered_transaction(
     let identity = &transaction_initialization.recovered[1];
     assert!(
         completed
-            == &krabka_macros::unthrottled_wire!(EndTxnResponse {
+            == &krabka_broker_macros::unthrottled_wire!(EndTxnResponse {
                 error_code: codes::NONE,
                 producer_id: identity.producer_id,
                 producer_epoch: identity.producer_epoch + 1
@@ -492,7 +492,7 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
             dir: _dir,
         } = two_phase_commit_broker(two_phase_commit, unstable).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, context);
             user ["admin"];
             client ["txn-client"];
@@ -529,7 +529,7 @@ async fn keep_prepared_txn_with_an_identity_is_invalid_before_the_timeout_check(
         dir: _dir,
     } = two_phase_commit_broker(true, UnstableApiVersions::Enabled).await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];
@@ -612,12 +612,12 @@ fn refused(error_code: i16) -> InitProducerIdResponse {
 
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
-    krabka_macros::broker_test_setup!(
+    krabka_broker_macros::broker_test_setup!(
         bind(broker_handle, _dir, broker);
         boot [transaction_v2_broker()];
     );
     wait_for_transaction_v2_coordinator(&broker_handle).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];
@@ -681,7 +681,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
     } = start_broker_no_audit_with(|config| config.transaction_max_timeout = secs(8)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_version_2(&broker_handle).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];
@@ -737,7 +737,7 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     } = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_transaction_v2_coordinator(&broker_handle).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];
@@ -974,7 +974,7 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
     let mut expected = Vec::new();
     let mut actual = Vec::new();
     for case in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker_with_authorizer_no_audit(Arc::new(SimpleAclAuthorizer::new(
                         HashSet::new()
@@ -984,7 +984,7 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
             acl_fixtures::seed_case_acls(&broker, case.acls).await;
         }
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, context);
             user ["alice"];
             client ["idempotent-client"];
@@ -1088,7 +1088,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             .await
             .expect("seed acls");
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, context);
             user ["alice"];
             client ["txn-client"];
@@ -1144,7 +1144,7 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
         client ["txn-client"];

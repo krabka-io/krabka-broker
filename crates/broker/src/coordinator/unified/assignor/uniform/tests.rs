@@ -253,8 +253,9 @@ struct UniformPlacement {
 }
 #[rstest::fixture]
 fn uniform_placement() -> UniformPlacement {
-    // Start this scenario with fresh inputs and observations.
-    UniformPlacement::default()
+    UniformPlacement {
+        ..UniformPlacement::default()
+    }
 }
 
 #[given("a homogeneous group has 100 three-partition topics and 49 subscribing members")]

@@ -10,7 +10,7 @@ use {
         },
         handlers::test_support::StartedBroker,
         partition::Partition,
-        test_support::{StandalonePartitionSetup, start_group_broker_with},
+        test_support::{STANDALONE_TOPIC, StorageMode, start_group_broker_with},
     },
     krabka_ids::PartitionIndex,
     krabka_protocol::records::{Attributes, Record, RecordBatch},
@@ -32,22 +32,25 @@ pub fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
 
 /// Open `topic-partition` under `log_dir` and register it with the broker.
 /// The partition starts with no local leader role; the caller installs one.
+#[bon::builder]
 pub fn open_partition(
-    broker: &Broker,
-    log_dir: &Path,
-    setup: StandalonePartitionSetup<'_>,
+    #[builder(start_fn)] broker: &Broker,
+    #[builder(start_fn)] log_dir: &Path,
+    #[builder(default = STANDALONE_TOPIC)] topic: &str,
+    #[builder(into, default)] partition: PartitionIndex,
+    #[builder(default)] storage: StorageMode,
 ) -> Arc<Partition> {
     use crate::test_support::open_partition as open_test_partition;
 
     let part = open_test_partition()
         .log_dir(log_dir)
-        .topic(setup.topic)
-        .partition(setup.partition)
-        .storage(setup.storage)
+        .topic(topic)
+        .partition(partition)
+        .storage(storage)
         .call();
     broker
         .partitions
-        .insert(setup.topic.into(), setup.partition, Arc::clone(&part));
+        .insert(topic.into(), partition, Arc::clone(&part));
     part
 }
 

@@ -155,11 +155,11 @@ mod tests {
         ];
         apply_submit_error(&mut results, &submitted, &error, known_leader);
         let expected = vec![
-            krabka_macros::tagged_wire!(AclCreationResult {
+            krabka_broker_macros::tagged_wire!(AclCreationResult {
                 error_code: code,
                 error_message: message.map(str::to_owned),
             }),
-            krabka_macros::tagged_wire!(AclCreationResult {
+            krabka_broker_macros::tagged_wire!(AclCreationResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some("already invalid".into()),
             }),

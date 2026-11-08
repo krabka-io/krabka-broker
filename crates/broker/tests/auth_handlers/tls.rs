@@ -60,8 +60,6 @@ struct TlsListener {
 
 #[rstest::fixture]
 fn tls_listener() -> TlsListener {
-    // Start this scenario with fresh inputs and observations.
-
     TlsListener {
         files: tls_fixture(),
         config: None,

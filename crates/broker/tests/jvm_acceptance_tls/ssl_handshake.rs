@@ -24,6 +24,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct EncryptedDiscovery {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -33,14 +34,8 @@ struct EncryptedDiscovery {
 }
 #[fixture]
 fn discovery() -> EncryptedDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     EncryptedDiscovery {
-        broker: None,
-        directory: None,
-        truststore: None,
-        properties: None,
-        output: None,
+        ..EncryptedDiscovery::default()
     }
 }
 #[given("an SSL only broker and a JVM truststore containing its development certificate")]

@@ -13,7 +13,7 @@ use {
     std::collections::HashSet,
 };
 
-krabka_macros::required_topics! {
+krabka_broker_macros::required_topics! {
     /// Kafka's `requiredTopics`: every source, repartition sink, repartition
     /// source and changelog topic, deduplicated in first-seen order across
     /// the subtopologies.

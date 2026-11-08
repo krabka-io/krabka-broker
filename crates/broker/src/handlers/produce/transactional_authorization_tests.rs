@@ -46,17 +46,6 @@ struct TransactionalBatchSetup {
     producer_epoch: ProducerEpoch,
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ProduceRequestSetup<'a> {
-    #[default(WireUuid::ZERO)]
-    topic_id: WireUuid,
-    #[default(ProduceApiVersion(12))]
-    version: ProduceApiVersion,
-    transactional_id: Option<&'a str>,
-    #[default(plain_batch())]
-    records: RecordsPayload,
-}
-
 #[derive(Clone, Copy)]
 enum BatchKind {
     Transactional,
@@ -89,7 +78,7 @@ async fn boot() -> StartedBroker {
 }
 
 async fn create_topic(broker: &Broker, name: &str) {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(admin, address, ctx);
         user [ADMIN_GRANTS];
         client ["produce-txn-authz-admin"];
@@ -115,7 +104,7 @@ async fn create_topic(broker: &Broker, name: &str) {
 async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
     use crate::handlers::init_producer_id::handle as init_producer_id_handle;
 
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(grantee, address, ctx);
         user ["TransactionalId:Write"];
         client ["produce-txn-authz-open"];
@@ -154,18 +143,6 @@ fn produce_request(
     transactional_id: Option<&'_ str>,
     #[builder(default = plain_batch ())] records: RecordsPayload,
 ) -> ProduceRequest {
-    let setup = ProduceRequestSetup {
-        topic_id,
-        version,
-        transactional_id,
-        records,
-    };
-    let ProduceRequestSetup {
-        topic_id,
-        version,
-        transactional_id,
-        records,
-    } = setup;
     let id_only = version.0 >= FIRST_TOPIC_ID_VERSION;
     ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
@@ -212,20 +189,14 @@ async fn drive(
     transactional_id: Option<&'_ str>,
     #[builder(default = plain_batch ())] records: RecordsPayload,
 ) -> ProduceResponse {
-    let setup = ProduceRequestSetup {
-        topic_id,
-        version,
-        transactional_id,
-        records,
-    };
-    let version = setup.version.0;
+    let version = version.0;
     let request = produce_request()
-        .topic_id(setup.topic_id)
-        .version(setup.version)
-        .maybe_transactional_id(setup.transactional_id)
-        .records(setup.records)
+        .topic_id(topic_id)
+        .version(version)
+        .maybe_transactional_id(transactional_id)
+        .records(records)
         .call();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user [grants];
         client ["produce-txn-authz"];

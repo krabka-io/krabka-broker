@@ -23,7 +23,7 @@ use {
         Config, connection::connection_options, replication_target_changed, response::RowAction,
         task_replication_target, truncate_producer_state,
     },
-    crate::{codes, network::client::InterBrokerError, partition::Partition},
+    crate::{codes, error::BrokerError, network::client::InterBrokerError, partition::Partition},
     krabka_client_core::Connection,
     krabka_ids::LeaderEpoch,
     krabka_log::{Log, Offset},
@@ -40,11 +40,26 @@ use {
         UNKNOWN_PENDING_UPLOAD_OFFSET, earliest_pending_upload_offset,
         should_fetch_from_last_tiered_offset,
     },
-    std::sync::{PoisonError, atomic},
+    std::sync::MutexGuard,
     tracing::{info, warn},
 };
 
 mod last_tiered;
+
+/// Locks the log of `part` for this replicator round, or warns and answers
+/// `None` when its mutex is poisoned. The round then leaves the partition
+/// alone, as the fetch loop leaves it out of the next request.
+pub(super) fn lock_log_or_skip<'a>(
+    part: &'a Partition,
+    cfg: &Config,
+) -> Option<MutexGuard<'a, Log>> {
+    part.lock_log()
+        .inspect_err(|error| {
+            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                "replicator: skipping a partition whose log mutex is poisoned");
+        })
+        .ok()
+}
 
 /// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
 /// `AbstractFetcherThread.getOffsetTruncationState` computes it.
@@ -95,24 +110,28 @@ struct EpochEnd {
 
 /// Where the local log of `part` truncates for the leader's `diverging`
 /// epoch and end offset. See [`diverging_truncation_offset`].
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned.
 pub(super) fn diverging_epoch_truncation_target(
     part: &Partition,
     diverging: &EpochEndOffset,
-) -> Offset {
+) -> Result<Offset, BrokerError> {
     let leader_epoch = LeaderEpoch(diverging.epoch);
-    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let log = part.lock_log()?;
     let log_end = log.log_end_offset();
     let (epoch, end_offset) = log
         .epoch_checkpoint()
         .epoch_and_offset_for(leader_epoch, log_end);
     drop(log);
     let follower = EpochEnd { epoch, end_offset };
-    diverging_truncation_offset(
+    Ok(diverging_truncation_offset(
         follower,
         leader_epoch,
         Offset(diverging.end_offset),
         log_end,
-    )
+    ))
 }
 
 /// Kafka's `ListOffsetsRequest.LATEST_TIMESTAMP`: a follower's `ListOffsets`
@@ -292,7 +311,9 @@ where
         );
         RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
     };
-    let local = LocalTieringFacts::read(cfg, &partition);
+    let Some(local) = LocalTieringFacts::read(cfg, &partition) else {
+        return RowAction::Continue;
+    };
     let replica_end = local.replica_end;
     let leader_end = match leader_offset(LATEST_TIMESTAMP).await {
         Ok(offset) => offset,
@@ -343,7 +364,7 @@ where
         "replicator: skipping out_of_range recovery from stale target",
         RowAction::Drop
     );
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping out_of_range recovery from stale local target"
@@ -411,14 +432,12 @@ const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAction {
     // Asked under the epoch the local partition last saw; a partition that is
     // gone is caught by the recovery itself, which asks nothing then.
-    let our_epoch =
-        cfg.partitions
-            .get(&cfg.topic, cfg.partition)
-            .map_or(cfg.leader_epoch.0, |partition| {
-                partition
-                    .current_leader_epoch
-                    .load(atomic::Ordering::Acquire)
-            });
+    let our_epoch = cfg
+        .partitions
+        .get(&cfg.topic, cfg.partition)
+        .map_or(cfg.leader_epoch.0, |partition| {
+            partition.leader_epoch().get()
+        });
     recover_offset_moved_to_tiered_storage(cfg, |timestamp| {
         leader_list_offset(cfg, our_epoch, timestamp)
     })
@@ -449,7 +468,9 @@ where
     let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return RowAction::Continue;
     };
-    let local = LocalTieringFacts::read(cfg, &partition);
+    let Some(local) = LocalTieringFacts::read(cfg, &partition) else {
+        return RowAction::Continue;
+    };
     drop(partition);
 
     let restart = match moved_to_tiered_restart_point(local, &mut leader_offset).await {
@@ -476,7 +497,7 @@ where
         "replicator: skipping tiered-storage restart from stale target",
         RowAction::Drop
     );
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping tiered-storage restart from stale local target"
@@ -700,11 +721,10 @@ where
     let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return Ok(());
     };
-    let current_leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let current_leader_epoch = part.leader_epoch().get();
     let latest_epoch = part
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_log()
+        .map_err(|error| format!("handle_epoch_fence: {error}"))?
         .epoch_checkpoint()
         .latest_epoch();
     drop(part);
@@ -742,11 +762,12 @@ where
         .map_err(|error| format!("handle_epoch_fence: stale local target: {error}"))?;
 
     let high_watermark = part.high_watermark().await;
-    let target = epoch_fence_target(
-        &part.log.lock().unwrap_or_else(PoisonError::into_inner),
-        leader,
-        high_watermark,
-    );
+    let target = {
+        let log = part
+            .lock_log()
+            .map_err(|error| format!("handle_epoch_fence: {error}"))?;
+        epoch_fence_target(&log, leader, high_watermark)
+    };
 
     if rewind_follower(
         &part,
@@ -1421,9 +1442,7 @@ mod tests {
     ) -> FenceRecovery {
         let (cfg, _log_dir, partition) = replica_with_batches(batches);
         partition.set_follower_hw(Offset(high_watermark)).await;
-        partition
-            .current_leader_epoch
-            .store(7, atomic::Ordering::Release);
+        partition.test_set_leader_epoch(7);
         let asked = RefCell::new(None);
         recover_epoch_fence(&cfg, |query| {
             *asked.borrow_mut() = Some(query);

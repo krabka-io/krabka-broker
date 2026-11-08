@@ -101,6 +101,7 @@ mod tests {
         rstest_bdd_macros::{given, scenarios, then, when},
     };
 
+    #[derive(Default)]
     struct AclListing {
         stdout: String,
         parsed: Vec<BTreeSet<AclBinding>>,
@@ -108,11 +109,8 @@ mod tests {
 
     #[fixture]
     fn listing() -> AclListing {
-        // Start this scenario with fresh inputs and observations.
-
         AclListing {
-            stdout: String::new(),
-            parsed: Vec::new(),
+            ..AclListing::default()
         }
     }
 

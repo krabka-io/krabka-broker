@@ -195,6 +195,7 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct EpochLookup {
         entries: Vec<EpochEntry>,
         answer: Option<(LeaderEpoch, Offset)>,
@@ -202,11 +203,8 @@ mod tests {
 
     #[rstest::fixture]
     fn checkpoint() -> EpochLookup {
-        // Start this scenario with fresh inputs and observations.
-
         EpochLookup {
-            entries: Vec::new(),
-            answer: None,
+            ..EpochLookup::default()
         }
     }
 

@@ -11,7 +11,7 @@ use {
     std::net::SocketAddr,
 };
 
-krabka_macros::scram_users_fixture!(describe_request);
+krabka_broker_macros::scram_users_fixture!(describe_request);
 
 /// Drives `DescribeUserScramCredentials` (`api_key=50`) over a SASL/PLAIN
 /// connection.
@@ -29,11 +29,14 @@ pub async fn drive_describe_user_scram_credentials_sasl(
 
     let req = describe_request(users_filter);
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass.as_bytes()).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass.as_bytes())
+            .build(),
+    )
     .await
     .expect("SASL authenticate for DescribeUserScramCredentials");
 

@@ -23,7 +23,7 @@ use {
     tokio::{task, time},
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) encode_request(ListOffsetsRequest);
     pub(super) decode_response(ListOffsetsResponse);
     pub(super) test_context ["admin-client"];
@@ -162,7 +162,7 @@ pub(super) async fn list_one_at_epoch(
 #[derive(Debug)]
 pub(super) struct DenyNamed(pub(super) HashSet<&'static str>);
 
-krabka_macros::test_authorizer!(DenyNamed, req; {
+krabka_broker_macros::test_authorizer!(DenyNamed, req; {
     if self.0.contains(req.resource_name) {
         AuthorizationResult::Deny
     } else {

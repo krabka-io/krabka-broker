@@ -8,6 +8,7 @@ use {
     rstest_bdd_macros::{given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct AclScenario {
     facts: Option<AclFacts>,
     identity: Option<(bool, bool)>,
@@ -20,16 +21,8 @@ struct AclScenario {
 
 #[fixture]
 fn acl() -> AclScenario {
-    // Start this scenario with fresh inputs and observations.
-
     AclScenario {
-        facts: None,
-        identity: None,
-        resource: None,
-        operation: None,
-        admission: None,
-        decision: None,
-        matches: None,
+        ..AclScenario::default()
     }
 }
 

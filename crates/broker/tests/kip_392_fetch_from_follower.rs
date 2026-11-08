@@ -20,7 +20,7 @@ use {
     crate::support::{
         client::connect_client,
         fetch::fetch_topic_row,
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
         shutdown_cluster,
     },
     assert2::assert,
@@ -106,17 +106,6 @@ use crate::support::client::value_batch as record_batch;
 /// at `offset`, with `rack_id`. The shared `Client` negotiates the broker's
 /// max Fetch version (>= 11). So the client serializes `rack_id` on the wire,
 /// and the decoded response carries `preferred_read_replica`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ConsumerFetchSetup<'a> {
-    #[default("t")]
-    topic: &'a str,
-    #[default(WireUuid::ZERO)]
-    topic_id: WireUuid,
-    offset: krabka_ids::Offset,
-    #[default(RACK_B)]
-    rack: &'a str,
-}
-
 #[bon::builder]
 fn consumer_fetch(
     #[builder(default = "t")] topic: &'_ str,
@@ -124,18 +113,6 @@ fn consumer_fetch(
     #[builder(into, default)] offset: krabka_ids::Offset,
     #[builder(default = RACK_B)] rack: &'_ str,
 ) -> FetchRequest {
-    let setup = ConsumerFetchSetup {
-        topic,
-        topic_id,
-        offset,
-        rack,
-    };
-    let ConsumerFetchSetup {
-        topic,
-        topic_id,
-        offset,
-        rack,
-    } = setup;
     FetchRequest {
         replica_id: -1,
         max_wait_ms: 800,
@@ -168,8 +145,6 @@ struct RackReads {
 
 #[rstest::fixture]
 fn rack_reads() -> RackReads {
-    // Start this scenario with fresh inputs and observations.
-
     RackReads {
         guard: None,
         cluster: Vec::new(),
@@ -210,16 +185,16 @@ async fn racks(rack_reads: &mut RackReads) {
 async fn committed(rack_reads: &mut RackReads, records: i32) {
     rack_reads.records = records;
     let producer = connect_client(rack_reads.cluster[0].1.listen_addr.to_string(), None).await;
-    let response = send_batch(
-        &producer,
-        record_batch().records(records).call(),
-        SinglePartitionProduceSetup {
-            topic: "t".into(),
-            topic_id: rack_reads.topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
-    .await;
+    let response = producer
+        .send_produce_request(
+            single_partition_produce()
+                .records(record_batch().records(records).call())
+                .topic("t")
+                .topic_id(rack_reads.topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
+        .await;
     assert!(response.responses[0].partition_responses[0].error_code == 0);
     rack_reads.cluster[1]
         .0

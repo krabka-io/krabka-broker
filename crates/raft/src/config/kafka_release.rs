@@ -167,8 +167,6 @@ mod tests {
 
     #[fixture]
     fn release() -> ReleaseCatalogue {
-        // Start this scenario with fresh inputs and observations.
-
         ReleaseCatalogue {
             keys: Vec::new(),
             key: None,

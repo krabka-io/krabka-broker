@@ -10,7 +10,7 @@
 //!   `coordinator_epoch`: i32 (big-endian)
 
 use {
-    crate::{codes, error::BrokerError, txn::util::now_millis},
+    crate::{codes, error::BrokerError, time_util},
     bytes::Bytes,
     krabka_log::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
@@ -167,7 +167,7 @@ pub fn build_marker_batch(
     // with the broker's clock. The marker's timestamp becomes the producer's
     // `ProducerStateEntry.lastTimestamp`, which `producer.id.expiration.ms`
     // ages the producer by.
-    let now = now_millis();
+    let now = time_util::now_ms();
     RecordBatch {
         attributes: attrs,
         base_offset: base_offset.0,

@@ -433,7 +433,7 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (name, delay, want) in cases {
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(user, peer, context);
                 user ["alice"];
                 client ["app"];

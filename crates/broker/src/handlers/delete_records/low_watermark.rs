@@ -21,7 +21,7 @@ use {
     },
     krabka_log::Offset,
     krabka_protocol::owned::delete_records_response::DeleteRecordsTopicResult,
-    std::{sync::atomic, time::Duration},
+    std::time::Duration,
     tokio::{time, time::Instant},
 };
 
@@ -112,7 +112,7 @@ pub(super) async fn await_followers(
                 *slot = error_partition_result(row.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
                 continue;
             };
-            if part.current_leader.load(atomic::Ordering::Acquire) != broker.config.node_id {
+            if part.leader() != broker.config.node_id {
                 *slot = error_partition_result(row.partition, codes::NOT_LEADER_OR_FOLLOWER);
                 continue;
             }

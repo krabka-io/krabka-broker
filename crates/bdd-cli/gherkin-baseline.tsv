@@ -23,6 +23,7 @@ crates/bench-driver/tests/features/producer_ordering/producer_ordering.feature	c
 crates/bench-driver/tests/features/scenario_files/scenario_files.feature	case-column	the Examples table starts with column `filename`, not `case`	1
 crates/bench-driver/tests/features/scenario_files/scenario_files.feature	one-when	scenario `A shipped scenario describes a runnable benchmark` has 2 `When` steps, and exactly one is allowed	1
 crates/bench-driver/tests/features/scenario_files/scenario_files.feature	one-when	scenario `Newly checked in scenarios join the validated corpus automatically` has 2 `When` steps, and exactly one is allowed	1
+crates/broker-macros/tests/features/epoch_codec/epoch_codec.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
 crates/broker/tests/features/controller/admin_surface.feature	max-steps	scenario `The controller listener serves the complete topic lifecycle` has 7 steps, and at most 5 are allowed	1
 crates/broker/tests/features/controller/admin_surface.feature	one-when	scenario `SCRAM credentials written through the controller listener can be described on the same connection` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/controller/admin_surface.feature	one-when	scenario `The controller listener serves the complete topic lifecycle` has 3 `When` steps, and exactly one is allowed	1
@@ -1729,7 +1730,6 @@ crates/log/tests/features/log_topic_names/log_topic_names.feature	case-column	th
 crates/log/tests/features/producer_snapshot_lifecycle/producer_snapshot_lifecycle.feature	case-column	the Examples table starts with column `action`, not `case`	1
 crates/log/tests/features/reopened_log_start/reopened_log_start.feature	case-column	the Examples table starts with column `enabled`, not `case`	1
 crates/log/tests/features/segment_timestamp_limit/segment_timestamp_limit.feature	case-column	the Examples table starts with column `codec`, not `case`	1
-crates/macros/tests/features/epoch_codec/epoch_codec.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
 crates/macros/tests/features/uuid_derive/uuid_derive.feature	case-column	the Examples table starts with column `source`, not `case`	1
 crates/macros/tests/features/uuid_derive/uuid_derive.feature	mechanism-word	step `UUID wrapper source pub struct Id(pub Uuid);` uses the mechanism word `struct`	1
 crates/raft/tests/features/kraft_log_sim.feature	one-when	scenario `A divergent follower truncates and reconverges` has 2 `When` steps, and exactly one is allowed	1

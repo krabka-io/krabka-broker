@@ -13,7 +13,7 @@ use {
         replica_state::ReplicaState,
     },
     krabka_protocol::owned::produce_response::LeaderIdAndEpoch,
-    std::sync::{Arc, atomic},
+    std::sync::Arc,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,12 +168,7 @@ pub(super) fn diskless_role_ready(
     partition: &Partition,
     record: &krabka_metadata::PartitionRecord,
 ) -> bool {
-    krabka_metadata::NodeId(partition.current_leader.load(atomic::Ordering::Acquire))
-        == record.leader
-        && partition
-            .current_leader_epoch
-            .load(atomic::Ordering::Acquire)
-            == record.leader_epoch.0
+    partition.is_leader_at(record.leader, record.leader_epoch.0)
 }
 
 pub(super) fn replication_target_matches_image(

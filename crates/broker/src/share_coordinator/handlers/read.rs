@@ -7,7 +7,10 @@
 //! before the answer, so the older share-partition leader is fenced.
 
 use {
-    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
+    crate::share_coordinator::{
+        coordinator::{ShareCoordinator, ShareStateOp},
+        key::ShareKeyRef,
+    },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_request::ReadShareGroupStateRequest,
@@ -17,7 +20,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     ReadShareGroupStateRequest,
     ReadShareGroupStateResponse,
     ReadStateResult,
@@ -40,10 +43,16 @@ async fn read_state(
     {
         return ReadShareGroupStateResponse::default();
     }
-    let results =
-        krabka_macros::share_state_results!(req, ReadStateResult, |group_id, topic_id, pd| {
+    let results = krabka_broker_macros::share_state_results!(
+        req,
+        ReadStateResult,
+        |group_id, topic_id, pd| {
             match coordinator
-                .read(image, group_id, topic_id, pd.partition, pd.leader_epoch)
+                .read(
+                    image,
+                    ShareKeyRef::new(group_id, topic_id, pd.partition),
+                    pd.leader_epoch,
+                )
                 .await
             {
                 Ok(st) => PartitionResult {
@@ -65,7 +74,8 @@ async fn read_state(
                     }
                 }
             }
-        });
+        }
+    );
 
     ReadShareGroupStateResponse {
         results,
@@ -100,7 +110,7 @@ mod tests {
     }
 
     fn request(group_id: &str, partitions: &[ReadPartition]) -> ReadShareGroupStateRequest {
-        krabka_macros::share_state_request! {
+        krabka_broker_macros::share_state_request! {
             ReadShareGroupStateRequest, ReadStateData;
             group [group_id];
             topic [WIRE_TOPIC];

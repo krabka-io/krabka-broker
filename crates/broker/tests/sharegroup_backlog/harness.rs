@@ -9,7 +9,7 @@
 use {
     crate::support::{
         client::http_get,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
         topics::{creatable_topic, create_topic_request},
     },
@@ -54,17 +54,17 @@ pub async fn produce_five(client: &Client, topic_id: uuid::Uuid) {
         .map(|offset| value_record(offset, Some(bytes::Bytes::from_static(b"work"))))
         .collect();
     let response = client
-        .send(batch_request(
-            RecordBatch {
-                last_offset_delta: 4,
-                ..batch_from_records(records)
-            },
-            SinglePartitionProduceSetup {
-                topic: (TOPIC).into(),
-                topic_id: WireUuid(*topic_id.as_bytes()),
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        ))
+        .send(
+            single_partition_produce()
+                .records(RecordBatch {
+                    last_offset_delta: 4,
+                    ..batch_from_records(records)
+                })
+                .topic(TOPIC)
+                .topic_id(WireUuid(*topic_id.as_bytes()))
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
         .await
         .unwrap();
     assert!(

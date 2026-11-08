@@ -35,7 +35,7 @@ use {
     krabka_verified::FreezeMutationKind,
     std::{
         collections::{BTreeMap, BTreeSet},
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::SystemTime,
     },
     tracing::warn,
@@ -158,10 +158,25 @@ pub async fn tick_all(
         // LSO computed from it is one every replica can derive.
         let high_watermark = partition.high_watermark().await;
         let (compacted, record_limit, due) = {
-            // Recover the guard if the mutex was poisoned by a panic
-            // elsewhere rather than killing the (discarded-JoinHandle)
-            // cleaner task. The config snapshot stays readable.
-            let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+            // A poisoned log is left alone this sweep: a pass would rewrite
+            // what a panicked task left half-written. Counting it as swept
+            // keeps whatever uncleanable mark it carries.
+            let mut log = match partition.lock_log() {
+                Ok(log) => log,
+                Err(error) => {
+                    warn!(
+                        topic = %partition.topic,
+                        partition_id = partition.index.get(),
+                        %error,
+                        "cleaner: skipping a partition whose log mutex is poisoned",
+                    );
+                    swept.insert(PartitionKey {
+                        topic: partition.topic.clone(),
+                        partition: partition.index.get(),
+                    });
+                    continue;
+                }
+            };
             // A policy list containing `compact` is what makes a partition the
             // cleaner's work, so `compact,delete` is swept exactly as `compact`
             // is; the delete half is the local-retention sweep's, in

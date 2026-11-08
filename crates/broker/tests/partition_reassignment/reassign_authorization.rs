@@ -16,17 +16,15 @@ use {
     tempfile::TempDir,
 };
 type ReassignmentRows = Vec<(String, Vec<(i32, i16)>)>;
+#[derive(Default)]
 struct ReassignmentPermission {
     broker: Option<(BrokerHandle, TempDir, SocketAddr)>,
     response: Option<ReassignmentRows>,
 }
 #[fixture]
 fn permission() -> ReassignmentPermission {
-    // Start this scenario with fresh inputs and observations.
-
     ReassignmentPermission {
-        broker: None,
-        response: None,
+        ..ReassignmentPermission::default()
     }
 }
 #[given("a SASL PLAIN broker grants admin superuser rights and authenticates these users")]

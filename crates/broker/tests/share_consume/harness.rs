@@ -22,7 +22,7 @@ pub use crate::support::share::{
     topic_id, wire,
 };
 
-krabka_macros::share_consumption_driver!(
+krabka_broker_macros::share_consumption_driver!(
     /// Initialize the common g1/t fixture before its first consume.
     initialize_consumption,
     join,

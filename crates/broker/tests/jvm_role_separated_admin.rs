@@ -232,6 +232,7 @@ fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
     support::jvm_finalized_level(describe_stdout, feature)
 }
 
+#[derive(Default)]
 struct Administration {
     cluster: Option<RoleSeparated>,
     topic: String,
@@ -240,13 +241,8 @@ struct Administration {
 }
 #[rstest::fixture]
 fn administration() -> Administration {
-    // Start this scenario with fresh inputs and observations.
-
     Administration {
-        cluster: None,
-        topic: String::new(),
-        outputs: Vec::new(),
-        described: None,
+        ..Administration::default()
     }
 }
 #[rstest_bdd_macros::given(

@@ -23,6 +23,7 @@ use {
     crate::{
         broker::Broker,
         codes,
+        controller_endpoint::CONTROLLER_LISTENER_NAME,
         handlers::{
             ApiVersion, DispatchResult, RequestContext, audit_admin_success, audit_resource,
             cluster_alter_denied,
@@ -37,7 +38,7 @@ use {
     krabka_raft::{reconfig::AddVoter, voter_requests},
 };
 
-#[krabka_macros::voter_admission(
+#[krabka_broker_macros::voter_admission(
     request = AddRaftVoterRequest,
     api = 80,
     gate = cluster_alter_denied,
@@ -122,7 +123,7 @@ async fn probe_candidate(
     let endpoint = req
         .listeners
         .iter()
-        .find(|listener| listener.name.eq_ignore_ascii_case("CONTROLLER"))
+        .find(|listener| listener.name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
         .or_else(|| req.listeners.first())
         .ok_or_else(|| unavailable("the request names no listener".to_owned()))?;
     let server_name = broker
@@ -186,8 +187,8 @@ mod tests {
         add_voter_request().voter_id(voter_id).call()
     }
 
-    krabka_macros::wire_codec_helpers! { test_context ["admin-client"]; }
-    krabka_macros::wire_test_driver! {
+    krabka_broker_macros::wire_codec_helpers! { test_context ["admin-client"]; }
+    krabka_broker_macros::wire_test_driver! {
         broker answer { request: AddRaftVoterRequest, response: AddRaftVoterResponse, api: 80 }
     }
     use {

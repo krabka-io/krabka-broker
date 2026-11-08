@@ -177,7 +177,7 @@ mod tests {
         tokio::{net, task::JoinHandle, time},
     };
 
-    krabka_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
+    krabka_broker_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
 
     /// A refresh keeps each meter at the rate its consumer created it with
     /// (#692). A `request_percentage` of 50 is a bound of 500 000

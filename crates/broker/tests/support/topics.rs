@@ -21,8 +21,8 @@ pub fn topic_configs<'a>(
         .collect()
 }
 
-krabka_macros::create_topic_fixture!(configured_topic_request);
-krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
+krabka_broker_macros::create_topic_fixture!(configured_topic_request);
+krabka_broker_macros::consumer_fetch_fixture!(consumer_fetch_request);
 
 /// The complete named topic row, with one partition and one replica by default.
 #[bon::builder]

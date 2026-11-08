@@ -24,7 +24,7 @@ use {
 ///
 /// Every broker runs both expiry sweeps. Raft serializes duplicate
 /// tombstones, so each one after the first is a no-op on the apply path.
-#[derive(krabka_macros::BackgroundControllers)]
+#[derive(krabka_broker_macros::BackgroundControllers)]
 pub(super) struct ControllerAdapter {
     pub(super) handle: Arc<dyn MetadataSource>,
     pub(super) node_id: NodeId,

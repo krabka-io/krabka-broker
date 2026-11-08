@@ -21,6 +21,7 @@ use {
 };
 
 const TOPIC: &str = "krabka-deleg-token-itest";
+#[derive(Default)]
 struct TokenLifecycle {
     port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
@@ -34,18 +35,8 @@ struct TokenLifecycle {
 }
 #[fixture]
 fn token() -> TokenLifecycle {
-    // Start this scenario with fresh inputs and observations.
-
     TokenLifecycle {
-        port_ownership: None,
-        cluster: None,
-        admin: None,
-        created: None,
-        token_id: String::new(),
-        hmac: String::new(),
-        produced: None,
-        described: None,
-        expired: None,
+        ..TokenLifecycle::default()
     }
 }
 #[given("three registered SASL brokers share the delegation token master key")]

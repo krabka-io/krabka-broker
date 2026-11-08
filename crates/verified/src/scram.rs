@@ -174,6 +174,7 @@ mod tests {
 
     use std::vec;
 
+    #[derive(Default)]
     struct ScramValidation {
         facts: Option<ScramAlterationFacts>,
         decision: Option<ScramAlterationDecision>,
@@ -181,11 +182,8 @@ mod tests {
 
     #[rstest::fixture]
     fn alteration() -> ScramValidation {
-        // Start this scenario with fresh inputs and observations.
-
         ScramValidation {
-            facts: None,
-            decision: None,
+            ..ScramValidation::default()
         }
     }
 

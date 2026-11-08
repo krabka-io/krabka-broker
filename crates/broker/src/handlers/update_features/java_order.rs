@@ -61,6 +61,7 @@ mod tests {
         assert2::assert!(java_string_hash(key) == want, "{key}");
     }
 
+    #[derive(Default)]
     struct FeatureValidationOrder {
         requested: Vec<String>,
         validated: Option<Vec<String>>,
@@ -73,11 +74,8 @@ mod tests {
 
     #[rstest::fixture]
     fn feature_order() -> FeatureValidationOrder {
-        // Start this scenario with fresh inputs and observations.
-
         FeatureValidationOrder {
-            requested: Vec::new(),
-            validated: None,
+            ..FeatureValidationOrder::default()
         }
     }
 

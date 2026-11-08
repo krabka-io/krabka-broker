@@ -70,6 +70,7 @@ async fn set_controller_mutation_quota(addr: SocketAddr) -> Vec<(QuotaEntity, i1
         .await
 }
 
+#[derive(Default)]
 struct MutationQuota {
     broker: Option<krabka_broker::BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -77,12 +78,8 @@ struct MutationQuota {
 }
 #[rstest::fixture]
 fn mutation() -> MutationQuota {
-    // Start this scenario with fresh inputs and observations.
-
     MutationQuota {
-        broker: None,
-        directory: None,
-        result: None,
+        ..MutationQuota::default()
     }
 }
 #[rstest_bdd_macros::given("alice has Cluster Create permission and controller mutation rate 2")]

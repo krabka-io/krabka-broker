@@ -158,8 +158,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn subscriptions() -> SubscriptionClassification {
-        // Start this scenario with fresh inputs and observations.
-        SubscriptionClassification::default()
+        SubscriptionClassification {
+            ..SubscriptionClassification::default()
+        }
     }
     fn topic_names(value: &str) -> Vec<String> {
         if value == "none" {

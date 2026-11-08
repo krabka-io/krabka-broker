@@ -59,12 +59,6 @@ enum SigningKey {
     RotatedAfterFirstSegment,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ArchiveSetup {
-    signing: ManifestSigning,
-    key: SigningKey,
-}
-
 /// An archive on disk, plus the paths a test needs to damage it.
 ///
 /// The trusted public key lives outside the archive root. An auditor's key is
@@ -102,7 +96,6 @@ impl Fixture {
         #[builder(default)] signing: ManifestSigning,
         #[builder(default)] key: SigningKey,
     ) -> Self {
-        let setup = ArchiveSetup { signing, key };
         let root = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
@@ -110,7 +103,7 @@ impl Fixture {
             .expect("ring mints a valid PKCS#8 Ed25519 key");
         let public_key = keys.path().join("worm.pub");
         fs::write(&public_key, signer.public_key()).unwrap();
-        let archiver = if matches!(setup.signing, ManifestSigning::Signed) {
+        let archiver = if matches!(signing, ManifestSigning::Signed) {
             WormArchiver::new(Some(Arc::new(signer)))
         } else {
             WormArchiver::new(None)
@@ -157,7 +150,7 @@ impl Fixture {
             // The rotation lands part-way through: the chain is unbroken, so
             // only the trusted-key set separates a clean run from an
             // untrusted one.
-            let sealed = if matches!(setup.key, SigningKey::RotatedAfterFirstSegment) && index > 0 {
+            let sealed = if matches!(key, SigningKey::RotatedAfterFirstSegment) && index > 0 {
                 rotated_archiver.seal(&stamped, entries).unwrap()
             } else {
                 archiver.seal(&stamped, entries).unwrap()

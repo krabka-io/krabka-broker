@@ -80,7 +80,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed) {
             ..MemberState::empty(mid.clone(), Instant::now())
         });
     }
-    krabka_macros::hydrate_member_epochs!(state, seed; m, cur {
+    krabka_broker_macros::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state;
             // Kafka's `ConsumerGroupMember.Builder.updateWith` reads each
             // partition's assignment epoch through
@@ -191,16 +191,6 @@ mod tests {
         state: MemberAssignmentState,
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct HostedClassicSetup {
-        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
-        target: Vec<PartitionIndex>,
-        current: HostedCurrentSetup,
-        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
-        assigned: Vec<PartitionIndex>,
-        pending: Vec<PartitionIndex>,
-    }
-
     #[bon::builder]
     fn hosted_classic_seed(
         #[builder(default = vec ! [PartitionIndex (0) , PartitionIndex (1)])] target: Vec<
@@ -212,22 +202,10 @@ mod tests {
         >,
         #[builder(default)] pending: Vec<PartitionIndex>,
     ) -> GroupSeed {
-        let setup = HostedClassicSetup {
-            target,
-            current,
-            assigned,
-            pending,
-        };
-        let HostedClassicSetup {
-            target,
-            current:
-                HostedCurrentSetup {
-                    epoch: member_epoch,
-                    state,
-                },
-            assigned,
-            pending,
-        } = setup;
+        let HostedCurrentSetup {
+            epoch: member_epoch,
+            state,
+        } = current;
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,

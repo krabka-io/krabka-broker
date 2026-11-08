@@ -64,12 +64,16 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
         let _ack_rx = queue_batch(&tx, sample_batch().call()).await;
     }
 
-    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
-        wal: Some(wal),
-        max_produce_group: MAX_GROUP,
-        sequencer: Some(test_sequencer()),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        Arc::clone(&log),
+        rx,
+        WriterOptions::builder()
+            .wal(wal)
+            .max_produce_group(MAX_GROUP)
+            .sequencer(test_sequencer())
+            .build(),
+    );
 
     time::timeout(Duration::from_secs(10), sync_started_rx)
         .await
@@ -89,12 +93,16 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
     let (wal, sync_started_rx, release_sync_tx) = GatedWal::gated_channel();
     let wal: SharedWal = wal;
     let (tx, rx) = mpsc::channel(2);
-    let writer = spawn_writer(dir.path(), log, rx, WriterOptions {
-        wal: Some(wal),
-        max_produce_group: 1,
-        sequencer: Some(test_sequencer()),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        log,
+        rx,
+        WriterOptions::builder()
+            .wal(wal)
+            .max_produce_group(1)
+            .sequencer(test_sequencer())
+            .build(),
+    );
 
     let append_ack_rx = queue_batch(&tx, sample_batch().call()).await;
     assert!(

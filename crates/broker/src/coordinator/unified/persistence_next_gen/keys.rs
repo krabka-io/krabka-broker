@@ -38,7 +38,7 @@ pub const KEY_TARGET_ASSIGNMENT_MEMBER: i16 = 7;
 pub const KEY_CURRENT_MEMBER_ASSIGNMENT: i16 = 8;
 pub const KEY_REGULAR_EXPRESSION: i16 = 16;
 
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::GroupRecordKey)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::GroupRecordKey)]
 #[group_key(invalid = "unknown next-gen key version")]
 pub enum NextGenKey {
     #[group_key(version = KEY_GROUP_METADATA)]
@@ -108,8 +108,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn consumer_key() -> ConsumerKeyEncoding {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerKeyEncoding::default()
+        ConsumerKeyEncoding {
+            ..ConsumerKeyEncoding::default()
+        }
     }
     #[given("a consumer {kind} key for group {group} and expression {expression}")]
     fn consumer_key_fields(

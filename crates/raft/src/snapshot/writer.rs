@@ -402,6 +402,7 @@ mod tests {
         rstest_bdd_macros::{given, scenarios, then, when},
     };
 
+    #[derive(Default)]
     struct MetadataCheckpoint {
         image: Option<MetadataImage>,
         bytes: Option<Bytes>,
@@ -409,11 +410,8 @@ mod tests {
 
     #[fixture]
     fn checkpoint() -> MetadataCheckpoint {
-        // Start this scenario with fresh inputs and observations.
-
         MetadataCheckpoint {
-            image: None,
-            bytes: None,
+            ..MetadataCheckpoint::default()
         }
     }
 

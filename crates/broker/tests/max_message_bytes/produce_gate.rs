@@ -21,6 +21,7 @@ use {
     std::collections::BTreeMap,
 };
 
+#[derive(Default)]
 struct BatchGate {
     process: Option<support::InProcess>,
     topics: BTreeMap<String, Uuid>,
@@ -29,13 +30,8 @@ struct BatchGate {
 }
 #[fixture]
 fn gate() -> BatchGate {
-    // Start this scenario with fresh inputs and observations.
-
     BatchGate {
-        process: None,
-        topics: BTreeMap::new(),
-        response: None,
-        gzip: None,
+        ..BatchGate::default()
     }
 }
 #[given("a broker hosts topics with these message and segment limits")]

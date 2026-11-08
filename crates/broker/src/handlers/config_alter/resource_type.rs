@@ -97,19 +97,19 @@ impl ConfigResourceType {
                 resource_type: ResourceType::Topic,
                 cluster_scoped: false,
                 failure_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                failure_message: "Topic authorization failed.",
+                failure_message: codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED),
             },
             Self::Group => ConfigResourceAcl {
                 resource_type: ResourceType::Group,
                 cluster_scoped: false,
                 failure_code: codes::GROUP_AUTHORIZATION_FAILED,
-                failure_message: "Group authorization failed.",
+                failure_message: codes::default_message(codes::GROUP_AUTHORIZATION_FAILED),
             },
             Self::Broker | Self::BrokerLogger | Self::ClientMetrics => ConfigResourceAcl {
                 resource_type: ResourceType::Cluster,
                 cluster_scoped: true,
                 failure_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                failure_message: "Cluster authorization failed.",
+                failure_message: codes::default_message(codes::CLUSTER_AUTHORIZATION_FAILED),
             },
         }
     }

@@ -48,7 +48,7 @@ const VERSION: i16 = elect_leaders_response::MAX_VERSION;
 
 mod commit_fencing;
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["kafka-leader-election"];
 }
 
@@ -118,7 +118,7 @@ struct ElectionOutcome {
 async fn elect(broker: &Broker, image: &MetadataImage, election: ElectionType) -> ElectionOutcome {
     let alive = alive();
     let witnesses = HashSet::new();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -196,7 +196,7 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
     )]);
     let alive = alive();
     let witnesses = HashSet::new();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -269,7 +269,7 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
 async fn the_wire_handler_refuses_an_unclean_election_that_no_proposal_covers() {
     let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -441,7 +441,7 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
     } = broker_with(BreakGlassConfig::default()).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_preferred_topic(&broker).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -533,15 +533,6 @@ async fn handle_request(
     response.replica_election_results[0].partition_result[0].error_code
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ElectionCaseSetup<'a> {
-    #[default(gated_config())]
-    config: BreakGlassConfig,
-    #[default(ElectionType::Unclean)]
-    election: ElectionType,
-    proposals: &'a [BreakGlassProposalRecord],
-}
-
 /// A running broker, the temporary directory that holds its data, and the row
 /// and records of an election it drove.
 struct ElectionFixture {
@@ -557,15 +548,9 @@ async fn election_fixture(
     #[builder(default = ElectionType :: Unclean)] election: ElectionType,
     #[builder(default)] proposals: &'_ [BreakGlassProposalRecord],
 ) -> ElectionFixture {
-    let setup = ElectionCaseSetup {
-        config,
-        election,
-        proposals,
-    };
-    let StartedBroker { handle, dir } = Box::pin(broker_with(setup.config)).await;
+    let StartedBroker { handle, dir } = Box::pin(broker_with(config)).await;
     let broker = handle.broker_arc_for_test();
-    let ElectionOutcome { row, records } =
-        elect(&broker, &image_with(setup.proposals), setup.election).await;
+    let ElectionOutcome { row, records } = elect(&broker, &image_with(proposals), election).await;
     ElectionFixture {
         handle,
         dir,

@@ -23,6 +23,7 @@ use {
     tempfile::TempDir,
 };
 const TOPIC: &str = "krabka-replication-itest";
+#[derive(Default)]
 struct ReplicaDumps {
     cluster: Vec<(BrokerHandle, TempDir)>,
     bootstrap: String,
@@ -31,13 +32,8 @@ struct ReplicaDumps {
 }
 #[fixture]
 fn replicas() -> ReplicaDumps {
-    // Start this scenario with fresh inputs and observations.
-
     ReplicaDumps {
-        cluster: Vec::new(),
-        bootstrap: String::new(),
-        produced: None,
-        dumps: Vec::new(),
+        ..ReplicaDumps::default()
     }
 }
 #[given(

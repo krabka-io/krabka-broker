@@ -50,31 +50,16 @@ pub(super) const TWO_REGISTERED_BROKERS: &[RegisteredBroker] =
     &[THREE_REGISTERED_BROKERS[0], THREE_REGISTERED_BROKERS[1]];
 pub(super) const ONE_REGISTERED_BROKER: &[RegisteredBroker] = &[THREE_REGISTERED_BROKERS[0]];
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ThreeBrokerEpochsSetup {
-    #[default(BrokerEpoch(10))]
-    pub first: BrokerEpoch,
-    #[default(BrokerEpoch(20))]
-    pub second: BrokerEpoch,
-    #[default(BrokerEpoch(30))]
-    pub third: BrokerEpoch,
-}
-
 #[bon::builder]
 pub(super) fn three_broker_states(
     #[builder(into, default = BrokerEpoch (10))] first: BrokerEpoch,
     #[builder(into, default = BrokerEpoch (20))] second: BrokerEpoch,
     #[builder(into, default = BrokerEpoch (30))] third: BrokerEpoch,
 ) -> Vec<BrokerState> {
-    let setup = ThreeBrokerEpochsSetup {
-        first,
-        second,
-        third,
-    };
     vec![
-        bs(WireBrokerId(1), setup.first),
-        bs(WireBrokerId(2), setup.second),
-        bs(WireBrokerId(3), setup.third),
+        bs(WireBrokerId(1), first),
+        bs(WireBrokerId(2), second),
+        bs(WireBrokerId(3), third),
     ]
 }
 

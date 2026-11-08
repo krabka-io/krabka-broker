@@ -56,6 +56,7 @@ mod tests {
 
     krabka_macros::finalized_feature_fixture!(finalized);
 
+    #[derive(Default)]
     struct FeatureDiscoveryContract {
         version: i16,
         image: Option<MetadataImage>,
@@ -78,13 +79,8 @@ mod tests {
 
     #[rstest::fixture]
     fn feature_discovery() -> FeatureDiscoveryContract {
-        // Start this scenario with fresh inputs and observations.
-
         FeatureDiscoveryContract {
-            version: 0,
-            image: None,
-            supported: None,
-            finalized: None,
+            ..FeatureDiscoveryContract::default()
         }
     }
 

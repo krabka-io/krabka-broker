@@ -16,7 +16,7 @@ use {
 };
 
 async fn leave(broker: &Broker, request: &LeaveGroupRequest, version: i16) -> LeaveGroupResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["alice"];
         client ["leave-client"];
@@ -171,7 +171,7 @@ async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups(
 /// `GROUP_AUTHORIZATION_FAILED` even for an empty group id.
 #[tokio::test]
 async fn denied_read_answers_group_authorization_failed_before_validation() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
     let request = LeaveGroupRequest {
         group_id: String::new(),
         members: vec![identity("m-a", None)],

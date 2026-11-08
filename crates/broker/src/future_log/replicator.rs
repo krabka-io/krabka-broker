@@ -5,15 +5,16 @@
 //! directories with `WriterMessage::SwapFutureLog` and acts on the outcome it
 //! acknowledges.
 
-#[cfg(test)]
-use crate::test_support::PartitionRecordsSetup;
 use {
     super::{
         FutureLogRegistry, FutureLogState, MovePolicy,
         catch_up::catch_up,
         truncation::{cut_future_log, truncate_to_current_epochs},
     },
-    crate::partition::{Partition, SwapOutcome, WriterMessage},
+    crate::{
+        error::BrokerError,
+        partition::{Partition, SwapOutcome, WriterMessage},
+    },
     krabka_ids::PartitionIndex,
     krabka_log::{Log, Offset},
     krabka_units::convert::TimeExt as _,
@@ -102,7 +103,9 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         if owes_epoch_check {
             let truncated = owed_cut
                 .map_or(Ok(()), |offset| cut_future_log(&future_log, offset))
-                .and_then(|()| truncate_to_current_epochs(&part.log, &future_log));
+                .and_then(|()| {
+                    truncate_to_current_epochs(&part.log, (&part.topic, part.index), &future_log)
+                });
             if let Err(e) = truncated {
                 warn!(
                     topic = %topic, partition = partition.get(),
@@ -122,6 +125,15 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
         // log-directory move quota is exceeded.
         let advance = match catch_up(&part, &future_log, policy.read_chunk, &policy.throttle) {
             Ok(v) => v,
+            // A poisoned current log stays poisoned, so a retry cannot help.
+            Err(e @ BrokerError::PartitionWriterDied { .. }) => {
+                warn!(
+                    topic = %topic, partition = partition.get(),
+                    error = %e,
+                    "future-log replicator: the current log mutex is poisoned; aborting move"
+                );
+                break;
+            }
             Err(e) => {
                 warn!(
                     topic = %topic, partition = partition.get(),
@@ -325,7 +337,7 @@ mod tests {
                 == canonicalize_or_self(target.path())
         );
         assert!(source.partition.stamp_for_offset(Offset(0)) == Some(101));
-        append_records(&source.partition, PartitionRecordsSetup::default());
+        append_records(&source.partition).call();
         assert!(source.partition.stamp_for_offset(Offset(3)) == Some(102));
     }
 

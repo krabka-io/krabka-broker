@@ -11,7 +11,7 @@ use {
         CLIENT_ID, kafka_wire,
         support::{
             fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
-            produce::{SinglePartitionProduceSetup, single_partition_produce},
+            produce::single_partition_produce,
             records::{batch_from_records, value_record},
             wire::{
                 HeaderEncoding as RequestHeaderEncoding, decode_response_frame, read_frame,
@@ -46,20 +46,13 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
         })
         .collect();
 
-    let req = single_partition_produce(
-        // leader ack only (rf=1 topic)
-        SinglePartitionProduceSetup {
-            topic: topic.to_owned(),
-            records: Some(
-                RecordBatch {
-                    last_offset_delta: i32::try_from(count - 1).unwrap(),
-                    ..batch_from_records(records)
-                }
-                .into(),
-            ),
-            ..Default::default()
-        },
-    );
+    let req = single_partition_produce()
+        .topic(topic.to_owned())
+        .records(RecordBatch {
+            last_offset_delta: i32::try_from(count - 1).unwrap(),
+            ..batch_from_records(records)
+        })
+        .call();
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();

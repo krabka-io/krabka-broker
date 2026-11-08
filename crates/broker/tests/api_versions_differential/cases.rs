@@ -44,6 +44,7 @@ fn catalog_sorted_by_key() -> Vec<ApiVersion> { supported_client_apis() }
 /// The API keys one advertised table names.
 fn key_set(apis: &[ApiVersion]) -> BTreeSet<i16> { apis.iter().map(|api| api.api_key).collect() }
 
+#[derive(Default)]
 struct ClientCatalog {
     listeners: Option<JvmListeners>,
     broker: Option<KrabkaBroker>,
@@ -65,16 +66,8 @@ impl ClientCatalog {
 }
 #[rstest::fixture]
 fn catalog() -> ClientCatalog {
-    // Start this scenario with fresh inputs and observations.
-
     ClientCatalog {
-        listeners: None,
-        broker: None,
-        oracle: None,
-        krabka: None,
-        kafka: None,
-        observed: None,
-        expected: None,
+        ..ClientCatalog::default()
     }
 }
 #[rstest_bdd_macros::given("a PLAINTEXT Krabka client listener without a metrics receiver")]

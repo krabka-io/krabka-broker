@@ -22,6 +22,7 @@ use {
             bootstrap,
             config::ShareCoordinatorConfig,
             coordinator::{ShareStateError, ShareStateSummary, message::FENCED_STATE_EPOCH},
+            key::ShareKeyRef,
             persistence::{
                 KEY_SHARE_SNAPSHOT, ShareSnapshotValue, ShareUpdateValue, StateBatch,
                 parse_state_key,
@@ -93,7 +94,7 @@ pub async fn assert_recovered_epoch_is_fenced(
 ) {
     assert!(
         coordinator
-            .read_summary_checked(topic_image, "g", topic_id, 0)
+            .read_summary_checked(topic_image, ShareKeyRef::new("g", topic_id, 0))
             .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 2,
@@ -104,7 +105,12 @@ pub async fn assert_recovered_epoch_is_fenced(
     );
     assert!(
         coordinator
-            .initialize(topic_image, "g", topic_id, 0, 1, Offset(20))
+            .initialize(
+                topic_image,
+                ShareKeyRef::new("g", topic_id, 0),
+                1,
+                Offset(20)
+            )
             .await
             == Err(ShareStateError::Refused {
                 code: codes::FENCED_STATE_EPOCH,
@@ -129,26 +135,8 @@ pub enum FixtureDeliveryState {
 }
 pub use crate::share_partition::state::test_support::DeliveryCount as DeliveryAttemptCount;
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct StateBatchSetup {
-    #[default(Offset(0)..=Offset(9))]
-    pub bounds: RangeInclusive<Offset>,
-    pub delivery: FixtureDeliveryState,
-    #[default(DeliveryAttemptCount(1))]
-    pub attempts: DeliveryAttemptCount,
-}
-
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub struct StateSeedEpoch(pub i32);
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct StateSeedSetup {
-    #[default(uuid::Uuid::from_bytes([5; 16]))]
-    pub topic: uuid::Uuid,
-    #[default(StateSeedEpoch(1))]
-    pub epoch: StateSeedEpoch,
-    pub offset: Offset,
-}
 
 pub(super) fn batch(bounds: RangeInclusive<Offset>) -> StateBatch {
     state_batch().bounds(bounds).call()
@@ -161,16 +149,6 @@ pub fn state_batch(
     #[builder(default)] delivery: FixtureDeliveryState,
     #[builder(default = DeliveryAttemptCount (1))] attempts: DeliveryAttemptCount,
 ) -> StateBatch {
-    let setup = StateBatchSetup {
-        bounds,
-        delivery,
-        attempts,
-    };
-    let StateBatchSetup {
-        bounds,
-        delivery,
-        attempts,
-    } = setup;
     let (first_offset, last_offset) = bounds.into_inner();
     StateBatch {
         first_offset,
@@ -221,15 +199,10 @@ pub(super) async fn initialize_led_group(
     #[builder(into, default = StateSeedEpoch (1))] epoch: StateSeedEpoch,
     #[builder(into, default)] offset: Offset,
 ) -> krabka_metadata::MetadataImage {
-    let setup = StateSeedSetup {
-        topic,
-        epoch,
-        offset,
-    };
     lead_all(coordinator).await;
-    let image = image_with_topic(setup.topic, 1);
+    let image = image_with_topic(topic, 1);
     coordinator
-        .initialize(&image, "g", setup.topic, 0, setup.epoch.0, setup.offset)
+        .initialize(&image, ShareKeyRef::new("g", topic, 0), epoch.0, offset)
         .await
         .unwrap();
     image

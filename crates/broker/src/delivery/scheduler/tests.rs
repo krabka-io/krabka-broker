@@ -5,7 +5,7 @@ use {
             PartitionDelivery,
             metrics::NoDeliveryMetrics,
             test_support::{
-                BOUND_MS, NOW_MS, RecordingMetrics, ReportedWatermark, ScheduleSetup, register,
+                BOUND_MS, NOW_MS, RecordingMetrics, ReportedWatermark, register,
                 scheduled_partition, wait_parked, wait_until, wall_at,
             },
         },
@@ -130,6 +130,7 @@ struct Harness {
     clock: Arc<dyn WallClock>,
 }
 
+#[bon::bon]
 impl Harness {
     fn new() -> Self {
         let timeline = ManualMonotonicClock::new_shared();
@@ -143,28 +144,29 @@ impl Harness {
         }
     }
 
-    fn with_partition(setup: ScheduleSetup<'_>) -> HarnessWithPartition {
+    #[builder]
+    fn with_partition(
+        topic: Option<&'_ str>,
+        policy: Option<DeliveryPolicy>,
+        activations: Option<Vec<UnixMillis>>,
+        leader: Option<krabka_ids::NodeId>,
+    ) -> HarnessWithPartition {
         let dir = tempfile::tempdir().expect("log root");
         let harness = Self::new();
-        let partition = harness.scheduled(&dir, setup);
+        let partition = scheduled_partition()
+            .dir(&dir)
+            .clock(&harness.clock)
+            .maybe_topic(topic)
+            .maybe_policy(policy)
+            .maybe_activations(activations)
+            .maybe_leader(leader)
+            .call();
+        register(&harness.registry, &partition);
         HarnessWithPartition {
             dir,
             harness,
             partition,
         }
-    }
-
-    fn scheduled(&self, dir: &tempfile::TempDir, setup: ScheduleSetup<'_>) -> Arc<Partition> {
-        let partition = scheduled_partition()
-            .dir(dir)
-            .clock(&self.clock)
-            .topic(setup.topic)
-            .policy(setup.policy)
-            .activations(setup.activations)
-            .leader(setup.leader)
-            .call();
-        register(&self.registry, &partition);
-        partition
     }
 
     fn spawn(&self) -> JoinHandle<()> { self.spawn_on(self.timeline.new_timer()) }
@@ -210,10 +212,9 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
         dir: _dir,
         harness,
         partition,
-    } = Harness::with_partition(ScheduleSetup {
-        activations: active_and_delayed_activations(),
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .activations(active_and_delayed_activations())
+        .call();
 
     let task = harness.spawn_and_wait_parked().await;
 
@@ -259,12 +260,11 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
         dir: _dir,
         harness,
         partition: immediate,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "immediate",
-        policy: DeliveryPolicy::Immediate,
-        activations: vec![UnixMillis(NOW_MS + 10_000)],
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("immediate")
+        .policy(DeliveryPolicy::Immediate)
+        .activations(vec![UnixMillis(NOW_MS + 10_000)])
+        .call();
 
     let task = harness.spawn_and_wait_parked().await;
 
@@ -282,12 +282,11 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
         dir: _dir,
         harness,
         partition: followed,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "followed",
-        activations: vec![UnixMillis(NOW_MS - 60_000)],
-        leader: krabka_ids::NodeId(THIS_BROKER + 1),
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("followed")
+        .activations(vec![UnixMillis(NOW_MS - 60_000)])
+        .leader(krabka_ids::NodeId(THIS_BROKER + 1))
+        .call();
 
     let task = harness.spawn_and_wait_parked().await;
 
@@ -305,11 +304,10 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
         dir: _dir,
         harness,
         partition,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "adopted",
-        activations: vec![UnixMillis(NOW_MS - 60_000)],
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("adopted")
+        .activations(vec![UnixMillis(NOW_MS - 60_000)])
+        .call();
 
     let task = harness.spawn_and_wait_parked().await;
 
@@ -359,11 +357,10 @@ async fn the_sweep_reports_the_watermark_and_the_pending_count() {
         dir: _dir,
         harness,
         partition: _partition,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "reported",
-        activations: active_and_delayed_activations(),
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("reported")
+        .activations(active_and_delayed_activations())
+        .call();
 
     let ReportedSweep {
         mut heap,
@@ -396,11 +393,10 @@ async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
         dir: _dir,
         harness,
         partition,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "quiet",
-        activations: vec![UnixMillis(NOW_MS - 60_000)],
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("quiet")
+        .activations(vec![UnixMillis(NOW_MS - 60_000)])
+        .call();
 
     let ReportedSweep {
         mut heap,
@@ -420,10 +416,11 @@ async fn check_dead_start(harness: &Harness, timer: &BrokenTimer, task: JoinHand
 #[yare::parameterized(
     refused_deadline = {
         TimerFailure::Registration,
-        Some(ScheduleSetup {
-            topic: "unarmable",
-            activations: vec![UnixMillis(NOW_MS + 10_000)],
-            ..Default::default()
+        Some(|| {
+            Harness::with_partition()
+                .topic("unarmable")
+                .activations(vec![UnixMillis(NOW_MS + 10_000)])
+                .call()
         }),
     },
     failed_deadline = { TimerFailure::Completion, None },
@@ -431,14 +428,14 @@ async fn check_dead_start(harness: &Harness, timer: &BrokenTimer, task: JoinHand
 #[test_macro(tokio::test)]
 async fn the_scheduler_stops_when_its_first_deadline_fails(
     failure: TimerFailure,
-    setup: Option<ScheduleSetup>,
+    with_partition: Option<fn() -> HarnessWithPartition>,
 ) {
-    let harness = setup.map_or_else(Harness::new, |setup| {
+    let harness = with_partition.map_or_else(Harness::new, |with_partition| {
         let HarnessWithPartition {
             dir: _dir,
             harness,
             partition: _partition,
-        } = Harness::with_partition(setup);
+        } = with_partition();
         harness
     });
     let timer = BrokenTimer::dead(failure);
@@ -452,11 +449,10 @@ async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed
         dir: _dir,
         harness,
         partition,
-    } = Harness::with_partition(ScheduleSetup {
-        topic: "unrearmable",
-        activations: vec![UnixMillis(NOW_MS - 60_000)],
-        ..Default::default()
-    });
+    } = Harness::with_partition()
+        .topic("unrearmable")
+        .activations(vec![UnixMillis(NOW_MS - 60_000)])
+        .call();
 
     let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
     let task = harness.spawn_on(timer.injectable());

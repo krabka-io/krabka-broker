@@ -13,7 +13,7 @@ use {
         produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
         producer::{producer_record, transactional_producer},
         registered_cluster, shutdown_cluster,
-        topics::{CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor},
+        topics::{TopicReplicationFactor, configured_topic_request},
     },
     assert2::{assert, check},
     bytes::Bytes,
@@ -22,7 +22,10 @@ use {
     },
     krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel},
     krabka_protocol::{
-        owned::{fetch_request::FetchRequest, produce_request::PartitionProduceData},
+        owned::{
+            create_topics_request::CreateTopicsRequest, fetch_request::FetchRequest,
+            produce_request::PartitionProduceData,
+        },
         records::RecordBatch,
     },
     std::{
@@ -59,14 +62,14 @@ fn idempotent_batch(pid: i64, base_seq: i32, values: &[&str]) -> RecordBatch {
 async fn create_topic_with_partitions(
     broker: &BrokerHandle,
     bootstrap: &str,
-    setup: CreateTopicSetup<'_>,
+    request: CreateTopicsRequest,
 ) {
+    let topic = request.topics[0].name.clone();
+    let partitions = request.topics[0].num_partitions;
     let client = connect_client(bootstrap.to_owned(), None).await;
-    support::client::create_topic_named(&client, setup).await;
-    for index in 0..setup.num_partitions.0 {
-        broker
-            .wait_until_partition_present(setup.topic, index)
-            .await;
+    support::client::create_topic_named(&client, request).await;
+    for index in 0..partitions {
+        broker.wait_until_partition_present(&topic, index).await;
     }
 }
 
@@ -179,12 +182,15 @@ async fn durability_topic(
         support::init_tracing();
         let cluster = registered_cluster(brokers).await;
         let bootstrap = cluster[0].1.listen_addr.to_string();
-        create_topic_with_partitions(&cluster[0].0, &bootstrap, CreateTopicSetup {
-            topic: &topic,
-            num_partitions: TopicPartitionCount(partitions),
-            replication_factor: TopicReplicationFactor(replicas),
-            ..Default::default()
-        })
+        create_topic_with_partitions(
+            &cluster[0].0,
+            &bootstrap,
+            configured_topic_request()
+                .topic(&topic)
+                .num_partitions(partitions)
+                .replication_factor(replicas)
+                .call(),
+        )
         .await;
         for index in 0..partitions {
             cluster[0]

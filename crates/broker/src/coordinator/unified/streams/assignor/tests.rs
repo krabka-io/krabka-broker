@@ -131,8 +131,9 @@ struct TaskPlacement {
 }
 #[rstest::fixture]
 fn task_placement() -> TaskPlacement {
-    // Start this scenario with fresh inputs and observations.
-    TaskPlacement::default()
+    TaskPlacement {
+        ..TaskPlacement::default()
+    }
 }
 
 #[when("the Streams assignor places active and standby tasks in both member orders")]

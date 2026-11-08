@@ -100,7 +100,7 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
     pub warmup: TaskMap,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupTargetAssignmentMemberValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupTargetAssignmentMemberValue")]
 impl StreamsGroupTargetAssignmentMemberValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         encode_task_map(buf, &self.active)?;
@@ -144,7 +144,7 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub active_pending_revocation_epochs: TaskMap,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupCurrentMemberAssignmentValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupCurrentMemberAssignmentValue")]
 impl StreamsGroupCurrentMemberAssignmentValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);
@@ -310,8 +310,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupTargetAssignmentMemberValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a Streams target assignment contains active task 1 in subtopology 0 and no standby or warmup tasks"
@@ -362,8 +363,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupCurrentMemberAssignmentValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a Streams current assignment at epochs 5 and 4 has unrevoked tasks and six empty task lists"
@@ -414,8 +416,9 @@ mod tests {
             KafkaDecodedRecord<StreamsGroupCurrentMemberAssignmentValue, BrokerError>;
         #[rstest::fixture]
         fn record() -> RecordCompatibility {
-            // Start this scenario with fresh inputs and observations.
-            RecordCompatibility::default()
+            RecordCompatibility {
+                ..RecordCompatibility::default()
+            }
         }
         #[given(
             "Streams active tasks 1 and 2 have epochs 4 and 5 while active task 3 awaits revocation at epoch 3"
@@ -494,8 +497,9 @@ mod tests {
         }
         #[rstest::fixture]
         fn member_state() -> MemberStateEncoding {
-            // Start this scenario with fresh inputs and observations.
-            MemberStateEncoding::default()
+            MemberStateEncoding {
+                ..MemberStateEncoding::default()
+            }
         }
         #[given("a Streams member is {state}")]
         fn logical_member_state(member_state: &mut MemberStateEncoding, state: String) {

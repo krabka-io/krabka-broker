@@ -68,14 +68,8 @@ struct BackgroundRecovery {
 
 #[fixture]
 fn recovery() -> BackgroundRecovery {
-    // Start this scenario with fresh inputs and observations.
-
     BackgroundRecovery {
-        cluster: Vec::new(),
-        client: None,
-        controller: None,
-        victim: None,
-        stopped_directory: None,
+        ..BackgroundRecovery::default()
     }
 }
 

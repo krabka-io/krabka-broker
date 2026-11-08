@@ -107,16 +107,6 @@ pub(super) fn response_tasks(partitions: Vec<i32>) -> Vec<TaskIds> {
 }
 
 /// Independent expected response fields for a single subtopology's active assignment.
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ActiveResponseSetup<'a> {
-    #[default("m1")]
-    pub member_id: &'a str,
-    #[default(MemberEpoch(1))]
-    pub epoch: MemberEpoch,
-    pub status: Option<Vec<Status>>,
-    pub active: Option<Vec<PartitionIndex>>,
-}
-
 #[bon::builder]
 pub(super) fn expected_active_response(
     #[builder(default = "m1")] member_id: &'_ str,
@@ -124,18 +114,6 @@ pub(super) fn expected_active_response(
     status: Option<Vec<Status>>,
     active: Option<Vec<PartitionIndex>>,
 ) -> StreamsGroupHeartbeatResponse {
-    let setup = ActiveResponseSetup {
-        member_id,
-        epoch,
-        status,
-        active,
-    };
-    let ActiveResponseSetup {
-        member_id,
-        epoch,
-        status,
-        active,
-    } = setup;
     StreamsGroupHeartbeatResponse {
         member_id: member_id.into(),
         status,

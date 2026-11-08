@@ -35,6 +35,7 @@ fn decode_legacy_records(legacy_bytes: &[u8]) -> Vec<ParsedRecord> {
 
 const PARTITIONS: [i32; 3] = [0, 1, 2];
 
+#[derive(Default)]
 struct Downconversion {
     process: Option<InProcess>,
     topic: String,
@@ -44,13 +45,8 @@ struct Downconversion {
 
 #[fixture]
 fn legacy() -> Downconversion {
-    // Start this scenario with fresh inputs and observations.
-
     Downconversion {
-        process: None,
-        topic: String::new(),
-        response: None,
-        conversions_before: None,
+        ..Downconversion::default()
     }
 }
 

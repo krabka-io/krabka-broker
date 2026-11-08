@@ -105,6 +105,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     std::process::Output,
 };
+#[derive(Default)]
 struct GroupProtocol {
     broker: Option<StartedBroker>,
     topic: String,
@@ -116,16 +117,8 @@ struct GroupProtocol {
 }
 #[fixture]
 fn protocol() -> GroupProtocol {
-    // Start this scenario with fresh inputs and observations.
-
     GroupProtocol {
-        broker: None,
-        topic: String::new(),
-        produced: None,
-        consumed: None,
-        described: None,
-        assigned: None,
-        keyed_payload: String::new(),
+        ..GroupProtocol::default()
     }
 }
 #[given(

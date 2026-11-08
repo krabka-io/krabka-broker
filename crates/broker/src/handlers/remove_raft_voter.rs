@@ -32,7 +32,7 @@ use {
     krabka_raft::{reconfig::RemoveVoter, voter_requests},
 };
 
-#[krabka_macros::voter_admission(
+#[krabka_broker_macros::voter_admission(
     request = RemoveRaftVoterRequest,
     api = 81,
     gate = cluster_alter_denied,

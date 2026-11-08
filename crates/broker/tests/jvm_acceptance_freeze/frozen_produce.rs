@@ -18,6 +18,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
 };
 
+#[derive(Default)]
 struct FrozenWrites {
     broker: Option<JvmBroker>,
     topics: Vec<String>,
@@ -25,12 +26,8 @@ struct FrozenWrites {
 }
 #[fixture]
 fn writes() -> FrozenWrites {
-    // Start this scenario with fresh inputs and observations.
-
     FrozenWrites {
-        broker: None,
-        topics: Vec::new(),
-        runs: Vec::new(),
+        ..FrozenWrites::default()
     }
 }
 #[given("these existing topics have the following write-freeze policies")]

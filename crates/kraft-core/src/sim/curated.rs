@@ -165,6 +165,7 @@ mod tests {
         rstest_bdd_macros::{given, scenarios, then, when},
     };
 
+    #[derive(Default)]
     struct Catalogue {
         source: Option<fn() -> Vec<ScenarioTrace>>,
         traces: Option<Vec<ScenarioTrace>>,
@@ -172,11 +173,8 @@ mod tests {
 
     #[fixture]
     fn catalogue() -> Catalogue {
-        // Start this scenario with fresh inputs and observations.
-
         Catalogue {
-            source: None,
-            traces: None,
+            ..Catalogue::default()
         }
     }
 

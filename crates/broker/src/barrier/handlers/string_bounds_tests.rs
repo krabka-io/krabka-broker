@@ -37,31 +37,12 @@ enum GroupMutation {
     Delete,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct AlterGroupSetup<'a> {
-    #[default("short")]
-    group: &'a str,
-    #[default("orders")]
-    topic: &'a str,
-    mutation: GroupMutation,
-}
-
 #[bon::builder]
 fn entry(
     #[builder(default = "short")] group: &'_ str,
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default)] mutation: GroupMutation,
 ) -> AlterableBarrierGroup {
-    let setup = AlterGroupSetup {
-        group,
-        topic,
-        mutation,
-    };
-    let AlterGroupSetup {
-        group,
-        topic,
-        mutation,
-    } = setup;
     AlterableBarrierGroup {
         group: group.to_owned(),
         topics: vec![topic.to_owned()],

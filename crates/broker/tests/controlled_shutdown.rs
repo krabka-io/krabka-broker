@@ -15,11 +15,12 @@
 use {
     crate::support::{
         registered_cluster, shutdown_cluster,
-        topics::{CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor},
+        topics::{TopicPartitionCount, configured_topic_request},
     },
     assert2::assert,
     krabka_broker::{BrokerHandle, config::NodeRole},
     krabka_metadata::{MetadataRecord, NodeId as MetadataNodeId, PartitionRecord},
+    krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
     std::{net::SocketAddr, time::Duration},
     tokio::time,
 };
@@ -30,26 +31,14 @@ mod support;
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-controlled-shutdown-test";
 
-async fn create_topic(addr: SocketAddr, setup: CreateTopicSetup<'_>) {
-    kafka_wire::create_topic_from_setup(addr, CLIENT_ID, setup).await;
+async fn create_topic(addr: SocketAddr, request: CreateTopicsRequest) {
+    kafka_wire::create_topic_from_request(addr, CLIENT_ID, request).await;
 }
 
 /// Waits until `(topic, partition)` appears in the metadata image of
 /// `handle`.
 async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i32) {
     handle.wait_until_partition_present(topic, partition).await;
-}
-
-#[derive(krabka_macros::FieldDefaults)]
-struct ForcedLeadershipSetup<'a> {
-    #[default("drain-me")]
-    topic: &'a str,
-    #[default(TopicPartitionCount(4))]
-    partitions: TopicPartitionCount,
-    #[default(krabka_metadata::NodeId(1))]
-    leader: krabka_metadata::NodeId,
-    #[default(vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2), krabka_metadata::NodeId(3)])]
-    replicas: Vec<MetadataNodeId>,
 }
 
 /// Injects a `PartitionRecord` that makes `target` the leader for every
@@ -65,16 +54,8 @@ async fn force_leadership_for_test(
     #[builder(default = vec ! [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2) , krabka_metadata :: NodeId (3)])]
     replicas: Vec<MetadataNodeId>,
 ) {
-    let setup = ForcedLeadershipSetup {
-        topic,
-        partitions,
-        leader,
-        replicas,
-    };
-    let topic = setup.topic;
-    let partitions = setup.partitions.0;
-    let target = setup.leader.0;
-    let replicas = setup.replicas;
+    let partitions = partitions.0;
+    let target = leader.0;
 
     let image = leader_handle.controller_image_for_test();
     for p in 0..partitions {
@@ -174,12 +155,14 @@ async fn concentrated_partition_leadership(leadership_drain: &mut LeadershipDrai
     let addr = cluster[raft_leader_idx].1.listen_addr;
     let topic = "drain-me";
     let partitions: i32 = 4;
-    create_topic(addr, CreateTopicSetup {
-        topic,
-        num_partitions: TopicPartitionCount(partitions),
-        replication_factor: TopicReplicationFactor(3),
-        ..Default::default()
-    })
+    create_topic(
+        addr,
+        configured_topic_request()
+            .topic(topic)
+            .num_partitions(partitions)
+            .replication_factor(3)
+            .call(),
+    )
     .await;
     for p in 0..partitions {
         for (h, _, _) in &cluster {

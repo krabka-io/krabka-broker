@@ -47,7 +47,7 @@
 use {
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    krabka_log::Offset,
+    krabka_log::{Offset, epoch_ms},
     krabka_metadata::MetadataImage,
     qubit_clock::WallClock,
     std::{
@@ -75,10 +75,13 @@ use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
-        bootstrap, config::ShareCoordinatorConfig, key::ShareKey,
-        partitioner::partition_for_share_key, persistence::StateBatch, state::SharePartitionState,
+        bootstrap,
+        config::ShareCoordinatorConfig,
+        key::{ShareKey, ShareKeyRef},
+        partitioner::partition_for_share_key,
+        persistence::StateBatch,
+        state::SharePartitionState,
     },
-    time_util::epoch_millis,
 };
 
 /// KIP-932 share-group state epoch.
@@ -111,6 +114,8 @@ pub struct ShareStateSummary {
 /// Kafka's messages for the share-state error rows: the `Errors` default
 /// messages and the validation messages of `ShareCoordinatorShard`.
 pub mod message {
+    use crate::codes::{self, default_message};
+
     pub const NEGATIVE_PARTITION_ID: &str = "The partition id cannot be a negative number.";
     pub const NEGATIVE_LEADER_EPOCH: &str = "The leader epoch cannot be a negative number.";
     pub const NEGATIVE_STATE_EPOCH: &str = "The state epoch cannot be a negative number.";
@@ -118,16 +123,17 @@ pub mod message {
         "Write operation on uninitialized share partition not allowed.";
     pub const READ_UNINITIALIZED_SHARE_PARTITION: &str =
         "Read operation on uninitialized share partition not allowed.";
-    pub const UNKNOWN_SERVER_ERROR: &str =
-        "The server experienced an unexpected error when processing the request.";
-    pub const UNKNOWN_TOPIC_OR_PARTITION: &str = "This server does not host this topic-partition.";
+    pub const UNKNOWN_SERVER_ERROR: &str = default_message(codes::UNKNOWN_SERVER_ERROR);
+    pub const UNKNOWN_TOPIC_OR_PARTITION: &str = default_message(codes::UNKNOWN_TOPIC_OR_PARTITION);
     pub const COORDINATOR_LOAD_IN_PROGRESS: &str =
-        "The coordinator is loading and hence can't process requests.";
-    pub const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
-    pub const REQUEST_TIMED_OUT: &str = "The request timed out.";
-    pub const KAFKA_STORAGE_ERROR: &str = "Disk error when trying to access log file on the disk.";
-    pub const FENCED_LEADER_EPOCH: &str =
-        "The leader epoch in the request is older than the epoch on the broker.";
+        default_message(codes::COORDINATOR_LOAD_IN_PROGRESS);
+    pub const NOT_COORDINATOR: &str = default_message(codes::NOT_COORDINATOR);
+    pub const REQUEST_TIMED_OUT: &str = default_message(codes::REQUEST_TIMED_OUT);
+    pub const KAFKA_STORAGE_ERROR: &str = default_message(codes::KAFKA_STORAGE_ERROR);
+    pub const FENCED_LEADER_EPOCH: &str = default_message(codes::FENCED_LEADER_EPOCH);
+    /// Not Kafka's `Errors.FENCED_STATE_EPOCH.message()`, which reads "The
+    /// share coordinator rejected the request because the share-group state
+    /// epoch did not match."; this row has always sent the text below.
     pub const FENCED_STATE_EPOCH: &str =
         "The coordinator rejected the request because the state epoch did not match.";
 }
@@ -289,7 +295,7 @@ pub(super) struct Active<'a> {
 /// call started.
 ///
 /// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default, krabka_macros::ScheduledLoads)]
+#[derive(Debug, Default, krabka_broker_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__share_group_state load task failed")]
 pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
@@ -370,7 +376,7 @@ impl ShareCoordinator {
     }
 
     /// The current time in milliseconds since the epoch.
-    fn now_ms(&self) -> i64 { epoch_millis(self.wall_clock.now()) }
+    fn now_ms(&self) -> i64 { epoch_ms(self.wall_clock.now()) }
 
     fn state_key_revision(&self, partition: PartitionIndex) -> u64 {
         self.key_revisions
@@ -523,10 +529,8 @@ impl ShareCoordinator {
 
     /// Removes every in-memory key that maps to `state_partition`.
     fn drop_partition_state(&self, state_partition: PartitionIndex) {
-        self.state.retain(|key, _| {
-            self.state_partition_for(&key.group, &key.topic_id, key.partition)
-                != Some(state_partition)
-        });
+        self.state
+            .retain(|key, _| self.state_partition_for(key.as_key_ref()) != Some(state_partition));
     }
 
     /// The load status of `state_partition`, or `None` when this broker does
@@ -557,12 +561,10 @@ impl ShareCoordinator {
     /// the errors of [`Self::active`].
     pub(super) async fn active_for_key(
         &self,
-        group: &str,
-        topic_id: &uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Active<'_>, ShareErrorCode> {
         let state_partition = self
-            .state_partition_for(group, topic_id, partition)
+            .state_partition_for(key)
             .ok_or(COORDINATOR_NOT_AVAILABLE)?;
         self.active(state_partition).await
     }
@@ -690,16 +692,11 @@ impl ShareCoordinator {
     /// share key `(group, topic_id, partition)`, or `None` when the configured
     /// partition count is not positive.
     #[must_use]
-    pub(crate) fn state_partition_for(
-        &self,
-        group: &str,
-        topic_id: &uuid::Uuid,
-        partition: i32,
-    ) -> Option<PartitionIndex> {
+    pub(crate) fn state_partition_for(&self, key: ShareKeyRef<'_>) -> Option<PartitionIndex> {
         partition_for_share_key(
-            group,
-            topic_id,
-            partition,
+            key.group,
+            &key.topic_id,
+            key.partition,
             self.config.state_topic_num_partitions,
         )
         .map(PartitionIndex)

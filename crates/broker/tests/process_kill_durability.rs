@@ -656,17 +656,15 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct DefaultPolicy {
     config: Option<krabka_log::LogConfig>,
     flush_on_append: Option<bool>,
 }
 #[fixture]
 fn policy() -> DefaultPolicy {
-    // Start this scenario with fresh inputs and observations.
-
     DefaultPolicy {
-        config: None,
-        flush_on_append: None,
+        ..DefaultPolicy::default()
     }
 }
 #[given("a broker log uses its default configuration")]
@@ -758,6 +756,7 @@ fn partial_boundary(segment: &TornSegment, partial: usize) {
     );
 }
 
+#[derive(Default)]
 struct CrashDurability {
     broker: Option<BrokerProcess>,
     topic: String,
@@ -767,14 +766,8 @@ struct CrashDurability {
 }
 #[fixture]
 fn durability() -> CrashDurability {
-    // Start this scenario with fresh inputs and observations.
-
     CrashDurability {
-        broker: None,
-        topic: String::new(),
-        acked: BTreeSet::new(),
-        readable: None,
-        cycles: Vec::new(),
+        ..CrashDurability::default()
     }
 }
 #[given(

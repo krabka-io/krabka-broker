@@ -105,7 +105,7 @@ pub struct ShareTargetAssignment {
 }
 
 /// Full membership state of a single share group.
-#[derive(Debug, Clone, krabka_macros::GroupLifecycle)]
+#[derive(Debug, Clone, krabka_broker_macros::GroupLifecycle)]
 #[group_lifecycle(protocol = "share")]
 pub struct ShareGroupState {
     pub group_id: String,

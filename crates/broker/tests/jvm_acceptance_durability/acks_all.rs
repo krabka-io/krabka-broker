@@ -18,6 +18,7 @@ use {
     tokio::time,
 };
 const TOPIC: &str = "krabka-acks-all-itest";
+#[derive(Default)]
 struct ReplicatedAcknowledgement {
     cluster: Vec<(BrokerHandle, TempDir)>,
     produced: Option<Output>,
@@ -25,12 +26,8 @@ struct ReplicatedAcknowledgement {
 }
 #[rstest::fixture]
 fn acknowledgements() -> ReplicatedAcknowledgement {
-    // Start this scenario with fresh inputs and observations.
-
     ReplicatedAcknowledgement {
-        cluster: Vec::new(),
-        produced: None,
-        consumed: None,
+        ..ReplicatedAcknowledgement::default()
     }
 }
 #[rstest_bdd_macros::given("three brokers host a topic replicated on all three nodes")]

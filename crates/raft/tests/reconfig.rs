@@ -14,6 +14,7 @@ use {
 #[path = "support/voter.rs"]
 mod voter_fixture;
 
+#[derive(Default)]
 struct VoterIdentity {
     voter: Option<Voter>,
     change: Option<VoterChange>,
@@ -21,11 +22,8 @@ struct VoterIdentity {
 
 #[fixture]
 fn identity() -> VoterIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     VoterIdentity {
-        voter: None,
-        change: None,
+        ..VoterIdentity::default()
     }
 }
 

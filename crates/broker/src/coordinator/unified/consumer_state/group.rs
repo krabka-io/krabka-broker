@@ -26,7 +26,7 @@ const FIRST_CONSUMER_PROTOCOL_COMMIT_VERSION: i16 = 9;
 /// Kafka's `JoinGroupRequest.UNKNOWN_GENERATION_ID`.
 const UNKNOWN_GENERATION_ID: i32 = -1;
 
-#[derive(Debug, krabka_macros::GroupLifecycle)]
+#[derive(Debug, krabka_broker_macros::GroupLifecycle)]
 #[group_lifecycle(protocol = "consumer")]
 pub struct GroupState {
     pub group_id: String,
@@ -756,8 +756,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn consumer_group() -> ConsumerBehavior {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerBehavior::default()
+        ConsumerBehavior {
+            ..ConsumerBehavior::default()
+        }
     }
     #[given(
         "a consumer group at epoch {epoch} target epoch {target} has member epoch {member_epoch} in state {state}"

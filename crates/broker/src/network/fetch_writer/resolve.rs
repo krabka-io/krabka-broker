@@ -30,7 +30,7 @@ use {
 /// that was truncated or unlinked under the reader. A `Raw` or `Legacy`
 /// payload is a refcount bump and cannot fail.
 pub fn resolve_records_inline(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
-    let bytes = krabka_macros::records_payload_match! { match payload {
+    let bytes = krabka_broker_macros::records_payload_match! { match payload {
         // `Raw`/`Legacy` are already verbatim wire bytes — share the `Bytes`.
         RecordsPayload::Raw(b) | RecordsPayload::Legacy(b) => b.clone(),
         // Parsed batches must be encoded; rare on the fetch path.

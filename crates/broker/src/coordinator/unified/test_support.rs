@@ -342,7 +342,7 @@ pub trait HeartbeatStatus {
     fn status(self) -> HeartbeatReply;
 }
 
-krabka_macros::heartbeat_status!(
+krabka_broker_macros::heartbeat_status!(
     ConsumerGroupHeartbeatResponse,
     ShareGroupHeartbeatResponse,
     StreamsGroupHeartbeatResponse,
@@ -720,32 +720,17 @@ pub fn plain_streams_member(
 }
 
 /// First consumer heartbeat, with an empty owned assignment and the standard rebalance timeout.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ConsumerJoinSetup<'a> {
-    #[default("g")]
-    pub group_id: &'a str,
-    #[default("m1")]
-    pub member_id: &'a str,
-    #[default(&["t"])]
-    pub topics: &'a [&'a str],
-}
-
 #[bon::builder]
 pub fn consumer_join_request(
     #[builder(default = "g")] group_id: &'_ str,
     #[builder(default = "m1")] member_id: &'_ str,
     #[builder(default = & ["t"])] topics: &'_ [&'_ str],
 ) -> ConsumerGroupHeartbeatRequest {
-    let setup = ConsumerJoinSetup {
-        group_id,
-        member_id,
-        topics,
-    };
     ConsumerGroupHeartbeatRequest {
-        group_id: setup.group_id.into(),
-        member_id: setup.member_id.into(),
+        group_id: group_id.into(),
+        member_id: member_id.into(),
         member_epoch: 0,
-        subscribed_topic_names: Some(setup.topics.iter().map(|topic| (*topic).into()).collect()),
+        subscribed_topic_names: Some(topics.iter().map(|topic| (*topic).into()).collect()),
         rebalance_timeout_ms: 60_000,
         topic_partitions: Some(vec![]),
         ..Default::default()

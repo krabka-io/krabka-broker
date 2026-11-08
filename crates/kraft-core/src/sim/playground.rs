@@ -162,8 +162,6 @@ mod tests {
 
     #[fixture]
     fn playground() -> Playground {
-        // Start this scenario with fresh inputs and observations.
-
         Playground {
             sim: None,
             ..Playground::default()

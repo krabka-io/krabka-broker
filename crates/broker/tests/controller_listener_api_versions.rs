@@ -161,6 +161,7 @@ async fn assert_closed(stream: &mut TcpStream, what: &str) {
     );
 }
 
+#[derive(Default)]
 struct ControllerDiscovery {
     node: Option<ControllerNode>,
     stream: Option<TcpStream>,
@@ -174,18 +175,8 @@ struct ControllerDiscovery {
 }
 #[rstest::fixture]
 fn discovery() -> ControllerDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerDiscovery {
-        node: None,
-        stream: None,
-        idle: None,
-        before: None,
-        after: None,
-        refusal: None,
-        handshake: None,
-        authenticate: None,
-        busy_errors: Vec::new(),
+        ..ControllerDiscovery::default()
     }
 }
 #[rstest_bdd_macros::given("an unauthenticated PLAIN connection to a SASL controller listener")]

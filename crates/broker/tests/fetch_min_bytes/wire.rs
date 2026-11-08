@@ -10,7 +10,7 @@ use {
         client::connect_owned,
         discovery::named_topic_metadata,
         fetch::{FetchByteLimit, FetchLimits, RequestWaitMillis, single_partition_fetch},
-        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, single_partition_produce},
         records::batch_from_records,
         topics::{creatable_topic, create_topic_request_with_setup},
     },
@@ -45,20 +45,19 @@ async fn connect(bootstrap: &str) -> Client {
 /// Append one small record -- small enough that `MIN_BYTES` stays out of reach
 /// whatever the batch overhead of the broker on the other end is.
 async fn produce_one(client: &Client, topic: &str, topic_id: WireUuid, value: &'static [u8]) {
-    let produced = send_batch(
-        &client,
-        batch_from_records(vec![Record {
-            value: Some(bytes::Bytes::from_static(value)),
-            ..Default::default()
-        }]),
-        SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            topic_id,
-            timeout: ProduceTimeoutMillis(10_000),
-            ..Default::default()
-        },
-    )
-    .await;
+    let produced = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch_from_records(vec![Record {
+                    value: Some(bytes::Bytes::from_static(value)),
+                    ..Default::default()
+                }]))
+                .topic(topic)
+                .topic_id(topic_id)
+                .timeout(10_000)
+                .call(),
+        )
+        .await;
     assert!(
         produced.responses[0].partition_responses[0].error_code == 0,
         "Produce"

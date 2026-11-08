@@ -56,27 +56,10 @@ pub(super) fn append_epoch_batches(log: &mut Log, epochs: &[i32]) {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct FetchWireSetup<'a> {
-    #[default(ApiVersion(fetch_request::MAX_VERSION))]
-    pub version: ApiVersion,
-    #[default("client")]
-    pub user: &'a str,
-    #[default("fetch-client")]
-    pub client_id: &'a str,
-}
-
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FetchReplicaId(pub i32);
 impl Default for FetchReplicaId {
     fn default() -> Self { Self(-1) }
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct SessionlessFetchSetup {
-    #[default(ApiVersion(fetch_request::MAX_VERSION))]
-    pub version: ApiVersion,
-    pub replica: FetchReplicaId,
 }
 
 #[derive(Clone, Copy)]
@@ -102,9 +85,8 @@ pub(super) fn sessionless_request(
 ) -> FetchRequest {
     use krabka_protocol::owned::fetch_request::ReplicaState;
 
-    let setup = SessionlessFetchSetup { version, replica };
-    let version = setup.version.0;
-    let replica_id = setup.replica.0;
+    let version = version.0;
+    let replica_id = replica.0;
     let (replica_id, replica_state) = if version >= 15 {
         (-1, ReplicaState {
             replica_id,
@@ -163,19 +145,9 @@ pub(super) async fn fetch_wire(
     #[builder(default = "client")] user: &'_ str,
     #[builder(default = "fetch-client")] client_id: &'_ str,
 ) -> FetchResponse {
-    let setup = FetchWireSetup {
-        version,
-        user,
-        client_id,
-    };
-    let FetchWireSetup {
-        version,
-        user,
-        client_id,
-    } = setup;
     let version = version.0;
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, peer, context);
         user [user];
         client [client_id];
@@ -217,7 +189,7 @@ pub(super) fn expected_single_topic(
     }
 }
 
-krabka_macros::refused_fetch_partition_fixture!(refused_partition_row);
+krabka_broker_macros::refused_fetch_partition_fixture!(refused_partition_row);
 
 pub(super) fn expected_refused_partition(
     partition_index: PartitionIndex,
@@ -237,28 +209,20 @@ pub(super) fn request_partition(fetch_offset: Offset) -> FetchPartition {
 }
 
 /// Independent successful read row; neither offset nor records comes from the handler response.
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ExpectedReadSetup {
-    pub watermark: Offset,
-    #[default(RecordsPayload::Legacy(Bytes::new()))]
-    pub records: RecordsPayload,
-}
-
 #[bon::builder]
 pub(super) fn expected_read(
     #[builder(into, default)] watermark: Offset,
     #[builder(default = RecordsPayload :: Legacy (Bytes :: new ()))] records: RecordsPayload,
 ) -> PartitionData {
-    let setup = ExpectedReadSetup { watermark, records };
     PartitionData {
         partition_index: 0,
         error_code: NONE,
-        high_watermark: setup.watermark.0,
-        last_stable_offset: setup.watermark.0,
+        high_watermark: watermark.0,
+        last_stable_offset: watermark.0,
         log_start_offset: 0,
         aborted_transactions: None,
         preferred_read_replica: -1,
-        records: Some(setup.records),
+        records: Some(records),
         ..Default::default()
     }
 }

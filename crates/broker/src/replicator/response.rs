@@ -19,7 +19,7 @@ use {
         replication_target_changed,
         truncation::{
             Rewind, diverging_epoch_truncation_target, handle_epoch_fence,
-            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+            handle_offset_moved_to_tiered_storage, handle_offset_out_of_range, lock_log_or_skip,
             return_if_target_stale, rewind_follower, warn_if_target_stale,
         },
     },
@@ -47,7 +47,7 @@ use {
         collections::{BTreeMap, HashMap},
         hash::Hash,
         mem,
-        sync::{Arc, PoisonError, atomic},
+        sync::{Arc, atomic},
     },
     tracing::{info, warn},
 };
@@ -107,14 +107,16 @@ fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowActi
 ///
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
-/// alone here.
+/// alone here. So is a partition whose log mutex is poisoned.
 async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_start: i64) {
     if part.diskless {
         return;
     }
     let target = Offset(leader_log_start).min(part.high_watermark().await);
     let (differs, established) = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(log) = lock_log_or_skip(part, cfg) else {
+            return;
+        };
         (
             log.differs_from_leader_log_start(target),
             log.established_log_start(),
@@ -170,7 +172,9 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
     // every batch before appending it. Checking it here too used to scan that
     // batch twice on every fetch, including compressed batches.
     {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(log) = lock_log_or_skip(part, cfg) else {
+            return;
+        };
         if log.log_start_offset() != log.log_end_offset() {
             return;
         }
@@ -179,7 +183,9 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
         return;
     };
     let (restarts, end) = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(log) = lock_log_or_skip(part, cfg) else {
+            return;
+        };
         (log.restarts_at_batch_base(base, last), log.log_end_offset())
     };
     if !restarts {
@@ -344,13 +350,20 @@ async fn apply_diverging_epoch(diverging_epoch: &EpochEndOffset, cfg: &Config) -
         RowAction::Drop
     );
     if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-        let _target_guard = krabka_macros::replication_target_guard!(
+        let _target_guard = krabka_broker_macros::replication_target_guard!(
             part,
             cfg,
             "replicator: skipping diverging_epoch truncation from stale local target"
         );
         let leader_end_offset = diverging_epoch.end_offset;
-        let end_offset = diverging_epoch_truncation_target(&part, diverging_epoch);
+        let end_offset = match diverging_epoch_truncation_target(&part, diverging_epoch) {
+            Ok(end_offset) => end_offset,
+            Err(error) => {
+                warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                    "replicator: skipping diverging_epoch truncation of a poisoned log");
+                return RowAction::Continue;
+            }
+        };
         if rewind_follower(
             &part,
             cfg,
@@ -379,7 +392,7 @@ async fn append_records(part_resp: &mut PartitionData, cfg: &Config) -> RowActio
             "replicator: local partition vanished between fetches");
         return RowAction::Continue;
     };
-    let _target_guard = krabka_macros::replication_target_guard!(
+    let _target_guard = krabka_broker_macros::replication_target_guard!(
         part,
         cfg,
         "replicator: discarding response for stale local target"

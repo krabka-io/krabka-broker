@@ -17,13 +17,12 @@
 //! or not.
 
 use {
-    super::EARLIEST_LOCAL_TIMESTAMP,
+    super::{EARLIEST_LOCAL_TIMESTAMP, lock_log_or_skip},
     crate::{
         config_keys::{node_or_cluster_default, parse::bool_value},
         partition::Partition,
         replicator::Config,
     },
-    std::sync::PoisonError,
 };
 
 /// Kafka's `ReplicationConfigs.FOLLOWER_FETCH_LAST_TIERED_OFFSET_ENABLE_CONFIG`.
@@ -83,17 +82,18 @@ pub(super) struct LocalTieringFacts {
 
 impl LocalTieringFacts {
     /// Reads the flag from the metadata image and the rest from `partition`'s
-    /// log, under one log mutex hold.
-    pub(super) fn read(cfg: &Config, partition: &Partition) -> Self {
+    /// log, under one log mutex hold. `None`, after a warning, when the log
+    /// mutex is poisoned: the recovery then leaves the partition alone.
+    pub(super) fn read(cfg: &Config, partition: &Partition) -> Option<Self> {
         let enabled = follower_fetch_last_tiered_offset_enabled(cfg);
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let log = lock_log_or_skip(partition, cfg)?;
         let config = log.config_snapshot();
-        Self {
+        Some(Self {
             enabled,
             remote_storage_enable: config.remote_storage_enable,
             compact: config.cleanup_policy.contains_compact(),
             replica_end: log.log_end_offset().0,
-        }
+        })
     }
 
     /// Whether the decision can still come out `true` for some leader log end.

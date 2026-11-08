@@ -192,6 +192,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct CertificateSession {
     configured: Option<MtlsFixture>,
     broker: Option<MtlsBroker>,
@@ -202,15 +203,8 @@ struct CertificateSession {
 }
 #[fixture]
 fn session() -> CertificateSession {
-    // Start this scenario with fresh inputs and observations.
-
     CertificateSession {
-        configured: None,
-        broker: None,
-        connector: None,
-        tls: None,
-        response: None,
-        request_timeout: None,
+        ..CertificateSession::default()
     }
 }
 #[given("a TLS listener uses client authentication mode {mode} and trusts the fixture client CA")]

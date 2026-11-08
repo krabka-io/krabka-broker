@@ -173,7 +173,7 @@ impl State {
     }
 }
 
-krabka_macros::projection_identity!(State, projection, debug);
+krabka_broker_macros::projection_identity!(State, projection, debug);
 
 #[derive(Clone, Debug)]
 struct StreamsModel;
@@ -575,7 +575,7 @@ impl Model for StreamsModel {
     }}
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { State;
+        krabka_broker_macros::model_properties! { State;
         always "active_task_exclusivity" => |state| { active_task_exclusive(&state.actor.state) },
         always "target_active_task_exclusivity" => |state| { target_active_exclusive(&state.actor.state) },
         always "assignment_within_topology" => |state| { assignments_in_topology(state) },

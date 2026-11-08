@@ -66,26 +66,6 @@ struct PlainCredentials<'a> {
 
 /// Build a `SASL_PLAINTEXT` data-plane listener config for broker `i`
 /// (0-indexed) and parameterized `controller_listener_protocol`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct SaslBrokerSetup<'a> {
-    slot: BrokerSlot,
-    #[default(data_listen_addr())]
-    data_addr: SocketAddr,
-    #[default(ControllerListener {
-        protocol: ListenerProtocol::SaslPlaintext,
-        addr: data_listen_addr(),
-    })]
-    controller: ControllerListener,
-    voters: &'a [ControllerVoter],
-    #[default(BootstrapMode::Bootstrap)]
-    mode: BootstrapMode,
-    #[default(PlainCredentials {
-        user: "raft-user",
-        password: "raft-password",
-    })]
-    credentials: PlainCredentials<'a>,
-}
-
 #[bon::builder]
 fn sasl_broker_config(
     log_dir: &Path,
@@ -98,22 +78,6 @@ fn sasl_broker_config(
     #[builder(default = PlainCredentials { user : "raft-user" , password : "raft-password" })]
     credentials: PlainCredentials<'_>,
 ) -> BrokerConfig {
-    let setup = SaslBrokerSetup {
-        slot,
-        data_addr,
-        controller,
-        voters,
-        mode,
-        credentials,
-    };
-    let SaslBrokerSetup {
-        slot,
-        data_addr,
-        controller,
-        voters,
-        mode,
-        credentials,
-    } = setup;
     let ControllerListener {
         protocol: ctrl,
         addr: ctrl_addr,

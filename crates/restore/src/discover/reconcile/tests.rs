@@ -35,31 +35,12 @@ struct SnapshotSegmentEntry {
 }
 
 /// Partition 0 of `topic` as the snapshot records it, one entry per segment.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct SnapshotPartitionSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    #[default(Uuid::from_u128(1))]
-    topic_id: Uuid,
-    segments: &'a [SnapshotSegmentEntry],
-}
-
 #[bon::builder]
 fn partition_dump(
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default = Uuid :: from_u128 (1))] topic_id: Uuid,
     #[builder(default)] segments: &'_ [SnapshotSegmentEntry],
 ) -> PartitionDump {
-    let setup = SnapshotPartitionSetup {
-        topic,
-        topic_id,
-        segments,
-    };
-    let SnapshotPartitionSetup {
-        topic,
-        topic_id,
-        segments,
-    } = setup;
     PartitionDump {
         topic_id_partition: TopicIdPartition::new(topic_id, topic, 0),
         segments: segments
@@ -97,17 +78,12 @@ fn snapshot_of(
     #[builder(default = Uuid :: from_u128 (1))] topic_id: Uuid,
     #[builder(default)] segments: &'_ [SnapshotSegmentEntry],
 ) {
-    let setup = SnapshotPartitionSetup {
-        topic,
-        topic_id,
-        segments,
-    };
     write_snapshot(path, RlmmCacheDump {
         partitions: vec![
             partition_dump()
-                .topic(setup.topic)
-                .topic_id(setup.topic_id)
-                .segments(setup.segments)
+                .topic(topic)
+                .topic_id(topic_id)
+                .segments(segments)
                 .call(),
         ],
     });

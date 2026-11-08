@@ -30,30 +30,16 @@ pub fn assn(broker_ids: &[i32]) -> CreatePartitionsAssignment {
     }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct PartitionTopicSetup<'a> {
-    #[default("t")]
-    pub name: &'a str,
-    #[default(TopicPartitionCount(3))]
-    pub count: TopicPartitionCount,
-    pub assignments: Option<Vec<CreatePartitionsAssignment>>,
-}
-
 #[bon::builder]
 pub fn topic_req(
     #[builder(default = "t")] name: &'_ str,
     #[builder(into, default = TopicPartitionCount (3))] count: TopicPartitionCount,
     assignments: Option<Vec<CreatePartitionsAssignment>>,
 ) -> CreatePartitionsTopic {
-    let setup = PartitionTopicSetup {
-        name,
-        count,
-        assignments,
-    };
     CreatePartitionsTopic {
-        name: setup.name.into(),
-        count: setup.count.0,
-        assignments: setup.assignments,
+        name: name.into(),
+        count: count.0,
+        assignments,
         ..Default::default()
     }
 }
@@ -89,16 +75,6 @@ pub fn request(
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SeedTopicSetup<'a> {
-    #[default("t")]
-    pub name: &'a str,
-    #[default(TopicPartitionCount(2))]
-    pub partitions: TopicPartitionCount,
-    #[default(TopicReplicationFactor(1))]
-    pub rf: TopicReplicationFactor,
-}
-
 #[bon::builder]
 pub async fn seed_topic(
     handle: &BrokerHandle,
@@ -106,16 +82,6 @@ pub async fn seed_topic(
     #[builder(into, default = TopicPartitionCount (2))] partitions: TopicPartitionCount,
     #[builder(into, default = TopicReplicationFactor (1))] rf: TopicReplicationFactor,
 ) {
-    let setup = SeedTopicSetup {
-        name,
-        partitions,
-        rf,
-    };
-    let SeedTopicSetup {
-        name,
-        partitions,
-        rf,
-    } = setup;
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::new_v4(),
@@ -147,7 +113,7 @@ pub fn expected_result(
     error_code: i16,
     error_message: Option<String>,
 ) -> CreatePartitionsTopicResult {
-    krabka_macros::tagged_wire!(CreatePartitionsTopicResult {
+    krabka_broker_macros::tagged_wire!(CreatePartitionsTopicResult {
         name: name.into(),
         error_code,
         error_message,
@@ -155,5 +121,5 @@ pub fn expected_result(
 }
 
 pub fn expected_response(results: Vec<CreatePartitionsTopicResult>) -> CreatePartitionsResponse {
-    krabka_macros::unthrottled_wire!(CreatePartitionsResponse { results })
+    krabka_broker_macros::unthrottled_wire!(CreatePartitionsResponse { results })
 }

@@ -17,28 +17,8 @@ pub enum DeadLetterQueue {
     Enabled,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct AcquiredWindowSetup {
-    #[default(Offset(3))]
-    pub end: Offset,
-    #[default(RecordCount(10))]
-    pub record_limit: RecordCount,
-    pub dead_letter_queue: DeadLetterQueue,
-}
-
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct DeliveryCount(pub i16);
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct DlqRangeSetup {
-    #[default(Offset(0))]
-    pub first: Offset,
-    #[default(Offset(0))]
-    pub last: Offset,
-    #[default(DeliveryCount(1))]
-    pub delivery_count: DeliveryCount,
-    pub cause: Option<super::DlqCause>,
-}
 
 pub(super) fn t0() -> Instant { Instant::now() }
 
@@ -59,16 +39,6 @@ pub fn acquire_window(
     #[builder(into, default = RecordCount (10))] record_limit: RecordCount,
     #[builder(default)] dead_letter_queue: DeadLetterQueue,
 ) {
-    let setup = AcquiredWindowSetup {
-        end,
-        record_limit,
-        dead_letter_queue,
-    };
-    let AcquiredWindowSetup {
-        end,
-        record_limit,
-        dead_letter_queue,
-    } = setup;
     if dead_letter_queue == DeadLetterQueue::Enabled {
         state.set_dlq_enabled(true);
     }
@@ -90,17 +60,11 @@ pub fn dlq_range(
     #[builder(into, default = DeliveryCount (1))] delivery_count: DeliveryCount,
     cause: Option<super::DlqCause>,
 ) -> super::DlqRange {
-    let setup = DlqRangeSetup {
+    super::DlqRange {
         first,
         last,
-        delivery_count,
+        delivery_count: delivery_count.0,
         cause,
-    };
-    super::DlqRange {
-        first: setup.first,
-        last: setup.last,
-        delivery_count: setup.delivery_count.0,
-        cause: setup.cause,
     }
 }
 

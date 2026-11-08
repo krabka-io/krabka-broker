@@ -12,8 +12,8 @@
 //! for example across a broker restart: the mark is only in memory.
 
 use {
-    crate::error::BrokerError,
-    krabka_ids::LeaderEpoch,
+    crate::{error::BrokerError, partition::lock_partition_log},
+    krabka_ids::{LeaderEpoch, PartitionIndex},
     krabka_log::{LeaderEpochCheckpoint, Log, Offset},
     std::sync::{Mutex, PoisonError},
 };
@@ -107,13 +107,16 @@ fn offset_truncation_state(
 /// emptied (Kafka truncates it to its high watermark).
 ///
 /// # Errors
-/// Returns an error when a cut fails.
+/// Returns an error when a cut fails, and
+/// [`BrokerError::PartitionWriterDied`] when the current log of
+/// `topic`-`partition` is poisoned.
 pub(super) fn truncate_to_current_epochs(
     current_log: &Mutex<Log>,
+    (topic, partition): (&str, PartitionIndex),
     future_log: &Mutex<Log>,
 ) -> Result<(), BrokerError> {
     // The lock order the swap uses: the current log, then the future log.
-    let current = current_log.lock().unwrap_or_else(PoisonError::into_inner);
+    let current = lock_partition_log(current_log, topic, partition)?;
     let mut future = future_log.lock().unwrap_or_else(PoisonError::into_inner);
     truncate_locked_to_current_epochs(&current, &mut future)
 }
@@ -321,14 +324,6 @@ mod tests {
 
     fn leo(log: &Mutex<Log>) -> Offset { log.lock().unwrap().log_end_offset() }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct TruncationLogsSetup<'a> {
-        #[default(&[])]
-        future: &'a [LeaderEpoch],
-        #[default(&[LeaderEpoch(1), LeaderEpoch(1)])]
-        current: &'a [LeaderEpoch],
-    }
-
     struct TruncationLogsFixture {
         current: Mutex<Log>,
         future: Mutex<Log>,
@@ -336,7 +331,10 @@ mod tests {
     }
 
     impl TruncationLogsFixture {
-        fn truncate(&self) { truncate_to_current_epochs(&self.current, &self.future).unwrap(); }
+        fn truncate(&self) {
+            truncate_to_current_epochs(&self.current, ("t", PartitionIndex(0)), &self.future)
+                .unwrap();
+        }
     }
 
     #[bon::builder]
@@ -344,10 +342,9 @@ mod tests {
         #[builder(default = & [])] future: &'_ [LeaderEpoch],
         #[builder(default = & [LeaderEpoch (1) , LeaderEpoch (1)])] current: &'_ [LeaderEpoch],
     ) -> TruncationLogsFixture {
-        let setup = TruncationLogsSetup { future, current };
         let directory = tempdir().unwrap();
-        let future = log_with_epochs(directory.path(), "future", setup.future);
-        let current = log_with_epochs(directory.path(), "current", setup.current);
+        let future = log_with_epochs(directory.path(), "future", future);
+        let current = log_with_epochs(directory.path(), "current", current);
         TruncationLogsFixture {
             current,
             future,

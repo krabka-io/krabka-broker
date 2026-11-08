@@ -36,17 +36,6 @@ pub mod test_prelude {
 /// The topic of the data partition [`live_coordinator`] hosts.
 pub(super) const DATA_TOPIC: &str = "orders";
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct StateImageSetup<'a> {
-    #[default(uuid::Uuid::from_u128(1))]
-    pub topic_id: uuid::Uuid,
-    #[default(NodeId(1))]
-    pub leader: NodeId,
-    pub leader_epoch: LeaderEpoch,
-    #[default(&[NodeId(1)])]
-    pub replicas: &'a [NodeId],
-}
-
 /// Single-partition transaction-state metadata, locally led by default.
 #[bon::builder]
 pub(super) fn state_image(
@@ -55,18 +44,6 @@ pub(super) fn state_image(
     #[builder(into, default)] leader_epoch: LeaderEpoch,
     #[builder(default = & [NodeId (1)])] replicas: &'_ [NodeId],
 ) -> MetadataImage {
-    let setup = StateImageSetup {
-        topic_id,
-        leader,
-        leader_epoch,
-        replicas,
-    };
-    let StateImageSetup {
-        topic_id,
-        leader,
-        leader_epoch,
-        replicas,
-    } = setup;
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: bootstrap::TOPIC.to_owned(),
@@ -162,20 +139,6 @@ pub(super) fn test_coordinator_with_partitions(num_partitions: PartitionCount) -
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub(super) struct ProducerEpoch(pub i16);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct TxnEntrySetup<'a> {
-    #[default("tid-a")]
-    pub transactional_id: &'a str,
-    #[default(ProducerId(1000))]
-    pub producer: ProducerId,
-    #[default(ProducerId(-1))]
-    pub previous: ProducerId,
-    #[default(ProducerId(-1))]
-    pub next: ProducerId,
-    #[default(ProducerEpoch(-1))]
-    pub next_epoch: ProducerEpoch,
-}
-
 #[bon::builder]
 pub(super) fn entry(
     #[builder(default = "tid-a")] transactional_id: &'_ str,
@@ -184,17 +147,10 @@ pub(super) fn entry(
     #[builder(into, default = ProducerId (- 1))] next: ProducerId,
     #[builder(into, default = ProducerEpoch (- 1))] next_epoch: ProducerEpoch,
 ) -> TxnEntry {
-    let setup = TxnEntrySetup {
-        transactional_id,
-        producer,
-        previous,
-        next,
-        next_epoch,
-    };
-    let mut e = TxnEntry::new_empty(setup.transactional_id.into(), setup.producer, 0, 60_000, 0);
-    e.prev_producer_id = setup.previous;
-    e.next_producer_id = setup.next;
-    e.next_producer_epoch = setup.next_epoch.0;
+    let mut e = TxnEntry::new_empty(transactional_id.into(), producer, 0, 60_000, 0);
+    e.prev_producer_id = previous;
+    e.next_producer_id = next;
+    e.next_producer_epoch = next_epoch.0;
     e
 }
 

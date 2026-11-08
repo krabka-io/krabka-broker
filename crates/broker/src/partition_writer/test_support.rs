@@ -180,36 +180,28 @@ pub(super) fn open_log_with_records(path: &Path, records: i32) -> Log {
 /// Writer services and signals, with each test overriding only what it observes.
 /// The fixture owns no log or sender: callers choose explicitly whether the
 /// spawned writer receives their log by move or by clone.
+#[derive(bon::Builder)]
 pub(super) struct WriterOptions {
+    #[builder(default = "t".into())]
     pub(super) topic: String,
+    #[builder(into, default = PartitionIndex(0))]
     pub(super) partition: PartitionIndex,
+    #[builder(default = Arc::new(Notify::new()))]
     pub(super) append_notify: Arc<Notify>,
+    #[builder(default = Arc::new(sync::Mutex::new(ReplicaState::new())))]
     pub(super) replica_state: Arc<sync::Mutex<ReplicaState>>,
+    #[builder(default = Arc::new(Notify::new()))]
     pub(super) hw_advance_notify: Arc<Notify>,
+    #[builder(default = DeliveryHandles::new())]
     pub(super) delivery: DeliveryHandles,
+    #[builder(default = LogDirRegistry::default())]
     pub(super) log_dir_status: LogDirRegistry,
+    #[builder(default = Arc::new(ProducerState::new()))]
     pub(super) producer_state: Arc<ProducerState>,
     pub(super) wal: Option<SharedWal>,
+    #[builder(default = BrokerConfig::default().max_produce_group)]
     pub(super) max_produce_group: usize,
     pub(super) sequencer: Option<Arc<dyn OffsetSequencer>>,
-}
-
-impl Default for WriterOptions {
-    fn default() -> Self {
-        Self {
-            topic: "t".into(),
-            partition: PartitionIndex(0),
-            append_notify: Arc::new(Notify::new()),
-            replica_state: Arc::new(sync::Mutex::new(ReplicaState::new())),
-            hw_advance_notify: Arc::new(Notify::new()),
-            delivery: DeliveryHandles::new(),
-            log_dir_status: LogDirRegistry::default(),
-            producer_state: Arc::new(ProducerState::new()),
-            wal: None,
-            max_produce_group: BrokerConfig::default().max_produce_group,
-            sequencer: None,
-        }
-    }
 }
 
 pub(super) fn spawn_writer(
@@ -265,10 +257,14 @@ pub(super) fn default_writer() -> DefaultWriter {
     let log = open_default_log(dir.path());
     let (sender, receiver) = mpsc::channel(1);
     let notify = Arc::new(Notify::new());
-    let writer = spawn_writer(dir.path(), Arc::clone(&log), receiver, WriterOptions {
-        append_notify: Arc::clone(&notify),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        Arc::clone(&log),
+        receiver,
+        WriterOptions::builder()
+            .append_notify(Arc::clone(&notify))
+            .build(),
+    );
     DefaultWriter {
         dir,
         log,
@@ -344,10 +340,9 @@ pub(super) fn observed_writer(
 }
 
 pub(super) async fn single_replica_options() -> WriterOptions {
-    WriterOptions {
-        replica_state: replica_with_isr(&[1]).await,
-        ..Default::default()
-    }
+    WriterOptions::builder()
+        .replica_state(replica_with_isr(&[1]).await)
+        .build()
 }
 
 /// A running writer with a one-slot queue, retaining caller ownership of its log.
@@ -356,6 +351,6 @@ pub(super) fn spawn_default_writer(
     log: Arc<Mutex<Log>>,
 ) -> (mpsc::Sender<WriterMessage>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(path, log, rx, WriterOptions::default());
+    let writer = spawn_writer(path, log, rx, WriterOptions::builder().build());
     (tx, writer)
 }

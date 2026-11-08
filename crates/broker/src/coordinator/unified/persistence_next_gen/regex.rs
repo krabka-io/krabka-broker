@@ -38,7 +38,7 @@ pub struct RegularExpressionValue {
     pub timestamp_ms: i64,
 }
 
-#[krabka_macros::flexible_value(record = "ConsumerGroupRegularExpressionValue")]
+#[krabka_broker_macros::flexible_value(record = "ConsumerGroupRegularExpressionValue")]
 impl RegularExpressionValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_string_array(buf, &self.topics)?;
@@ -97,8 +97,9 @@ mod tests {
         type EncodedValue = EncodedRecord<RegularExpressionValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a resolved expression contains topics a and bc at version 7 and timestamp 1700000000000"

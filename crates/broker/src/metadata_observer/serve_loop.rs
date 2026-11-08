@@ -373,15 +373,6 @@ mod tests {
         }
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct MetadataFetchResponseSetup {
-        #[default(krabka_ids::NodeId(1))]
-        leader: krabka_ids::NodeId,
-        records: Bytes,
-        high_watermark: krabka_ids::Offset,
-        quorum_high_watermark: krabka_ids::Offset,
-    }
-
     /// The responder and quorum watermarks differ while a follower catches up.
     #[bon::builder]
     fn metadata_fetch_response_body(
@@ -390,18 +381,6 @@ mod tests {
         #[builder(into, default)] high_watermark: krabka_ids::Offset,
         #[builder(into, default)] quorum_high_watermark: krabka_ids::Offset,
     ) -> Vec<u8> {
-        let setup = MetadataFetchResponseSetup {
-            leader,
-            records,
-            high_watermark,
-            quorum_high_watermark,
-        };
-        let MetadataFetchResponseSetup {
-            leader,
-            records,
-            high_watermark,
-            quorum_high_watermark,
-        } = setup;
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,

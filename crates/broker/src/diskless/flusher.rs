@@ -197,7 +197,7 @@ async fn flush_tick(
         &context.index_log,
         &partitions,
         config,
-        |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
+        |partition| partition.handle.leader_relaxed() == context.node_id,
     )
     .await
 }
@@ -210,7 +210,7 @@ async fn flushable_partitions(
     // Snapshot registry handles before awaiting any partition state.
     let mut out = Vec::new();
     for handle in registry.arcs() {
-        if !handle.diskless || handle.current_leader.load(Ordering::Relaxed) != node_id {
+        if !handle.diskless || handle.leader_relaxed() != node_id {
             continue;
         }
         let Some(topic_id) = image.topic(&handle.topic).map(|topic| topic.topic_id) else {
@@ -1331,7 +1331,7 @@ mod tests {
                 .is_ok()
         );
 
-        krabka_macros::metric_registry_fixture!(context.metrics, body, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(context.metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_expired_ranges_total 1"));
     }
 

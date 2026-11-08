@@ -38,6 +38,9 @@
 
 mod support;
 
+// DEV_CERT is the dev server certificate scenario 4's TLS listener presents.
+// Nothing verifies it -- the peer under test never sends a `ClientHello` --
+// but the listener will not bind without one.
 use {
     assert2::assert,
     bytes::{Buf, BufMut, BytesMut},
@@ -60,7 +63,11 @@ use {
         path::{Path, PathBuf},
         time::Duration,
     },
-    support::{listeners::loopback_listener, wire::decode_response_frame},
+    support::{
+        listeners::loopback_listener,
+        tls::{DEV_CERT, DEV_KEY},
+        wire::decode_response_frame,
+    },
     tempfile::TempDir,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -68,12 +75,6 @@ use {
         time,
     },
 };
-
-/// The dev server certificate scenario 4's TLS listener presents. Nothing
-/// verifies it -- the peer under test never sends a `ClientHello` -- but the
-/// listener will not bind without one.
-const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
-const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
 
 /// Writes one PEM fixture into `dir` and returns its path.
 fn write_pem(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -190,6 +191,7 @@ async fn assert_connection_closed(stream: &mut TcpStream) {
     assert!(is_closed(stream).await);
 }
 
+#[derive(Default)]
 struct IdleConnections {
     fixture: Option<Fixture>,
     pem_directory: Option<TempDir>,
@@ -200,15 +202,8 @@ struct IdleConnections {
 }
 #[rstest::fixture]
 fn idle_connections() -> IdleConnections {
-    // Start this scenario with fresh inputs and observations.
-
     IdleConnections {
-        fixture: None,
-        pem_directory: None,
-        stream: None,
-        wire: Vec::new(),
-        responses: Vec::new(),
-        correlation: None,
+        ..IdleConnections::default()
     }
 }
 #[rstest_bdd_macros::given(

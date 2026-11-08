@@ -33,7 +33,7 @@ use {
 /// The `coordinator_id` of a group that no broker coordinates now.
 const NO_COORDINATOR: i32 = -1;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_describe_barrier_groups",
     api = "DescribeBarrierGroups",
     level = "info"

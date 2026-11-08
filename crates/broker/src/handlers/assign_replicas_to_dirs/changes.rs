@@ -174,18 +174,6 @@ mod tests {
 
     const UNASSIGNED_DIRECTORIES: [uuid::Uuid; 2] = [uuid::Uuid::nil(); 2];
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ReplicaImageSetup<'a> {
-        #[default("t")]
-        name: &'a str,
-        #[default(uuid::Uuid::from_u128(7))]
-        topic_id: uuid::Uuid,
-        #[default(&[NodeId(1), NodeId(2)])]
-        replicas: &'a [NodeId],
-        #[default(&UNASSIGNED_DIRECTORIES)]
-        directories: &'a [uuid::Uuid],
-    }
-
     #[bon::builder]
     fn image_with(
         #[builder(default = "t")] name: &'_ str,
@@ -193,19 +181,13 @@ mod tests {
         #[builder(default = & [NodeId (1) , NodeId (2)])] replicas: &'_ [NodeId],
         #[builder(default = & UNASSIGNED_DIRECTORIES)] directories: &'_ [uuid::Uuid],
     ) -> MetadataImage {
-        let setup = ReplicaImageSetup {
-            name,
-            topic_id,
-            replicas,
-            directories,
-        };
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         apply_topic()
             .image(&mut image)
-            .name(setup.name)
-            .topic_id(setup.topic_id)
-            .replicas(setup.replicas)
-            .directories(setup.directories)
+            .name(name)
+            .topic_id(topic_id)
+            .replicas(replicas)
+            .directories(directories)
             .call();
         image
     }
@@ -218,18 +200,6 @@ mod tests {
         #[builder(default = & [NodeId (1) , NodeId (2)])] replicas: &'_ [NodeId],
         #[builder(default = & UNASSIGNED_DIRECTORIES)] directories: &'_ [uuid::Uuid],
     ) {
-        let setup = ReplicaImageSetup {
-            name,
-            topic_id,
-            replicas,
-            directories,
-        };
-        let ReplicaImageSetup {
-            name,
-            topic_id,
-            replicas,
-            directories,
-        } = setup;
         let nodes = replicas.to_vec();
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
             name: name.into(),

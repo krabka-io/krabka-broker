@@ -7,6 +7,7 @@
 use {
     crate::share_coordinator::{
         coordinator::{ShareCoordinator, ShareStateOp, ShareWrite},
+        key::ShareKeyRef,
         persistence::StateBatch,
     },
     krabka_log::Offset,
@@ -19,7 +20,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     WriteShareGroupStateRequest,
     WriteShareGroupStateResponse,
     WriteStateResult,
@@ -42,8 +43,10 @@ async fn write_state(
     {
         return WriteShareGroupStateResponse::default();
     }
-    let results =
-        krabka_macros::share_state_results!(req, WriteStateResult, |group_id, topic_id, pd| {
+    let results = krabka_broker_macros::share_state_results!(
+        req,
+        WriteStateResult,
+        |group_id, topic_id, pd| {
             let request = ShareWrite {
                 state_epoch: pd.state_epoch,
                 leader_epoch: pd.leader_epoch,
@@ -52,7 +55,11 @@ async fn write_state(
                 batches: pd.state_batches.iter().map(StateBatch::from).collect(),
             };
             let result = coordinator
-                .write(image, group_id, topic_id, pd.partition, request)
+                .write(
+                    image,
+                    ShareKeyRef::new(group_id, topic_id, pd.partition),
+                    request,
+                )
                 .await;
             let verdict = super::operation_result(result, ShareStateOp::Write);
             PartitionResult {
@@ -61,7 +68,8 @@ async fn write_state(
                 error_message: verdict.message,
                 ..Default::default()
             }
-        });
+        }
+    );
 
     WriteShareGroupStateResponse {
         results,
@@ -235,7 +243,7 @@ mod tests {
         write_state_story.summary.set(
             state
                 .coordinator
-                .stored_summary_for_test("share-group", TOPIC, 4)
+                .stored_summary_for_test(ShareKeyRef::new("share-group", TOPIC, 4))
                 .await,
         );
     }

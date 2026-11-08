@@ -245,6 +245,7 @@ fn kafka_add_controller() -> Output {
     output
 }
 
+#[derive(Default)]
 struct FeatureAdministration {
     broker: Option<StartedBroker>,
     observer: Option<StartedObserver>,
@@ -253,13 +254,8 @@ struct FeatureAdministration {
 }
 #[rstest::fixture]
 fn features() -> FeatureAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     FeatureAdministration {
-        broker: None,
-        observer: None,
-        mutation: None,
-        description: None,
+        ..FeatureAdministration::default()
     }
 }
 #[rstest_bdd_macros::given("a standalone broker finalizes the latest-release feature defaults")]

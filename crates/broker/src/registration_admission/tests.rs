@@ -214,7 +214,7 @@ async fn the_brokers_active_on_activation_are_the_ones_a_new_term_seeds_active()
 /// broker 2 out of the ISR, and leaves broker 2 without a session.
 #[tokio::test]
 async fn a_controller_retires_a_restarted_leader_in_its_registration_batch() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with(|config| config.heartbeat_timeout = krabka_units::minutes(10))];
     };

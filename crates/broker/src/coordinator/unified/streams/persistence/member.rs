@@ -59,7 +59,7 @@ pub struct StreamsGroupMemberMetadataValue {
     pub topology_epoch: i32,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupMemberMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupMemberMetadataValue")]
 impl StreamsGroupMemberMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_compact_nullable_string(buf, self.instance_id.as_deref())?;
@@ -215,8 +215,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupMemberMetadataValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a Streams member c at host h with process p endpoint e:8080 tag k=v timeout 1 and topology epoch 2"

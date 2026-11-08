@@ -662,7 +662,6 @@ mod tests {
             crate::handlers::produce::test_support::image_with_topic,
             krabka_metadata::MetadataRecord,
             krabka_protocol::records::{Record, RecordBatch},
-            std::sync::atomic::Ordering,
         };
 
         for (diskless, new_leader, recreated, already_durable) in [
@@ -711,7 +710,7 @@ mod tests {
                 pending.finish(
                     Instant::now() + Duration::from_secs(30),
                     |partition, _| {
-                        assert!(partition.current_leader.load(Ordering::Acquire) == 1);
+                        assert!(partition.leader() == 1);
                         Ok(2)
                     },
                     changed,
@@ -757,7 +756,7 @@ mod tests {
             assert!(row.error_code == codes::NOT_LEADER_OR_FOLLOWER);
             assert!(partition.high_watermark().await == Offset(i64::from(already_durable)));
             timeout(Duration::from_secs(1), promotion).await.unwrap();
-            assert!(partition.current_leader_epoch.load(Ordering::Acquire) == next_epoch);
+            assert!(partition.leader_epoch() == next_epoch);
             assert!(partition.lock_produce_transition().await.topic_id == Some(next_topic_id));
         }
     }

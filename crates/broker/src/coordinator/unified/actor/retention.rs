@@ -689,8 +689,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn retention_records() -> RetentionRecords {
-        // Start this scenario with fresh inputs and observations.
-        RetentionRecords::default()
+        RetentionRecords {
+            ..RetentionRecords::default()
+        }
     }
     #[given("the expired t partition 0 offset belongs to group g of kind {kind}")]
     fn retained_group_kind(retention_records: &mut RetentionRecords, kind: String) {

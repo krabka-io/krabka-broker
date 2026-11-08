@@ -44,11 +44,11 @@ pub async fn retry_produce_until_allowed(
             drive_produce_as_plain(
                 addr,
                 single_record_produce_request(topic, 0, b"hello"),
-                &PlainAuthenticationSetup {
-                    client_id: CLIENT_ID,
-                    user,
-                    password: (password).to_vec(),
-                },
+                &PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .user(user)
+                    .password(password)
+                    .build(),
             )
             .await
         })
@@ -95,11 +95,15 @@ pub async fn retry_metadata_until_topic_row(
     }));
     retry_response()
         .request(|| async {
-            drive_metadata_as_plain(addr, req.clone(), &PlainAuthenticationSetup {
-                client_id: CLIENT_ID,
-                user,
-                password: (password).to_vec(),
-            })
+            drive_metadata_as_plain(
+                addr,
+                req.clone(),
+                &PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .user(user)
+                    .password(password)
+                    .build(),
+            )
             .await
         })
         .ready(|response| topic_row_reports(response, topic, error_code))
@@ -142,11 +146,11 @@ pub async fn retry_join_group_until_allowed(
             drive_join_group_as_plain(
                 addr,
                 join_group_request(group_id),
-                &PlainAuthenticationSetup {
-                    client_id: CLIENT_ID,
-                    user,
-                    password: (password).to_vec(),
-                },
+                &PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .user(user)
+                    .password(password)
+                    .build(),
             )
             .await
         })

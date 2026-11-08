@@ -95,15 +95,18 @@ async fn connect() -> Client {
 /// Create `topic` (`partitions` partitions) and wait until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, partitions: i32) {
-    support::client::create_led_topic(broker, client, CreateTopicSetup {
-        topic,
-        num_partitions: TopicPartitionCount(partitions),
-        ..Default::default()
-    })
+    support::client::create_led_topic(
+        broker,
+        client,
+        configured_topic_request()
+            .topic(topic)
+            .num_partitions(partitions)
+            .call(),
+    )
     .await;
 }
 
-use crate::support::topics::{CreateTopicSetup, TopicPartitionCount};
+use crate::support::topics::configured_topic_request;
 /// Finalize `streams.version` to level 1 so the heartbeat/describe handlers
 /// stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE.
 use support::streams::{active_partition_count, finalize_streams_version, follow_up};
@@ -176,6 +179,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct StreamsAdministration {
     broker: Option<StartedBroker>,
     client: Option<Client>,
@@ -187,16 +191,8 @@ struct StreamsAdministration {
 }
 #[fixture]
 fn streams() -> StreamsAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     StreamsAdministration {
-        broker: None,
-        client: None,
-        topic: String::new(),
-        group: String::new(),
-        member: String::new(),
-        heartbeat: None,
-        wire: None,
+        ..StreamsAdministration::default()
     }
 }
 #[given(

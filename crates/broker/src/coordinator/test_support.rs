@@ -203,26 +203,6 @@ pub fn coordinator_with_config(
     )
 }
 
-/// A nontransactional offset record with the ordinary unversioned fixture fields.
-#[derive(Clone, Copy)]
-pub struct OffsetRecordSetup<'a> {
-    pub group: &'a str,
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    pub offset: Offset,
-}
-
-impl Default for OffsetRecordSetup<'_> {
-    fn default() -> Self {
-        Self {
-            group: "g",
-            topic: "t",
-            partition: krabka_ids::PartitionIndex::default(),
-            offset: Offset::ZERO,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Default)]
 pub enum DeletionTarget {
     #[default]
@@ -319,26 +299,15 @@ pub fn topic_deletion_tombstones(
         .call()
 }
 
+/// A nontransactional offset record with the ordinary unversioned fixture fields.
 #[bon::builder]
 pub fn offset_record(
-    #[builder(default = OffsetRecordSetup::default().group)] group: &'_ str,
-    #[builder(default = OffsetRecordSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = OffsetRecordSetup::default().partition)]
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(into, default = krabka_ids::PartitionIndex::default())]
     partition: krabka_ids::PartitionIndex,
-    #[builder(into, default = OffsetRecordSetup::default().offset)] offset: Offset,
+    #[builder(into, default = Offset::ZERO)] offset: Offset,
 ) -> Record {
-    let setup = OffsetRecordSetup {
-        group,
-        topic,
-        partition,
-        offset,
-    };
-    let OffsetRecordSetup {
-        group,
-        topic,
-        partition,
-        offset,
-    } = setup;
     let value = OffsetCommitValue {
         offset,
         leader_epoch: -1,

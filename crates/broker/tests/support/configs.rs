@@ -60,16 +60,6 @@ impl ConfigOperation {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct TopicConfigMutationSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    #[default("cleanup.policy")]
-    pub name: &'a str,
-    pub operation: ConfigOperation,
-    pub value: Option<&'a str>,
-}
-
 pub fn incremental_config(
     name: impl Into<String>,
     value: Option<String>,
@@ -103,24 +93,14 @@ pub enum ConfigMutation {
     Validate,
 }
 
-#[derive(Default)]
-pub struct IncrementalConfigsSetup {
-    pub resources: Vec<AlterConfigsResource>,
-    pub mutation: ConfigMutation,
-}
-
 #[bon::builder]
 pub fn incremental_request(
     #[builder(default)] resources: Vec<AlterConfigsResource>,
     #[builder(default)] mutation: ConfigMutation,
 ) -> IncrementalAlterConfigsRequest {
-    let setup = IncrementalConfigsSetup {
-        resources,
-        mutation,
-    };
     IncrementalAlterConfigsRequest {
-        resources: setup.resources,
-        validate_only: matches!(setup.mutation, ConfigMutation::Validate),
+        resources,
+        validate_only: matches!(mutation, ConfigMutation::Validate),
         ..Default::default()
     }
 }
@@ -230,18 +210,6 @@ pub async fn alter_topic_config(
     #[builder(default)] operation: ConfigOperation,
     value: Option<&'_ str>,
 ) -> ConfigMutationOutcome {
-    let setup = TopicConfigMutationSetup {
-        topic,
-        name,
-        operation,
-        value,
-    };
-    let TopicConfigMutationSetup {
-        topic,
-        name,
-        operation,
-        value,
-    } = setup;
     let response = client
         .send(
             incremental_request()
@@ -316,37 +284,18 @@ pub fn controller_registration(
 }
 
 /// A valid client-metrics subscription input shared by telemetry and config round trips.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ClientMetricsSubscriptionSetup<'a> {
-    #[default("sub-a")]
-    pub name: &'a str,
-    #[default("*")]
-    pub metrics: &'a str,
-    #[default("60000")]
-    pub interval: &'a str,
-}
-
 #[bon::builder]
 pub fn client_metrics_subscription(
     #[builder(default = "sub-a")] name: &'_ str,
     #[builder(default = "*")] metrics: &'_ str,
     #[builder(default = "60000")] interval: &'_ str,
 ) -> IncrementalAlterConfigsRequest {
-    let setup = ClientMetricsSubscriptionSetup {
-        name,
-        metrics,
-        interval,
-    };
     incremental_request()
-        .resources(vec![incremental_resource(16, setup.name, vec![
-            incremental_config(
-                "metrics",
-                Some(setup.metrics.to_owned()),
-                ConfigOperation::Set,
-            ),
+        .resources(vec![incremental_resource(16, name, vec![
+            incremental_config("metrics", Some(metrics.to_owned()), ConfigOperation::Set),
             incremental_config(
                 "interval.ms",
-                Some(setup.interval.to_owned()),
+                Some(interval.to_owned()),
                 ConfigOperation::Set,
             ),
         ])])

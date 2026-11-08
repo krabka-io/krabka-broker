@@ -674,8 +674,6 @@ mod tests {
 
     #[rstest::fixture]
     fn produce_timestamp() -> ProduceTimestampContract {
-        // Start this scenario with fresh inputs and observations.
-
         ProduceTimestampContract {
             policy: TimestampPolicy::default(),
             now: 0,

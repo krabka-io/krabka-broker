@@ -77,7 +77,7 @@ pub(super) fn expected_result(
     error_code: i16,
     error_message: Option<&str>,
 ) -> AlterUserScramCredentialsResult {
-    krabka_macros::tagged_wire!(AlterUserScramCredentialsResult {
+    krabka_broker_macros::tagged_wire!(AlterUserScramCredentialsResult {
         user: user.into(),
         error_code,
         error_message: error_message.map(Into::into),
@@ -87,7 +87,7 @@ pub(super) fn expected_result(
 pub(super) fn expected_response(
     results: Vec<AlterUserScramCredentialsResult>,
 ) -> super::AlterUserScramCredentialsResponse {
-    krabka_macros::unthrottled_wire!(super::AlterUserScramCredentialsResponse { results })
+    krabka_broker_macros::unthrottled_wire!(super::AlterUserScramCredentialsResponse { results })
 }
 
 pub(super) async fn low_metadata_version(broker: &Broker) {
@@ -103,7 +103,7 @@ pub(super) async fn low_metadata_version(broker: &Broker) {
         .expect("seed low metadata.version");
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 

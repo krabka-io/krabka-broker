@@ -7,6 +7,7 @@ use {
         DescribeSplit, IndexedTopic, PartitionRow, TopicPartitions,
         bound::{fetch_bound, last_fetchable_offset},
         leadership::resolve_for_broker,
+        local::lock_log,
         remote::concurrently,
         resolve::{LatestContext, PartitionLogSnapshot, TopicPartitionName, resolve_latest},
     },
@@ -20,7 +21,7 @@ use {
         fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
         string_bytes::{get_string_owned, put_string},
     },
-    std::{iter, sync::PoisonError},
+    std::iter,
 };
 
 const LATEST_TIMESTAMP: i64 = -1;
@@ -119,7 +120,10 @@ async fn resolve_partition(
 
     // The legacy offsets come from the same log mutex hold as the snapshot.
     let (snapshot, offsets) = {
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let log = match lock_log(&partition) {
+            Ok(log) => log,
+            Err(error_code) => return error_response(request.index, error_code),
+        };
         (
             PartitionLogSnapshot::of(&log),
             log.legacy_offsets_before(request.timestamp, max_num_offsets),
@@ -375,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, admin, socket);
                     boot [start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
                                 HashSet::from(["denied"]),
@@ -460,7 +464,7 @@ mod tests {
     }
     async fn answer(broker: &BrokerHandle, request: &[u8]) -> Bytes {
         let shared = broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(admin, socket);
             user ["admin"];
         };

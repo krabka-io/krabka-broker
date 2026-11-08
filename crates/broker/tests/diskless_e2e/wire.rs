@@ -17,7 +17,7 @@ use {
                 delete_records_partition, delete_records_request, delete_records_topic,
                 list_offset_partition, single_partition_list_offsets,
             },
-            produce::{SinglePartitionProduceSetup, batch_request, send_batch},
+            produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
             records::batch_from_records,
         },
     },
@@ -108,12 +108,17 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
     let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         let batch = stamped_batch(value.clone());
-        let response = send_batch(&client, batch, SinglePartitionProduceSetup {
-            topic: (TOPIC).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
-        })
-        .await;
+        let response = client
+            .send_produce_request(
+                single_partition_produce()
+                    .records(batch)
+                    .topic(TOPIC)
+                    .topic_id(topic_id)
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .timeout(30_000)
+                    .call(),
+            )
+            .await;
         let partition = &response.responses[0].partition_responses[0];
         match partition.error_code {
             0 => return,
@@ -251,11 +256,14 @@ pub async fn produce_until_stopped(client: Client, topic_id: WireUuid, stop: Can
     while !stop.is_cancelled() {
         let batch = stamped_batch(Bytes::from(format!("diskless-e2e-churn-{index:04}")));
         let _ = client
-            .send(batch_request(batch, SinglePartitionProduceSetup {
-                topic: (TOPIC).into(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            }))
+            .send(
+                single_partition_produce()
+                    .records(batch)
+                    .topic(TOPIC)
+                    .topic_id(topic_id)
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
             .await;
         index += 1;
         time::sleep(Duration::from_millis(5)).await;

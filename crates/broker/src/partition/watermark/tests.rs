@@ -1,12 +1,9 @@
 //! Unit tests for the partition's high-watermark and ISR bookkeeping.
 
 use {
-    crate::{
-        partition::{
-            HwTimeout, Partition,
-            test_support::{append_records, install_three_replica_isr, test_partition},
-        },
-        test_support::{PartitionRecordsSetup, RecordCount},
+    crate::partition::{
+        HwTimeout, Partition,
+        test_support::{append_records, install_three_replica_isr, test_partition},
     },
     assert2::{assert, check},
     krabka_log::Offset,
@@ -53,10 +50,7 @@ async fn install_isr_advances_and_notifies_only_synced_storage() {
         let hw_advance_notify = Arc::new(Notify::new());
         let (mut partition, _dir) = test_partition(Arc::clone(&hw_advance_notify));
         partition.diskless = diskless;
-        append_records(&partition, PartitionRecordsSetup {
-            count: RecordCount(3),
-            ..Default::default()
-        });
+        append_records(&partition).count(3).call();
         assert!(partition.high_watermark().await == 0);
 
         let waiter = hw_advance_notify.notified();
@@ -82,10 +76,7 @@ async fn install_isr_advances_and_notifies_only_synced_storage() {
 async fn install_isr_same_high_watermark_does_not_notify() {
     let hw_advance_notify = Arc::new(Notify::new());
     let (p, _td) = test_partition(Arc::clone(&hw_advance_notify));
-    append_records(&p, PartitionRecordsSetup {
-        count: RecordCount(2),
-        ..Default::default()
-    });
+    append_records(&p).count(2).call();
     install_local_isr(&p).await;
     assert!(p.high_watermark().await == 2);
 
@@ -129,10 +120,7 @@ async fn set_follower_hw_clamps_advances_and_notifies() {
     let (p, _dir) = test_partition(Arc::clone(&hw_advance_notify));
 
     // Append a 3-record batch so log_end_offset() == 3.
-    append_records(&p, PartitionRecordsSetup {
-        count: RecordCount(3),
-        ..Default::default()
-    });
+    append_records(&p).count(3).call();
     assert!(p.log_end_offset().unwrap() == 3);
 
     // reported_hw below log_end: stored verbatim, notify fires.

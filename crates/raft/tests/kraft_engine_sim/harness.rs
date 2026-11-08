@@ -64,38 +64,16 @@ pub fn topic_record(name: &str, id: u128) -> krabka_metadata::MetadataRecord {
 
 /// Builds a single engine over a fresh tempdir log, and does not register it.
 /// Start and register every node while retaining its backing directory.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SimClusterSetup<'a> {
-    #[default(&[NodeId(1), NodeId(2), NodeId(3)])]
-    pub ids: &'a [NodeId],
-    pub cluster_id: uuid::Uuid,
-    #[default(&STAGGERED_TIMEOUTS)]
-    pub timeouts: &'a [Time],
-    /// One fetch timeout for every node, or each node's election timeout when
-    /// `None`.
-    pub fetch_timeout: Option<Time>,
-}
-
 #[bon::builder]
 pub fn start_engines(
     net: &SimNet,
     #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] ids: &'_ [NodeId],
     #[builder(default)] cluster_id: uuid::Uuid,
     #[builder(default = & STAGGERED_TIMEOUTS)] timeouts: &'_ [Time],
+    /// One fetch timeout for every node, or each node's election timeout when
+    /// `None`.
     fetch_timeout: Option<Time>,
 ) -> Vec<tempfile::TempDir> {
-    let setup = SimClusterSetup {
-        ids,
-        cluster_id,
-        timeouts,
-        fetch_timeout,
-    };
-    let SimClusterSetup {
-        ids,
-        cluster_id,
-        timeouts,
-        fetch_timeout,
-    } = setup;
     let mut dirs = Vec::new();
     for (i, &id) in ids.iter().enumerate() {
         let (ctrl, dir) = build_engine()
@@ -149,18 +127,6 @@ pub fn metadata_log() -> krabka_raft::MetadataLogConfig {
 #[krabka_macros::test_scalar]
 pub struct SnapshotRecordCount(pub u64);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SimEngineSetup<'a> {
-    #[default(NodeId(1))]
-    pub me: NodeId,
-    #[default(&[NodeId(1), NodeId(2), NodeId(3)])]
-    pub ids: &'a [NodeId],
-    pub cluster_id: uuid::Uuid,
-    #[default(uniform(STAGGERED_TIMEOUTS[0]))]
-    pub timeouts: QuorumTimeouts,
-    pub snapshot_interval_records: SnapshotRecordCount,
-}
-
 #[bon::builder]
 pub fn build_engine(
     net: &SimNet,
@@ -170,20 +136,6 @@ pub fn build_engine(
     #[builder(default = uniform(STAGGERED_TIMEOUTS[0]))] timeouts: QuorumTimeouts,
     #[builder(into, default)] snapshot_interval_records: SnapshotRecordCount,
 ) -> (KraftController, tempfile::TempDir) {
-    let setup = SimEngineSetup {
-        me,
-        ids,
-        cluster_id,
-        timeouts,
-        snapshot_interval_records,
-    };
-    let SimEngineSetup {
-        me,
-        ids,
-        cluster_id,
-        timeouts,
-        snapshot_interval_records,
-    } = setup;
     let dir = tempfile::tempdir().expect("tempdir");
     let log =
         KraftLog::open(dir.path(), &krabka_raft::MetadataLogConfig::default()).expect("open log");

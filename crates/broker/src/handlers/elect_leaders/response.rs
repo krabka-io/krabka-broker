@@ -16,17 +16,6 @@ use {
     },
 };
 
-/// Kafka's default `Errors.ELECTION_NOT_NEEDED` message, which
-/// `new ApiError(Errors.ELECTION_NOT_NEEDED)` puts on the row.
-const ELECTION_NOT_NEEDED_MESSAGE: &str = "Leader election not needed for topic partition.";
-
-/// Kafka's default `Errors.PREFERRED_LEADER_NOT_AVAILABLE` message.
-const PREFERRED_LEADER_NOT_AVAILABLE_MESSAGE: &str = "The preferred leader was not available.";
-
-/// Kafka's default `Errors.ELIGIBLE_LEADERS_NOT_AVAILABLE` message.
-const ELIGIBLE_LEADERS_NOT_AVAILABLE_MESSAGE: &str =
-    "Eligible topic partition leaders are not available.";
-
 /// The code and message of the row for one partition whose election failed.
 ///
 /// The messages follow `ReplicationControlManager.electLeader`: a missing
@@ -49,17 +38,17 @@ pub(super) fn elect_error_to_wire(
         }
         ElectError::PreferredAlreadyLeader | ElectError::ElectionNotNeeded => (
             codes::ELECTION_NOT_NEEDED,
-            ELECTION_NOT_NEEDED_MESSAGE.to_owned(),
+            codes::default_message(codes::ELECTION_NOT_NEEDED).to_owned(),
         ),
         ElectError::PreferredNotInIsr
         | ElectError::PreferredNotAlive
         | ElectError::PreferredIsWitness => (
             codes::PREFERRED_LEADER_NOT_AVAILABLE,
-            PREFERRED_LEADER_NOT_AVAILABLE_MESSAGE.to_owned(),
+            codes::default_message(codes::PREFERRED_LEADER_NOT_AVAILABLE).to_owned(),
         ),
         ElectError::NoEligibleReplica => (
             codes::ELIGIBLE_LEADERS_NOT_AVAILABLE,
-            ELIGIBLE_LEADERS_NOT_AVAILABLE_MESSAGE.to_owned(),
+            codes::default_message(codes::ELIGIBLE_LEADERS_NOT_AVAILABLE).to_owned(),
         ),
         ElectError::EpochExhausted => (
             codes::INVALID_REQUEST,

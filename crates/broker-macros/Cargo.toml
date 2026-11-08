@@ -1,0 +1,43 @@
+[package]
+name = "krabka-broker-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Proc macros whose expansions name krabka-broker's own modules, so they compile only inside the broker"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+moxy = { workspace = true }
+[dev-dependencies]
+# Tests derive `FieldDefaults` on their fixture rows.
+krabka-macros = { path = "../macros" }
+rstest = { workspace = true }
+rstest-bdd = { workspace = true }
+rstest-bdd-macros = { workspace = true }
+rust-embed = { workspace = true }
+assert2 = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+derive_more = { workspace = true }
+futures-util = { workspace = true }
+krabka-units = { workspace = true }
+krabka-protocol = { version = "0.8.0", default-features = false }
+prometheus-client = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+stateright = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+yare = { workspace = true }

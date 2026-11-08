@@ -218,7 +218,7 @@ mod tests {
         assert2::assert!(refusal_response(code) == expected);
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["controller"];
     }
 
@@ -241,7 +241,7 @@ mod tests {
     async fn a_controller_that_is_not_a_voter_registers() {
         use std::{net::SocketAddr, sync::Arc};
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with_authorizer(Arc::new(
                         fixture_authorizers::AllowAllAuthorizer,
@@ -272,7 +272,7 @@ mod tests {
 
         assert2::check!(
             answer
-                == krabka_macros::unthrottled_wire!(ControllerRegistrationResponse {
+                == krabka_broker_macros::unthrottled_wire!(ControllerRegistrationResponse {
                     error_code: 0,
                     error_message: Some(String::new()),
                 })

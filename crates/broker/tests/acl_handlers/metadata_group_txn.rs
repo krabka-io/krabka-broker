@@ -58,6 +58,7 @@ async fn alice_metadata_fixture() -> AliceMetadataFixture {
     AliceMetadataFixture { handle, dir }
 }
 
+#[derive(Default)]
 struct ResourceAuthorization {
     broker: Option<krabka_broker::BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -67,14 +68,8 @@ struct ResourceAuthorization {
 }
 #[rstest::fixture]
 fn authorization() -> ResourceAuthorization {
-    // Start this scenario with fresh inputs and observations.
-
     ResourceAuthorization {
-        broker: None,
-        directory: None,
-        metadata: None,
-        joined: None,
-        initialized: None,
+        ..ResourceAuthorization::default()
     }
 }
 #[rstest_bdd_macros::given("topics t1 and t2 exist but alice may Describe only t1")]
@@ -153,10 +148,9 @@ async fn alice_group_join_denied(authorization: &mut ResourceAuthorization) {
     let denied = drive_join_group_as_plain(
         addr,
         join_group_request("cg-1"),
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            ..Default::default()
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
     )
     .await
     .expect("JoinGroup must round-trip");
@@ -228,10 +222,13 @@ async fn alice_group_join_authorized(authorization: &mut ResourceAuthorization) 
         .expect("member id assigned")
         .member_id
         .clone();
-    let joined = drive_join_group_as_plain(addr, req2, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let joined = drive_join_group_as_plain(
+        addr,
+        req2,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("second JoinGroup must round-trip");
     authorization.joined = Some(joined);
@@ -254,10 +251,13 @@ async fn alice_transactional_producer(authorization: &mut ResourceAuthorization)
     let req = init_producer_request()
         .maybe_transactional_id(Some("tx-1".to_owned()))
         .call();
-    let resp = drive_init_producer_id_as_plain(addr, req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let resp = drive_init_producer_id_as_plain(
+        addr,
+        req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("InitProducerId must round-trip");
     authorization.initialized = Some(resp);

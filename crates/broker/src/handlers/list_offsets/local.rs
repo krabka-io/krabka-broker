@@ -7,10 +7,26 @@
 //! rest of the handler reads.
 
 use {
-    crate::partition::Partition,
-    krabka_log::DeliveryPolicy,
-    std::sync::{PoisonError, atomic},
+    crate::{codes, partition::Partition},
+    krabka_log::{DeliveryPolicy, Log},
+    std::sync::MutexGuard,
 };
+
+/// The partition's log, locked, or `KAFKA_STORAGE_ERROR` when its mutex is
+/// poisoned. `ListOffsets` answers a log it cannot read with that code, as it
+/// does when [`fetchable_offsets`](super::bound::fetchable_offsets) fails, and
+/// does not read what a panicked task left half-written.
+///
+/// # Errors
+///
+/// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned.
+pub(super) fn lock_log(partition: &Partition) -> Result<MutexGuard<'_, Log>, i16> {
+    partition.lock_log().map_err(|error| {
+        tracing::warn!(topic = %partition.topic, partition = partition.index.0, %error,
+            "list_offsets: partition log unreadable");
+        codes::KAFKA_STORAGE_ERROR
+    })
+}
 
 /// The offset the `LATEST` sentinel reports for one partition, before the
 /// fetchable bound is applied to it.
@@ -59,11 +75,19 @@ pub(super) fn scheduled_latest_offset(
         .map(|delivery| delivery.watermark.0)
 }
 
-pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> i32 {
-    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-    log.epoch_checkpoint()
+/// The leader epoch the epoch checkpoint records for `offset`, or -1 when it
+/// records none.
+///
+/// # Errors
+///
+/// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned; see
+/// [`lock_log`].
+pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> Result<i32, i16> {
+    let log = lock_log(partition)?;
+    Ok(log
+        .epoch_checkpoint()
         .epoch_for_offset(krabka_log::Offset(offset))
-        .map_or(-1, |epoch| epoch.0)
+        .map_or(-1, |epoch| epoch.0))
 }
 
 /// The start offset of the partition's live leader epoch, from the epoch
@@ -74,16 +98,20 @@ pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> i32
 /// KIP-207 reads this to decide whether the high watermark has caught up to
 /// the epoch it is supposed to bound: see
 /// [`resolve_partition`](super::resolve::resolve_partition).
-pub(super) fn epoch_start_offset(partition: &Partition) -> Option<i64> {
-    let current = partition
-        .current_leader_epoch
-        .load(atomic::Ordering::Acquire);
-    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-    log.epoch_checkpoint()
+///
+/// # Errors
+///
+/// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned; see
+/// [`lock_log`].
+pub(super) fn epoch_start_offset(partition: &Partition) -> Result<Option<i64>, i16> {
+    let current = partition.leader_epoch();
+    let log = lock_log(partition)?;
+    Ok(log
+        .epoch_checkpoint()
         .entries()
         .iter()
         .find(|entry| entry.epoch.0 == current)
-        .map(|entry| entry.start_offset.0)
+        .map(|entry| entry.start_offset.0))
 }
 
 #[cfg(test)]
@@ -108,6 +136,7 @@ mod tests {
                 },
                 test_support::replicated_partition,
             },
+            partition::test_support::{poison_log, test_partition},
             test_support::{UnixMillis, start_broker_with_authorizer_no_audit as start_broker},
             testing::list_offsets_request,
         },
@@ -117,7 +146,20 @@ mod tests {
         },
         krabka_units::convert::ByteSizeExt as _,
         std::{collections::BTreeMap, sync::Arc, time::Duration},
+        tokio::sync::Notify,
     };
+
+    /// The epoch lookups on a partition whose log mutex a panicked task
+    /// poisoned answer `KAFKA_STORAGE_ERROR`, the code `ListOffsets` gives a log
+    /// it cannot read, rather than the epochs that task left half-written.
+    #[tokio::test]
+    async fn the_epoch_lookups_of_a_poisoned_log_answer_the_storage_error() {
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+        poison_log(&partition);
+
+        check!(leader_epoch_for_offset(&partition, 0) == Err(codes::KAFKA_STORAGE_ERROR));
+        check!(epoch_start_offset(&partition) == Err(codes::KAFKA_STORAGE_ERROR));
+    }
 
     // Activation time of a batch that has long since come due.
     const DELIVERED_MS: i64 = 1_700_000_000_000;
@@ -300,7 +342,7 @@ mod tests {
         const IMMEDIATE: &str = "list-offsets-delivery-immediate";
         const SCHEDULED: &str = "list-offsets-delivery-scheduled";
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -321,7 +363,7 @@ mod tests {
             DeliveryPolicy::Scheduled,
         )
         .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -417,7 +459,7 @@ mod tests {
         };
 
         const TOPIC: &str = "scheduled-latest-retention";
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -477,7 +519,7 @@ mod tests {
             ) == 1
         );
         assert!(partition.log.lock().unwrap().local_log_start_offset() == Offset(2));
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -577,7 +619,7 @@ mod tests {
                 &partition,
             ));
             assert!(partition.high_watermark().await == Offset(6));
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user ["admin"];
             };
@@ -641,7 +683,7 @@ mod tests {
         // matching what `ListOffsets` now also requires of the image.
         const OTHER_BROKER: u64 = 7;
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -670,7 +712,7 @@ mod tests {
         partition
             .install_leader_change(broker.config.node_id.get(), 0)
             .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

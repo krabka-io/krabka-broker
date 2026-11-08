@@ -8,7 +8,7 @@
 
 use {
     crate::{
-        blocking::{run_page_cache_io, spawn_blocking},
+        blocking::{OnPoison, run_page_cache_io, spawn_blocking},
         error::BrokerError,
         log_dir_status::LogDirRegistry,
         replica_state::ReplicaState,
@@ -168,7 +168,7 @@ pub(super) async fn run_log_append<T: Send + 'static>(
     panic_context: &'static str,
     storage: StorageStatus<'_>,
 ) -> Result<T, BrokerError> {
-    let result = match run_page_cache_io(log, stays_in_cache, operation).await {
+    let result = match run_page_cache_io(log, OnPoison::Recover, stays_in_cache, operation).await {
         Ok(value) => value,
         Err(panic) => Err(storage_failure_error(panic_context, panic)),
     };

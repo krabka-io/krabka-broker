@@ -20,10 +20,7 @@
 //! a duplicate or late sweep on a moved partition is safe.
 
 use {
-    crate::{
-        metadata_source::MetadataSource,
-        txn::{coordinator::TxnCoordinator, util::now_millis},
-    },
+    crate::{metadata_source::MetadataSource, time_util, txn::coordinator::TxnCoordinator},
     krabka_units::{Time, convert::TimeExt as _},
     std::sync::Arc,
     tokio_util::sync::CancellationToken,
@@ -40,7 +37,9 @@ use {
 /// `expiration` is
 /// [`crate::config::BrokerConfig::txn_id_expiration`], Kafka's
 /// `transactional.id.expiration.ms`.
-#[krabka_macros::reaper_task(shutdown_message = "transactional-id expiry sweep shutting down")]
+#[krabka_broker_macros::reaper_task(
+    shutdown_message = "transactional-id expiry sweep shutting down"
+)]
 pub async fn run(
     coord: Arc<TxnCoordinator>,
     controller: Arc<dyn MetadataSource>,
@@ -67,7 +66,7 @@ pub(in crate::txn) async fn sweep_once(
         .await
         .finished()
         .await;
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let expired = coord
         .expire_transactional_ids(now_ms, expiration.millis_i64())
         .await;

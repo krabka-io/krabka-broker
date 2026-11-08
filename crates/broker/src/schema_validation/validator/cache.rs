@@ -16,7 +16,8 @@ use {
         registry::RegistryReads,
         reject::RejectReason,
     },
-    crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util},
+    crate::{metrics::BrokerMetrics, schema_validation::ValidationMode},
+    krabka_log::epoch_ms,
     krabka_schema_serde::{error::SchemaSerdeError, subject::SchemaKind},
     krabka_units::convert::TimeExt as _,
     qubit_clock::WallClock as _,
@@ -145,7 +146,7 @@ impl SchemaValidator {
         mode: ValidationMode,
         metrics: &BrokerMetrics,
     ) -> Result<Arc<SchemaEntry>, RejectReason> {
-        let now = time_util::epoch_millis(self.clock.now());
+        let now = epoch_ms(self.clock.now());
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
         // thousands, and it is what the OPA cache does.

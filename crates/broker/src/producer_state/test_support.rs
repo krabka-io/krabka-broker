@@ -14,21 +14,6 @@ impl Default for SequenceDelta {
     fn default() -> Self { Self(4) }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ProducerCommitSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    #[default(krabka_log::ProducerId(1000))]
-    pub producer: krabka_log::ProducerId,
-    pub epoch: ProducerEpoch,
-    pub sequence: ProducerSequence,
-    pub delta: SequenceDelta,
-    pub offset: krabka_log::Offset,
-    #[default(UnixMillis(1))]
-    pub timestamp: UnixMillis,
-}
-
 #[bon::builder]
 pub(super) async fn commit_fixture(
     state: &ProducerState,
@@ -41,23 +26,13 @@ pub(super) async fn commit_fixture(
     #[builder(into, default)] offset: krabka_log::Offset,
     #[builder(into, default = UnixMillis (1))] timestamp: UnixMillis,
 ) {
-    let setup = ProducerCommitSetup {
-        topic,
-        partition,
-        producer,
-        epoch,
-        sequence,
-        delta,
-        offset,
-        timestamp,
-    };
     state
         .commit(
-            setup.topic,
-            setup.partition,
-            (setup.producer.0, setup.epoch.0),
-            (setup.sequence.0, setup.delta.0),
-            (setup.offset.0, setup.timestamp.0, false),
+            topic,
+            partition,
+            (producer.0, epoch.0),
+            (sequence.0, delta.0),
+            (offset.0, timestamp.0, false),
         )
         .await;
 }
@@ -67,19 +42,6 @@ pub(super) enum RecordOffsets {
     #[default]
     Contiguous,
     FinalOffsetOnly,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ProducerBatchSetup {
-    #[default(krabka_log::ProducerId(42))]
-    pub producer: krabka_log::ProducerId,
-    #[default(ProducerEpoch(7))]
-    pub epoch: ProducerEpoch,
-    pub sequence: ProducerSequence,
-    #[default(SequenceDelta(0))]
-    pub delta: SequenceDelta,
-    pub timestamp: UnixMillis,
-    pub offsets: RecordOffsets,
 }
 
 #[bon::builder]
@@ -93,29 +55,21 @@ pub(super) fn producer_batch(
 ) -> RecordBatch {
     use krabka_protocol::records::{Record, RecordBatch};
 
-    let setup = ProducerBatchSetup {
-        producer,
-        epoch,
-        sequence,
-        delta,
-        timestamp,
-        offsets,
-    };
     let at_offset = |offset_delta| Record {
         offset_delta,
         ..Default::default()
     };
-    let records = match setup.offsets {
-        RecordOffsets::Contiguous => (0..=setup.delta.0).map(at_offset).collect(),
-        RecordOffsets::FinalOffsetOnly => vec![at_offset(setup.delta.0)],
+    let records = match offsets {
+        RecordOffsets::Contiguous => (0..=delta.0).map(at_offset).collect(),
+        RecordOffsets::FinalOffsetOnly => vec![at_offset(delta.0)],
     };
     RecordBatch {
-        producer_id: setup.producer.0,
-        producer_epoch: setup.epoch.0,
-        base_sequence: setup.sequence.0,
-        last_offset_delta: setup.delta.0,
-        base_timestamp: setup.timestamp.0,
-        max_timestamp: setup.timestamp.0,
+        producer_id: producer.0,
+        producer_epoch: epoch.0,
+        base_sequence: sequence.0,
+        last_offset_delta: delta.0,
+        base_timestamp: timestamp.0,
+        max_timestamp: timestamp.0,
         records,
         ..Default::default()
     }

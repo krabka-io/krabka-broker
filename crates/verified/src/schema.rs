@@ -162,6 +162,7 @@ mod tests {
         check!(schema_frame_id(magic, id_0, id_1, id_2, id_3) == expected);
     }
 
+    #[derive(Default)]
     struct SchemaFieldScenario {
         key_enabled: bool,
         value_enabled: bool,
@@ -170,12 +171,8 @@ mod tests {
 
     #[rstest::fixture]
     fn field() -> SchemaFieldScenario {
-        // Start this scenario with fresh inputs and observations.
-
         SchemaFieldScenario {
-            key_enabled: false,
-            value_enabled: false,
-            action: None,
+            ..SchemaFieldScenario::default()
         }
     }
 

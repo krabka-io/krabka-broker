@@ -19,10 +19,7 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
-    std::{
-        collections::HashSet,
-        sync::{Arc, atomic},
-    },
+    std::{collections::HashSet, sync::Arc},
     tracing::warn,
 };
 
@@ -52,9 +49,8 @@ impl ReplicatorSupervisor {
             let topic_id = image.topic(&key.0).map(|topic| topic.topic_id);
             let promoting_diskless = part.diskless
                 && part_record.leader == self.node_id
-                && (part.current_leader.load(atomic::Ordering::Acquire) != self.node_id.0
-                    || part.current_leader_epoch.load(atomic::Ordering::Acquire)
-                        != part_record.leader_epoch.0);
+                && (part.leader() != self.node_id.0
+                    || part.leader_epoch() != part_record.leader_epoch.0);
             if promoting_diskless {
                 let Some(topic_id) = topic_id else {
                     warn!(
@@ -143,7 +139,7 @@ impl ReplicatorSupervisor {
             } else {
                 let losing_leadership = part.diskless
                     && part_record.leader != self.node_id
-                    && part.current_leader.load(atomic::Ordering::Acquire) == self.node_id.0;
+                    && part.leader() == self.node_id.0;
                 part.install_replication_target(
                     topic_id,
                     part_record.leader.0,
@@ -247,7 +243,7 @@ mod tests {
         krabka_metadata::MetadataRecord,
         krabka_protocol::records::{Record, RecordBatch},
         krabka_raft::NodeId,
-        std::{path::PathBuf, sync::atomic::Ordering},
+        std::path::PathBuf,
         uuid::Uuid,
     };
 
@@ -256,14 +252,8 @@ mod tests {
         let img = three_replica_image(NodeId(2), krabka_metadata::LeaderEpoch(7));
         let ((_supervisor, _partitions, _reporter, _dir), part) =
             reconciled_partition(&img, "local leader materialized").await;
-        assert!(
-            part.current_leader.load(Ordering::Acquire) == 2,
-            "leader cache updated"
-        );
-        assert!(
-            part.current_leader_epoch.load(Ordering::Acquire) == 7,
-            "leader epoch cache updated"
-        );
+        assert!(part.leader() == 2, "leader cache updated");
+        assert!(part.leader_epoch() == 7, "leader epoch cache updated");
         let state = part.replica_state.lock().await.clone();
         assert!(state.isr == [NodeId(1), NodeId(2), NodeId(3)].into_iter().collect());
     }
@@ -302,11 +292,8 @@ mod tests {
             for pass in ["promotion", "unchanged reconcile"] {
                 supervisor.reconcile(&as_leader).await;
                 assert!(history() == [(3, 0), (7, 2)], "{pass}");
-                assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
-                assert!(
-                    part.current_leader_epoch.load(Ordering::Acquire) == 7,
-                    "{pass}"
-                );
+                assert!(part.leader() == 2, "{pass}");
+                assert!(part.leader_epoch() == 7, "{pass}");
             }
             let mut record = as_leader.partition("t", 0).unwrap().clone();
             record.leader_epoch.0 = 8;
@@ -318,7 +305,7 @@ mod tests {
     }
 
     // A disk that refuses every write to the leader-epoch checkpoint.
-    krabka_macros::epoch_checkpoint_failure!(EpochCheckpointFull, PermissionDenied);
+    krabka_broker_macros::epoch_checkpoint_failure!(EpochCheckpointFull, PermissionDenied);
 
     /// Kafka's `LeaderEpochFileCache` reports a checkpoint write that fails to
     /// `LogDirFailureChannel`, so a promotion that cannot record its epoch
@@ -342,10 +329,7 @@ mod tests {
             .into_iter()
             .map(|(log_dir, _reason)| log_dir)
             .collect();
-        assert!(
-            (offline, part.current_leader.load(Ordering::Acquire))
-                == (vec![dir.path().to_path_buf()], 1)
-        );
+        assert!((offline, part.leader().get()) == (vec![dir.path().to_path_buf()], 1));
     }
 
     #[tokio::test]
@@ -467,8 +451,8 @@ mod tests {
             leader_epoch: krabka_metadata::LeaderEpoch(7),
         };
         assert!(*partition.replication_target.read().await == expected);
-        assert!(partition.current_leader.load(Ordering::Acquire) == 2);
-        assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 7);
+        assert!(partition.leader() == 2);
+        assert!(partition.leader_epoch() == 7);
         assert!(
             partition.replica_state.lock().await.current_leader_epoch == krabka_ids::LeaderEpoch(7)
         );
@@ -508,7 +492,7 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(0),
                 }
         );
-        assert!(partition.current_leader.load(Ordering::Acquire) == 0);
-        assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 0);
+        assert!(partition.leader() == 0);
+        assert!(partition.leader_epoch() == 0);
     }
 }

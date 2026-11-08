@@ -14,7 +14,7 @@ use {
             self, ClusterNodeSetup, NodeIndex, broker_config,
             client::connect_client,
             controller_voters, init_tracing_with, listeners,
-            produce::{batch_request, replicated_topic_produce_for},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{batch_from_records, value_record},
             shutdown_cluster,
         },
@@ -65,32 +65,21 @@ async fn reserve_listeners(n: usize) -> ReservedListeners {
 const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] =
     [SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)];
 
-#[derive(krabka_macros::FieldDefaults)]
-struct SaslNodeSetup<'a> {
-    cluster: ClusterNodeSetup<'a>,
-    #[default(&DEFAULT_SASL_ENDPOINTS)]
-    sasl_addrs: &'a [SocketAddr],
-}
-
 #[bon::builder]
 fn sasl_two_listener_config(
     log_dir: &Path,
     #[builder(default)] cluster: ClusterNodeSetup<'_>,
     #[builder(default = & DEFAULT_SASL_ENDPOINTS)] sasl_addrs: &'_ [SocketAddr],
 ) -> BrokerConfig {
-    let setup = SaslNodeSetup {
-        cluster,
-        sasl_addrs,
-    };
-    let listen = setup.cluster.client_addrs[setup.cluster.index.0];
-    let sasl = setup.sasl_addrs[setup.cluster.index.0];
+    let listen = cluster.client_addrs[cluster.index.0];
+    let sasl = sasl_addrs[cluster.index.0];
     let mut cfg = broker_config()
         .log_dir(log_dir)
-        .index(setup.cluster.index.0)
-        .client_addrs(setup.cluster.client_addrs)
-        .controller_addrs(setup.cluster.controller_addrs)
-        .voters(setup.cluster.voters)
-        .mode(setup.cluster.mode)
+        .index(cluster.index.0)
+        .client_addrs(cluster.client_addrs)
+        .controller_addrs(cluster.controller_addrs)
+        .voters(cluster.voters)
+        .mode(cluster.mode)
         .call();
     cfg.listeners = vec![
         listeners::listener("PLAINTEXT", listen, ListenerProtocol::Plaintext),
@@ -194,6 +183,7 @@ async fn two_broker_sasl_plaintext_replication(replication: SaslReplication) {
     shutdown_cluster(replication.cluster).await;
 }
 
+#[derive(Default)]
 struct SaslReplication {
     cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
     topic_id: Option<Uuid>,
@@ -202,12 +192,8 @@ struct SaslReplication {
 
 #[fixture]
 fn replication() -> SaslReplication {
-    // Start this scenario with fresh inputs and observations.
-
     SaslReplication {
-        cluster: Vec::new(),
-        topic_id: None,
-        produced: None,
+        ..SaslReplication::default()
     }
 }
 
@@ -251,13 +237,14 @@ async fn produce_replicated_sasl_records(replication: &mut SaslReplication) {
     };
     replication.produced = Some(
         producer
-            .send(batch_request(
-                batch,
-                replicated_topic_produce_for(
-                    "sasl-repl",
-                    replication.topic_id.expect("the replicated topic id").0,
-                ),
-            ))
+            .send(
+                single_partition_produce()
+                    .records(batch)
+                    .topic("sasl-repl")
+                    .topic_id(replication.topic_id.expect("the replicated topic id"))
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
             .await
             .unwrap(),
     );

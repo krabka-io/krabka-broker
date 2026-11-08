@@ -62,12 +62,6 @@ pub async fn create_configured_topic(
     );
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AssignedTieredTopicSetup<'a> {
-    pub topic: AssignedTopicSetup,
-    pub segment_bytes: Option<&'a str>,
-}
-
 /// Pin one tiered partition to the caller's ordered replica list.
 #[bon::builder]
 pub async fn create_assigned_topic(
@@ -75,18 +69,14 @@ pub async fn create_assigned_topic(
     #[builder(default)] topic: AssignedTopicSetup,
     segment_bytes: Option<&'_ str>,
 ) {
-    let setup = AssignedTieredTopicSetup {
-        topic,
-        segment_bytes,
-    };
     let response = client
         .send(
             create_topic_request_with_setup()
                 .topic(CreatableTopic {
-                    configs: tiered_configs(setup.segment_bytes),
+                    configs: tiered_configs(segment_bytes),
                     ..assigned_topic()
-                        .name(setup.topic.name)
-                        .replicas(setup.topic.replicas)
+                        .name(topic.name)
+                        .replicas(topic.replicas)
                         .call()
                 })
                 .timeout(10_000)
@@ -132,15 +122,6 @@ pub struct TieredRecordCount(pub usize);
 #[derive(Clone, Copy, derive_more::Display)]
 pub struct TieredRecordIndex(pub usize);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct TieredRecordsSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    pub topic_id: Uuid,
-    #[default(TieredRecordCount(1))]
-    pub count: TieredRecordCount,
-}
-
 /// Produce one acknowledged single-record request for every caller-generated value.
 ///
 /// A produce can reach the leader of a new partition before its partition
@@ -157,12 +138,7 @@ pub async fn produce_records(
     #[builder(default)] topic_id: Uuid,
     #[builder(into, default = TieredRecordCount (1))] count: TieredRecordCount,
 ) {
-    let setup = TieredRecordsSetup {
-        topic,
-        topic_id,
-        count,
-    };
-    for index in 0..setup.count.0 {
+    for index in 0..count.0 {
         let batch = batch_from_records(vec![Record {
             value: Some(value(TieredRecordIndex(index))),
             ..Default::default()
@@ -172,8 +148,8 @@ pub async fn produce_records(
                 produce_batch()
                     .client(client)
                     .batch(batch.clone())
-                    .topic(setup.topic)
-                    .topic_id(setup.topic_id)
+                    .topic(topic)
+                    .topic_id(topic_id)
                     .timeout(ProduceTimeoutMillis(10_000))
                     .call()
             })

@@ -204,6 +204,7 @@ fn jvm_log_end_offset(partition: i32) -> i64 {
     jvm_parse_offset(line)
 }
 
+#[derive(Default)]
 struct BarrierReads {
     broker: Option<(BrokerHandle, TempDir)>,
     producer: Option<Producer>,
@@ -214,15 +215,8 @@ struct BarrierReads {
 }
 #[rstest::fixture]
 fn barriers() -> BarrierReads {
-    // Start this scenario with fresh inputs and observations.
-
     BarrierReads {
-        broker: None,
-        producer: None,
-        client: None,
-        cuts: Vec::new(),
-        ends: BTreeMap::new(),
-        reads: BTreeMap::new(),
+        ..BarrierReads::default()
     }
 }
 #[rstest_bdd_macros::given(

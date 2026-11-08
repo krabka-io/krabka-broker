@@ -89,6 +89,12 @@ pub(super) enum CopyOutcome {
     /// The attempt did not reach `CopySegmentFinished`. The caller keeps its
     /// chain position and the next tick retries the segment.
     Failed,
+    /// The attempt did not reach `CopySegmentFinished` because the tier did
+    /// not take the upload: it ran past its deadline, could not serve it, or
+    /// refused it. The next segment would meet the same tier, so the pass
+    /// stops, as Kafka's `RLMCopyTask` stops at a failed copy, and the next
+    /// tick retries from this segment.
+    TierFailed,
     /// The copy uploaded, but the segment was deleted under it: a
     /// `DeleteRecords` marked it for deletion before `CopySegmentFinished`
     /// went in, or it finished wholly below the partition's established log
@@ -145,7 +151,7 @@ pub(super) async fn copy_one(
             tier.metrics
                 .record_remote_bytes(RemoteTierPath::Copy, &tp.topic, ex.size.bytes_u64());
         }
-        CopyOutcome::Failed => {
+        CopyOutcome::Failed | CopyOutcome::TierFailed => {
             tier.metrics
                 .record_remote_error(RemoteTierPath::Copy, &tp.topic);
         }
@@ -225,9 +231,10 @@ async fn copy_one_inner(
         leader_epoch_index_bytes(&epochs)
     });
 
-    let Some(returned) = upload_with_deadline(tier, ex, chain, &metadata, broker_id, data).await
-    else {
-        return CopyOutcome::Failed;
+    let returned = match upload_with_deadline(tier, ex, chain, &metadata, broker_id, data).await {
+        Ok(returned) => returned,
+        Err(UploadFailure::Segment) => return CopyOutcome::Failed,
+        Err(UploadFailure::Tier) => return CopyOutcome::TierFailed,
     };
 
     // The upload may have outlived this broker's leadership. On a mutable
@@ -343,10 +350,24 @@ fn finish_chain_receipt(
     Some(next)
 }
 
+/// Why an upload did not succeed, and so whether the next segment can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadFailure {
+    /// Something about this segment, such as its local files. The next
+    /// segment may well upload.
+    Segment,
+    /// The tier did not take the upload. It ran past the copy deadline,
+    /// could not serve it ([`RemoteStorageError::Unavailable`]), or refused
+    /// it ([`RemoteStorageError::Backend`]). The next segment meets the same
+    /// tier.
+    Tier,
+}
+
 /// Upload `data` under `metadata` on the blocking pool, bounded by the tier's
 /// copy timeout, and return the custom metadata the backend hands back.
-/// `None`, after a warning, a seal failure for a chained copy and, unless
-/// the deadline expired, a rollback, when the upload did not succeed.
+/// An [`UploadFailure`], after a log line, a seal failure for a chained copy
+/// and, unless the deadline expired, a rollback, when the upload did not
+/// succeed.
 async fn upload_with_deadline(
     tier: &RemoteTier<'_>,
     ex: &SegmentExport,
@@ -354,7 +375,7 @@ async fn upload_with_deadline(
     metadata: &RemoteLogSegmentMetadata,
     broker_id: i32,
     data: LogSegmentData,
-) -> Option<Option<CustomMetadata>> {
+) -> Result<Option<CustomMetadata>, UploadFailure> {
     let tp = &metadata.remote_log_segment_id().topic_id_partition;
     // The RSM is a blocking SPI — run the copy on the blocking pool.
     //
@@ -385,8 +406,8 @@ async fn upload_with_deadline(
 
     // Copy failed (or the blocking task panicked): clean up so the segment
     // is retried next tick.
-    let returned = match copy_result {
-        Ok(Ok(Ok(returned))) => returned,
+    match copy_result {
+        Ok(Ok(Ok(returned))) => Ok(returned),
         // The deadline expired. Nothing is rolled back: the abandoned upload
         // is still writing under this metadata's segment id, and a delete
         // racing it could remove an object the upload then re-creates,
@@ -400,24 +421,43 @@ async fn upload_with_deadline(
                   "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
                    moving on to the next partition");
             chain.record_seal_failure(tier);
-            return None;
+            Err(UploadFailure::Tier)
         }
         Ok(Ok(Err(e))) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: segment copy failed");
+            let failure = match &e {
+                RemoteStorageError::Unavailable(_) => {
+                    warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                          error = %e, "remote-log-manager: the remote tier could not take the \
+                          segment; stopping the copy pass until the next tick");
+                    UploadFailure::Tier
+                }
+                // A refusal does not clear on its own: every later upload
+                // meets it until the tier's credentials or configuration
+                // change, so it is logged where an operator looks first.
+                RemoteStorageError::Backend(_) => {
+                    error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                           error = %e, "remote-log-manager: the remote tier refused the \
+                           segment; stopping the copy pass");
+                    UploadFailure::Tier
+                }
+                _ => {
+                    warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                          error = %e, "remote-log-manager: segment copy failed");
+                    UploadFailure::Segment
+                }
+            };
             chain.record_seal_failure(tier);
             rollback(tier, metadata, broker_id).await;
-            return None;
+            Err(failure)
         }
         Ok(Err(e)) => {
             warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
                   error = %e, "remote-log-manager: segment copy task panicked");
             chain.record_seal_failure(tier);
             rollback(tier, metadata, broker_id).await;
-            return None;
+            Err(UploadFailure::Segment)
         }
-    };
-    Some(returned)
+    }
 }
 
 /// The `CopySegmentStarted` metadata for copying `ex`, stamped for `chain`,
@@ -535,7 +575,9 @@ async fn delete_below_floor(
     debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
            end = copied.end_offset(), floor = floor.0,
            "remote-log-manager: copy finished below the established log start; deleting it");
-    delete_segment_metered(tier.delete_targets(), tp, broker_id, &current).await
+    delete_segment_metered(tier.delete_targets(), tp, broker_id, &current)
+        .await
+        .is_ok()
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.
@@ -666,7 +708,7 @@ mod tests {
     /// use it to exercise the failure rollback path.
     struct AlwaysFailRsm;
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for AlwaysFailRsm {
         fn copy_log_segment_data(
@@ -684,7 +726,7 @@ mod tests {
         refuse_delete: bool,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for FailingCopyRsm {
         fn copy_log_segment_data(
             &self,
@@ -708,7 +750,7 @@ mod tests {
     /// Returns caller-selected metadata without touching storage.
     struct ReturningRsm(Option<CustomMetadata>);
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for ReturningRsm {
         fn copy_log_segment_data(
@@ -728,7 +770,7 @@ mod tests {
         seen: Mutex<Vec<RemoteLogSegmentMetadata>>,
     }
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for CapturingRsm {
         fn copy_log_segment_data(
@@ -764,7 +806,7 @@ mod tests {
         deleted: Mutex<Vec<Uuid>>,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for DeletingRsm {
         fn copy_log_segment_data(
             &self,
@@ -992,7 +1034,7 @@ mod tests {
         deleted: Mutex<Vec<Uuid>>,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for FlakyStoreRsm {
         fn copy_log_segment_data(
             &self,
@@ -1038,7 +1080,7 @@ mod tests {
         let tier = owned.tier(&rsm);
 
         let outcome = copy_fixture_segment(&tier).await;
-        check!(outcome == CopyOutcome::Failed);
+        check!(outcome == CopyOutcome::TierFailed);
         let copied = rsm_impl
             .copied
             .lock()

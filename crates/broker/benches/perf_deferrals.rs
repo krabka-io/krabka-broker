@@ -178,9 +178,9 @@ fn drive<F: Future>(future: F) -> F::Output {
 // The pattern is non-uniform so that nothing downstream can shortcut it, and
 // so a compressed variant of this suite would not measure an unrealistically
 // compressible payload.
-krabka_macros::patterned_bytes_fixture!(body);
+krabka_broker_macros::patterned_bytes_fixture!(body);
 
-krabka_macros::frame_prefix_fixture!(wire_frame_prefix);
+krabka_broker_macros::frame_prefix_fixture!(wire_frame_prefix);
 
 /// The chained-`Buf` prototype's leading segment: the codec's 4-byte frame
 /// length followed by the response header the copy path prepends.

@@ -378,8 +378,6 @@ mod tests {
 
     #[rstest::fixture]
     fn fetch_classification() -> FetchClassification {
-        // Start this scenario with fresh inputs and observations.
-
         FetchClassification {
             cache: FetchSessionCache::new(10),
             session_id: None,

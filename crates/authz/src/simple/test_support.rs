@@ -167,33 +167,14 @@ pub(super) fn cidr_img() -> MetadataImage {
 
 pub(super) use crate::test_support::{AclSetup, acl as topic_acl};
 
-#[derive(Clone, Copy)]
-pub(super) struct QuerySetup<'a> {
-    pub rt: ResourceType,
-    pub name: &'a str,
-    pub op: AclOperation,
-}
-
-impl Default for QuerySetup<'_> {
-    fn default() -> Self {
-        Self {
-            rt: ResourceType::Topic,
-            name: "foo",
-            op: AclOperation::Read,
-        }
-    }
-}
-
 #[bon::builder]
 pub(super) fn req<'a>(
     p: &'a Principal,
     host: &'a SocketAddr,
-    #[builder(default = QuerySetup::default().rt)] rt: ResourceType,
-    #[builder(default = QuerySetup::default().name)] name: &'a str,
-    #[builder(default = QuerySetup::default().op)] op: AclOperation,
+    #[builder(default = ResourceType::Topic)] rt: ResourceType,
+    #[builder(default = "foo")] name: &'a str,
+    #[builder(default = AclOperation::Read)] op: AclOperation,
 ) -> AuthorizationRequest<'a> {
-    let setup = QuerySetup { rt, name, op };
-    let QuerySetup { rt, name, op } = setup;
     AuthorizationRequest {
         principal: p,
         host,

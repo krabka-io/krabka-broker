@@ -69,6 +69,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct LegacyConversion {
     process: Option<support::InProcess>,
     produced: Option<LegacyProduceResponse>,
@@ -76,12 +77,8 @@ struct LegacyConversion {
 }
 #[fixture]
 fn conversion() -> LegacyConversion {
-    // Start this scenario with fresh inputs and observations.
-
     LegacyConversion {
-        process: None,
-        produced: None,
-        fetched: None,
+        ..LegacyConversion::default()
     }
 }
 #[given("a legacy compatible broker hosts a single partition legacy v0 topic")]

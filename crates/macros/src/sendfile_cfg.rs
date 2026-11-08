@@ -11,7 +11,7 @@
 //! separately (Linux `rustix` versus Apple/BSD `nix`).
 
 use {
-    crate::{meta::no_arguments, network_fixtures::sendfile_platform},
+    crate::{meta::no_arguments, sendfile_gate::sendfile_platform},
     moxy::ast::ParseError,
     proc_macro::TokenStream as NativeTokenStream,
 };

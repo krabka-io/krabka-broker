@@ -20,7 +20,7 @@ use {
         support::{
             self,
             client::connect_with_context,
-            produce::{SinglePartitionProduceSetup, send_batch},
+            produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
             records::{batch_from_records, value_record},
             registered_cluster, shutdown_cluster,
             topics::create_topic_request,
@@ -110,12 +110,17 @@ async fn produce(
 ) -> PartitionProduceResponse {
     let client =
         connect_with_context(broker.listen_addr().to_string(), None, "producer client").await;
-    let response = send_batch(&client, batch, SinglePartitionProduceSetup {
-        topic: topic.to_owned(),
-        topic_id,
-        ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
-    })
-    .await;
+    let response = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic.to_owned())
+                .topic_id(topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .timeout(30_000)
+                .call(),
+        )
+        .await;
     response.responses[0].partition_responses[0].clone()
 }
 

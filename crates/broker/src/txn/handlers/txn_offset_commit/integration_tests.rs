@@ -37,9 +37,9 @@ use {
             decode_response, dispatch_context, encode_request, peer, principal, request_context,
             start_broker_no_audit_with, start_transaction_grant_broker,
         },
+        time_util,
         txn::{
             state::{TopicPartition, TxnEntry, TxnState},
-            util::now_millis,
             version::resolve_txn_version,
         },
     },
@@ -108,16 +108,6 @@ pub(super) async fn wait_for_coordinators(handle: &BrokerHandle) {
 }
 
 /// A transaction identity, state and optional held offsets partition.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct TransactionSeedSetup<'a> {
-    #[default("tid")]
-    pub transactional_id: &'a str,
-    pub producer: super::test_support::TxnCommitProducer,
-    #[default(TxnState::Ongoing)]
-    pub state: TxnState,
-    pub group_id: Option<&'a str>,
-}
-
 #[bon::builder]
 pub(super) async fn seed_transaction(
     broker: &Broker,
@@ -126,24 +116,18 @@ pub(super) async fn seed_transaction(
     #[builder(default = TxnState::Ongoing)] state: TxnState,
     group_id: Option<&'_ str>,
 ) {
-    let setup = TransactionSeedSetup {
-        transactional_id,
-        producer,
-        state,
-        group_id,
-    };
     let image = broker.controller.current_image();
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let mut entry = TxnEntry::new_empty(
-        setup.transactional_id.to_owned(),
-        setup.producer.id,
-        setup.producer.epoch.0,
+        transactional_id.to_owned(),
+        producer.id,
+        producer.epoch.0,
         60_000,
         now_ms,
     );
-    entry.state = setup.state;
+    entry.state = state;
     entry.start_ms = now_ms;
-    if let Some(group_id) = setup.group_id {
+    if let Some(group_id) = group_id {
         entry.partitions.insert(TopicPartition {
             topic: OFFSETS_TOPIC.to_owned(),
             partition: PartitionIndex(partition_for_group(&image, group_id).unwrap()),
@@ -153,9 +137,7 @@ pub(super) async fn seed_transaction(
         .txn_coordinator
         .put(entry, resolve_txn_version(&image))
         .await
-        .unwrap_or_else(|error| {
-            panic!("seed a transaction for {}: {error}", setup.transactional_id)
-        });
+        .unwrap_or_else(|error| panic!("seed a transaction for {transactional_id}: {error}"));
 }
 
 /// Seed the open transaction and its held group partition before building its commit.
@@ -477,7 +459,7 @@ fn logged_value(
 #[derive(Debug)]
 struct DeniesReadOnB;
 
-krabka_macros::test_authorizer! { DeniesReadOnB, request; {
+krabka_broker_macros::test_authorizer! { DeniesReadOnB, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read
         && request.resource_name == "b"

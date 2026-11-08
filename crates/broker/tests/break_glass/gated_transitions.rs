@@ -33,18 +33,8 @@ struct GatedTransition {
 
 #[fixture]
 fn gate() -> GatedTransition {
-    // Start this scenario with fresh inputs and observations.
-
     GatedTransition {
-        cluster: None,
-        alice: None,
-        topic: String::new(),
-        transition: None,
-        metric: None,
-        action: 0,
-        refusals_before: None,
-        answered: None,
-        proposal: None,
+        ..GatedTransition::default()
     }
 }
 

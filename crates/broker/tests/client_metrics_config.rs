@@ -76,6 +76,7 @@ fn assert_list_response(response: &ListConfigResourcesResponse) {
     );
 }
 
+#[derive(Default)]
 struct MetricsSubscription {
     cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
     client: Option<Client>,
@@ -87,15 +88,8 @@ struct MetricsSubscription {
 
 #[fixture]
 fn subscription() -> MetricsSubscription {
-    // Start this scenario with fresh inputs and observations.
-
     MetricsSubscription {
-        cluster: Vec::new(),
-        client: None,
-        metrics: String::new(),
-        altered: None,
-        described: None,
-        listed: None,
+        ..MetricsSubscription::default()
     }
 }
 

@@ -61,7 +61,7 @@ pub async fn run(
     // rather than spinning on a timer that cannot be armed.
     const TASK: &str = "log retention";
     let timer = Arc::clone(&cfg.timer);
-    krabka_macros::sweep_loop! {
+    krabka_broker_macros::sweep_loop! {
         timer [&*timer];
         cadence [cfg.periodic_cadence()];
         shutdown [&shutdown];

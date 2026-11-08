@@ -93,7 +93,7 @@ impl EnvelopeError {
     }
 }
 
-krabka_macros::forwardable_requests! {
+krabka_broker_macros::forwardable_requests! {
     19 => create_topics_request::CreateTopicsRequest, // CreateTopics
     20 => delete_topics_request::DeleteTopicsRequest, // DeleteTopics
     30 => create_acls_request::CreateAclsRequest, // CreateAcls
@@ -485,10 +485,10 @@ mod tests {
     /// "alice"))` in `mirror.gcr.io/apache/kafka:4.3.1`, captured verbatim:
     /// int16 version 0, compact string "User", compact string "alice",
     /// `token_authenticated = false`, empty tagged fields.
-    const JVM_USER_ALICE: &[u8] = krabka_macros::jvm_principal_golden!(alice, false);
+    const JVM_USER_ALICE: &[u8] = krabka_broker_macros::jvm_principal_golden!(alice, false);
     /// The same call for `new KafkaPrincipal("User", "bob", true)`, whose
     /// `token_authenticated` byte is `0x01`.
-    const JVM_USER_BOB_TOKEN: &[u8] = krabka_macros::jvm_principal_golden!(bob, true);
+    const JVM_USER_BOB_TOKEN: &[u8] = krabka_broker_macros::jvm_principal_golden!(bob, true);
 
     fn forwarded_principal(name: &str, token_authenticated: bool) -> ForwardedPrincipal {
         ForwardedPrincipal {
@@ -947,16 +947,6 @@ mod tests {
         Flexible,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ForwardedResponseSetup {
-        #[default(krabka_ids::ApiKey(19))]
-        api_key: krabka_ids::ApiKey,
-        api_version: krabka_ids::ApiVersion,
-        #[default(EmbeddedCorrelationId(0x0102_0304))]
-        correlation_id: EmbeddedCorrelationId,
-        encoding: ForwardedBodyEncoding,
-    }
-
     #[bon::builder]
     fn forwarded(
         #[builder(into, default = krabka_ids :: ApiKey (19))] api_key: krabka_ids::ApiKey,
@@ -965,19 +955,13 @@ mod tests {
         correlation_id: EmbeddedCorrelationId,
         #[builder(default)] encoding: ForwardedBodyEncoding,
     ) -> ForwardedRequest {
-        let setup = ForwardedResponseSetup {
-            api_key,
-            api_version,
-            correlation_id,
-            encoding,
-        };
         ForwardedRequest {
-            api_key: setup.api_key.0,
-            api_version: setup.api_version.0,
-            correlation_id: setup.correlation_id.0,
+            api_key: api_key.0,
+            api_version: api_version.0,
+            correlation_id: correlation_id.0,
             client_id: None,
             body: Bytes::new(),
-            body_flexible: matches!(setup.encoding, ForwardedBodyEncoding::Flexible),
+            body_flexible: matches!(encoding, ForwardedBodyEncoding::Flexible),
         }
     }
 
@@ -1073,7 +1057,7 @@ mod tests {
         check!(decode_request(&encoded, 0) == Ok(want));
     }
 
-    krabka_macros::request_frame_fixture!(wire_request_frame);
+    krabka_broker_macros::request_frame_fixture!(wire_request_frame);
 
     #[derive(
         Debug,

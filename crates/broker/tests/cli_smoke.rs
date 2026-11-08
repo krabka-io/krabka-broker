@@ -422,6 +422,7 @@ fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
     }
 }
 
+#[derive(Default)]
 struct BrokerCommand {
     binary: Option<PathBuf>,
     directory: Option<TempDir>,
@@ -441,21 +442,8 @@ struct BrokerCommand {
 
 #[fixture]
 fn command() -> BrokerCommand {
-    // Start this scenario with fresh inputs and observations.
-
     BrokerCommand {
-        binary: None,
-        directory: None,
-        config_path: None,
-        log_dir: None,
-        output: None,
-        status: None,
-        running: None,
-        controller_reservation: None,
-        cases: Vec::new(),
-        observed: Vec::new(),
-        expected: Vec::new(),
-        nodes: Vec::new(),
+        ..BrokerCommand::default()
     }
 }
 

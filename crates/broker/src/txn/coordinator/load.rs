@@ -43,7 +43,7 @@ const REPLAY_COMMIT_RECHECK: Duration = Duration::from_secs(60);
 /// The load tasks that one refresh started.
 ///
 /// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default, krabka_macros::ScheduledLoads)]
+#[derive(Debug, Default, krabka_broker_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__transaction_state load task failed")]
 pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
@@ -99,11 +99,7 @@ impl TxnCoordinator {
             };
             self.partitions
                 .get(bootstrap::TOPIC, partition)
-                .is_some_and(|local| {
-                    local.current_leader.load(Ordering::Acquire) == self.node_id.0
-                        && local.current_leader_epoch.load(Ordering::Acquire)
-                            == record.leader_epoch.0
-                })
+                .is_some_and(|local| local.is_leader_at(self.node_id, record.leader_epoch.0))
         };
         // Most refreshes change nothing. Check that under the read guard, so
         // a refresh does not wait for the appends that publish.

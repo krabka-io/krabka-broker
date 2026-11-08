@@ -600,8 +600,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn join_expiry() -> JoinExpiry {
-        // Start this scenario with fresh inputs and observations.
-        JoinExpiry::default()
+        JoinExpiry {
+            ..JoinExpiry::default()
+        }
     }
     #[given(
         "m1 is new {is_new} waiting in JoinGroup {waiting} with ten second session and last heartbeat age {age}"

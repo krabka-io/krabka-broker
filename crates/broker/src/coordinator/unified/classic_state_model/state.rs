@@ -93,7 +93,7 @@ impl GrpState {
     }
 }
 
-krabka_macros::projection_identity!(GrpState, proj);
+krabka_broker_macros::projection_identity!(GrpState, proj);
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(super) enum Act {

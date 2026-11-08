@@ -5,7 +5,7 @@ use {
         harness::{create_topic, topic_id_for},
         support::{
             self, InProcess,
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::producer_values_batch,
             transactions::claim_idempotent_producer,
         },
@@ -61,17 +61,17 @@ async fn producer_batch(idempotence: &mut IdempotentScenario, topic: String, val
     let topic_id = topic_id_for(&broker.client, &topic).await;
     let producer_id = claim_idempotent_producer(&broker.client).await.producer_id;
     let values: Vec<_> = values.split(',').collect();
-    let request = batch_request(
-        producer_values_batch()
-            .pid(producer_id)
-            .values(&values)
-            .call(),
-        SinglePartitionProduceSetup {
-            topic: topic.clone(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    );
+    let request = single_partition_produce()
+        .records(
+            producer_values_batch()
+                .pid(producer_id)
+                .values(&values)
+                .call(),
+        )
+        .topic(topic.clone())
+        .topic_id(topic_id)
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call();
     idempotence.broker = Some(broker);
     idempotence.topic = topic;
     idempotence.topic_id = topic_id;
@@ -101,18 +101,18 @@ async fn retry_producer_batch(idempotence: &mut IdempotentScenario) {
 
 #[when("the producer skips to sequence ten with records x and y")]
 async fn skip_sequences(idempotence: &mut IdempotentScenario) {
-    let request = batch_request(
-        producer_values_batch()
-            .pid(idempotence.producer_id)
-            .base_seq(10)
-            .values(&["x", "y"])
-            .call(),
-        SinglePartitionProduceSetup {
-            topic: idempotence.topic.clone(),
-            topic_id: idempotence.topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    );
+    let request = single_partition_produce()
+        .records(
+            producer_values_batch()
+                .pid(idempotence.producer_id)
+                .base_seq(10)
+                .values(&["x", "y"])
+                .call(),
+        )
+        .topic(idempotence.topic.clone())
+        .topic_id(idempotence.topic_id)
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call();
     let response = idempotence
         .broker()
         .client

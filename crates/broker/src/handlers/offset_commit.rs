@@ -28,7 +28,7 @@ use {
                     validate_commit,
                 },
                 classic_state::OffsetEntry,
-                streams::actor::validate_streams_group_offset_commit,
+                streams::actor::commit_validation::validate_streams_group_offset_commit,
             },
         },
         error::BrokerError,
