@@ -721,7 +721,14 @@ pub(crate) fn resolve_group_config_from_image(
     match defaults.with_group_overrides(&applicable) {
         Ok(config) => config,
         Err(error) => {
-            tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
+            // Logged under the actor module, where this resolution ran before
+            // it moved here, so that existing log filters still see it.
+            tracing::error!(
+                target: "krabka_broker::coordinator::unified::streams::actor",
+                group_id,
+                %error,
+                "ignoring invalid persisted streams group config",
+            );
             defaults.clone()
         }
     }
