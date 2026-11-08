@@ -21,7 +21,7 @@ use {
         share_coordinator::{
             bootstrap,
             config::ShareCoordinatorConfig,
-            coordinator::{ShareStateError, message::FENCED_STATE_EPOCH},
+            coordinator::{ShareStateError, ShareStateSummary, message::FENCED_STATE_EPOCH},
             persistence::{
                 KEY_SHARE_SNAPSHOT, ShareSnapshotValue, ShareUpdateValue, StateBatch,
                 parse_state_key,
@@ -95,7 +95,12 @@ pub async fn assert_recovered_epoch_is_fenced(
         coordinator
             .read_summary_checked(topic_image, "g", topic_id, 0)
             .await
-            == Ok(Some((2, 0, Offset(10), 0)))
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 2,
+                leader_epoch: 0,
+                start_offset: Offset(10),
+                delivery_complete_count: 0
+            }))
     );
     assert!(
         coordinator

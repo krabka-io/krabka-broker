@@ -10,15 +10,20 @@
 #![cfg(test)]
 
 mod kafka_wire;
+#[path = "support/reserved_port.rs"]
+mod reserved_port;
 mod support;
 
 use {
-    crate::support::{
-        configs::{
-            BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request,
-            describe_resource,
+    crate::{
+        reserved_port::reserve_port,
+        support::{
+            configs::{
+                BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request,
+                describe_resource,
+            },
+            wire::HeaderEncoding,
         },
-        wire::HeaderEncoding,
     },
     assert2::assert,
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes},
@@ -31,7 +36,7 @@ use {
     },
     std::{
         io::ErrorKind,
-        net::{Ipv4Addr, SocketAddr},
+        net::SocketAddr,
         path::Path,
         time::{Duration, Instant},
     },
@@ -51,33 +56,6 @@ const PROPAGATION: Duration = Duration::from_secs(10);
 
 const LISTENERS: &str = "listeners";
 const PROTOCOL_MAP: &str = "listener.security.protocol.map";
-
-/// A loopback port held for a listener the broker adds later, and its
-/// address.
-///
-/// A port bound and dropped at once is free again at once: on a busy host
-/// any `bind("127.0.0.1:0")` -- another scenario's broker in this binary, or
-/// another test binary's -- can be handed it before the broker applies the
-/// alter. The added listener's bind then fails, which the broker logs and
-/// leaves closed as Kafka's `addListeners` does, and the port answers as the
-/// other socket's listener: a PLAINTEXT one serves `ApiVersions` and answers
-/// `SaslHandshake` with `ILLEGAL_SASL_STATE` and no mechanisms.
-///
-/// A socket that is bound but not listening keeps the port out of both
-/// `bind(0)` and `connect()`'s ephemeral pick, and refuses connections as a
-/// closed port does. Under `SO_REUSEADDR`, which mio also sets on the
-/// listener the broker binds, it lets that one listener bind the port.
-fn reserve_port() -> (TcpSocket, SocketAddr) {
-    let socket = TcpSocket::new_v4().expect("reservation socket");
-    socket
-        .set_reuseaddr(true)
-        .expect("SO_REUSEADDR on the reservation socket");
-    socket
-        .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-        .expect("reserve a loopback port");
-    let address = socket.local_addr().expect("reserved address");
-    (socket, address)
-}
 
 /// Whether a new connection to `addr` answers an `ApiVersions` round trip.
 /// The stream is returned so the caller can hold it.

@@ -282,7 +282,7 @@ pub(super) async fn reloaded_classic_view(log: &InMemoryOffsetsLog) -> super::Cl
     };
 
     let mut reloaded = ClassicGroup::new("g");
-    apply_group_metadata(&mut reloaded, last_classic_metadata(log).await, 0);
+    apply_group_metadata(&mut reloaded, last_classic_metadata(log).await);
     super::views::build_classic_view(&reloaded)
 }
 

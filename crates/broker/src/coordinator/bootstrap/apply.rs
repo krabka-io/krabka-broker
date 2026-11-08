@@ -326,7 +326,7 @@ pub(super) fn apply_streams_record(
 /// stored rebalance timeout of -1, the schema default of a version 0 value,
 /// becomes the session timeout of the member. An empty protocol type becomes
 /// no protocol type.
-pub fn apply_group_metadata(g: &mut ClassicState, v: GroupMetadataValue, replay_timestamp_ms: i64) {
+pub fn apply_group_metadata(g: &mut ClassicState, v: GroupMetadataValue) {
     g.protocol_type = Some(v.protocol_type).filter(|protocol_type| !protocol_type.is_empty());
     g.generation_id = v.generation;
     g.leader_id = v.leader;
@@ -372,5 +372,4 @@ pub fn apply_group_metadata(g: &mut ClassicState, v: GroupMetadataValue, replay_
     } else {
         ClassicGroupState::Stable
     };
-    let _ = replay_timestamp_ms; // currently unused; logged for debug
 }

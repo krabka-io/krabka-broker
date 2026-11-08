@@ -332,6 +332,44 @@ mod tests {
         }
     }
 
+    /// Golden bytes of the `ShareSnapshotKey` and `ShareUpdateKey` records:
+    /// the record type, the group id with an `INT16` length, the topic id and
+    /// the partition. The bytes follow Kafka's key schemas, which every 1.x
+    /// broker writes, so a 1.x broker must read them back to the same key and
+    /// write them again unchanged.
+    #[yare::parameterized(
+        snapshot = {
+            KEY_SHARE_SNAPSHOT, "g1", [7; 16], 3,
+            &[
+                0x00, 0x00, 0x00, 0x02, b'g', b'1', 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+                7, 0x00, 0x00, 0x00, 0x03,
+            ],
+        },
+        update = {
+            KEY_SHARE_UPDATE, "grp", [1; 16], 0,
+            &[
+                0x00, 0x01, 0x00, 0x03, b'g', b'r', b'p', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 0x00, 0x00, 0x00, 0x00,
+            ],
+        },
+    )]
+    fn state_key_golden_bytes(
+        record_type: i16,
+        group_id: &str,
+        topic_id: [u8; 16],
+        partition: i32,
+        golden: &[u8],
+    ) {
+        let key = ShareStateKey {
+            record_type,
+            group_id: group_id.into(),
+            topic_id: Uuid::from_bytes(topic_id),
+            partition,
+        };
+        check!(parse_state_key(golden).unwrap() == key);
+        check!(encode_state_key(&key).unwrap().as_ref() == golden);
+    }
+
     /// The key writes its group id with an `INT16` length: a group id of 32767
     /// bytes encodes, and one of 32768 bytes is an error, not a panic.
     #[yare::parameterized(

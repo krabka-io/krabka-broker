@@ -101,7 +101,15 @@ async fn initialize_then_summary() {
     let summary = coord
         .read_summary_checked(&image_with_topic(TOPIC, 1), "g", TOPIC, 0)
         .await;
-    assert!(summary == Ok(Some((5, 0, Offset(100), 0))));
+    assert!(
+        summary
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 5,
+                leader_epoch: 0,
+                start_offset: Offset(100),
+                delivery_complete_count: 0
+            }))
+    );
 }
 
 /// A shard serializes first initialization through its append, even before a
@@ -139,7 +147,12 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
                 result = &mut first => panic!("paused append completed: {result:?}"),
                 () = yield_now() => {}
             }
-            assert!(coord.entry("g", TOPIC, 0).is_none());
+            let key = ShareKeyRef {
+                group: "g",
+                topic_id: TOPIC,
+                partition: 0,
+            };
+            assert!(coord.entry(key).is_none());
             tokio::select! {
                 biased;
                 result = &mut next => panic!("queued initialize completed: {result:?}"),
@@ -157,9 +170,19 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             };
             assert!((first, next) == (Ok(()), expected_next));
             let expected = if next_epoch == 1 {
-                (2, 0, Offset(10), 0)
+                ShareStateSummary {
+                    state_epoch: 2,
+                    leader_epoch: 0,
+                    start_offset: Offset(10),
+                    delivery_complete_count: 0,
+                }
             } else {
-                (3, 0, Offset(20), 0)
+                ShareStateSummary {
+                    state_epoch: 3,
+                    leader_epoch: 0,
+                    start_offset: Offset(20),
+                    delivery_complete_count: 0,
+                }
             };
             assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
             let snapshots: Vec<_> =
@@ -180,8 +203,8 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             assert!(snapshots == expected_snapshots);
             coord.reload_all_partitions_for_test().await;
             assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
-            let entry = coord.entry("g", TOPIC, 0).expect("state replayed");
-            assert!(entry.lock().await.fence_state_epoch == expected.0);
+            let entry = coord.entry(key).expect("state replayed");
+            assert!(entry.lock().await.fence_state_epoch == expected.state_epoch);
         }
     }
 }
@@ -211,7 +234,12 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
     );
     check!(
         coord.read_summary_checked(&image, &longest, TOPIC, 0).await
-            == Ok(Some((5, 0, Offset(100), 0)))
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 5,
+                leader_epoch: 0,
+                start_offset: Offset(100),
+                delivery_complete_count: 0
+            }))
     );
     check!(coord.delete(&image, &longest, TOPIC, 0).await == Ok(()));
 
@@ -266,7 +294,13 @@ async fn seeded(dir: &Path, trunk: bool) -> Seeded {
         .await
         .unwrap();
     assert!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4)))
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 2,
+                leader_epoch: 3,
+                start_offset: Offset(10),
+                delivery_complete_count: 4
+            }))
     );
     Seeded { coord, image }
 }
@@ -412,7 +446,7 @@ async fn read_fences_and_persists_the_leader_epoch() {
             coord.reload_all_partitions_for_test().await;
             let summary = coord.read_summary_checked(&image, "g", TOPIC, 0).await;
             check!(
-                summary.map(|s| s.map(|(_, leader, ..)| leader)) == Ok(Some(reloaded_leader_epoch)),
+                summary.map(|s| s.map(|s| s.leader_epoch)) == Ok(Some(reloaded_leader_epoch)),
                 "row {index}, trunk {trunk}"
             );
         }
@@ -435,7 +469,13 @@ async fn failed_read_append_changes_no_state() {
         })
     );
     assert!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4)))
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 2,
+                leader_epoch: 3,
+                start_offset: Offset(10),
+                delivery_complete_count: 4
+            }))
     );
 }
 
@@ -451,7 +491,13 @@ async fn reinitialize_keeps_the_recorded_leader_epoch() {
         .await
         .unwrap();
     check!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some((3, 0, Offset(40), 0)))
+        coord.read_summary_checked(&image, "g", TOPIC, 0).await
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 3,
+                leader_epoch: 0,
+                start_offset: Offset(40),
+                delivery_complete_count: 0
+            }))
     );
     let rows = [
         (
@@ -715,9 +761,16 @@ fn observed_share_operation(result: WriteOutcome) -> ObservedShareOperation {
 fn observed_share_summary(
     result: Result<Option<ShareStateSummary>, ShareStateError>,
 ) -> ShareSummaryObservation {
-    result
-        .map_err(ShareStateError::code)
-        .map(|summary| summary.map(|(state, leader, start, count)| (state, leader, start.0, count)))
+    result.map_err(ShareStateError::code).map(|summary| {
+        summary.map(|summary| {
+            (
+                summary.state_epoch,
+                summary.leader_epoch,
+                summary.start_offset.0,
+                summary.delivery_complete_count,
+            )
+        })
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -941,7 +994,11 @@ async fn write_seeded_share_state(share_state_write: &mut ShareStateWrite) {
     // The stored state itself: rows also cover partition 2, which the image
     // does not hold, and partition -1, which a summary read refuses.
     share_state_write.summary = Some(observed_share_summary(Ok(coord
-        .summary("g", TOPIC, request.partition)
+        .summary(ShareKeyRef {
+            group: "g",
+            topic_id: TOPIC,
+            partition: request.partition,
+        })
         .await)));
 }
 
@@ -1004,5 +1061,16 @@ async fn active_summary_answers_load_in_progress_while_a_load_has_dropped_the_ke
     );
 
     check!(mid_load == (None, Err(codes::COORDINATOR_LOAD_IN_PROGRESS)));
-    check!(loaded == (Ok(Some((5, 0, Offset(100), 0))), Ok(None)));
+    check!(
+        loaded
+            == (
+                Ok(Some(ShareStateSummary {
+                    state_epoch: 5,
+                    leader_epoch: 0,
+                    start_offset: Offset(100),
+                    delivery_complete_count: 0,
+                })),
+                Ok(None)
+            )
+    );
 }

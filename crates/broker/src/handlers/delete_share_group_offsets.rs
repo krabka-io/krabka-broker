@@ -711,13 +711,13 @@ mod tests {
                 .expect("read deleted state");
             assert!(deleted_state.is_none());
         }
-        let (kept_state_epoch, _, kept_start_offset, _) = persister
+        let kept = persister
             .read_state_summary("g-delete", kept_id, 0)
             .await
             .expect("read kept state")
             .expect("kept state");
-        assert!(kept_state_epoch == 6);
-        assert!(kept_start_offset == krabka_log::Offset(20));
+        assert!(kept.state_epoch == 6);
+        assert!(kept.start_offset == krabka_log::Offset(20));
         broker_handle.shutdown().await;
     }
 
@@ -902,7 +902,7 @@ mod tests {
                     .read_state_summary("g-authz", topic_id, 0)
                     .await
                     .expect("read state")
-                    .map(|(state_epoch, _, start_offset, _)| (state_epoch, start_offset));
+                    .map(|summary| (summary.state_epoch, summary.start_offset));
                 let expected = denied.contains(name).then_some((4, krabka_log::Offset(10)));
                 assert!(state == expected, "case: {case}, topic: {name}");
             }

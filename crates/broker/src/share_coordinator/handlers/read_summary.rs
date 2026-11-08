@@ -13,7 +13,9 @@
 //! summary: start offset and delivery-complete count `-1`, epochs `0`.
 
 use {
-    crate::share_coordinator::coordinator::{ShareCoordinator, UNINITIALIZED_START_OFFSET},
+    crate::share_coordinator::coordinator::{
+        ShareCoordinator, ShareStateOp, UNINITIALIZED_START_OFFSET,
+    },
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         read_share_group_state_summary_request::ReadShareGroupStateSummaryRequest,
@@ -51,16 +53,14 @@ async fn read_summaries(
                 .read_summary_checked(image, group_id, topic_id, pd.partition)
                 .await
             {
-                Ok(Some((state_epoch, leader_epoch, start_offset, delivery_complete_count))) => {
-                    PartitionResult {
-                        partition: pd.partition,
-                        state_epoch,
-                        leader_epoch,
-                        start_offset: start_offset.0,
-                        delivery_complete_count,
-                        ..Default::default()
-                    }
-                }
+                Ok(Some(summary)) => PartitionResult {
+                    partition: pd.partition,
+                    state_epoch: summary.state_epoch,
+                    leader_epoch: summary.leader_epoch,
+                    start_offset: summary.start_offset.0,
+                    delivery_complete_count: summary.delivery_complete_count,
+                    ..Default::default()
+                },
                 // Kafka's `PartitionFactory` sentinels for a key with no state.
                 Ok(None) => PartitionResult {
                     partition: pd.partition,
@@ -72,12 +72,16 @@ async fn read_summaries(
                 },
                 // Kafka's `toErrorResponseData`: the code and the message, and
                 // the schema default for every other field.
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.summary_row_message()),
-                    ..Default::default()
-                },
+                Err(error) => {
+                    let verdict =
+                        super::OperationVerdict::refused(error, ShareStateOp::ReadSummary);
+                    PartitionResult {
+                        partition: pd.partition,
+                        error_code: verdict.code,
+                        error_message: verdict.message,
+                        ..Default::default()
+                    }
+                }
             }
         }
     );

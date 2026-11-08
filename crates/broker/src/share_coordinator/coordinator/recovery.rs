@@ -22,7 +22,7 @@ use {
 mod tests;
 
 use {
-    super::{LeaderPartitions, LoadStatus, ShareCoordinator, ShareStateKey3},
+    super::{LeaderPartitions, LoadStatus, ShareCoordinator, ShareKey},
     crate::{
         blocking::spawn_blocking,
         error::BrokerError,
@@ -110,7 +110,7 @@ impl ShareCoordinator {
         &self,
         state_partition: PartitionIndex,
         generation: u64,
-        replayed: Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError>,
+        replayed: Result<HashMap<ShareKey, SharePartitionState>, BrokerError>,
     ) {
         self.install_term(
             &mut *self.leader_partitions.write().await,
@@ -127,7 +127,7 @@ impl ShareCoordinator {
         led: &mut LeaderPartitions,
         state_partition: PartitionIndex,
         generation: u64,
-        replayed: Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError>,
+        replayed: Result<HashMap<ShareKey, SharePartitionState>, BrokerError>,
     ) {
         let Some(entry) = led
             .get_mut(&state_partition)
@@ -192,7 +192,7 @@ fn replay_partition(
     state_partition: PartitionIndex,
     read_max: krabka_units::ByteSize,
     updates_per_snapshot: u32,
-) -> Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError> {
+) -> Result<HashMap<ShareKey, SharePartitionState>, BrokerError> {
     let mut replayed = HashMap::new();
     let mut offset = part.log_start_offset();
     loop {
@@ -211,7 +211,11 @@ fn replay_partition(
                     else {
                         continue;
                     };
-                    let map_key = (key.group_id.clone(), key.topic_id, key.partition);
+                    let map_key = ShareKey {
+                        group: key.group_id.clone(),
+                        topic_id: key.topic_id,
+                        partition: key.partition,
+                    };
 
                     // Tombstone: drop the entry.
                     let Some(value) = rec.value.as_ref() else {
@@ -319,8 +323,8 @@ struct ReplayPosition {
 /// Returns the decode error of the value: an unsupported value version, or
 /// bytes that do not decode at that version.
 fn replay_value(
-    replayed: &mut HashMap<ShareStateKey3, SharePartitionState>,
-    map_key: ShareStateKey3,
+    replayed: &mut HashMap<ShareKey, SharePartitionState>,
+    map_key: ShareKey,
     key: &ShareStateKey,
     value: &Bytes,
     position: ReplayPosition,

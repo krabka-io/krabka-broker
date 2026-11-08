@@ -241,5 +241,4 @@ fn batch_has_no_timestamps(up_conversion: &UpConversion, base_timestamp: i64, ma
 krabka_bdd::scenarios!(
     "tests/features/up_conversion",
     fixtures = [up_conversion: UpConversion],
-    tags = "not @formulated and not @inprogress",
 );

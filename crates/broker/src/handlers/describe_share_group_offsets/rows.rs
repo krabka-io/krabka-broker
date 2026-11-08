@@ -126,10 +126,10 @@ struct PartitionSummary {
 impl PartitionSummary {
     fn from_read(read: &Result<Option<ShareStateSummary>, BrokerError>) -> Self {
         match *read {
-            Ok(Some((_, leader_epoch, start_offset, delivery_complete_count))) => Self {
-                start_offset: start_offset.0,
-                leader_epoch,
-                delivery_complete_count,
+            Ok(Some(summary)) => Self {
+                start_offset: summary.start_offset.0,
+                leader_epoch: summary.leader_epoch,
+                delivery_complete_count: summary.delivery_complete_count,
                 failed: false,
             },
             // `ShareCoordinatorShard.readStateSummary` for a key with no state.
@@ -493,12 +493,12 @@ mod tests {
             let summary = if cells[2] == "error" {
                 None
             } else {
-                Some((
-                    cells[2].parse().expect("state epoch"),
-                    cells[3].parse().expect("leader epoch"),
-                    Offset(cells[4].parse().expect("start offset")),
-                    cells[5].parse().expect("delivered count"),
-                ))
+                Some(ShareStateSummary {
+                    state_epoch: cells[2].parse().expect("state epoch"),
+                    leader_epoch: cells[3].parse().expect("leader epoch"),
+                    start_offset: Offset(cells[4].parse().expect("start offset")),
+                    delivery_complete_count: cells[5].parse().expect("delivered count"),
+                })
             };
             share_offset_rows.summaries.insert(key, summary);
         }

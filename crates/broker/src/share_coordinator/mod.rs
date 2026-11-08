@@ -8,6 +8,7 @@ pub mod bootstrap;
 pub mod config;
 pub(crate) mod coordinator;
 pub(crate) mod handlers;
+pub(crate) mod key;
 pub mod partitioner;
 pub mod persistence;
 pub(crate) mod persister_client;

@@ -4,7 +4,7 @@
 //! `__share_group_state` partition.
 
 use {
-    crate::share_coordinator::coordinator::ShareCoordinator,
+    crate::share_coordinator::coordinator::{ShareCoordinator, ShareStateOp},
     krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         delete_share_group_state_request::DeleteShareGroupStateRequest,
@@ -42,7 +42,7 @@ async fn delete_state(
             let result = coordinator
                 .delete(image, group_id, topic_id, pd.partition)
                 .await;
-            let verdict = super::operation_result(result, "delete");
+            let verdict = super::operation_result(result, ShareStateOp::Delete);
             PartitionResult {
                 partition: pd.partition,
                 error_code: verdict.code,

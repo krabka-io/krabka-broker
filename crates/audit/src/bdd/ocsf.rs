@@ -249,10 +249,7 @@ fn record_declares_schema(ocsf: &OcsfScenario, version: String) {
     assert2::assert!(ocsf.record.get()["metadata"]["version"] == serde_json::json!(version));
 }
 
-// `krabka_bdd::scenarios!` leaves `@inprogress` out of its step check but
-// does not forward that filter to rstest-bdd, so the gating run filters here.
 krabka_bdd::scenarios!(
     "tests/features/ocsf_mapping",
-    fixtures = [ocsf: OcsfScenario],
-    tags = "not @formulated and not @inprogress"
+    fixtures = [ocsf: OcsfScenario]
 );

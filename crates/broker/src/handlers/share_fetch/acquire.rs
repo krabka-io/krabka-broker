@@ -23,6 +23,7 @@ use {
         error::BrokerError,
         handlers::log_read_failure::local_read_failure,
         partition::Partition,
+        share_coordinator::key::ShareKeyRef,
         share_partition::{
             group_settings::GroupShareSettings,
             manager::{SharePartitionLeaderManager, persistence::fences_the_partition},
@@ -707,7 +708,7 @@ async fn acquire_partition(
     // fenced write drops the cell, and the records acquired on it must not
     // reach the client.
     let persisted = mgr
-        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
+        .persist_if_dirty(share_key(group, p), Some(&cell), &mut st)
         .await;
     drop(st);
     match persisted {
@@ -735,7 +736,7 @@ async fn persist_best_effort(
     st: &mut AcquisitionState,
 ) {
     let _ = mgr
-        .persist_if_dirty(group, p.topic_id, p.partition_index, Some(cell), st)
+        .persist_if_dirty(share_key(group, p), Some(cell), st)
         .await;
 }
 
@@ -764,6 +765,15 @@ fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, 
     };
     out.records = Some(RecordsPayload::Raw(joined));
     Ok(added_len)
+}
+
+/// The share key of `p` in `group`.
+fn share_key<'a>(group: &'a str, p: &PendingPartition) -> ShareKeyRef<'a> {
+    ShareKeyRef {
+        group,
+        topic_id: p.topic_id,
+        partition: p.partition_index,
+    }
 }
 
 /// Fails one partition row's fetch half with a share-partition error, and

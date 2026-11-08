@@ -22,10 +22,7 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
-    krabka_protocol::{
-        owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-        records::RecordBatch,
-    },
+    krabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     std::{
         collections::HashMap,
         time::{Duration, Instant},
@@ -164,7 +161,6 @@ async fn a_replayed_group_admits_a_new_member_that_proposes_its_protocol() {
         &mut replayed,
         persistence::parse_key(&key).unwrap(),
         &value,
-        &RecordBatch::default(),
     )
     .unwrap();
     finalize(&coordinator, replayed).await;
@@ -279,7 +275,6 @@ fn replay_classic_group(classic_load: &mut ClassicLoad) {
             .stored
             .take()
             .expect("persisted group prepared"),
-        0,
     );
     classic_load.loaded = Some(loaded);
 }
