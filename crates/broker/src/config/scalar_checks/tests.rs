@@ -12,7 +12,7 @@ use {
 
 #[test]
 fn rejects_non_positive_runtime_scalars() {
-    let cases: [RuntimeInvalidator; 27] = [
+    let cases: [RuntimeInvalidator; 29] = [
         RuntimeInvalidator {
             expected: "startup_leader_wait_timeout",
             invalidate: |c| {
@@ -175,6 +175,18 @@ fn rejects_non_positive_runtime_scalars() {
                 c.delegation_token_max_lifetime = -millis(1);
             },
         },
+        RuntimeInvalidator {
+            expected: "replication_quota_window_size",
+            invalidate: |c| {
+                c.replication_quota_window_size = <Time as TimeExt>::ZERO;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "alter_log_dirs_replication_quota_window_size",
+            invalidate: |c| {
+                c.alter_log_dirs_replication_quota_window_size = -millis(1);
+            },
+        },
     ];
 
     for RuntimeInvalidator {
@@ -333,6 +345,18 @@ fn additional_scalar_cases_a() -> Vec<RuntimeInvalidator> {
             expected: "partition_writer_queue_depth must be positive",
             invalidate: |c| {
                 c.partition_writer_queue_depth = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "replication_quota_window_num must be positive",
+            invalidate: |c| {
+                c.replication_quota_window_num = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "alter_log_dirs_replication_quota_window_num must be positive",
+            invalidate: |c| {
+                c.alter_log_dirs_replication_quota_window_num = 0;
             },
         },
     ]

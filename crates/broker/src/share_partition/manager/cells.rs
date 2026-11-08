@@ -12,13 +12,14 @@ use {
         config_keys::resolve_remote_list_offsets_timeout,
         coordinator::unified::streams::config::ShareAutoOffsetReset,
         handlers::list_offsets::timestamp::resolve_timestamp_with_sources,
+        share_coordinator::key::ShareKeyRef,
         share_partition::{source::diskless_logical_start, state::AcquisitionState},
         time_util::{duration_millis, now_ms},
     },
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
     krabka_remote_storage::TopicIdPartition,
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
     tokio::{sync::Mutex, time::timeout},
     tracing::warn,
 };
@@ -57,8 +58,12 @@ impl SharePartitionLeaderManager {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Arc<Mutex<AcquisitionState>>, i16> {
-        let key = (group.to_owned(), topic_id, partition);
-        if let Some(cell) = self.leaders.get(&key) {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        if let Some(cell) = self.leaders.get(key.lookup()) {
             return Ok(Arc::clone(cell.value()));
         }
 
@@ -119,12 +124,12 @@ impl SharePartitionLeaderManager {
 
         let cell = Arc::new(Mutex::new(loaded));
         // Adopt the winner if another task loaded the same key concurrently.
-        let cell = Arc::clone(self.leaders.entry(key.clone()).or_insert(cell).value());
+        let cell = Arc::clone(self.leaders.entry(key.to_key()).or_insert(cell).value());
         // A run that the last leader left in `Archiving` resumes its
         // dead-letter write here (KIP-1191). Whichever loader takes the runs
         // first starts them, so a race starts each once.
         let resumed = cell.lock().await.take_pending_dlq();
-        self.dispatch_dead_letters(&key, &cell, resumed);
+        self.dispatch_dead_letters(key, &cell, resumed);
         Ok(cell)
     }
 
@@ -167,9 +172,8 @@ impl SharePartitionLeaderManager {
             return Ok(Offset(0));
         };
         let config = local
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_log()
+            .map_err(|error| from_broker_error(&error))?
             .config_snapshot();
         let log_start = if local.diskless
             && let Some(reader) = self.diskless_read.get()
@@ -189,13 +193,17 @@ impl SharePartitionLeaderManager {
             .map_err(|_| REQUEST_TIMED_OUT)?
             .map_err(|_| KAFKA_STORAGE_ERROR)?;
             let (log_start, established) = {
-                let log = local.log.lock().unwrap_or_else(PoisonError::into_inner);
+                let log = local
+                    .lock_log()
+                    .map_err(|error| from_broker_error(&error))?;
                 (log.log_start_offset().0, log.established_log_start())
             };
             Offset(remote.map_or(log_start, |remote| remote.min(log_start)))
                 .max(established.unwrap_or(Offset(0)))
         } else {
-            local.log_start_offset()
+            local
+                .log_start_offset()
+                .map_err(|error| from_broker_error(&error))?
         };
         match strategy {
             ShareAutoOffsetReset::Earliest => Ok(log_start),
@@ -246,8 +254,13 @@ impl SharePartitionLeaderManager {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Option<Arc<Mutex<AcquisitionState>>> {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         self.leaders
-            .get(&(group.to_owned(), topic_id, partition))
+            .get(key.lookup())
             .map(|cell| Arc::clone(cell.value()))
     }
 
@@ -279,10 +292,13 @@ impl SharePartitionLeaderManager {
         partition: i32,
         cell: &Arc<Mutex<AcquisitionState>>,
     ) {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
         self.leaders
-            .remove_if(&(group.to_owned(), topic_id, partition), |_, cached| {
-                Arc::ptr_eq(cached, cell)
-            });
+            .remove_if(key.lookup(), |_, cached| Arc::ptr_eq(cached, cell));
     }
 
     /// Drops every share session and every cached acquisition-state cell.
@@ -307,8 +323,12 @@ impl SharePartitionLeaderManager {
         state: AcquisitionState,
     ) -> Arc<Mutex<AcquisitionState>> {
         let cell = Arc::new(Mutex::new(state));
-        self.leaders
-            .insert((group.to_owned(), topic_id, partition), Arc::clone(&cell));
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        self.leaders.insert(key.to_key(), Arc::clone(&cell));
         cell
     }
 
@@ -322,8 +342,12 @@ impl SharePartitionLeaderManager {
     /// another broker refreshes on its own next load, which matches the classic
     /// offset-reset behavior.
     pub(crate) fn invalidate(&self, group: &str, topic_id: uuid::Uuid, partition: i32) {
-        self.leaders
-            .remove(&(group.to_owned(), topic_id, partition));
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        self.leaders.remove(key.lookup());
     }
 }
 

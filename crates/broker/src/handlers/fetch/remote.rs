@@ -7,6 +7,7 @@ mod wait;
 pub(super) use wait::RemoteFetchWait;
 use {
     super::{
+        FetchReaderExt as _,
         plan::{PendingRead, refused_read},
         read::LiveOffsets,
     },
@@ -339,7 +340,7 @@ fn answer_not_due(p: &mut PendingRead, live: LiveOffsets) -> usize {
     p.out.error_code = codes::NONE;
     live.report(&mut p.out);
     p.out.records = None;
-    if p.read_committed {
+    if p.reader.is_read_committed() {
         p.out.aborted_transactions = Some(Vec::new());
     }
     0
@@ -542,7 +543,7 @@ pub(super) async fn try_remote_read(
     // is gone from every tier and stays `OFFSET_OUT_OF_RANGE` for a follower
     // exactly as it does for a consumer -- Kafka guards the same way, with
     // `logStartOffset <= offset` before `offset < localLogStartOffset`.
-    if p.is_follower_fetch && p.fetch_offset < local_log_start.0 {
+    if p.reader.is_follower() && p.fetch_offset < local_log_start.0 {
         return Some(moved_to_tiered_storage(p, live, local_log_start.0));
     }
     // KIP-956: Kafka asks the fetch quota right after the follower branch of
@@ -620,7 +621,7 @@ pub(super) async fn try_remote_read(
     // it toward the ISR, before any consumer may see it.
     let now_ms = part.delivery.now_ms();
     let is_due = |max_timestamp| {
-        p.is_follower_fetch
+        p.reader.is_follower()
             || remote_batch_is_deliverable(
                 delivery_policy,
                 delivery_uncertainty_ms,
@@ -642,7 +643,7 @@ pub(super) async fn try_remote_read(
 
     // KIP-405 read-committed: the aborted transactions in the window this read
     // returns. Read-uncommitted leaves the list `None`.
-    if p.read_committed && !p.is_follower_fetch {
+    if p.reader.is_read_committed() {
         let window = ArchivedWindow {
             tp: &tp,
             leader_epoch,
@@ -704,6 +705,7 @@ mod tests {
         krabka_log::{DeliveryPolicy, Log, LogConfig},
         krabka_protocol::{owned::fetch_response, primitives::uuid::Uuid, records},
         krabka_units::prelude::millis,
+        krabka_verified::{FetchReader, Isolation},
         std::{
             fs, io,
             path::Path,
@@ -741,9 +743,9 @@ mod tests {
     /// isolation level.
     #[test]
     fn a_refused_cold_read_answers_the_partition_with_an_error_and_no_records() {
-        for read_committed in [false, true] {
+        for isolation in [Isolation::ReadUncommitted, Isolation::ReadCommitted] {
             let mut pending = super::PendingRead {
-                read_committed,
+                reader: FetchReader::Consumer(isolation),
                 ..out_of_range_at_unattached(7)
             };
 
@@ -999,8 +1001,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset,
             max_bytes: PARTITION_MAX_BYTES,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: Some(Arc::clone(part)),
@@ -1092,7 +1093,7 @@ mod tests {
         let tiered = committed_tiered_fixture().await;
 
         let follower_at = |fetch_offset| super::PendingRead {
-            is_follower_fetch: true,
+            reader: FetchReader::Follower,
             ..out_of_range_at(&tiered.part, fetch_offset)
         };
 
@@ -1279,7 +1280,7 @@ mod tests {
         check!(bounds(&served.out) == served_bounds(0));
 
         let mut follower = super::PendingRead {
-            is_follower_fetch: true,
+            reader: FetchReader::Follower,
             ..out_of_range_at(&part, 0)
         };
         check!(
@@ -1572,8 +1573,7 @@ mod tests {
             last_fetched_epoch: -1,
             fetch_offset,
             max_bytes: 1024,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             fetch_only_leader: false,
             follower_position: None,
             partition: None,
@@ -1624,9 +1624,9 @@ mod tests {
                 UNKNOWN_SERVER_ERROR,
             ),
         ] {
-            for read_committed in [false, true] {
+            for isolation in [Isolation::ReadUncommitted, Isolation::ReadCommitted] {
                 let mut pending = super::PendingRead {
-                    read_committed,
+                    reader: FetchReader::Consumer(isolation),
                     out: fetch_response::PartitionData {
                         partition_index: 0,
                         error_code: OFFSET_OUT_OF_RANGE,
@@ -1643,10 +1643,10 @@ mod tests {
 
                 let served = super::fail_remote_read(&metrics, &mut pending, &error);
 
-                actual.push((error.to_string(), read_committed, served, pending.out));
+                actual.push((error.to_string(), isolation, served, pending.out));
                 expected.push((
                     error.to_string(),
-                    read_committed,
+                    isolation,
                     0,
                     fetch_response::PartitionData {
                         partition_index: 0,

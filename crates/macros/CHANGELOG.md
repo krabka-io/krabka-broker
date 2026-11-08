@@ -12,6 +12,9 @@ release that contains `krabka-macros`.
   `Option<Bytes>`, not `Bytes`, and the generated body returns what the
   caller's `encode_body` returns. An encoder that fails no longer yields a
   truncated body.
+- `guard_response!(client, request, err)` takes the stderr writer that a
+  refusal is reported to, and passes it to the caller's `report_error` as its
+  first argument.
 
 ### Added
 

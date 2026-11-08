@@ -16,6 +16,7 @@ load("./check_creusot_packages_test.axl", "check_creusot_packages_tests")
 load("./check_creusot_skip_test.axl", "check_creusot_skip_tests")
 load("./check_delivery_image_test.axl", "check_delivery_image_tests")
 load("./check_design_docs_test.axl", "check_design_docs_tests")
+load("./check_gherkin_test.axl", "check_gherkin_tests")
 load("./check_images_test.axl", "check_images_tests")
 load("./check_k8s_security_test.axl", "check_k8s_security_tests")
 load("./check_kfcs_test.axl", "check_kfcs_tests")
@@ -55,6 +56,7 @@ SUITES = [
     check_creusot_skip_tests,
     check_delivery_image_tests,
     check_design_docs_tests,
+    check_gherkin_tests,
     check_images_tests,
     check_kfcs_tests,
     check_k8s_security_tests,

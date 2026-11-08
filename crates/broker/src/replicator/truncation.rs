@@ -1054,7 +1054,8 @@ mod tests {
             .partitions
             .get(&cfg.topic, cfg.partition)
             .expect("local partition")
-            .log_end_offset();
+            .log_end_offset()
+            .unwrap();
 
         let action = handle_offset_moved_to_tiered_storage(&cfg).await;
 
@@ -1063,7 +1064,8 @@ mod tests {
             .partitions
             .get(&cfg.topic, cfg.partition)
             .expect("local partition")
-            .log_end_offset();
+            .log_end_offset()
+            .unwrap();
         assert!(after == before);
     }
 
@@ -1321,8 +1323,8 @@ mod tests {
         let got = Recovery {
             action,
             asked: asked.into_inner(),
-            log_start: partition.log_start_offset().0,
-            log_end: partition.log_end_offset().0,
+            log_start: partition.log_start_offset().unwrap().0,
+            log_end: partition.log_end_offset().unwrap().0,
         };
         check!(got == expected, "{path:?}");
     }
@@ -1431,8 +1433,8 @@ mod tests {
         .expect("epoch fence recovery");
         FenceRecovery {
             asked: asked.into_inner(),
-            log_start: partition.log_start_offset().0,
-            log_end: partition.log_end_offset().0,
+            log_start: partition.log_start_offset().unwrap().0,
+            log_end: partition.log_end_offset().unwrap().0,
         }
     }
 
@@ -1497,8 +1499,8 @@ mod tests {
         assert!(
             Rewound {
                 succeeded,
-                log_start: partition.log_start_offset().0,
-                log_end: partition.log_end_offset().0,
+                log_start: partition.log_start_offset().unwrap().0,
+                log_end: partition.log_end_offset().unwrap().0,
                 producers,
             } == expected
         );
@@ -1671,8 +1673,8 @@ mod tests {
         out_of_range_log.recovery = Some(Recovery {
             action,
             asked: asked.into_inner(),
-            log_start: partition.log_start_offset().0,
-            log_end: partition.log_end_offset().0,
+            log_start: partition.log_start_offset().unwrap().0,
+            log_end: partition.log_end_offset().unwrap().0,
         });
     }
     #[derive(serde::Deserialize)]

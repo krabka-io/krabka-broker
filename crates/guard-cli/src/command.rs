@@ -5,6 +5,9 @@
 //! the cluster before it signs anything. Every path here returns a [`Failure`]
 //! for a step that stopped before a broker answered, and an exit code for one
 //! that a broker answered.
+//!
+//! Every report goes to the stdout and stderr writers the caller hands in, so
+//! the binary writes to its real streams and a scenario reads buffers.
 
 use {
     super::{
@@ -26,6 +29,7 @@ use {
     },
     krabka_units::{Time, convert::TimeExt as _},
     std::{
+        io::Write,
         path::Path,
         time::{self, SystemTime},
     },
@@ -34,7 +38,27 @@ use {
 // Commands share transport errors and the broker's ordinary refusal report.
 // Their success responses retain each command's distinct interpretation.
 
-/// Send one command's request and print its response.
+/// Send one command's request and report its outcome.
+///
+/// The response goes to `out`, and a refusal or a [`Failure`] to `err`. The
+/// return value is the exit code.
+pub async fn run_command(
+    client: &krabka_client_core::Client,
+    command: Command,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> i32 {
+    match dispatch(client, command, out, err).await {
+        Ok(code) => code,
+        Err(failure) => {
+            _ = writeln!(err, "{}", failure.message());
+            failure.exit_code()
+        }
+    }
+}
+
+/// Send one command's request and write its response to `out`, and a refusal
+/// the broker answered with to `err`.
 ///
 /// # Errors
 ///
@@ -44,6 +68,8 @@ use {
 pub async fn dispatch(
     client: &krabka_client_core::Client,
     command: Command,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     match command {
         Command::Freeze { command } => match command {
@@ -51,23 +77,27 @@ pub async fn dispatch(
                 scope,
                 reason,
                 signing,
-            } => set_freeze(client, &scope, reason, &signing, FreezeChange::Freeze).await,
+            } => {
+                let change = FreezeChange::Freeze;
+                set_freeze(client, &scope, reason, &signing, change, out, err).await
+            }
             FreezeCommand::Clear {
                 scope,
                 proposal,
                 reason,
                 signing,
             } => {
-                set_freeze(client, &scope, reason, &signing, FreezeChange::Thaw {
-                    proposal,
-                })
-                .await
+                let change = FreezeChange::Thaw { proposal };
+                set_freeze(client, &scope, reason, &signing, change, out, err).await
             }
             FreezeCommand::List {
                 scope,
                 verify_signatures,
                 operator_keys,
-            } => list_freezes(client, scope, verify_signatures, operator_keys.as_deref()).await,
+            } => {
+                let operator_keys = operator_keys.as_deref();
+                list_freezes(client, scope, verify_signatures, operator_keys, out, err).await
+            }
         },
         Command::BreakGlass { command } => match command {
             BreakGlassCommand::Propose {
@@ -75,15 +105,18 @@ pub async fn dispatch(
                 target,
                 reason,
                 ttl,
-            } => propose(client, action, target, reason, ttl).await,
+            } => propose(client, action, target, reason, ttl, out, err).await,
             BreakGlassCommand::Approve {
                 proposal,
                 sign_with,
                 key_id,
-            } => approve(client, proposal, sign_with.as_deref(), key_id.as_deref()).await,
-            BreakGlassCommand::Withdraw { proposal } => withdraw(client, proposal).await,
+            } => {
+                let (sign_with, key_id) = (sign_with.as_deref(), key_id.as_deref());
+                approve(client, proposal, sign_with, key_id, out, err).await
+            }
+            BreakGlassCommand::Withdraw { proposal } => withdraw(client, proposal, out, err).await,
             BreakGlassCommand::List { pending, proposal } => {
-                list_proposals(client, pending, proposal).await
+                list_proposals(client, pending, proposal, out, err).await
             }
         },
     }
@@ -122,6 +155,8 @@ async fn set_freeze(
     reason: String,
     signing: &FreezeSigningArgs,
     change: FreezeChange,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let scope = scope.resolve()?;
     let set_at_ms = now_ms();
@@ -163,7 +198,7 @@ async fn set_freeze(
         ..api::SetTopicFreezeRequest::default()
     };
     let response = client.send(request).await.map_err(Failure::from)?;
-    Ok(report_set_freeze(&response, frozen))
+    Ok(report_set_freeze(out, err, &response, frozen))
 }
 
 /// Read the registry, and prove it when the operator asks.
@@ -172,23 +207,25 @@ async fn list_freezes(
     scope: Option<String>,
     verify_signatures: bool,
     operator_keys: Option<&Path>,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let request = api::DescribeTopicFreezesRequest {
         scope_filter: scope,
         pattern_type_filter: PATTERN_TYPE_ANY,
         ..api::DescribeTopicFreezesRequest::default()
     };
-    let response = krabka_macros::guard_response!(client, request);
+    let response = krabka_macros::guard_response!(client, request, err);
     let Some(operator_keys) = operator_keys.filter(|_| verify_signatures) else {
         for freeze in &response.freezes {
-            print_freeze(freeze, None);
+            print_freeze(out, freeze, None);
         }
         return Ok(0);
     };
     let keys = verify::load_trust_set(operator_keys).map_err(Failure::Signature)?;
     let cluster_id = cluster_id(client).await?;
     let outcome = verify::verify_registry(&cluster_id, &keys, &response.freezes);
-    Ok(report_verify(&response.freezes, &outcome))
+    Ok(report_verify(out, err, &response.freezes, &outcome))
 }
 
 /// Open a proposal.
@@ -198,6 +235,8 @@ async fn propose(
     target: String,
     reason: String,
     ttl: Option<Time>,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let request = bg::ProposeBreakGlassRequest {
         action: action.wire(),
@@ -207,12 +246,10 @@ async fn propose(
         ttl_ms: ttl.map_or(0, Time::millis_i64),
         ..bg::ProposeBreakGlassRequest::default()
     };
-    let response = krabka_macros::guard_response!(client, request);
-    println!(
-        "proposal {}",
-        uuid::Uuid::from_bytes(response.proposal_id.0)
-    );
-    println!("expires  {}", response.expires_at_ms);
+    let response = krabka_macros::guard_response!(client, request, err);
+    let id = uuid::Uuid::from_bytes(response.proposal_id.0);
+    _ = writeln!(out, "proposal {id}");
+    _ = writeln!(out, "expires  {}", response.expires_at_ms);
     Ok(0)
 }
 
@@ -226,6 +263,8 @@ async fn approve(
     proposal: uuid::Uuid,
     sign_with: Option<&Path>,
     key_id: Option<&str>,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let proposal_id = WireUuid(*proposal.as_bytes());
     let (key_id, signature) = match (sign_with, key_id) {
@@ -251,8 +290,9 @@ async fn approve(
         withdraw: false,
         ..bg::ApproveBreakGlassRequest::default()
     };
-    let response = krabka_macros::guard_response!(client, request);
-    println!(
+    let response = krabka_macros::guard_response!(client, request, err);
+    _ = writeln!(
+        out,
         "approvals {} of {}",
         response.approvals_held, response.approvals_required
     );
@@ -265,31 +305,35 @@ async fn approve(
 async fn withdraw(
     client: &krabka_client_core::Client,
     proposal: uuid::Uuid,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let request = bg::ApproveBreakGlassRequest {
         proposal_id: WireUuid(*proposal.as_bytes()),
         withdraw: true,
         ..bg::ApproveBreakGlassRequest::default()
     };
-    let _response = krabka_macros::guard_response!(client, request);
-    println!("withdrawn {proposal}");
+    let _response = krabka_macros::guard_response!(client, request, err);
+    _ = writeln!(out, "withdrawn {proposal}");
     Ok(0)
 }
 
-/// Print the proposals and their approvals.
+/// Write the proposals and their approvals.
 async fn list_proposals(
     client: &krabka_client_core::Client,
     pending: bool,
     proposal: Option<uuid::Uuid>,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let request = bg::DescribeBreakGlassRequest {
         pending_only: pending,
         proposal_id: proposal.map_or(WireUuid::ZERO, |id| WireUuid(*id.as_bytes())),
         ..bg::DescribeBreakGlassRequest::default()
     };
-    let response = krabka_macros::guard_response!(client, request);
+    let response = krabka_macros::guard_response!(client, request, err);
     for stored in &response.proposals {
-        print_proposal(stored);
+        print_proposal(out, stored);
     }
     Ok(0)
 }

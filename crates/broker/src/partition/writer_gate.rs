@@ -247,7 +247,7 @@ mod tests {
         let (partition, _rx, _dir) = gated(true);
         let answered = produce_three_inline(&partition).await;
         check!(answered.expect("appended").base_offset.0 == 0);
-        check!(partition.log_end_offset().0 == 3);
+        check!(partition.log_end_offset().unwrap().0 == 3);
     }
 
     #[tokio::test]
@@ -256,7 +256,7 @@ mod tests {
         drop(partition.retire());
         let answered = produce_three_inline(&partition).await;
         assert!(let Err(BrokerError::Log(LogError::Fenced)) = answered);
-        check!(partition.log_end_offset().0 == 0);
+        check!(partition.log_end_offset().unwrap().0 == 0);
     }
 
     /// The race the disarm closes: the writer reads the log, an inline

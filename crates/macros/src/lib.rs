@@ -2676,7 +2676,7 @@ pub fn config_alter_handler(input: NativeTokenStream) -> Result<NativeTokenStrea
 
 mod fixture_expressions;
 
-/// Verify a guard response and return its typed value.
+/// Verify a guard response, or report its refusal to the caller's stderr.
 #[moxy::function]
 pub fn guard_response(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     fixture_expressions::guard_response(&input.into()).map(Into::into)

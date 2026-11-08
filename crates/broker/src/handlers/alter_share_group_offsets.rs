@@ -848,12 +848,12 @@ mod tests {
             .share_persister()
             .cloned()
             .expect("share persister");
-        let (_, _, start_offset, _) = persister
+        let summary = persister
             .read_state_summary("g-new", topic_id, 0)
             .await
             .expect("read state")
             .expect("state present");
-        assert!(start_offset == krabka_log::Offset(42));
+        assert!(summary.start_offset == krabka_log::Offset(42));
 
         // A member joining afterwards must not re-initialize the partition
         // and reset its start offset: `reconcile_share_state` skips any
@@ -864,13 +864,13 @@ mod tests {
                 joining_share_member(&actor, "g-new", member_id, vec!["new-topic".into()]).await;
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
-        let (_, _, start_offset_after, _) = persister
+        let summary_after = persister
             .read_state_summary("g-new", topic_id, 0)
             .await
             .expect("read state")
             .expect("state present");
         assert!(
-            start_offset_after == krabka_log::Offset(42),
+            summary_after.start_offset == krabka_log::Offset(42),
             "member joins must not move the start offset back"
         );
         broker_handle.shutdown().await;
@@ -1047,13 +1047,13 @@ mod tests {
                 response.responses[0].partitions[1].error_code == codes::UNKNOWN_TOPIC_OR_PARTITION
             );
 
-            let (state_epoch, _, start_offset, _) = persister
+            let summary = persister
                 .read_state_summary("g-reset", topic_id, 0)
                 .await
                 .expect("read state")
                 .expect("state present");
-            assert!(state_epoch == 7);
-            assert!(start_offset == krabka_log::Offset(42));
+            assert!(summary.state_epoch == 7);
+            assert!(summary.start_offset == krabka_log::Offset(42));
             let seed = broker
                 .group_coordinator
                 .cached_share_seed("g-reset")

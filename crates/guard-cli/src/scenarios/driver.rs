@@ -1,13 +1,17 @@
 //! The cluster a scenario runs against, and the operator actions it takes.
 //!
 //! Every action builds the command line an operator would type and runs it
-//! through [`dispatch`], over a client that the broker authenticates as that
-//! operator. The flags live here and nowhere else, so a scenario says what an
-//! operator wants and this module says how the tool is asked for it.
+//! through [`run_command`], over a client that the broker authenticates as that
+//! operator, with two buffers in place of stdout and stderr. The flags live
+//! here and nowhere else, so a scenario says what an operator wants and this
+//! module says how the tool is asked for it.
 
 use {
-    super::params::{KeySource, Lifetime, LocalKeys, Operator, Outcome, Scope},
-    crate::{cli::Cli, command::dispatch},
+    super::{
+        params::{KeySource, Lifetime, LocalKeys, Operator, Scope},
+        transcript::Run,
+    },
+    crate::{cli::Cli, command::run_command, run_with},
     clap::Parser as _,
     krabka_broker::{
         Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper,
@@ -239,23 +243,21 @@ impl Cluster {
     /// Run the tool as `operator` with `args` after the bootstrap flag.
     ///
     /// A command line the parser refuses never reaches a broker, which is the
-    /// [`Outcome::CommandLineRefused`] outcome.
-    pub async fn guard(&self, operator: Operator, args: &[&str]) -> Outcome {
+    /// [`Run::command_line_refused`] outcome.
+    pub async fn guard(&self, operator: Operator, args: &[&str]) -> Run {
         let mut command_line = vec!["krabka-guard", "--bootstrap-server", "scenario"];
         command_line.extend_from_slice(args);
         let Ok(cli) = Cli::try_parse_from(command_line) else {
-            return Outcome::CommandLineRefused;
+            return Run::command_line_refused();
         };
         let client = self.client(operator).await;
-        let code = match dispatch(&client, cli.command).await {
-            Ok(code) => code,
-            Err(failure) => failure.exit_code(),
-        };
-        Outcome::from_exit_code(code)
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_command(&client, cli.command, &mut stdout, &mut stderr).await;
+        Run::new(code, &stdout, &stderr)
     }
 
     /// `operator` freezes `scope`.
-    pub async fn freeze(&self, operator: Operator, scope: &Scope, signing: Signing) -> Outcome {
+    pub async fn freeze(&self, operator: Operator, scope: &Scope, signing: Signing) -> Run {
         let mut args = vec![
             "freeze",
             "set",
@@ -276,7 +278,7 @@ impl Cluster {
         scope: &Scope,
         proposal: uuid::Uuid,
         signing: Signing,
-    ) -> Outcome {
+    ) -> Run {
         let proposal = proposal.to_string();
         let mut args = vec![
             "freeze",
@@ -325,15 +327,15 @@ impl Cluster {
 
     /// `operator` opens a proposal for `action` on `target`.
     ///
-    /// Returns the outcome and, when the cluster holds a proposal it did not
-    /// hold before, that proposal's id.
+    /// Returns the run and, when the cluster holds a proposal it did not hold
+    /// before, that proposal's id.
     pub async fn propose(
         &self,
         operator: Operator,
         action: &str,
         target: &str,
         lifetime: &Lifetime,
-    ) -> (Outcome, Option<uuid::Uuid>) {
+    ) -> (Run, Option<uuid::Uuid>) {
         let before = self.proposals().await;
         let mut args = vec![
             "break-glass",
@@ -348,7 +350,7 @@ impl Cluster {
         if let Lifetime::Typed(ttl) = lifetime {
             args.extend(["--ttl", ttl.as_str()]);
         }
-        let outcome = self.guard(operator, &args).await;
+        let run = self.guard(operator, &args).await;
         let opened = self
             .proposals()
             .await
@@ -359,7 +361,7 @@ impl Cluster {
                     .any(|old| old.proposal_id == stored.proposal_id)
             })
             .map(|stored| uuid::Uuid::from_bytes(stored.proposal_id.0));
-        (outcome, opened)
+        (run, opened)
     }
 
     /// `operator` approves `proposal`, signed with `key` when one is given.
@@ -368,7 +370,7 @@ impl Cluster {
         operator: Operator,
         proposal: uuid::Uuid,
         key: Option<KeySource>,
-    ) -> Outcome {
+    ) -> Run {
         let proposal = proposal.to_string();
         let mut args = vec!["break-glass", "approve", "--proposal", &proposal];
         let (path, key_id) = match key {
@@ -389,7 +391,7 @@ impl Cluster {
     }
 
     /// `operator` withdraws `proposal`.
-    pub async fn withdraw(&self, operator: Operator, proposal: uuid::Uuid) -> Outcome {
+    pub async fn withdraw(&self, operator: Operator, proposal: uuid::Uuid) -> Run {
         let proposal = proposal.to_string();
         self.guard(operator, &[
             "break-glass",
@@ -401,7 +403,7 @@ impl Cluster {
     }
 
     /// `operator` verifies the registry against `trust_file`.
-    pub async fn verify(&self, operator: Operator, trust_file: &Path) -> Outcome {
+    pub async fn verify(&self, operator: Operator, trust_file: &Path) -> Run {
         let trust_file = trust_file.display().to_string();
         self.guard(operator, &[
             "freeze",
@@ -411,6 +413,16 @@ impl Cluster {
             &trust_file,
         ])
         .await
+    }
+
+    /// `operator` lists the registry without verifying it.
+    pub async fn list_registry(&self, operator: Operator) -> Run {
+        self.guard(operator, &["freeze", "list"]).await
+    }
+
+    /// `operator` lists every proposal the cluster holds.
+    pub async fn list_proposals(&self, operator: Operator) -> Run {
+        self.guard(operator, &["break-glass", "list"]).await
     }
 
     /// The trust file the verifying operator's machine holds.
@@ -484,11 +496,14 @@ impl Cluster {
 }
 
 /// Run the shipped entry point against `bootstrap`, exactly as the binary
-/// runs it, connect step included.
-pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Outcome {
+/// runs it, connect step included, with buffers in place of its streams.
+pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Run {
     let mut command_line = vec!["krabka-guard", "--bootstrap-server", bootstrap];
     command_line.extend_from_slice(args);
-    Outcome::from_exit_code(crate::run_from_args(command_line).await)
+    let cli = Cli::parse_from(command_line);
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = run_with(cli, &mut stdout, &mut stderr).await;
+    Run::new(code, &stdout, &stderr)
 }
 
 /// Run the shipped tool with `command_line` as its whole command line, reading
@@ -496,11 +511,13 @@ pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Outcome {
 ///
 /// A scenario cannot set a variable in its own process, because that is
 /// `unsafe` in edition 2024, so it hands the parser this map instead.
-pub async fn run_in(command_line: &[&str], environment: &BTreeMap<String, String>) -> Outcome {
+pub async fn run_in(command_line: &[&str], environment: &BTreeMap<String, String>) -> Run {
     let Ok(cli) =
         try_parse_with_env::<Cli, _, _>(command_line, |name| environment.get(name).cloned())
     else {
-        return Outcome::CommandLineRefused;
+        return Run::command_line_refused();
     };
-    Outcome::from_exit_code(crate::run(cli).await)
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = run_with(cli, &mut stdout, &mut stderr).await;
+    Run::new(code, &stdout, &stderr)
 }

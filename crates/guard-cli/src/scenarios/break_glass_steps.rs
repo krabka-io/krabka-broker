@@ -5,6 +5,7 @@ use {
     super::{
         driver,
         params::{KeySource, Lifetime, Operator, Outcome},
+        transcript::Run,
         world::GuardScenario,
     },
     assert2::assert,
@@ -75,8 +76,8 @@ async fn approvals(guard: &mut GuardScenario) -> Vec<Approval> {
 /// proposal it opened.
 async fn propose(guard: &mut GuardScenario, operator: Operator, lifetime: &Lifetime) {
     let cluster = guard.cluster().await;
-    let (outcome, proposal) = cluster.propose(operator, ACTION, TARGET, lifetime).await;
-    guard.outcome.set(outcome);
+    let (run, proposal) = cluster.propose(operator, ACTION, TARGET, lifetime).await;
+    guard.record(run);
     if let Some(proposal) = proposal {
         guard.proposal.set(proposal);
     }
@@ -87,17 +88,17 @@ async fn propose(guard: &mut GuardScenario, operator: Operator, lifetime: &Lifet
 async fn try_approve(guard: &mut GuardScenario, operator: Operator) {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster().await;
-    let outcome = cluster.approve(operator, proposal, None).await;
-    guard.outcome.set(outcome);
+    let run = cluster.approve(operator, proposal, None).await;
+    guard.record(run);
 }
 
 #[given("{operator} has proposed deleting the doomed topic")]
 async fn has_proposed(guard: &mut GuardScenario, operator: Operator) {
     let cluster = guard.cluster().await;
-    let (outcome, proposal) = cluster
+    let (run, proposal) = cluster
         .propose(operator, ACTION, TARGET, &Lifetime::Default)
         .await;
-    assert!(outcome == Outcome::Success);
+    assert!(run.outcome == Outcome::Success);
     guard
         .proposal
         .set(proposal.expect("the propose opened a proposal"));
@@ -105,12 +106,14 @@ async fn has_proposed(guard: &mut GuardScenario, operator: Operator) {
 
 #[given("{operator} has approved the proposal")]
 async fn has_approved(guard: &mut GuardScenario, operator: Operator) {
-    assert!(act_on_proposal(guard, operator, ProposalAct::Approve).await == Outcome::Success);
+    let run = act_on_proposal(guard, operator, ProposalAct::Approve).await;
+    assert!(run.outcome == Outcome::Success);
 }
 
 #[given("{operator} has withdrawn the proposal")]
 async fn has_withdrawn(guard: &mut GuardScenario, operator: Operator) {
-    assert!(act_on_proposal(guard, operator, ProposalAct::Withdraw).await == Outcome::Success);
+    let run = act_on_proposal(guard, operator, ProposalAct::Withdraw).await;
+    assert!(run.outcome == Outcome::Success);
 }
 
 /// What an operator does to the scenario's proposal in a Given.
@@ -121,11 +124,7 @@ enum ProposalAct {
 }
 
 /// `operator` approves or withdraws the scenario's proposal, unsigned.
-async fn act_on_proposal(
-    guard: &mut GuardScenario,
-    operator: Operator,
-    act: ProposalAct,
-) -> Outcome {
+async fn act_on_proposal(guard: &mut GuardScenario, operator: Operator, act: ProposalAct) -> Run {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster().await;
     async {
@@ -147,8 +146,8 @@ fn caps_proposal_lifetime(guard: &mut GuardScenario, cap: String) {
 async fn approves_signed(guard: &mut GuardScenario, operator: Operator, key: KeySource) {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster().await;
-    let outcome = cluster.approve(operator, proposal, Some(key)).await;
-    guard.outcome.set(outcome);
+    let run = cluster.approve(operator, proposal, Some(key)).await;
+    guard.record(run);
 }
 
 #[when("{operator} tries to approve the proposal")]
@@ -172,14 +171,14 @@ async fn approves_through_binary(
 ) {
     let proposal = guard.proposal.get().to_string();
     let bootstrap = guard.cluster().await.bootstrap();
-    let outcome = driver::run_binary(&bootstrap, &[
+    let run = driver::run_binary(&bootstrap, &[
         "break-glass",
         "approve",
         "--proposal",
         &proposal,
     ])
     .await;
-    guard.outcome.set(outcome);
+    guard.record(run);
 }
 
 #[when("{operator} proposes deleting the doomed topic for {lifetime}")]

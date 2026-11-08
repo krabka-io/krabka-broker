@@ -514,7 +514,7 @@ mod tests {
         let partition = registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open");
-        check!(partition.log_end_offset() == Offset(0));
+        check!(partition.log_end_offset().unwrap() == Offset(0));
     }
 
     #[test]

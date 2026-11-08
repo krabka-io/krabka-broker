@@ -3,7 +3,10 @@
 //! dedup that answers a retry with the offset it already assigned.
 
 use {
-    super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch},
+    super::{
+        ACKS_ALL, INVALID_OFFSET, append::stamp_log_start, durability_frontier,
+        prepare::PreparedBatch,
+    },
     crate::{
         api_catalog::UnstableApiVersions,
         broker::Broker,
@@ -362,8 +365,21 @@ pub(super) async fn handle_duplicate(
     if batch.producer_id < 0 {
         return DedupOutcome::Append;
     }
+    // A poisoned log cannot say whether it is empty, which the sequence check
+    // needs, so the row fails closed and the producer retries.
+    let log_end = match partition.log_end_offset() {
+        Ok(log_end) => log_end,
+        Err(error) => {
+            return DedupOutcome::Answered(PartitionProduceResponse {
+                index: partition_index,
+                error_code: codes::from_broker_error(&error),
+                base_offset: -1,
+                ..Default::default()
+            });
+        }
+    };
     let context = SequenceContext {
-        log_empty: partition.log_end_offset() == Offset(0),
+        log_empty: log_end == Offset(0),
         unstable,
     };
     let Checked {
@@ -406,7 +422,7 @@ pub(super) async fn handle_duplicate(
                         index: partition_index,
                         base_offset,
                         log_append_time_ms: duplicate_timestamp,
-                        log_start_offset: partition.log_start_offset().0,
+                        log_start_offset: stamp_log_start(partition),
                         ..Default::default()
                     },
                     target,
@@ -416,20 +432,20 @@ pub(super) async fn handle_duplicate(
                 codes::NONE,
                 base_offset,
                 duplicate_timestamp,
-                partition.log_start_offset().0,
+                stamp_log_start(partition),
             )
         }
         Decision::OutOfOrder => (
             codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
             INVALID_OFFSET,
             super::NO_LOG_APPEND_TIME,
-            partition.log_start_offset().0,
+            stamp_log_start(partition),
         ),
         Decision::Fenced => (
             codes::INVALID_PRODUCER_EPOCH,
             INVALID_OFFSET,
             super::NO_LOG_APPEND_TIME,
-            partition.log_start_offset().0,
+            stamp_log_start(partition),
         ),
         Decision::Append => return DedupOutcome::Append,
     };
@@ -699,7 +715,7 @@ mod tests {
                 .append(&mut batch)
                 .expect("seed source records");
         }
-        assert!(part.log_end_offset() == krabka_log::Offset(3));
+        assert!(part.log_end_offset().unwrap() == krabka_log::Offset(3));
         part.set_follower_hw(krabka_log::Offset(2)).await;
         assert!(part.high_watermark().await == krabka_log::Offset(2));
         leader
@@ -1017,7 +1033,7 @@ mod tests {
             let label = format!("{history:?}, sequence {base_sequence}, {unstable:?}");
             check!(produce(base_sequence).await == want, "{label}");
             check!(
-                part_handle.log_end_offset() == krabka_log::Offset(log_end),
+                part_handle.log_end_offset().unwrap() == krabka_log::Offset(log_end),
                 "{label}"
             );
         }

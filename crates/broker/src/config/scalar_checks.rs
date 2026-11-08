@@ -158,6 +158,14 @@ impl BrokerConfig {
             ("quota_throttle_max", self.quota_throttle_max),
             ("quota_window", self.quota_window),
             (
+                "replication_quota_window_size",
+                self.replication_quota_window_size,
+            ),
+            (
+                "alter_log_dirs_replication_quota_window_size",
+                self.alter_log_dirs_replication_quota_window_size,
+            ),
+            (
                 "controller_mutation_quota_window",
                 self.controller_mutation_quota_window,
             ),
@@ -382,6 +390,14 @@ impl BrokerConfig {
             (
                 "partition_writer_queue_depth",
                 self.partition_writer_queue_depth == 0,
+            ),
+            (
+                "replication_quota_window_num",
+                self.replication_quota_window_num == 0,
+            ),
+            (
+                "alter_log_dirs_replication_quota_window_num",
+                self.alter_log_dirs_replication_quota_window_num == 0,
             ),
         ] {
             if value {

@@ -366,5 +366,4 @@ fn field_reads_back(message: &MessageScenario, field: Field, content: Content) {
 krabka_bdd::scenarios!(
     "tests/features/message_format",
     fixtures = [message: MessageScenario],
-    tags = "not @formulated and not @inprogress"
 );

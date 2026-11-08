@@ -32,7 +32,7 @@ use {
     std::{
         collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         mem,
-        sync::{Arc, PoisonError, atomic},
+        sync::{Arc, atomic},
         time::Duration,
     },
     tokio::time::Instant,
@@ -432,16 +432,28 @@ struct PartitionRow {
 /// Every row asks for the configured fetch maximum, Kafka's
 /// `replica.fetch.max.bytes`. The KIP-73 follower throttle decides only
 /// whether a partition joins the round.
+///
+/// A partition whose log mutex is poisoned does not join it: with no log end
+/// to fetch from, a row would ask the leader for the log from offset 0.
 fn partition_row(cfg: &Config) -> Option<PartitionRow> {
     let entry = cfg.partitions.get(&cfg.topic, cfg.partition)?;
-    let fetch_offset = entry.log_end_offset();
     let leader_epoch = entry.current_leader_epoch.load(atomic::Ordering::Acquire);
-    let last_fetched_epoch = {
-        let log = entry.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.epoch_checkpoint()
-            .latest_epoch()
-            // Unwrap the log-layer `LeaderEpoch` into the raw wire field.
-            .map_or(-1, |epoch| epoch.0)
+    let (fetch_offset, log_start_offset, last_fetched_epoch) = {
+        let log = entry
+            .lock_log()
+            .inspect_err(|error| {
+                tracing::warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                               "replicator: not fetching a partition whose log mutex is poisoned");
+            })
+            .ok()?;
+        (
+            log.log_end_offset(),
+            log.log_start_offset(),
+            log.epoch_checkpoint()
+                .latest_epoch()
+                // Unwrap the log-layer `LeaderEpoch` into the raw wire field.
+                .map_or(-1, |epoch| epoch.0),
+        )
     };
     Some(PartitionRow {
         request: FetchPartition {
@@ -452,7 +464,7 @@ fn partition_row(cfg: &Config) -> Option<PartitionRow> {
             last_fetched_epoch,
             // The leader's `DeleteRecords` waits until every live follower
             // reports a log start at or above the trim point.
-            log_start_offset: entry.log_start_offset().0,
+            log_start_offset: log_start_offset.0,
             partition_max_bytes: cfg.connection.replication.fetch_max.bytes_i32(),
             ..FetchPartition::default()
         },
@@ -521,7 +533,7 @@ mod tests {
         assert2::{assert, check},
         krabka_protocol::primitives::uuid::Uuid as WireUuid,
         krabka_raft::NodeId,
-        krabka_units::{bytes, millis},
+        krabka_units::{bytes, bytes_per_sec, millis},
         std::{collections::BTreeSet, iter, slice, time::Duration},
         tokio::{time, time::Instant},
         tokio_util::sync::CancellationToken,
@@ -538,13 +550,13 @@ mod tests {
         }
     }
 
-    /// A throttled fetcher whose follower-in bucket is empty, so every
+    /// A throttled fetcher whose follower-in quota is exceeded, so every
     /// partition it follows wants a fetch this round and none may have one.
     fn throttled_out() -> ConfigWithDir {
         let (cfg, log_dir) = test_config(image_with_follower_throttle("*"));
-        cfg.throttle_state
-            .follower_in
-            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), bytes(0));
+        let quota = &cfg.throttle_state.follower_in;
+        quota.set_bound(Some(bytes_per_sec(1024)));
+        quota.record(10_240);
         ConfigWithDir { cfg, dir: log_dir }
     }
 

@@ -275,14 +275,19 @@ async fn publish_diskless_delete_floor(
 ///
 /// `None` for a partition with no object tier behind it, which trims against
 /// its local log start like any other.
-async fn diskless_logical_start(env: &TrimEnv<'_>, topic: &str, part: &Partition) -> Option<i64> {
+async fn diskless_logical_start(
+    env: &TrimEnv<'_>,
+    topic: &str,
+    part: &Partition,
+    local_start: Offset,
+) -> Option<i64> {
     let DisklessIndex { handle, topic_id } = diskless_index(env, topic, part)?;
     let covered = handle
         .index
         .lock()
         .await
         .earliest_covered(topic_id, part.index.get())?;
-    Some(covered.min(part.log_start_offset().0))
+    Some(covered.min(local_start.0))
 }
 
 /// The diskless read handle and topic id behind a diskless partition.
@@ -437,7 +442,7 @@ async fn trim_one(
     let archive = deletes.then(|| archive_floor(env, topic, &part)).flatten();
     match trim_behind_archive(archive.as_ref(), &part, target).await {
         Ok(_) => {
-            let (low_watermark, waiting_for) = settle_row(env, &part, fp, target, hw).await;
+            let settled = settle_row(env, &part, fp, target, hw).await;
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -448,6 +453,18 @@ async fn trim_one(
                     "records deleted below the trim point",
                 ),
             );
+            let (low_watermark, waiting_for) = match settled {
+                Ok(settled) => settled,
+                Err(error) => {
+                    tracing::warn!(%topic, partition = index, %error,
+                                   "DeleteRecords cannot read the low watermark after the trim");
+                    return TrimOutcome {
+                        row: error_partition_result(index, codes::from_broker_error(&error)),
+                        deleted: deletes,
+                        waiting_for: None,
+                    };
+                }
+            };
             let code = if waiting_for.is_some() {
                 // Kafka's `DelayedDeleteRecords` starts every waiting row at
                 // `REQUEST_TIMED_OUT`, and clears it when the row completes.
@@ -566,7 +583,9 @@ async fn measure_trim(
     part: &Partition,
     fp: &DeleteRecordsPartition,
 ) -> Result<TrimMeasurement, i16> {
-    let leo = part.log_end_offset();
+    let leo = part
+        .log_end_offset()
+        .map_err(|error| codes::from_broker_error(&error))?;
     let hw = part.high_watermark().await;
     // Recompute delivery under the log mutex against the partition's own
     // clock. This agrees with the cap a fetch at this instant would apply,
@@ -583,9 +602,12 @@ async fn measure_trim(
     // measure against the offset the partition actually starts at, which is
     // the same one `ListOffsets(EARLIEST)` answers, or every request below the
     // trim frontier would be a no-op that deletes nothing.
-    let current_start = diskless_logical_start(env, topic, part)
+    let local_start = part
+        .log_start_offset()
+        .map_err(|error| codes::from_broker_error(&error))?;
+    let current_start = diskless_logical_start(env, topic, part, local_start)
         .await
-        .map_or_else(|| part.log_start_offset(), Offset);
+        .map_or(local_start, Offset);
     // `deletes` is what the audit trail keys on: a `Noop` answers the current
     // start, trims to where the partition already begins, and removes nothing.
     let (target, deletes) =
@@ -625,16 +647,16 @@ async fn settle_row(
     fp: &DeleteRecordsPartition,
     target: Offset,
     hw: Offset,
-) -> (i64, Option<i64>) {
+) -> Result<(i64, Option<i64>), BrokerError> {
     if part.diskless {
-        (target.0, None)
+        Ok((target.0, None))
     } else {
         let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
         let required = target.0.min(requested);
-        let low_watermark = low_watermark::current(env.broker, part).await.0;
-        (
+        let low_watermark = low_watermark::current(env.broker, part).await?.0;
+        Ok((
             low_watermark,
             (low_watermark < required).then_some(required),
-        )
+        ))
     }
 }

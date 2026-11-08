@@ -76,6 +76,7 @@ use {
     uuid::Uuid,
 };
 
+mod quota_windows;
 mod security;
 
 pub use self::security::PlainCredentials;
@@ -246,6 +247,22 @@ krabka_macros::broker_config! {
         /// Time window sizing the KIP-599 controller-mutation token bucket burst capacity (default 11 s): the bucket holds `window x controller_mutation_rate` tokens. Equivalent to Kafka's `controller.quota.window.num * controller.quota.window.size.seconds`.
         #[default(DEFAULT_QUOTA_WINDOW)]
         pub controller_mutation_quota_window: Time,
+        /// Number of samples the leader-out and follower-in replication quotas
+        /// keep (default 11). Kafka's `replication.quota.window.num`.
+        #[default(11)]
+        pub replication_quota_window_num: u32,
+        /// Length of one replication-quota sample (default 1 s). Kafka's
+        /// `replication.quota.window.size.seconds`.
+        #[default(secs(1))]
+        pub replication_quota_window_size: Time,
+        /// Number of samples the log-directory move quota keeps (default 11).
+        /// Kafka's `alter.log.dirs.replication.quota.window.num`.
+        #[default(11)]
+        pub alter_log_dirs_replication_quota_window_num: u32,
+        /// Length of one log-directory move quota sample (default 1 s). Kafka's
+        /// `alter.log.dirs.replication.quota.window.size.seconds`.
+        #[default(secs(1))]
+        pub alter_log_dirs_replication_quota_window_size: Time,
         /// Maximum self-registration attempts before startup fails.
         #[default(8)]
         pub self_registration_max_attempts: u32,

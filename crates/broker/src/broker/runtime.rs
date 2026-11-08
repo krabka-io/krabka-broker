@@ -265,7 +265,12 @@ pub(super) async fn start_broker_runtime(
         audit_signer,
     } = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
-    let throttle_state = Arc::new(ThrottleState::new());
+    let throttle_state = Arc::new(
+        ThrottleState::with_windows()
+            .replication_window(config.replication_quota_window())
+            .alter_log_dirs_window(config.alter_log_dirs_replication_quota_window())
+            .call(),
+    );
     // KIP-1066: keep the cordoned set in step with this broker's dynamic
     // `cordoned.log.dirs`, as Kafka's `DynamicLogConfig.reconfigure` does.
     spawn_watcher(

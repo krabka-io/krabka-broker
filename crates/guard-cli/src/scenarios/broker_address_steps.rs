@@ -16,8 +16,8 @@ const LIST_THE_FREEZES: [&str; 3] = ["krabka-guard", "freeze", "list"];
 
 /// Run `command_line` in the scenario's environment and record the outcome.
 async fn record_run(guard: &mut GuardScenario, command_line: &[&str]) {
-    let outcome = driver::run_in(command_line, &guard.environment).await;
-    guard.outcome.set(outcome);
+    let run = driver::run_in(command_line, &guard.environment).await;
+    guard.record(run);
 }
 
 #[given("KRABKA_BOOTSTRAP_SERVER names the broker")]

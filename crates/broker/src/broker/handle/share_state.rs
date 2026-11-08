@@ -10,10 +10,13 @@ use {
 
 /// Unwraps the summary's `start_offset` to `i64` at this test-helper
 /// boundary: integration tests compare it against raw offset literals.
-fn raw_summary(
-    (state_epoch, leader_epoch, start_offset, count): ShareStateSummary,
-) -> (i32, i32, i64, i32) {
-    (state_epoch, leader_epoch, start_offset.0, count)
+fn raw_summary(summary: ShareStateSummary) -> (i32, i32, i64, i32) {
+    (
+        summary.state_epoch,
+        summary.leader_epoch,
+        summary.start_offset.0,
+        summary.delivery_complete_count,
+    )
 }
 
 impl BrokerHandle {

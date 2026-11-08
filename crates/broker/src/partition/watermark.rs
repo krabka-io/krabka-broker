@@ -57,9 +57,12 @@ impl Partition {
     /// bounded correctly. It clamps to the local log end, so the broker never
     /// exposes records it has not replicated yet, and it only advances `hw`,
     /// because HW is monotonic. It fires `hw_advance_notify` when the HW
-    /// advances, so a consumer parked at the old HW wakes.
+    /// advances, so a consumer parked at the old HW wakes. A poisoned log
+    /// has no log end to clamp to, so the HW stays where it is.
     pub async fn set_follower_hw(&self, reported_hw: Offset) {
-        let log_end = self.log_end_offset();
+        let Ok(log_end) = self.log_end_offset() else {
+            return;
+        };
         let new_hw = reported_hw.min(log_end);
         let advanced = {
             let mut st = self.replica_state.lock().await;
@@ -90,21 +93,21 @@ impl Partition {
     /// The method recomputes HW under the new ISR and fires
     /// `hw_advance_notify` if HW advanced. Diskless partitions deliberately
     /// skip this LEO-based HW recompute, because their client-visible HW
-    /// advances only after WAL fsync.
+    /// advances only after WAL fsync. A poisoned log skips it too: it has no
+    /// LEO to recompute from.
     pub async fn install_isr(
         &self,
         isr: &[krabka_raft::NodeId],
         replicas: &[krabka_raft::NodeId],
         leader: krabka_raft::NodeId,
     ) {
-        let leader_leo = self.log_end_offset();
+        let leader_leo = self.log_end_offset().ok().filter(|_| !self.diskless);
         let mut st = self.replica_state.lock().await;
         let prev_hw = st.hw;
         st.install_isr(isr, replicas, leader, Instant::now());
-        let new_hw = if self.diskless {
-            st.hw
-        } else {
-            st.recompute_hw_for_leader_append(leader_leo)
+        let new_hw = match leader_leo {
+            Some(leader_leo) => st.recompute_hw_for_leader_append(leader_leo),
+            None => st.hw,
         };
         drop(st);
         if new_hw > prev_hw {
@@ -145,7 +148,7 @@ impl Partition {
                     // state so a failover stall (HW stuck because the ISR can't
                     // be satisfied) is observable — this path was previously
                     // silent. Cheap: only fires on a (rare) produce timeout.
-                    let leader_leo = self.log_end_offset();
+                    let leader_leo = self.log_end_offset().ok().map(|leo| leo.0);
                     let st = self.replica_state.lock().await;
                     let mut isr: Vec<krabka_raft::NodeId> = st.isr.iter().copied().collect();
                     isr.sort_unstable();
@@ -154,7 +157,7 @@ impl Partition {
                     tracing::warn!(
                         target_offset = target_offset.0,
                         hw = st.hw.0,
-                        leader_leo = leader_leo.0,
+                        leader_leo = ?leader_leo,
                         leader_epoch = st.current_leader_epoch.0,
                         ?isr,
                         ?followers,

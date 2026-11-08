@@ -39,7 +39,10 @@
 //! which is `Range.atLeast`, `ValidString.in` and `ValidList`. The topic
 //! synonyms carry their topic key's own check instead (see
 //! [`super::broker_dynamic`]), so a key with a stricter validator than the one
-//! here is checked by that validator first.
+//! here is checked by that validator first. A read-only key never reaches the
+//! check through an alter, so its column is `Free` unless krabka reads the key
+//! at startup: the four replication-quota window keys carry Kafka's
+//! `atLeast(1)` there.
 //!
 //! Kafka trunk's broker keys are not here. Under
 //! `unstable.api.versions.enable`, [`super::broker_dynamic`] adds the broker
@@ -196,14 +199,14 @@ pub const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
         Int,
         Some("11"),
         ReadOnly,
-        Free,
+        AtLeast(1),
     ),
     k(
         "alter.log.dirs.replication.quota.window.size.seconds",
         Int,
         Some("1"),
         ReadOnly,
-        Free,
+        AtLeast(1),
     ),
     k("authorizer.class.name", Str, Some(""), ReadOnly, Free),
     k(
@@ -1568,14 +1571,14 @@ pub const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
         Int,
         Some("11"),
         ReadOnly,
-        Free,
+        AtLeast(1),
     ),
     k(
         "replication.quota.window.size.seconds",
         Int,
         Some("1"),
         ReadOnly,
-        Free,
+        AtLeast(1),
     ),
     k("request.timeout.ms", Int, Some("30000"), ReadOnly, Free),
     k(

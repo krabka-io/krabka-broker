@@ -59,6 +59,8 @@ pub mod scheduler;
 pub mod state;
 
 #[cfg(test)]
+mod cut_consumption_tests;
+#[cfg(test)]
 mod test_support;
 
 /// The internal topic that carries group definitions, injection-start records,

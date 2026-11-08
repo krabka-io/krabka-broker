@@ -189,8 +189,13 @@ async fn run_steps(partition: &Partition, state: &ProducerState, steps: &[Step])
                     .await;
             }
             Step::Marker { epoch, marker } => {
-                let batch =
-                    build_marker_batch(PRODUCER_ID, epoch.0, partition.log_end_offset(), marker, 0);
+                let batch = build_marker_batch(
+                    PRODUCER_ID,
+                    epoch.0,
+                    partition.log_end_offset().unwrap(),
+                    marker,
+                    0,
+                );
                 partition
                     .produce_control_batch(batch)
                     .await

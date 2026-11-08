@@ -46,7 +46,8 @@ impl BarrierCoordinator {
     /// # Errors
     /// Returns [`BarrierError::NotCoordinator`] when another broker owns the
     /// group, [`BarrierError::UnknownGroup`] when no group of that name is
-    /// live, [`BarrierError::InjectionInProgress`] when the group entry is
+    /// live or `__barrier_state` does not exist yet,
+    /// [`BarrierError::InjectionInProgress`] when the group entry is
     /// busy, [`BarrierError::CoordinatorEpochChanged`] when this broker lost
     /// the state partition during the fan-out, and [`BarrierError::Persist`]
     /// when an append fails.

@@ -220,14 +220,18 @@ fn spawn_move(task: MoveTask) {
 mod tests {
     use {
         super::*,
-        crate::future_log::{
-            MoveLock,
-            test_support::{
-                PlantedFutureLog, fixture_partition, plant_future_log, registered_source_fixture,
-                test_policy,
+        crate::{
+            future_log::{
+                MoveLock,
+                test_support::{
+                    PlantedFutureLog, fixture_partition, plant_future_log,
+                    registered_source_fixture, test_policy,
+                },
             },
+            throttle::ReplicationQuota,
         },
         assert2::assert,
+        qubit_clock::ManualMonotonicClock,
         std::{iter, time::Duration},
         tempfile::tempdir,
         tokio::{task, time},
@@ -509,14 +513,18 @@ mod tests {
         assert!(future_logs.len() == 1);
     }
 
-    /// A policy whose throttle never grants a chunk, so a move task runs
-    /// until something stops it.
+    /// A policy whose move quota stays exceeded, so a move task copies nothing
+    /// and runs until something stops it. A zero bound is exceeded once a byte
+    /// is recorded, and on a clock that never advances the sample is never
+    /// forgotten.
     fn stalled_policy() -> MovePolicy {
-        let policy = test_policy();
-        policy
-            .throttle
-            .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1), krabka_units::bytes(0));
-        policy
+        let throttle = ReplicationQuota::with_clock(ManualMonotonicClock::new_shared());
+        throttle.set_bound(Some(krabka_units::bytes_per_sec(0)));
+        throttle.record(1);
+        MovePolicy {
+            throttle: Arc::new(throttle),
+            ..test_policy()
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -611,6 +619,6 @@ mod tests {
 
         assert!(old_cancel.is_cancelled());
         assert!(!future_path.exists());
-        assert!(source.partition.log_end_offset() == 3);
+        assert!(source.partition.log_end_offset().unwrap() == 3);
     }
 }

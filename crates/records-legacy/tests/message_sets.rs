@@ -200,5 +200,4 @@ fn rejected_as_invalid(message_set: &MessageSetScenario) {
 krabka_bdd::scenarios!(
     "tests/features/message_sets",
     fixtures = [message_set: MessageSetScenario],
-    tags = "not @formulated and not @inprogress"
 );
