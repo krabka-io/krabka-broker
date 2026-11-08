@@ -2,8 +2,8 @@
 //! the heartbeat epoch exchange, reconciliation, and persistence.
 //!
 //! This actor mirrors the overall shape of the KIP-932 share-group actor
-//! ([`super::super::share::actor`]): a `tokio::select!` loop over an mpsc
-//! message channel plus a `heartbeat_interval` session tick, the
+//! ([`share::actor`]): a `tokio::select!` loop over an mpsc message channel
+//! plus a `heartbeat_interval` session tick, the
 //! `Pending*Records` → `RecordBatch` → `OffsetsLog::append` flush, and a
 //! last-known-good cache hand-off through
 //! `GroupCoordinator::update_streams_cache`.
@@ -21,6 +21,8 @@
 //! source, so the group stays `NotReady` with empty assignments. Members there
 //! still mint a `member_id` and advance their epoch, but the actor assigns no
 //! tasks.
+//!
+//! [`share::actor`]: crate::coordinator::unified::share::actor
 
 #[cfg(test)]
 use crate::task_util::spawn_dropping_mailbox;
@@ -69,15 +71,17 @@ use {
     super::{
         config::{StreamsGroupConfig, resolve_broker_and_group_config},
         description::{DescriptionEpochs, DescriptionRuntime, TopologyDescription},
+        migration::DowngradeOutcome,
         persistence::StreamsGroupTopologyValue,
         state::{self, StreamsGroupState},
+        topology::{ConfiguredTopology, InternalTopicSpec},
     },
     crate::{
         codes,
         coordinator::{
             DeleteGroupError,
             unified::{
-                GroupCoordinator,
+                ClientIdentity, GroupCoordinator, GroupType, StreamsGroupSeed,
                 actor::{CommitFence, ReapOutcome, SubscribedTopics},
                 offsets_log::{OffsetsLog, write_failure_code},
             },
@@ -140,7 +144,7 @@ pub enum StreamsGroupActorMessage {
         push: Box<DescriptionPush>,
         reply: oneshot::Sender<PushAnswer>,
     },
-    Seed(super::super::StreamsGroupSeed),
+    Seed(StreamsGroupSeed),
     /// Retention runs under the Streams membership actor, never its offset home.
     ReapExpiredOffsets {
         now_ms: i64,
@@ -151,7 +155,7 @@ pub enum StreamsGroupActorMessage {
     Convert {
         member_id: String,
         now_ms: i64,
-        reply: oneshot::Sender<Result<super::migration::DowngradeOutcome, BrokerError>>,
+        reply: oneshot::Sender<Result<DowngradeOutcome, BrokerError>>,
     },
     DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
     PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
@@ -163,7 +167,7 @@ pub enum StreamsGroupActorMessage {
 #[derive(Debug, Default)]
 pub struct StreamsHeartbeatResult {
     pub response: StreamsGroupHeartbeatResponse,
-    pub creatable_topics: Vec<super::topology::InternalTopicSpec>,
+    pub creatable_topics: Vec<InternalTopicSpec>,
 }
 
 /// Read-only projection of [`StreamsGroupState`] for the
@@ -182,7 +186,7 @@ pub struct StreamsDescribeView {
     /// The topology as the last configuration sized it, when it is ready:
     /// Kafka describes this one, with the decided partition count of every
     /// internal topic.
-    pub configured_topology: Option<super::topology::ConfiguredTopology>,
+    pub configured_topology: Option<ConfiguredTopology>,
     /// The members, by member id.
     pub members: Vec<StreamsDescribeMember>,
     /// KIP-1331: the topology description that the plugin holds for the
@@ -230,7 +234,7 @@ impl StreamsGroupActorHandle {
     pub fn spawn(
         group_id: String,
         config: Arc<StreamsGroupConfig>,
-        coordinator: Arc<super::super::GroupCoordinator>,
+        coordinator: Arc<GroupCoordinator>,
     ) -> Self {
         let owner = Arc::new(());
         let actor_owner = Arc::clone(&owner);
@@ -288,7 +292,7 @@ struct ActorState {
     /// does not hold. Every heartbeat answer carries them, as Kafka's
     /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
     /// sends them to the controller as a `CreateTopics` request.
-    creatable_topics: Vec<super::topology::InternalTopicSpec>,
+    creatable_topics: Vec<InternalTopicSpec>,
     /// The members whose target the last target assignment changed, set when
     /// a reconcile installed a target and taken by the records of the
     /// transition that installed it.
@@ -301,7 +305,7 @@ struct ActorState {
     /// Kafka's `StreamsGroup.configuredTopology`: the topology as the most
     /// recent configuration against the metadata image sized it. It is
     /// `None` until a configuration succeeds.
-    configured_topology: Option<super::topology::ConfiguredTopology>,
+    configured_topology: Option<ConfiguredTopology>,
     /// When Kafka's initial rebalance delay of the group ends: set when the
     /// first member joins an empty group, and cleared when the delayed
     /// assignment runs.
@@ -396,7 +400,7 @@ impl MetadataLink {
     /// image, so the loop takes the source before it handles each wake-up.
     fn attach(
         &mut self,
-        coordinator: &super::super::GroupCoordinator,
+        coordinator: &GroupCoordinator,
     ) -> Option<Arc<krabka_metadata::MetadataImage>> {
         if self.source.is_some() {
             return None;
@@ -420,7 +424,7 @@ fn session_tick(config: &StreamsGroupConfig) -> Interval {
 async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
-    coordinator: Arc<super::super::GroupCoordinator>,
+    coordinator: Arc<GroupCoordinator>,
     owner: Arc<()>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
@@ -434,7 +438,7 @@ async fn actor_loop(
     // A stale Streams lookup after conversion must not recreate plugin state.
     if coordinator
         .group_type(&actor.state.group_id)
-        .is_none_or(|kind| kind == super::super::GroupType::Streams)
+        .is_none_or(|kind| kind == GroupType::Streams)
     {
         actor.description_runtime = Arc::clone(
             coordinator
@@ -604,7 +608,7 @@ impl ActorState {
     fn assignment_pending(&self) -> bool { self.state.target.epoch < self.state.group_epoch }
 
     /// The configured topology, when it is ready for an assignment.
-    fn ready_topology(&self) -> Option<&super::topology::ConfiguredTopology> {
+    fn ready_topology(&self) -> Option<&ConfiguredTopology> {
         self.configured_topology
             .as_ref()
             .filter(|configured| configured.is_ready())
@@ -651,9 +655,7 @@ fn forget_abandoned_group(coordinator: &GroupCoordinator, actor: &ActorState, ow
         description::retire_runtime(actor, coordinator);
         coordinator
             .group_types
-            .remove_if(group_id, |_, group_type| {
-                *group_type == super::super::GroupType::Streams
-            });
+            .remove_if(group_id, |_, group_type| *group_type == GroupType::Streams);
         entry.remove();
     }
 }
@@ -677,14 +679,14 @@ async fn handle_message(
             if turn
                 .coordinator
                 .group_type(&actor.state.group_id)
-                .is_some_and(|kind| kind != super::super::GroupType::Streams)
+                .is_some_and(|kind| kind != GroupType::Streams)
             {
                 return Step::RefusedJoin(Box::new(DeferredReply {
                     reply,
                     response: response::error_resp(codes::GROUP_ID_NOT_FOUND, None),
                 }));
             }
-            match handle_heartbeat(actor, turn, &request, super::super::ClientIdentity {
+            match handle_heartbeat(actor, turn, &request, ClientIdentity {
                 id: &client_id,
                 host: &client_host,
             })
@@ -815,8 +817,7 @@ async fn handle_message(
             let result = description::convert(actor, turn, &member_id, now_ms).await;
             let stop = matches!(
                 &result,
-                Ok(super::migration::DowngradeOutcome::Converted
-                    | super::migration::DowngradeOutcome::Removed)
+                Ok(DowngradeOutcome::Converted | DowngradeOutcome::Removed)
             ) || result.is_err();
             return reply_and_step(reply, result, stop);
         }
