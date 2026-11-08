@@ -881,4 +881,4 @@ async fn wait_for_metadata_change(
     }
 }
 
-use crate::txn::util::now_millis as chrono_now_ms;
+use crate::time_util::now_ms as chrono_now_ms;

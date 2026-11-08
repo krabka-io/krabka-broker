@@ -5,13 +5,12 @@
 use {
     super::producer_identity::prepare_completion_identities,
     crate::{
-        codes,
+        codes, time_util,
         txn::{
             coordinator::TxnCoordinator,
             decision::{apply_end_txn_prepare, decide_phase1_transition},
             marker::MarkerType,
             state::{TxnEntry, TxnState},
-            util::now_millis,
             version::TxnVersion,
         },
     },
@@ -58,7 +57,7 @@ pub(super) async fn prepare_transaction(
     // comes from `Ongoing`.
     let (prepare, complete) = if no_partition_added {
         staged.partitions.clear();
-        staged.start_ms = now_millis();
+        staged.start_ms = time_util::now_ms();
         apply_end_txn_prepare(&mut staged, committed)
     } else {
         decide_phase1_transition(&mut staged, committed)?
@@ -76,7 +75,7 @@ pub(super) async fn prepare_transaction(
             // `COORDINATOR_LOAD_IN_PROGRESS` while no block is ready.
             codes::from_broker_error(&error)
         })?;
-    staged.last_update_ms = now_millis();
+    staged.last_update_ms = time_util::now_ms();
     // Kafka `prepareAbortOrCommit` stamps the request's transaction version.
     staged.client_transaction_version = client_version.level();
     if let Err(error) = coordinator
