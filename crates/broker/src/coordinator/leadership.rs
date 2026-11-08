@@ -430,7 +430,6 @@ mod tests {
             coordinator, image, ..
         } = coordinator_of_the_offsets_partition();
         let _classic = coordinator.get_or_create_classic("classic-actor");
-        coordinator.mark_share("share-actor");
         let _share = coordinator.get_or_create_share("share-actor");
         let _streams = coordinator.get_or_create_streams("streams-actor");
         coordinator
