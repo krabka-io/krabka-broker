@@ -6,8 +6,8 @@
 
 use {
     crate::codes::{
-        INVALID_REQUEST, THROTTLING_QUOTA_EXCEEDED, TOPIC_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_ID,
-        UNKNOWN_TOPIC_OR_PARTITION,
+        self, INVALID_REQUEST, THROTTLING_QUOTA_EXCEEDED, TOPIC_AUTHORIZATION_FAILED,
+        UNKNOWN_TOPIC_ID, UNKNOWN_TOPIC_OR_PARTITION,
     },
     krabka_protocol::{
         owned::{
@@ -19,31 +19,17 @@ use {
     std::collections::hash_map::RandomState,
 };
 
-/// Kafka's `Errors.TOPIC_AUTHORIZATION_FAILED.message()`.
-pub(super) const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
-
-/// Kafka's `Errors.UNKNOWN_TOPIC_OR_PARTITION.message()`.
-pub(super) const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str =
-    "This server does not host this topic-partition.";
-
-/// Kafka's `Errors.UNKNOWN_TOPIC_ID.message()`.
-pub(super) const UNKNOWN_TOPIC_ID_MESSAGE: &str = "This server does not host this topic ID.";
-
-/// Kafka's `Errors.THROTTLING_QUOTA_EXCEEDED.message()`.
-pub(super) const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str =
-    "The throttling quota has been exceeded.";
-
 /// The message Kafka's `new ApiError(error)` carries for the codes this
 /// handler answers without a message of its own.
 fn default_message(error_code: i16) -> Option<String> {
-    let message = match error_code {
-        TOPIC_AUTHORIZATION_FAILED => TOPIC_AUTHORIZATION_FAILED_MESSAGE,
-        UNKNOWN_TOPIC_OR_PARTITION => UNKNOWN_TOPIC_OR_PARTITION_MESSAGE,
-        UNKNOWN_TOPIC_ID => UNKNOWN_TOPIC_ID_MESSAGE,
-        THROTTLING_QUOTA_EXCEEDED => THROTTLING_QUOTA_EXCEEDED_MESSAGE,
-        _ => return None,
-    };
-    Some(message.to_owned())
+    matches!(
+        error_code,
+        TOPIC_AUTHORIZATION_FAILED
+            | UNKNOWN_TOPIC_OR_PARTITION
+            | UNKNOWN_TOPIC_ID
+            | THROTTLING_QUOTA_EXCEEDED
+    )
+    .then(|| codes::default_message(error_code).to_owned())
 }
 
 /// Builds one response row for a requested topic.
@@ -177,7 +163,7 @@ mod tests {
             name: None,
             topic_id: id,
             error_code: codes::UNKNOWN_TOPIC_ID,
-            error_message: Some(UNKNOWN_TOPIC_ID_MESSAGE.into()),
+            error_message: Some("This server does not host this topic ID.".into()),
         });
         assert!(unknown_id == expected_unknown);
 
@@ -190,7 +176,7 @@ mod tests {
             name: Some("secret".into()),
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.into()),
+            error_message: Some("Topic authorization failed.".into()),
         });
         assert!(denied == expected_denied);
 

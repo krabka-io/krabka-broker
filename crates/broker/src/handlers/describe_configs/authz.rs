@@ -52,9 +52,7 @@ pub(super) fn resource_authz_failure(
 }
 
 /// Kafka's `Errors.INVALID_REQUEST.message()`.
-const INVALID_REQUEST_MESSAGE: &str = "This most likely occurs because of a request being \
-     malformed by the client library or the message was sent to an incompatible broker. See the \
-     broker logs for more details.";
+const INVALID_REQUEST_MESSAGE: &str = codes::default_message(codes::INVALID_REQUEST);
 
 /// Kafka's answer to a request that names a resource type it does not
 /// describe, or `None` when every type is one it does.
@@ -105,11 +103,10 @@ pub(super) fn denied_result(
 
 /// Kafka's `Errors.message()` for the three authorization failures.
 const fn authorization_failed_message(error_code: i16) -> &'static str {
-    match error_code {
-        codes::TOPIC_AUTHORIZATION_FAILED => "Topic authorization failed.",
-        codes::GROUP_AUTHORIZATION_FAILED => "Group authorization failed.",
-        _ => "Cluster authorization failed.",
-    }
+    codes::default_message(match error_code {
+        codes::TOPIC_AUTHORIZATION_FAILED | codes::GROUP_AUTHORIZATION_FAILED => error_code,
+        _ => codes::CLUSTER_AUTHORIZATION_FAILED,
+    })
 }
 
 #[cfg(test)]

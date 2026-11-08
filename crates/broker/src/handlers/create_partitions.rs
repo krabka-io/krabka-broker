@@ -300,7 +300,7 @@ async fn grow_topic(
     let additional = u64::try_from(i64::from(t.count) - i64::from(existing)).unwrap_or(0);
     if !reconcile_growth_charge(growth, additional).await {
         out.error_code = codes::THROTTLING_QUOTA_EXCEEDED;
-        out.error_message = Some("The throttling quota has been exceeded.".into());
+        out.error_message = Some(codes::default_message(codes::THROTTLING_QUOTA_EXCEEDED).into());
         return Ok(out);
     }
     let diskless = resolve_diskless(image.topic_config(&t.name));
@@ -533,7 +533,7 @@ fn admit_growth(
     {
         return Err(GrowthRefusal {
             code: codes::THROTTLING_QUOTA_EXCEEDED,
-            message: Some("The throttling quota has been exceeded.".into()),
+            message: Some(codes::default_message(codes::THROTTLING_QUOTA_EXCEEDED).into()),
         });
     }
     Ok(topic_rec)

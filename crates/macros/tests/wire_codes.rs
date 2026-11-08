@@ -1,4 +1,5 @@
-//! Constants remain public while guard tables preserve declaration order.
+//! Constants remain public while guard tables preserve declaration order, and
+//! the generated lookup answers each declared Kafka row's name and message.
 #![cfg(test)]
 
 use assert2::assert;
@@ -8,19 +9,26 @@ mod codes {
     struct NamedCode {
         name: &'static str,
         code: i16,
+        message: Option<&'static str>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct KafkaError {
+        pub name: &'static str,
+        pub message: &'static str,
     }
 
     krabka_macros::wire_codes! {
         release RELEASE {
             /// A successful reply.
-            NONE = 0;
-            UNKNOWN = -1;
-            MAX = 32767;
-            MIN = -32768;
+            NONE = 0 => "NONE";
+            UNKNOWN = -1 => "Something went wrong.";
+            MAX = 32767 => "The top.";
+            MIN = -32768 => "The bottom.";
         }
         trunk TRUNK {
-            TOPOLOGY = 135;
-            CONTROLLER = 136;
+            TOPOLOGY = 135 => "The topology moved.";
+            CONTROLLER = 136 => "No such controller.";
         }
         private PRIVATE {
             BUSY = 1000;
@@ -28,63 +36,31 @@ mod codes {
         }
     }
 
+    pub const fn lookup(code: i16) -> Option<KafkaError> { declared_kafka_error(code) }
+
     #[test]
-    fn private_guard_tables_keep_every_name_and_value_in_declared_order() {
+    fn private_guard_tables_keep_every_name_value_and_message_in_declared_order() {
         use assert2::assert;
 
-        let tables: Vec<Vec<_>> = [RELEASE, TRUNK, PRIVATE]
-            .into_iter()
-            .map(|table| {
-                table
-                    .iter()
-                    .map(|code| NamedCode {
-                        name: code.name,
-                        code: code.code,
-                    })
-                    .collect()
-            })
-            .collect();
+        let row = |name, code, message| NamedCode {
+            name,
+            code,
+            message,
+        };
         assert!(
-            tables
+            [RELEASE, TRUNK, PRIVATE]
                 == [
-                    vec![
-                        NamedCode {
-                            name: "NONE",
-                            code: 0
-                        },
-                        NamedCode {
-                            name: "UNKNOWN",
-                            code: -1
-                        },
-                        NamedCode {
-                            name: "MAX",
-                            code: 32767
-                        },
-                        NamedCode {
-                            name: "MIN",
-                            code: -32768
-                        }
-                    ],
-                    vec![
-                        NamedCode {
-                            name: "TOPOLOGY",
-                            code: 135
-                        },
-                        NamedCode {
-                            name: "CONTROLLER",
-                            code: 136
-                        }
-                    ],
-                    vec![
-                        NamedCode {
-                            name: "BUSY",
-                            code: 1000
-                        },
-                        NamedCode {
-                            name: "REFUSED",
-                            code: 1013
-                        }
-                    ],
+                    &[
+                        row("NONE", 0, Some("NONE")),
+                        row("UNKNOWN", -1, Some("Something went wrong.")),
+                        row("MAX", 32767, Some("The top.")),
+                        row("MIN", -32768, Some("The bottom.")),
+                    ][..],
+                    &[
+                        row("TOPOLOGY", 135, Some("The topology moved.")),
+                        row("CONTROLLER", 136, Some("No such controller.")),
+                    ][..],
+                    &[row("BUSY", 1000, None), row("REFUSED", 1013, None)][..],
                 ]
         );
     }
@@ -102,4 +78,16 @@ fn generated_constants_are_public_i16_values() {
             codes::REFUSED
         ] == [135, 136, 1000, 1013]
     );
+}
+
+#[yare::parameterized(
+    release = { codes::UNKNOWN, Some(("UNKNOWN", "Something went wrong.")) },
+    none = { codes::NONE, Some(("NONE", "NONE")) },
+    trunk = { codes::CONTROLLER, Some(("CONTROLLER", "No such controller.")) },
+    private = { codes::BUSY, None },
+    undeclared = { 7, None },
+)]
+fn the_lookup_answers_declared_kafka_rows_only(code: i16, want: Option<(&str, &str)>) {
+    let want = want.map(|(name, message)| codes::KafkaError { name, message });
+    assert2::assert!(codes::lookup(code) == want);
 }
