@@ -3990,6 +3990,7 @@ dependencies = [
  "clap",
  "derive_more",
  "futures-util",
+ "krabka-bdd",
  "krabka-macros",
  "krabka-protocol",
  "krabka-units 0.8.0",

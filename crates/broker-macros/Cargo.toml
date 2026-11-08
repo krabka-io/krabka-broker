@@ -21,6 +21,8 @@ moxy = { workspace = true }
 [dev-dependencies]
 # Tests derive `FieldDefaults` on their fixture rows.
 krabka-macros = { path = "../macros" }
+# No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }
