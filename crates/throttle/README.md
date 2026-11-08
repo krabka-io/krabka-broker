@@ -1,6 +1,7 @@
 # krabka-throttle
 
-Shared KIP-73 token-bucket rate limiter for the broker's quotas.
+Shared throttling primitives for the broker: the KIP-73 replication quota and
+the token bucket behind the client quotas.
 
 Part of [krabka-broker](../../README.md), an Apache Kafka-compatible broker
 written in Rust.
@@ -11,12 +12,20 @@ written in Rust.
 arithmetic in [`krabka-verified`](../verified/README.md). It holds the bucket
 state behind one lock, a lock-free copy of the rate for the unthrottled fast
 path, and an injected monotonic clock.
-`ThrottleState` bundles the three buckets the broker meters: leader-out and
-follower-in replica traffic (KIP-73), and intra-broker log directory moves
-(KIP-113).
+`ReplicationQuota` is a port of Kafka's `ReplicationQuotaManager` over a
+`SimpleRate`: 11 samples of one second each, exceeded while the measured rate
+is above the bound. `ThrottleState` bundles the three replication quotas the
+broker meters: leader-out and follower-in replica traffic (KIP-73), and
+intra-broker log directory moves (KIP-113).
 
 ## Features
 
+- A `ReplicationQuota` that a reader asks before it reads throttled traffic
+  and records after, as Kafka's fetchers do. A rate equal to the bound is
+  within it, a batch past the bound keeps the quota exceeded until the
+  elapsed time covers it or its sample leaves the 11 s window, a bound of
+  zero admits no recorded traffic, and no bound never throttles. Changing
+  the bound keeps the traffic already measured.
 - Byte, event, and plain token rates, each with an optional burst capacity.
   The bucket counts micro-tokens, so a fractional byte rate such as Kafka's
   `consumer_byte_rate = 0.5` is enforced as configured.

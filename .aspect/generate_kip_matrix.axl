@@ -25,7 +25,7 @@ page.
     aspect generate-kip-matrix
 """
 
-load("./repo.axl", "is_file", "walk")
+load("./repo.axl", "is_file", "walk", "walk_suffix")
 
 _TESTS = "crates/log/tests/integration.rs"
 _LOG_BUILD = "crates/log/BUILD.bazel"
@@ -912,12 +912,181 @@ def bdd_scenario_bindings(suite, source = _LIBRDKAFKA):
                 )
     return found
 
+_BDD_DIRECTORY_MACRO = "krabka_bdd::scenarios!("
+
+def bdd_directory_bindings(suite, source = _LIBRDKAFKA):
+    """The directories `krabka_bdd::scenarios!` binds, relative to the crate manifest.
+
+    The directory is the macro's first argument, positional or as `dir = ".."`
+    or `path = ".."`. A call inside a `//` comment binds nothing.
+    """
+    found = []
+    lines = suite.splitlines()
+    for index in range(len(lines)):
+        line = lines[index]
+        opening = line.find(_BDD_DIRECTORY_MACRO)
+        if opening < 0 or line.strip().startswith("//"):
+            continue
+        rest = "\n".join([line[opening + len(_BDD_DIRECTORY_MACRO):]] + lines[index + 1:])
+        at = _skip_whitespace(rest, 0)
+        for key in ("dir", "path"):
+            for separator in (" = ", "="):
+                if rest[at:].startswith(key + separator):
+                    at = _skip_whitespace(rest, at + len(key + separator))
+        directory = _quoted(rest, at)
+        if directory == None or not directory.value.rstrip("/"):
+            fail("unreadable krabka_bdd::scenarios! directory in %s" % source)
+        if "tags" in macro_argument_words(rest):
+            fail("krabka_bdd::scenarios! directory %s in %s has tags = ..: the KIP matrix cannot apply a tag filter, so it would read scenarios the suite leaves out" % (directory.value, source))
+        found.append(directory.value.rstrip("/"))
+    return found
+
+def macro_argument_words(rest):
+    """The words of a macro call's arguments outside string literals.
+
+    `rest` starts just past the call's opening parenthesis; the scan stops at
+    the parenthesis that closes it.
+    """
+    words = []
+    word = ""
+    depth = 1
+    quoted = False
+    for character in rest.elems():
+        if quoted:
+            quoted = character != '"'
+            continue
+        if character == '"':
+            quoted = True
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+            if depth == 0:
+                break
+        if character in _ASCII_ALPHANUMERIC or character == "_":
+            word += character
+            continue
+        if word:
+            words.append(word)
+        word = ""
+    if word:
+        words.append(word)
+    return words
+
+def bdd_generated_test_names(suite, features, source = _LIBRDKAFKA):
+    """The test names `krabka_bdd::scenarios!` generates in `suite`.
+
+    `features` maps each bound `.feature` path, relative to the crate
+    manifest, to its text. A KIP catalog entry may cite one of these names
+    although no `fn` in the source declares it.
+    """
+    names = {}
+    for directory in bdd_directory_bindings(suite, source):
+        for path in bdd_directory_features(directory, features, source):
+            for title in bdd_feature_scenarios(features[path], path):
+                names[bdd_test_name(title)] = True
+    return names
+
+def bdd_directory_features(directory, features, source = _LIBRDKAFKA):
+    """The `.feature` paths of `features` under `directory`, sorted."""
+    found = sorted([path for path in features if path.startswith(directory + "/") and path.endswith(".feature")])
+    if not found:
+        fail("krabka_bdd::scenarios! directory %s holds no .feature file for %s" % (directory, source))
+    return found
+
+_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_ASCII_ALPHANUMERIC = _ASCII_UPPER + _ASCII_UPPER.lower() + "0123456789"
+
+# The Rust 2024 keywords krabka-bdd prefixes with `r_` in a generated name.
+_RUST_KEYWORDS = [
+    "abstract",
+    "as",
+    "async",
+    "await",
+    "become",
+    "box",
+    "break",
+    "const",
+    "continue",
+    "crate",
+    "do",
+    "dyn",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "final",
+    "fn",
+    "for",
+    "gen",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "macro",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "override",
+    "priv",
+    "pub",
+    "ref",
+    "return",
+    "self",
+    "static",
+    "struct",
+    "super",
+    "trait",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "union",
+    "unsafe",
+    "unsized",
+    "use",
+    "virtual",
+    "where",
+    "while",
+    "yield",
+]
+
+def bdd_test_name(title):
+    """The test (or, for an outline, module) name `scenarios!` gives a scenario.
+
+    Mirrors `krabka_bdd_model::plan::ident`: ASCII alphanumerics in snake
+    case, a break at every other character and at a lower-to-upper step.
+    """
+    out = ""
+    gap = False
+    previous_lower = False
+    for character in title.elems():
+        if character not in _ASCII_ALPHANUMERIC:
+            gap = True
+            previous_lower = False
+            continue
+        upper = character in _ASCII_UPPER
+        if out and (gap or (upper and previous_lower)):
+            out += "_"
+        gap = False
+        previous_lower = not upper
+        out += character.lower()
+    if not out:
+        return "unnamed"
+    if out[0] in "0123456789":
+        out = "_" + out
+    if out in _RUST_KEYWORDS:
+        out = "r_" + out
+    return out
+
 def _bdd_step_bindings(suite):
     found = []
     for name, attributes in _bdd_attributes(suite).items():
         for attribute in attributes.split("#["):
             for kind in ("given", "when", "then"):
-                for prefix in (kind + "(", "rstest_bdd_macros::" + kind + "("):
+                for prefix in (kind + "(", "rstest_bdd_macros::" + kind + "(", "krabka_bdd::" + kind + "("):
                     if attribute.startswith(prefix):
                         at = _skip_whitespace(attribute, len(prefix))
                         pattern = _quoted(attribute, at)
@@ -970,8 +1139,14 @@ def _bdd_expand(text, values):
     return text
 
 def bdd_feature_scenarios(feature, source = "feature"):
-    """Concrete steps, including Background and Examples rows, indexed by scenario title."""
+    """Concrete steps, including Background and Examples rows, indexed by scenario title.
+
+    A scenario under a `Rule:` runs the feature's Background, then its rule's
+    Background, then its own steps; a rule's Background reaches no other rule.
+    """
     background = []
+    rule_background = []
+    in_rule = False
     scenarios = {}
     current = None
     steps = background
@@ -986,15 +1161,28 @@ def bdd_feature_scenarios(feature, source = "feature"):
             continue
         if docstring or not line or line.startswith("#") or line.startswith("@"):
             continue
+        if line.startswith("Rule:"):
+            rule_background = []
+            in_rule = True
+            current = None
+            steps = rule_background
+            examples = False
+            kind = ""
+            continue
         if line.startswith("Background:"):
-            steps = background
+            steps = rule_background if in_rule else background
             kind = ""
             continue
         if line.startswith("Scenario:") or line.startswith("Scenario Outline:"):
             title = line.partition(":")[2].strip()
             if title in scenarios:
                 fail("duplicate BDD scenario %s in %s" % (title, source))
-            current = {"steps": [], "examples": [], "outline": line.startswith("Scenario Outline:")}
+            current = {
+                "steps": [],
+                "background": rule_background,
+                "examples": [],
+                "outline": line.startswith("Scenario Outline:"),
+            }
             scenarios[title] = current
             steps = current["steps"]
             examples = False
@@ -1033,7 +1221,7 @@ def bdd_feature_scenarios(feature, source = "feature"):
             fail("BDD outline without Examples in %s" % source)
         concrete = []
         for values in scenario["examples"] if scenario["outline"] else [{}]:
-            for step in background + scenario["steps"]:
+            for step in background + scenario["background"] + scenario["steps"]:
                 concrete.append(struct(
                     kind = step["kind"],
                     text = _bdd_expand(step["text"], values),
@@ -1094,6 +1282,7 @@ def client_cases_by_function(suite, count, source = _LIBRDKAFKA, features = {}, 
         name = function_name(line)
         if name and "#[datatable]" in line:
             datatables[name] = True
+    bound = {}
     for name, binding in bindings.items():
         if binding.path not in features:
             fail("missing BDD feature %s for %s in %s" % (binding.path, name, source))
@@ -1101,28 +1290,43 @@ def client_cases_by_function(suite, count, source = _LIBRDKAFKA, features = {}, 
         if binding.name not in scenarios:
             fail("missing BDD scenario %s in %s" % (binding.name, binding.path))
         cases = {index: True for index in resolved[name]}
-        bound_cases = {}
-        selected_clients = {}
-        has_selection = False
-        for step in scenarios[binding.name]:
-            matched = [bound for bound in steps if bound.kind == step.kind and bdd_step_matches(bound.pattern, step.text)]
-            if len(matched) != 1:
-                fail("BDD step %s in %s has %d bindings" % (step.text, binding.path, len(matched)))
-            function = matched[0].function
-            reached = resolved[function]
-            if reached and datatables[function]:
-                selected = _bdd_table_clients(step.table, clients, binding.path)
-                has_selection = True
-                for index in selected:
-                    selected_clients[index] = True
-                reached = [index for index in reached if index in selected]
-            for index in reached:
-                bound_cases[index] = True
-        for index in bound_cases:
-            if not has_selection or index in selected_clients:
-                cases[index] = True
-        resolved[name] = sorted(cases)
+        for index in _bdd_bound_cases(scenarios[binding.name], steps, resolved, datatables, clients, binding.path):
+            cases[index] = True
+        bound[name] = sorted(cases)
+    for directory in bdd_directory_bindings(suite, source):
+        for path in bdd_directory_features(directory, features, source):
+            for title, concrete in bdd_feature_scenarios(features[path], path).items():
+                name = bdd_test_name(title)
+                if name in resolved or name in bound:
+                    fail("BDD scenario %s in %s reuses the test name %s in %s" % (title, path, name, source))
+                bound[name] = _bdd_bound_cases(concrete, steps, resolved, datatables, clients, path)
+    resolved.update(bound)
     return resolved
+
+def _bdd_bound_cases(concrete, steps, resolved, datatables, clients, path):
+    """The clients one concrete scenario's bound steps reach.
+
+    Each step needs exactly one binding. A data-table step that reaches clients
+    narrows the scenario's evidence to the pinned clients its table selects.
+    """
+    bound_cases = {}
+    selected_clients = {}
+    has_selection = False
+    for step in concrete:
+        matched = [found for found in steps if found.kind == step.kind and bdd_step_matches(found.pattern, step.text)]
+        if len(matched) != 1:
+            fail("BDD step %s in %s has %d bindings" % (step.text, path, len(matched)))
+        function = matched[0].function
+        reached = resolved[function]
+        if reached and datatables[function]:
+            selected = _bdd_table_clients(step.table, clients, path)
+            has_selection = True
+            for index in selected:
+                selected_clients[index] = True
+            reached = [index for index in reached if index in selected]
+        for index in reached:
+            bound_cases[index] = True
+    return sorted([index for index in bound_cases if not has_selection or index in selected_clients])
 
 def citations(note):
     """Every `crates/<path>.rs:<line>` in `note`, as `struct(start, end, path, line)`.
@@ -1616,6 +1820,12 @@ def _librdkafka_evidence(fs, root, pins, broker_build):
     suite_root = _LIBRDKAFKA.rsplit("/tests/", 1)[0]
     for binding in bdd_scenario_bindings(suite).values():
         features[binding.path] = _read(fs, root, suite_root + "/" + binding.path)
+    for directory in bdd_directory_bindings(suite):
+        base = suite_root + "/" + directory
+        if not fs.exists(root + "/" + base):
+            fail("krabka_bdd::scenarios! directory %s does not exist for %s" % (base, _LIBRDKAFKA))
+        for relative in walk_suffix(fs, root + "/" + base, ".feature"):
+            features[directory + "/" + relative] = _read(fs, root, base + "/" + relative)
     return clients, client_cases_by_function(suite, len(clients), features = features, clients = clients)
 
 def _kip_inventory(fs, root, catalog):
@@ -1645,9 +1855,29 @@ def _check_test(fs, root, key, test):
     function = test.partition("::")[2]
     if not is_file(fs, root + "/" + path):
         fail("%s names a test file that does not exist: %s" % (key, path))
-    if function and not declares_fn(_read(fs, root, path), function):
+    if function and not _defines_test(fs, root, path, function):
         fail("%s names a test that %s does not define: %s" % (key, path, function))
     return path
+
+def _defines_test(fs, root, path, function):
+    """Whether the Rust file `path` declares `function`, or generates it
+    through `krabka_bdd::scenarios!`."""
+    text = _read(fs, root, path)
+    if declares_fn(text, function):
+        return True
+    if _BDD_DIRECTORY_MACRO not in text:
+        return False
+    manifest = path
+    for marker in ("/tests/", "/src/"):
+        if marker in path:
+            manifest = path.split(marker)[0]
+            break
+    features = {}
+    for directory in bdd_directory_bindings(text, path):
+        base = manifest + "/" + directory
+        for relative in walk_suffix(fs, root + "/" + base, ".feature"):
+            features[directory + "/" + relative] = _read(fs, root, base + "/" + relative)
+    return function.rsplit("::", 1)[-1] in bdd_generated_test_names(text, features, path)
 
 def _note_line_counts(fs, root, note, counts):
     """Extend `counts` with the length of every file the note cites."""

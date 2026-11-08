@@ -593,6 +593,15 @@ refuses a `listeners` config with any other listener when
 `process.roles=controller`. Logs are one JSON object
 per line on stdout; `RUST_LOG` sets the level.
 
+On GKE, set `KRABKA_GCP_PROJECT_ID`, or the `--gcp-project-id` flag, to the
+id of the Google Cloud project whose Cloud Trace holds the broker's traces.
+Cloud Logging then links each entry written inside a traced span to its
+trace: the entry carries `logging.googleapis.com/trace` as
+`projects/<project id>/traces/<trace id>`, `logging.googleapis.com/spanId` and
+`logging.googleapis.com/trace_sampled`. The setting needs OTLP export on,
+because the span context comes from the OTLP tracing layer. Unset, entries
+carry no trace keys.
+
 The container image starts the broker with
 `GLIBC_TUNABLES=glibc.malloc.trim_threshold=134217728:glibc.malloc.mmap_threshold=67108864`.
 A broker started from the binary outside the image sets the same variable.

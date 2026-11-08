@@ -11,7 +11,7 @@ use {
             MixedQuorum, docker_rm, jvm_controller_properties, kafka_cluster_id_string,
             start_jvm_controller,
         },
-        support,
+        support::{self, ReservedPorts},
     },
     assert2::check,
     krabka_broker::{BrokerHandle, NodeId},
@@ -27,6 +27,8 @@ struct MixedReplication {
     controllers: Option<[BrokerHandle; 2]>,
     dirs: Option<[TempDir; 2]>,
     properties: Option<TempDir>,
+    /// Holds JVM voter 3's controller port until the container publishes it.
+    reserved: Option<ReservedPorts>,
     ports: [u16; 3],
     cluster_id: Uuid,
     leaders: Vec<(Option<NodeId>, Option<NodeId>)>,
@@ -40,6 +42,7 @@ fn mixed() -> MixedReplication {
         controllers: None,
         dirs: None,
         properties: None,
+        reserved: None,
         ports: [0; 3],
         cluster_id: Uuid::nil(),
         leaders: Vec::new(),
@@ -53,8 +56,9 @@ async fn static_voters(mixed: &mut MixedReplication, id: String) {
     support::init_tracing();
     docker_rm(CONTAINER);
     mixed.cluster_id = Uuid::parse_str(&id).expect("cluster UUID");
-    let (ports, controllers, dirs) = MixedQuorum::start(mixed.cluster_id, None).await;
+    let (ports, controllers, dirs, reserved) = MixedQuorum::start(mixed.cluster_id, None).await;
     mixed.ports = ports;
+    mixed.reserved = Some(reserved);
     mixed.controllers = Some(controllers);
     mixed.dirs = Some(dirs);
 }

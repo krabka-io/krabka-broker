@@ -77,6 +77,14 @@ impl Drop for TelemetryGuard {
 ///   is unset.
 /// - `tracer_name`: the name that this function passes to
 ///   `TracerProvider::tracer(...)`.
+/// - `gcp_project_id`: the Google Cloud project whose Cloud Trace holds the
+///   traces. With it set, an entry that the stdout layer writes inside a span
+///   that OTLP traces carries `logging.googleapis.com/trace`,
+///   `logging.googleapis.com/spanId` and
+///   `logging.googleapis.com/trace_sampled`, so Cloud Logging links the entry
+///   to its trace. The span context comes from the OTLP span layer, so the
+///   keys need `otlp` to be `Some`. With it unset, entries carry none of
+///   those keys.
 ///
 /// You must call this function exactly one time, and from inside the tokio
 /// runtime. The gRPC exporter captures the current runtime handle.
@@ -91,6 +99,7 @@ pub fn init(
     fmt_default_filter: &str,
     otel_default_filter: &str,
     tracer_name: &str,
+    gcp_project_id: Option<String>,
 ) -> Result<TelemetryGuard, TelemetryError> {
     // The stdout layer's filter is the one an operator retargets at runtime,
     // so it is a `LogLevelFilter` and not a bare `EnvFilter`. It starts from
@@ -102,7 +111,13 @@ pub fn init(
     let (log_levels, fmt_filter) = LogLevelController::new(&fmt_spec);
     // Structured Cloud Logging-friendly JSON to stdout (see `krabka_logfmt`),
     // so GKE / Cloud Logging ingests fields rather than ANSI-coloured text.
-    let fmt_layer = krabka_logfmt::layer(fmt_filter, io::stdout);
+    // The trace keys need the span context that the OTLP layer below attaches,
+    // so they appear only when OTLP is on.
+    let fmt_layer = krabka_logfmt::layer()
+        .filter(fmt_filter)
+        .writer(io::stdout)
+        .maybe_gcp_project_id(gcp_project_id)
+        .call();
 
     let Some(cfg) = otlp else {
         tracing_subscriber::registry().with(fmt_layer).init();

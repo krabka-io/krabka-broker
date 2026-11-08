@@ -16,10 +16,6 @@ use {
     std::path::PathBuf,
 };
 
-/// Region used when `--archive-s3-region` is absent. AWS requires a region,
-/// and `MinIO` and R2 accept this one as a placeholder.
-pub const DEFAULT_S3_REGION: &str = "us-east-1";
-
 /// A flag combination the archive flags cannot mean.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArchiveArgsError {
@@ -67,12 +63,14 @@ pub struct ArchiveArgs {
     #[arg(long = "archive-s3-bucket", value_name = "BUCKET")]
     pub s3_bucket: Option<String>,
 
-    /// S3 region. Defaults to `us-east-1`, which `MinIO` and R2 accept as a
-    /// placeholder.
+    /// S3 region. Without it `AWS_REGION`, then `AWS_DEFAULT_REGION`, names
+    /// the region, and with neither it is `us-east-1`, which `MinIO` and R2
+    /// accept as a placeholder.
     #[arg(long = "archive-s3-region", value_name = "REGION")]
     pub s3_region: Option<String>,
 
-    /// S3 endpoint URL, for a non-AWS S3-compatible store.
+    /// S3 endpoint URL, for a non-AWS S3-compatible store. Without it
+    /// `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` or `AWS_ENDPOINT` applies.
     #[arg(long = "archive-s3-endpoint", value_name = "URL")]
     pub s3_endpoint: Option<String>,
 
@@ -171,10 +169,9 @@ impl ArchiveArgs {
             return Ok(ObjectStoreConfig::S3(S3Config {
                 bucket: bucket.clone(),
                 prefix: None,
-                region: self
-                    .s3_region
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_S3_REGION.to_owned()),
+                // An empty region leaves it to the environment; see
+                // `S3Settings`.
+                region: self.s3_region.clone().unwrap_or_default(),
                 endpoint: self.s3_endpoint.clone(),
                 access_key_id: self.s3_access_key_id.clone(),
                 secret_access_key: self.s3_secret_access_key.clone(),
@@ -402,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_s3_region_falls_back_to_the_placeholder() {
+    fn an_absent_s3_region_is_left_to_the_environment() {
         let ObjectStoreConfig::S3(s3) = ArchiveArgs {
             s3_bucket: Some("backups".to_owned()),
             ..ArchiveArgs::default()
@@ -411,7 +408,7 @@ mod tests {
         .expect("config") else {
             panic!("the s3 bucket selects the S3 backend");
         };
-        check!(s3.region == "us-east-1");
+        check!(s3.region.is_empty());
         check!(!s3.allow_http);
     }
 

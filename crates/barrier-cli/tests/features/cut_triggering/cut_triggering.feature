@@ -53,7 +53,6 @@ Feature: Operators trigger a cut on demand
 
   Rule: Only a defined group can be cut
 
-    @inprogress
     Scenario: A cut of a group nobody defined is refused
       When an operator tries to trigger a cut of a group nobody defined
       Then the broker refuses the request as an unknown group

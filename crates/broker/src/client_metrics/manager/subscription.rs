@@ -578,6 +578,33 @@ mod tests {
         );
     }
 
+    /// A selector that does not match ends the test, so the slow selector
+    /// after it never runs and the client is simply not subscribed.
+    #[test]
+    fn a_selector_that_does_not_match_stops_before_a_slow_one() {
+        let img = img_with("slow", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "match",
+                value: r"client_software_name=other,client_id=((x+x+)+)\2y",
+            },
+        ]);
+        let client = ClientAttributes {
+            client_id: "x".repeat(29),
+            ..attrs()
+        };
+        check!(
+            Subscriptions::from_image(&img).compute(&client, config::INTERVAL_MS_DEFAULT)
+                == Ok(ComputedSubscription {
+                    metrics: vec![],
+                    push_interval_ms: config::INTERVAL_MS_DEFAULT,
+                })
+        );
+    }
+
     #[test]
     fn subscription_id_stable_and_change_sensitive() {
         let a = attrs();

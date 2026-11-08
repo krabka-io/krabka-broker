@@ -10,14 +10,36 @@ use {krabka_units::Time, schemars::JsonSchema, serde::Deserialize};
 
 /// TOML shape of `[remote_storage.s3]`. Maps to
 /// [`krabka_remote_storage::S3Config`].
+///
+/// The broker builds the store from its `AWS_*` environment variables and
+/// applies this table on top: a key set here wins, and a variable fills only a
+/// key the table omits. `region` comes from the table, then `AWS_REGION`, then
+/// `AWS_DEFAULT_REGION`, then `us-east-1`. `endpoint` comes from the table,
+/// then `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or `AWS_ENDPOINT`. The
+/// bucket, `allow_http`, `conditional_put`, `checksum_sha256` and the retry and
+/// timeout bounds always come from the table.
+///
+/// The credentials are the first of these that is present: `access_key_id`
+/// with `secret_access_key`; `AWS_ACCESS_KEY_ID` with `AWS_SECRET_ACCESS_KEY`
+/// and an optional `AWS_SESSION_TOKEN`; web identity (IRSA) from
+/// `AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`, and optional
+/// `AWS_ROLE_SESSION_NAME` and `AWS_ENDPOINT_URL_STS`; an ECS task role from
+/// `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; EKS Pod Identity from
+/// `AWS_CONTAINER_CREDENTIALS_FULL_URI` with
+/// `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`; and last the EC2 instance
+/// metadata service. A static key in the table makes the broker ignore the
+/// three `AWS_*` key variables, so half a key in the table is refused rather
+/// than completed from the environment. The shared `~/.aws` config and
+/// credentials files are not read.
 #[krabka_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageS3Config {
     /// S3 bucket name.
     pub bucket: String,
-    /// AWS region. Required even for non-AWS endpoints (use any value).
-    pub region: String,
+    /// AWS region. When omitted, `AWS_REGION`, then `AWS_DEFAULT_REGION`,
+    /// applies, and with neither `us-east-1`, which `MinIO` and R2 accept.
+    pub region: Option<String>,
     /// Optional key prefix inside the bucket (lets multiple clusters
     /// share a bucket). Tiered segments and new diskless WAL objects are
     /// written under it, and the diskless reclaimer lists and deletes only
@@ -25,14 +47,18 @@ pub struct FileRemoteStorageS3Config {
     /// before a prefix was set stay readable at their recorded keys, and the
     /// reclaimer of a prefixed cluster never deletes them.
     pub prefix: Option<String>,
-    /// Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).
+    /// Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2). When
+    /// omitted, `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or
+    /// `AWS_ENDPOINT`, applies, and with none of them the AWS endpoint for the
+    /// region.
     pub endpoint: Option<String>,
-    /// Explicit access key id. Falls back to the AWS credential chain
-    /// (env vars, instance profile, …) when omitted.
+    /// Explicit access key id. Set it together with `secret_access_key`; the
+    /// pair wins over every `AWS_*` credential variable. When both are
+    /// omitted, the AWS credential chain above applies.
     #[debug("{:?}", access_key_id.as_ref().map(|_| "***"))]
     pub access_key_id: Option<String>,
-    /// Explicit secret access key. Falls back to the AWS credential chain
-    /// when omitted.
+    /// Explicit secret access key. Set it together with `access_key_id`.
+    /// When both are omitted, the AWS credential chain applies.
     #[debug("{:?}", secret_access_key.as_ref().map(|_| "***"))]
     pub secret_access_key: Option<String>,
     /// Allow plaintext HTTP (off-by-default; required by `MinIO` running
@@ -186,7 +212,7 @@ mod tests {
     fn s3_config_debug_redacts_credentials() {
         let cfg = FileRemoteStorageS3Config {
             bucket: "logs".to_owned(),
-            region: "us-east-1".to_owned(),
+            region: Some("us-east-1".to_owned()),
             prefix: None,
             endpoint: None,
             access_key_id: Some("AKIAEXAMPLEKEYID".to_owned()),
@@ -236,6 +262,14 @@ allow_http = true
         check!(s3.secret_access_key.is_none());
         check!(s3.multipart_threshold == krabka_remote_storage::DEFAULT_MULTIPART_THRESHOLD);
         check!(s3.multipart_chunk_size == krabka_remote_storage::DEFAULT_MULTIPART_CHUNK_SIZE);
+    }
+
+    /// An omitted region is not an error: it maps to an empty region, which
+    /// the store fills from `AWS_REGION` and `AWS_DEFAULT_REGION`.
+    #[test]
+    fn remote_storage_s3_region_may_be_omitted() {
+        let s3 = configured_s3("[remote_storage.s3]\nbucket = \"krabka-prod\"\n");
+        check!(s3.region.is_empty());
     }
     #[test]
     fn remote_storage_s3_section_round_trips_multipart_overrides() {

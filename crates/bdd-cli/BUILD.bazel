@@ -1,0 +1,21 @@
+load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+crate_library(name = "bdd-cli")
+
+# `krabka-bdd lint|map|docs|glossary|tags-table` over Gherkin feature files.
+crate_binary(
+    name = "krabka-bdd",
+    crate_root = "src/main.rs",
+    lib = ":bdd-cli",
+)
+
+crate_tests(
+    # rstest's `#[case]` expansion reads the manifest to find its own crate.
+    compile_data = ["Cargo.toml"],
+    lib = "bdd-cli",
+)

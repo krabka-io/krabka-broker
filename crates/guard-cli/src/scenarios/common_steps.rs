@@ -19,7 +19,13 @@ async fn has_frozen(guard: &mut GuardScenario, operator: Operator, scope: Scope)
 /// `operator` freezes `scope` unsigned, and the freeze lands.
 pub async fn freeze_succeeds(guard: &mut GuardScenario, operator: Operator, scope: &Scope) {
     let cluster = guard.cluster().await;
-    assert!(cluster.freeze(operator, scope, Signing::Unsigned).await == Outcome::Success);
+    assert!(
+        cluster
+            .freeze(operator, scope, Signing::Unsigned)
+            .await
+            .outcome
+            == Outcome::Success
+    );
 }
 
 /// The proposer opens a thaw proposal and the other approvers, in order,
@@ -33,16 +39,17 @@ async fn holds_thaw_proposal(
 ) {
     let cluster = guard.cluster().await;
     let proposal = async {
-        let (outcome, proposal) = cluster
+        let (run, proposal) = cluster
             .propose(operator, "thaw-topic-freeze", &target, &Lifetime::Default)
             .await;
-        assert!(outcome == Outcome::Success);
+        assert!(run.outcome == Outcome::Success);
         let proposal = proposal.expect("the propose opened a proposal");
         let approvers = Operator::ALL
             .into_iter()
             .filter(|approver| *approver != operator);
         for approver in approvers.take(approvals) {
-            assert!(cluster.approve(approver, proposal, None).await == Outcome::Success);
+            let run = cluster.approve(approver, proposal, None).await;
+            assert!(run.outcome == Outcome::Success);
         }
         proposal
     }

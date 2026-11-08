@@ -123,7 +123,8 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
             owes_epoch_check = false;
         }
         // Read whatever is missing from the future log up to the source's
-        // current LEO, bounded by the broker-wide log-directory copy budget.
+        // current LEO, one `read_chunk` per pass, unless the broker-wide
+        // log-directory move quota is exceeded.
         let advance = match catch_up(&part, &future_log, policy.read_chunk, &policy.throttle) {
             Ok(v) => v,
             // A poisoned current log stays poisoned, so a retry cannot help.
@@ -148,6 +149,8 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
             }
         };
 
+        // An exceeded quota reopens only as its measured rate falls, so back
+        // off before the next pass.
         if advance.throttled {
             if wait_retry_or_cancel(&cancel, policy.retry_backoff).await {
                 break;

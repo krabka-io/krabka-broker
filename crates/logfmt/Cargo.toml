@@ -18,18 +18,24 @@ workspace = true
 
 [dependencies]
 assert2 = { workspace = true }
+bon = { workspace = true }
+# The span context that `tracing-opentelemetry` attaches when a span is
+# entered, read for the Cloud Logging trace keys.
+opentelemetry = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
-bon = { workspace = true }
 # No `version`: `krabka-bdd` is not published, so cargo drops it from the
 # published manifest. See CLAUDE.md "Releases".
 krabka-bdd = { path = "../bdd" }
+# A tracer with fixed ids, so the trace scenarios read back known ids.
+opentelemetry_sdk = { workspace = true }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 # Parses the RFC 3339 timestamp the scenarios read back.
 time = { workspace = true, features = ["parsing"] }
+tracing-opentelemetry = { workspace = true }
 yare = { workspace = true }

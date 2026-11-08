@@ -1,0 +1,30 @@
+[package]
+name = "krabka-bdd-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The krabka-bdd command-line tool: house-style lint with a ratchet baseline, example maps, living documentation and the glossary report"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "krabka_bdd_cli"
+
+[[bin]]
+name = "krabka-bdd"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+gherkin = { workspace = true }
+krabka-bdd-model = { path = "../bdd-model" }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+rstest = { workspace = true }

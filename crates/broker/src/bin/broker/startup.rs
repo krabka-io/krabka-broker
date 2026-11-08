@@ -75,6 +75,7 @@ pub async fn broker_main() -> Result<(), Box<dyn Error>> {
         DEFAULT_LOG_FILTER,
         "info,krabka_broker::request=debug,krabka_log=info",
         "krabka-broker",
+        args.gcp_project_id.clone(),
     )?;
 
     let outcome = Box::pin(run(args, file_config, client_metrics_otlp, &telemetry)).await;

@@ -225,8 +225,9 @@ pub struct RestoreArgs {
     #[arg(long, value_enum, default_value = "text", help_heading = HEADING_BEHAVIOUR)]
     pub report: ReportFormat,
 
-    /// Skip a segment that fails verification instead of stopping. The report
-    /// names every segment that was skipped.
+    /// Skip a segment whose archived copy is damaged instead of stopping. A
+    /// segment the archive cannot be read for still stops the restore. The
+    /// report names every segment that was skipped.
     #[arg(long, help_heading = HEADING_BEHAVIOUR)]
     pub continue_on_corrupt: bool,
 }

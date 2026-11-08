@@ -34,7 +34,10 @@ use {
     krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::{Time, convert::TimeExt as _},
-    std::{collections::HashSet, sync::Arc},
+    std::{
+        collections::HashSet,
+        sync::{Arc, Mutex as StdMutex},
+    },
     tokio::sync::{Mutex, RwLock},
 };
 
@@ -194,6 +197,9 @@ pub struct BarrierCoordinator {
     remote: Option<Arc<dyn RemoteMarkerWriter>>,
     /// Live groups: name to locked entry.
     groups: DashMap<String, Arc<Mutex<GroupEntry>>>,
+    /// Held across the group-cap check and the insertion of a new entry, so
+    /// two creates of different names cannot both take the last slot.
+    create_slot: StdMutex<()>,
     /// The `__barrier_state` partition indices this broker leads.
     leader_partitions: RwLock<HashSet<PartitionIndex>>,
 }
@@ -216,6 +222,7 @@ impl BarrierCoordinator {
             metrics,
             remote: None,
             groups: DashMap::new(),
+            create_slot: StdMutex::new(()),
             leader_partitions: RwLock::new(HashSet::new()),
         }
     }
@@ -339,16 +346,26 @@ impl BarrierCoordinator {
             })
     }
 
+    /// Refuse a request for `group` unless this broker coordinates it.
+    ///
+    /// Two refusals tell a caller different things. Before `__barrier_state`
+    /// exists no group can be live on any broker, so the group is unknown and
+    /// a retry elsewhere cannot help. Once the topic exists, a group whose
+    /// state partition another broker leads belongs to that broker.
+    ///
     /// # Errors
-    /// Returns [`BarrierError::NotCoordinator`] when another broker leads the
-    /// state partition of `group`.
-    async fn require_coordinator(&self, group: &str) -> Result<(), BarrierError> {
+    /// Returns [`BarrierError::UnknownGroup`] when `__barrier_state` does not
+    /// exist, and [`BarrierError::NotCoordinator`] when another broker leads
+    /// the state partition of `group`.
+    pub(crate) async fn require_coordinator(&self, group: &str) -> Result<(), BarrierError> {
         if self.is_coordinator_for(group).await {
-            Ok(())
+            return Ok(());
+        }
+        let group = group.to_owned();
+        if self.controller.current_image().topic(STATE_TOPIC).is_none() {
+            Err(BarrierError::UnknownGroup { group })
         } else {
-            Err(BarrierError::NotCoordinator {
-                group: group.to_owned(),
-            })
+            Err(BarrierError::NotCoordinator { group })
         }
     }
 
@@ -362,6 +379,7 @@ mod tests {
         crate::barrier::{
             coordinator::test_support::{Fixture, GROUP, spec},
             persistence::{RecordKind, decode_key},
+            test_support::topic_records,
         },
         assert2::{assert, check},
         krabka_units::millis,
@@ -520,6 +538,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Before `__barrier_state` exists no broker holds any group, so a cut of a
+    /// group is a request for an unknown group, and a retry against another
+    /// broker cannot help.
+    #[tokio::test]
+    async fn a_group_is_unknown_while_the_state_topic_does_not_exist() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        fixture
+            .replace_metadata(&coordinator, &topic_records("orders", 2, NodeId(1)))
+            .await;
+
+        let triggered = coordinator.trigger_injection(GROUP, None).await;
+        assert!(let Err(BarrierError::UnknownGroup { group }) = triggered);
+        assert!(group == GROUP);
+    }
+
+    /// Once `__barrier_state` exists, a group whose state partition another
+    /// broker leads belongs to that broker, and the caller retries there.
+    #[tokio::test]
+    async fn a_group_whose_state_partition_another_broker_leads_is_not_coordinated_here() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        fixture
+            .hand_state_partitions_to_another_broker(&coordinator)
+            .await;
+
+        let triggered = coordinator.trigger_injection(GROUP, None).await;
+        assert!(let Err(BarrierError::NotCoordinator { group }) = triggered);
+        assert!(group == GROUP);
     }
 
     /// Every `__barrier_state` batch carries the time it was written, as

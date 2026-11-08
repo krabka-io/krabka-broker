@@ -142,7 +142,10 @@ streams_group_assignor = "sticky"
 
 # Tiered storage on an S3-compatible object store. Credentials come from the
 # AWS credential chain when `access_key_id` and `secret_access_key` are
-# absent. `allow_http` is for a MinIO endpoint without TLS.
+# absent: `AWS_ACCESS_KEY_ID`, IRSA web identity, an ECS task role, EKS Pod
+# Identity, then instance metadata. A key set here wins over its `AWS_*`
+# variable; `region` and `endpoint` may be left to `AWS_REGION` and
+# `AWS_ENDPOINT_URL_S3`. `allow_http` is for a MinIO endpoint without TLS.
 [remote_storage]
 
 [remote_storage.s3]

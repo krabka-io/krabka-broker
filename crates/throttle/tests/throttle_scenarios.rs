@@ -1,22 +1,16 @@
 //! Gherkin scenarios for the broker's replication and log-directory-move
-//! throttles, bound to the features under `tests/features`.
+//! quotas, bound to the features under `tests/features`.
+
+mod support;
 
 use {
-    krabka_bdd::Given,
-    krabka_throttle::{ThrottleState, TokenBucket},
-    krabka_units::prelude::{Time, bytes_per_sec, secs},
+    krabka_throttle::{QuotaWindow, ReplicationQuota, ThrottleState},
+    krabka_units::prelude::{ByteRate, ByteRateExt as _, secs},
     qubit_clock::ManualMonotonicClock,
-    std::{sync::Arc, time::Duration},
+    std::{num::NonZeroU32, sync::Arc},
 };
 
-const ASKS: &str = "When <traffic> traffic asks for <requested> bytes";
-
-/// Kafka's default replication quota window: `replication.quota.window.num`
-/// 11 samples of `replication.quota.window.size.seconds` 1. The broker records
-/// replication traffic against it.
-const REPLICATION_QUOTA_WINDOW: Time = secs(11);
-
-/// One kind of throttled traffic, each metered by its own broker bucket.
+/// One kind of throttled traffic, each measured by its own broker quota.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
 enum Traffic {
     /// `leader.replication.throttled.rate`.
@@ -30,16 +24,31 @@ enum Traffic {
     LogDirectoryMove,
 }
 
-/// How a quota reads at the end of a wait and one millisecond after it.
+/// A `server.properties` key that sets a replication quota window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+enum WindowConfig {
+    #[step_param("replication.quota.window.num")]
+    ReplicationSamples,
+    #[step_param("replication.quota.window.size.seconds")]
+    ReplicationSampleSeconds,
+    #[step_param("alter.log.dirs.replication.quota.window.num")]
+    AlterLogDirsSamples,
+    #[step_param("alter.log.dirs.replication.quota.window.size.seconds")]
+    AlterLogDirsSampleSeconds,
+}
+
+/// How a quota reads one millisecond before a wait ends and when it ends.
 #[derive(Debug, PartialEq, Eq)]
 struct QuotaOverTime {
+    exceeded_one_ms_before: bool,
     exceeded_at_end_of_wait: bool,
-    exceeded_one_ms_later: bool,
 }
 
 /// A broker's throttles on a manual clock, driven in domain terms.
 struct ThrottledBroker {
     clock: Arc<ManualMonotonicClock>,
+    replication_window: QuotaWindow,
+    alter_log_dirs_window: QuotaWindow,
     throttles: ThrottleState,
 }
 
@@ -47,10 +56,46 @@ impl ThrottledBroker {
     fn new() -> Self {
         let clock = ManualMonotonicClock::new_shared();
         let throttles = ThrottleState::with_clock(Arc::<ManualMonotonicClock>::clone(&clock));
-        Self { clock, throttles }
+        Self {
+            clock,
+            replication_window: QuotaWindow::KAFKA_DEFAULT,
+            alter_log_dirs_window: QuotaWindow::KAFKA_DEFAULT,
+            throttles,
+        }
     }
 
-    fn throttle(&self, traffic: Traffic) -> &TokenBucket {
+    /// Sets one window config and restarts the throttles with it, as a
+    /// broker reads `server.properties` once at startup.
+    fn configure(&mut self, config: WindowConfig, value: NonZeroU32) {
+        let with_samples = |window: QuotaWindow| QuotaWindow::new(value, window.sample());
+        let with_seconds = |window: QuotaWindow| {
+            QuotaWindow::new(
+                NonZeroU32::new(window.samples()).unwrap_or(NonZeroU32::MIN),
+                secs(value.get()),
+            )
+        };
+        match config {
+            WindowConfig::ReplicationSamples => {
+                self.replication_window = with_samples(self.replication_window);
+            }
+            WindowConfig::ReplicationSampleSeconds => {
+                self.replication_window = with_seconds(self.replication_window);
+            }
+            WindowConfig::AlterLogDirsSamples => {
+                self.alter_log_dirs_window = with_samples(self.alter_log_dirs_window);
+            }
+            WindowConfig::AlterLogDirsSampleSeconds => {
+                self.alter_log_dirs_window = with_seconds(self.alter_log_dirs_window);
+            }
+        }
+        self.throttles = ThrottleState::with_windows()
+            .clock(Arc::<ManualMonotonicClock>::clone(&self.clock))
+            .replication_window(self.replication_window)
+            .alter_log_dirs_window(self.alter_log_dirs_window)
+            .call();
+    }
+
+    fn quota(&self, traffic: Traffic) -> &ReplicationQuota {
         match traffic {
             Traffic::LeaderReplication => &self.throttles.leader_out,
             Traffic::FollowerReplication => &self.throttles.follower_in,
@@ -59,62 +104,51 @@ impl ThrottledBroker {
     }
 
     /// Sets the throttle rate, as a dynamic broker config change does.
-    fn set_rate(&self, traffic: Traffic, rate: u32) {
-        self.throttle(traffic).set_byte_rate(bytes_per_sec(rate));
+    fn throttle_at(&self, traffic: Traffic, rate: i64) {
+        self.quota(traffic)
+            .set_bound(Some(ByteRate::from_bytes_per_sec(rate)));
     }
 
-    fn pass(&self, millis: u64) {
-        let advanced = self.clock.advance(Duration::from_millis(millis));
-        assert2::assert!(let Ok(()) = advanced, "manual time moves forward");
-    }
+    /// Removes the throttle rate, as deleting the dynamic broker config does.
+    fn unthrottle(&self, traffic: Traffic) { self.quota(traffic).set_bound(None); }
 
-    /// Asks for up to `requested` bytes, as a log directory copy step does.
-    fn ask(&self, traffic: Traffic, requested: u64) -> u64 {
-        self.throttle(traffic).try_consume(requested)
-    }
+    fn pass(&self, millis: u64) { support::pass(&self.clock, millis); }
 
-    /// Records bytes already sent, as replication does after its read.
-    fn send(&self, traffic: Traffic, sent: u64) {
-        self.throttle(traffic)
-            .record_bounded(sent, REPLICATION_QUOTA_WINDOW);
-    }
+    /// Records bytes already moved, as a broker does after its read.
+    fn send(&self, traffic: Traffic, sent: u64) { self.quota(traffic).record(sent); }
 
-    fn quota_exceeded(&self, traffic: Traffic) -> bool { self.throttle(traffic).quota_exceeded() }
+    fn quota_exceeded(&self, traffic: Traffic) -> bool { self.quota(traffic).quota_exceeded() }
 
     fn quota_over(&self, traffic: Traffic, millis: u64) -> QuotaOverTime {
-        self.pass(millis);
-        let exceeded_at_end_of_wait = self.quota_exceeded(traffic);
+        self.pass(millis.saturating_sub(1));
+        let exceeded_one_ms_before = self.quota_exceeded(traffic);
         self.pass(1);
         QuotaOverTime {
-            exceeded_at_end_of_wait,
-            exceeded_one_ms_later: self.quota_exceeded(traffic),
+            exceeded_one_ms_before,
+            exceeded_at_end_of_wait: self.quota_exceeded(traffic),
         }
     }
 }
 
 struct ThrottleScenario {
     broker: ThrottledBroker,
-    granted: Given<(Traffic, u64)>,
 }
 
 #[rstest::fixture]
 fn throttle() -> ThrottleScenario {
     ThrottleScenario {
         broker: ThrottledBroker::new(),
-        granted: Given::new("granted", ASKS),
     }
 }
 
-#[rstest_bdd_macros::given("{traffic} traffic is throttled at {rate} bytes per second")]
-fn traffic_is_throttled(throttle: &ThrottleScenario, traffic: Traffic, rate: u32) {
-    throttle.broker.set_rate(traffic, rate);
+#[rstest_bdd_macros::given("the broker sets {config} to {value}")]
+fn broker_sets_window(throttle: &mut ThrottleScenario, config: WindowConfig, value: NonZeroU32) {
+    throttle.broker.configure(config, value);
 }
 
-#[rstest_bdd_macros::given("{traffic} traffic has spent a throttle of {rate} bytes per second")]
-fn traffic_has_spent_its_throttle(throttle: &ThrottleScenario, traffic: Traffic, rate: u32) {
-    throttle.broker.set_rate(traffic, rate);
-    let rate = u64::from(rate);
-    assert2::assert!(throttle.broker.ask(traffic, rate) == rate);
+#[rstest_bdd_macros::given("{traffic} traffic is throttled at {rate} bytes per second")]
+fn traffic_is_throttled(throttle: &ThrottleScenario, traffic: Traffic, rate: i64) {
+    throttle.broker.throttle_at(traffic, rate);
 }
 
 #[rstest_bdd_macros::given("{traffic} traffic has sent {sent} bytes")]
@@ -122,40 +156,24 @@ fn traffic_has_sent(throttle: &ThrottleScenario, traffic: Traffic, sent: u64) {
     throttle.broker.send(traffic, sent);
 }
 
-#[rstest_bdd_macros::given(
-    "the {traffic} throttle rate has been changed to {rate} bytes per second"
-)]
-fn rate_has_been_changed(throttle: &ThrottleScenario, traffic: Traffic, rate: u32) {
-    throttle.broker.set_rate(traffic, rate);
+#[rstest_bdd_macros::when("{traffic} traffic is throttled at {rate} bytes per second")]
+fn traffic_becomes_throttled(throttle: &ThrottleScenario, traffic: Traffic, rate: i64) {
+    throttle.broker.throttle_at(traffic, rate);
 }
-
-#[rstest_bdd_macros::given("{millis} ms have passed")]
-fn time_has_passed(throttle: &ThrottleScenario, millis: u64) { throttle.broker.pass(millis); }
 
 #[rstest_bdd_macros::when("{traffic} traffic sends {sent} bytes")]
 fn traffic_sends(throttle: &ThrottleScenario, traffic: Traffic, sent: u64) {
     throttle.broker.send(traffic, sent);
 }
 
-#[rstest_bdd_macros::when("{traffic} traffic asks for {requested} bytes")]
-fn traffic_asks(throttle: &mut ThrottleScenario, traffic: Traffic, requested: u64) {
-    let granted = throttle.broker.ask(traffic, requested);
-    throttle.granted.set((traffic, granted));
-}
-
 #[rstest_bdd_macros::when("the {traffic} throttle rate changes to {rate} bytes per second")]
-fn rate_changes(throttle: &ThrottleScenario, traffic: Traffic, rate: u32) {
-    throttle.broker.set_rate(traffic, rate);
+fn rate_changes(throttle: &ThrottleScenario, traffic: Traffic, rate: i64) {
+    throttle.broker.throttle_at(traffic, rate);
 }
 
 #[rstest_bdd_macros::when("the {traffic} throttle is removed")]
 fn throttle_is_removed(throttle: &ThrottleScenario, traffic: Traffic) {
-    throttle.broker.set_rate(traffic, 0);
-}
-
-#[rstest_bdd_macros::then("{traffic} traffic is granted {granted} bytes")]
-fn traffic_is_granted(throttle: &ThrottleScenario, traffic: Traffic, granted: u64) {
-    assert2::assert!(*throttle.granted.get() == (traffic, granted));
+    throttle.broker.unthrottle(traffic);
 }
 
 #[rstest_bdd_macros::then("the {traffic} quota is exceeded")]
@@ -173,10 +191,10 @@ fn quota_stays_exceeded_for(throttle: &ThrottleScenario, traffic: Traffic, milli
     assert2::assert!(
         throttle.broker.quota_over(traffic, millis)
             == QuotaOverTime {
-                exceeded_at_end_of_wait: true,
-                exceeded_one_ms_later: false,
+                exceeded_one_ms_before: true,
+                exceeded_at_end_of_wait: false,
             }
     );
 }
 
-krabka_bdd::scenarios!("tests/features", fixtures = [throttle: ThrottleScenario]);
+krabka_bdd::scenarios!("tests/features/replication", fixtures = [throttle: ThrottleScenario]);

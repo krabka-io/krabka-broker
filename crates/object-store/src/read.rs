@@ -43,7 +43,8 @@ pub struct CappedDigest {
 /// - [`ObjectStoreError::TooLarge`] if the object is larger than `max_bytes`.
 /// - [`ObjectStoreError::NotFound`] if the object does not exist.
 /// - [`ObjectStoreError::Precondition`] if its etag changed after the HEAD.
-/// - [`ObjectStoreError::Backend`] for any other backend failure.
+/// - [`ObjectStoreError::Unavailable`] for a backend failure a retry can
+///   clear, and [`ObjectStoreError::Backend`] for any other.
 pub async fn read_capped(
     store: &Arc<dyn object_store::ObjectStore>,
     key: &Path,
