@@ -15,7 +15,7 @@ No remote publication, merge, release or production change was performed.
 
 1. Kafka accepts an unknown assignment owner while native rejects it without partial state. This is a measured behavioral difference, not a parity pass. Validation remains intact.
 2. Arbitrary Java/JAR loading requires a separately designed JVM/worker bridge, type conversion, lifecycle, cancellation and failure handling. Native callbacks are not that bridge.
-3. DLQ phase-two fault schedules are model evidence, not distributed persister-failure or crash-during-ARCHIVING evidence. Existing RF3 denial covers completed writes and clean restart. No exactly-once guarantee.
+3. The [paired live RF3 source-crash run](kafka44-dlq/rf3-crash-20261108/README.md) now covers SIGKILL during durable ARCHIVING after DLQ append with confirmation held: both peers recover with two copies and six final ARCHIVED/start0/count1 replica rows (offline checked). It uses the immutable retained candidate, not a combined-tree build. Real phase-two persister-failure injection remains unqualified; the bounded model is separate evidence. Existing RF3 denial remains a separate completed-write/clean-restart schedule. No exactly-once guarantee.
 4. Topology directory sync is not a physical power-cut test or distributed fencing. The backend has no ownership generation/CAS; concurrent old/new owners remain outside the supported host contract.
 5. Arbitrary fault schedules, inconsistent plugins across nodes and active-member plugin-removal restart remain unqualified.
 

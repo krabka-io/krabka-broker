@@ -68,7 +68,9 @@ difference for its eight scenarios: both peers durably retain ARCHIVED,
 startOffset=0 and deliveryCompleteCount=1 before/after clean restart. The
 [RF3 denial run](rf3-denial-20261107/README.md) additionally measures destination
 authorization failure and completed-write clean restart on three replicas.
-Neither run measures an RF3 crash during ARCHIVING or failed phase-2 persistence.
+Those runs do not measure an RF3 crash during ARCHIVING or failed phase-2 persistence;
+the [paired RF3 source-crash follow-up](rf3-crash-20261108/README.md) below
+adds the former, not the latter.
 The [phase-2 model](phase2-model-20261108/README.md) covers those persistence cuts
 only at the bounded acquisition-machine level, not as distributed execution.
 Native manager registration/lifecycle is implemented and tested in this branch
@@ -392,3 +394,17 @@ refusal after retry, and restart cuts. This is acquisition-machine evidence,
 not another live oracle or distributed ACL/fault execution. Failed phase-2
 persistence can replay a previously appended DLQ copy; exactly-once archival
 remains unsupported.
+
+## Paired RF3 source-crash follow-up (2026-11-08)
+
+The [retained paired run](rf3-crash-20261108/README.md) measures a source
+SIGKILL after readable DLQ append while the response is held and durable state
+is ARCHIVING, with RF3/minISR2 on source, destination and share state. Both
+peers recover with two intact copies, no source redelivery during 15 seconds,
+and lag0. Offline checks of all six final replica logs confirm the latest
+rows are ARCHIVED/start0/deliveryCompleteCount1; the historical runner's PASS
+only dumps these rows, rather than asserting them. The native binary is the
+immutable retained RF3-denial candidate, not a combined-tree rebuild. This
+one-record schedule demonstrates duplication, not exactly-once archival or a
+real failed phase-2 persistence attempt. The unchanged historical harness is
+retained privately, not installed as a repository task; see the receipt.

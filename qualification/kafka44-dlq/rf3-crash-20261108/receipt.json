@@ -1,0 +1,73 @@
+{
+  "date": "2026-11-08",
+  "status": "paired-rf3-append-before-confirmation-source-crash-pass",
+  "qualification_pass": false,
+  "private_artifacts": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-crash-20261108",
+  "candidate": {
+    "source_revision": "c51d444b3c290b307bb9cb43b2f4faed9344a603",
+    "binary_source": "retained RF3 denial immutable binary, not rebuilt from current worktree",
+    "broker_sha256": "07495afa62f59249f7006561209cd1c09b132f49a0dad4e2f461a654fb41bfbd"
+  },
+  "oracle_image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "observed": [
+    "Source, destination, state each assigned three replicas/minISR2",
+    "One readable intact DLQ copy while response confirmation held",
+    "Actual state log latest group row ARCHIVING before source SIGKILL",
+    "Recovered share polls empty for 15 seconds",
+    "Exactly two intact DLQ copies and lag0 after recovery on each peer",
+    "All six final replica state logs ARCHIVED/start0/deliveryCompleteCount1",
+    "Supplemental Admin queries observe RF3/ISR3/minISR2 on all three topics per peer"
+  ],
+  "topology_observation_note": "Oracle inspected after source crash/recovery; native inspected after an additional whole-cluster clean restart. No pre-crash ISR3 assertion was made.",
+  "limits": [
+    "One partition and one record; one source process kill per cluster, no power loss or fsync fault",
+    "DLQ append confirmation held, not injected real WriteShareGroupState failure",
+    "No concurrent destination ACL denial during crash; existing separate RF3 ACL denial receipt remains separate evidence",
+    "No exactly-once guarantee: both executions deliberately demonstrate duplicates",
+    "Candidate retained binary predates current model-only lane; no current-main binary qualification claim",
+    "No exhaustive fault schedule or full qualification claim"
+  ],
+  "shutdown": "All new owned processes stopped; three owned oracle containers stopped and retained; data retained",
+  "checks": [
+    "javac fixture compilation passed",
+    "paired setup/count/resume/verify commands passed",
+    "offline integration verification: six latest replica rows match state-summary.json and ARCHIVED/start0/count1; runner PASS only dumps final rows",
+    "source/model binary hashes separately checked against retained phase2 receipt",
+    "git diff --check passed"
+  ],
+  "artifacts_sha256": {
+    "Rf3Inspect.java": "4cb328dcc72803ff93ba0f9edbbaf1c3c6b7da6cc5b65742cb12c982deceb8c6",
+    "ShareFaultRf3.java": "b0fb0f021e4d44851b8a33e9eaebe161a43b7dbca1363c6b71e6dc0a1c793163",
+    "javac.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-count.txt": "f533be2b3dab817745cb0ca5008731aa487f62089224accb92ce2d9f75d6c7a5",
+    "native-reject.txt": "d20b9b991699561d1e6adbe5bab5f0d706d57aaa3dacdb095b71e3cc81f08d69",
+    "native-resume.txt": "a5d42e28ccafa4bbd044d14f893d135fcd76a3a0af0ceb2607664e6a6410abad",
+    "native-setup.txt": "2bdf3149c8a6b11766f3f3aa102a44f19ff60b7b47031541c755587b8e4e6fe6",
+    "native-state-before.txt": "595f94e133fc983e08e471c30b1e536bd03b4162a6f941c3d28e00bf46f96e8b",
+    "native-timeline.json": "103ac1b074a161fa529564ab56fefe491eb3282195ffd164cee4169314e7c580",
+    "native-topology.txt": "403ef415c7e7c57e2561d5e1bfef1f92115b966e7bdd3adb304b3f28249e55d0",
+    "native-verify.txt": "a451f7296248496959f21ed5333ed1ec6eea744b0705ce458860335f4d500c71",
+    "native1-state-after.txt": "ff0436cd53158200310a9782e6a64de781a60ddf0500a8b7057769352e5b7341",
+    "native2-state-after.txt": "786d015d771e67f6248a04a9e0f03008472f0049b0bb6e0043edb6ebc16d0997",
+    "native3-state-after.txt": "2ffac59a2490fa89cd5cee0d80733f7afc2128c3261d4b5fb8fb3b3cfcddc309",
+    "oracle-count.txt": "f533be2b3dab817745cb0ca5008731aa487f62089224accb92ce2d9f75d6c7a5",
+    "oracle-reject.txt": "b4b62fb7c6805a04da17b0e62ad6ac31575e728a2edc03ff9a4b0b0518b44ba0",
+    "oracle-resume.txt": "a5d42e28ccafa4bbd044d14f893d135fcd76a3a0af0ceb2607664e6a6410abad",
+    "oracle-setup.txt": "2bdf3149c8a6b11766f3f3aa102a44f19ff60b7b47031541c755587b8e4e6fe6",
+    "oracle-state-before.txt": "a82977167364ddc2a6bc2b04e69071050cbe1ed35306b1fa4d10d6ba1ca77f67",
+    "oracle-timeline.json": "a1a42c1bc8de8e2d007c16a1edf08d692289025bdd3100161819bec0b1dac333",
+    "oracle-topology.txt": "85143c2d3228824c6c2f298c793cceef4d8bcb9cc12013f09ad8b3143159736f",
+    "oracle-verify.txt": "a451f7296248496959f21ed5333ed1ec6eea744b0705ce458860335f4d500c71",
+    "oracle1-state-after.txt": "99fc0ab69e2ccf2a32e7604940f04bd081342e097977e75af0cbeb8b281a02fc",
+    "oracle2-state-after.txt": "696d800fc84970a22f552307b6a2448f33b714e0934b8a9d342622213f5fd362",
+    "oracle3-state-after.txt": "e65445433f4e3e28eb5290734e5587b152be66d6cac11d694cb06f1e847ce3ae",
+    "results.json": "87bf80bdf6accb7c3a9bcf48ecf687c28284ab560841da91ae01fa7eff586e7b",
+    "state-summary.json": "d32a91f1da2d405839f0ac1d40598187def00bee741a9b30c8af6cedaffebe3e",
+    "README.md": "8d2aa757ef39fcbb6b29a49003f8d33611e3e4e88e2f1ebcbc53b9a0e72d82a3"
+  },
+  "private_harness": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-crash-20261108/run.py",
+    "sha256": "3c29570162b437ece132125610eee7eb2a569ca066876243c1717452f91e994c",
+    "note": "Unchanged historical harness; not a tracked task; inferred repository path requires adaptation when relocated."
+  }
+}
