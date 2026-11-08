@@ -45,7 +45,7 @@ use {
     std::time::Instant,
 };
 
-#[krabka_macros::share_request_identity]
+#[krabka_broker_macros::share_request_identity]
 pub async fn handle(
     broker: &Broker,
     req: ShareAcknowledgeRequest,
@@ -295,7 +295,7 @@ mod tests {
         },
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["client-a"];
     }
 
@@ -331,7 +331,7 @@ mod tests {
             .call()
             .await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -340,7 +340,7 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = krabka_macros::unthrottled_wire!(ShareAcknowledgeResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ShareAcknowledgeResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: None,
             acquisition_lock_timeout_ms: 0,
@@ -377,7 +377,7 @@ mod tests {
         topic_id: ProtoUuid,
     ) -> ShareAcknowledgeResponse {
         let shared = broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             client ["client-a"];

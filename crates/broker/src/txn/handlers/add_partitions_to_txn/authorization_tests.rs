@@ -60,7 +60,7 @@ const A_AND_B: &[PartitionSpec] = &[
 #[derive(Debug)]
 struct Grants;
 
-krabka_macros::test_authorizer! { Grants, request; {
+krabka_broker_macros::test_authorizer! { Grants, request; {
     let allowed = match (
         request.principal.name.as_str(),
         request.resource_type,

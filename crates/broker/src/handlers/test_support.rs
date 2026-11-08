@@ -18,7 +18,7 @@ macro_rules! handler_drive {
 
 macro_rules! allow_all_broker_setup {
     (($($binding:ident),+), $boot:ident, $user:literal) => {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind($($binding),+);
             boot [$boot] allow_all;
             user [$user];
@@ -28,7 +28,7 @@ macro_rules! allow_all_broker_setup {
 
 macro_rules! anonymous_request_identity {
     ($principal:ident, $peer:ident, $ctx:ident, $client:expr $(, $connection:expr)? $(,)?) => {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind($principal, $peer, $ctx);
             user ["ANONYMOUS"];
             client [$client];
@@ -195,7 +195,7 @@ pub fn voter_leader_epoch(broker: &Broker) -> i32 {
 #[derive(Debug)]
 pub struct DenyTopicRead;
 
-krabka_macros::test_authorizer!(DenyTopicRead, request; {
+krabka_broker_macros::test_authorizer!(DenyTopicRead, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read
     {
@@ -209,7 +209,7 @@ krabka_macros::test_authorizer!(DenyTopicRead, request; {
 #[derive(Debug)]
 pub struct DenyTopics;
 
-krabka_macros::test_authorizer!(DenyTopics, request; {
+krabka_broker_macros::test_authorizer!(DenyTopics, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic {
         AuthorizationResult::Deny
     } else {
@@ -306,7 +306,7 @@ pub const fn unauthorized_topic_cases(
     ]
 }
 
-krabka_macros::create_topic_fixture!(configured_topic_request);
+krabka_broker_macros::create_topic_fixture!(configured_topic_request);
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// A partition with the supplied leader and replicas, initially all in ISR.
@@ -902,7 +902,7 @@ pub fn acknowledge_batches_request(
             topic_id,
             partitions: vec![AcknowledgePartition {
                 partition_index: partition.index.0,
-                acknowledgement_batches: krabka_macros::acknowledgement_batches!(AcknowledgementBatch; [partition.batches]),
+                acknowledgement_batches: krabka_broker_macros::acknowledgement_batches!(AcknowledgementBatch; [partition.batches]),
                 ..Default::default()
             }],
             ..Default::default()

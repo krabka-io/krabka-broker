@@ -71,7 +71,7 @@ const DELAY_MS: i64 = 30_000;
 /// The probe's own report of what a stock JVM client saw.
 ///
 /// The Java side only measures and prints; every assertion is made here.
-const PROBE_JAVA: &str = krabka_macros::java_string_producer_source!(
+const PROBE_JAVA: &str = krabka_broker_macros::java_string_producer_source!(
     r#"
 import java.time.Duration;
 import java.util.Collections;

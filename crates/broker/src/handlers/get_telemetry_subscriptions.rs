@@ -89,7 +89,7 @@ mod tests {
         krabka_protocol::owned::get_telemetry_subscriptions_response,
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         encode_request(GetTelemetrySubscriptionsRequest);
         decode_response(GetTelemetrySubscriptionsResponse);
         version [get_telemetry_subscriptions_response::MAX_VERSION];
@@ -100,7 +100,7 @@ mod tests {
     /// gets `THROTTLING_QUOTA_EXCEEDED` with `throttle_time_ms` 0 (#672).
     #[tokio::test]
     async fn get_answers_with_the_instance_id_and_throttles_without_delay() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
         };

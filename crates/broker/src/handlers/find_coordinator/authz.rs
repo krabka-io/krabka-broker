@@ -138,7 +138,7 @@ mod tests {
     fn key_admission_follows_get_coordinator() {
         let authz = deny_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, context);
             user ["ANONYMOUS"];
             client ["find-client"];

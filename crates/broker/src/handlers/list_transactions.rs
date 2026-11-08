@@ -279,7 +279,7 @@ mod tests {
         );
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -316,7 +316,7 @@ mod tests {
         use {crate::txn::state::TxnEntry, krabka_log::ProducerId};
 
         let max_ver = list_transactions_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -334,7 +334,7 @@ mod tests {
             .await
             .expect("seed txn entry");
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -429,7 +429,7 @@ mod tests {
 
         let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-        let expected = krabka_macros::unthrottled_wire!(ListTransactionsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ListTransactionsResponse {
             error_code: codes::NONE,
             unknown_state_filters: vec!["MysteryState".to_owned()],
             transaction_states: vec![],
@@ -446,7 +446,7 @@ mod tests {
         use {crate::txn::state::TxnEntry, krabka_log::ProducerId};
 
         let version = list_transactions_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -474,7 +474,7 @@ mod tests {
                 .expect("seed the transaction");
         }
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

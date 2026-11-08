@@ -342,7 +342,7 @@ pub trait HeartbeatStatus {
     fn status(self) -> HeartbeatReply;
 }
 
-krabka_macros::heartbeat_status!(
+krabka_broker_macros::heartbeat_status!(
     ConsumerGroupHeartbeatResponse,
     ShareGroupHeartbeatResponse,
     StreamsGroupHeartbeatResponse,

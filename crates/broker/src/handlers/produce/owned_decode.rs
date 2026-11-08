@@ -21,9 +21,9 @@ pub(super) fn decode_owned_batch(
     metrics: &BrokerMetrics,
     policy: RecordDecompressionPolicy,
 ) -> Result<RecordBatch, i16> {
-    krabka_macros::records_payload_match! { match payload {
+    krabka_broker_macros::records_payload_match! { match payload {
         RecordsPayload::V2(batches) => exactly_one_v2_batch(batches),
-        RecordsPayload::Raw(bytes) => krabka_macros::records_payload_match! { match RecordsPayload::from_bytes_with_policy(bytes, policy) {
+        RecordsPayload::Raw(bytes) => krabka_broker_macros::records_payload_match! { match RecordsPayload::from_bytes_with_policy(bytes, policy) {
             Ok(RecordsPayload::V2(batches)) => exactly_one_v2_batch(batches),
             Ok(RecordsPayload::Raw(_) | RecordsPayload::Legacy(_)) | Err(_) => {
                 Err(codes::INVALID_RECORD)

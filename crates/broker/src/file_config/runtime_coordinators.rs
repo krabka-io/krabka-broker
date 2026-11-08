@@ -21,7 +21,7 @@ use {
 impl RuntimeFileConfig {
     pub(super) fn apply_coordinators(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
-        krabka_macros::set_runtime! {
+        krabka_broker_macros::set_runtime! {
             runtime => cfg;
             positive_time: coordinator_session_expiry_tick, coordinator_shutdown_ack_timeout;
             duration: consumer_group_session_timeout => next_gen_consumer_group.session_timeout,
@@ -58,7 +58,7 @@ impl RuntimeFileConfig {
     pub(super) fn apply_share_group(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         let share = &mut *cfg.share_group;
-        krabka_macros::set_runtime! {
+        krabka_broker_macros::set_runtime! {
             runtime => share;
             int_millis: share_group_session_timeout => session_timeout in AT_LEAST_ONE_MS,
                 share_group_heartbeat_interval => heartbeat_interval in AT_LEAST_ONE_MS,
@@ -82,7 +82,7 @@ impl RuntimeFileConfig {
                     => max_partition_max_record_locks in 2_000..=10_000;
         }
         validate_share_group_order(share)?;
-        krabka_macros::set_runtime! {
+        krabka_broker_macros::set_runtime! {
             runtime => share;
             duration: share_group_backlog_poll_interval => backlog_poll_interval;
         }
@@ -94,7 +94,7 @@ impl RuntimeFileConfig {
         cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        krabka_macros::set_runtime! {
+        krabka_broker_macros::set_runtime! {
             runtime => cfg;
             plain: streams_group_enable => streams_group.enable;
             duration: streams_group_session_timeout => streams_group.session_timeout,
@@ -139,7 +139,7 @@ impl RuntimeFileConfig {
             }
             cfg.streams_group.acceptable_recovery_lag = value;
         }
-        krabka_macros::set_runtime! {
+        krabka_broker_macros::set_runtime! {
             runtime => cfg;
             duration: streams_group_task_offset_interval => streams_group.task_offset_interval;
         }

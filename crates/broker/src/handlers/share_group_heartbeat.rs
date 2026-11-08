@@ -241,7 +241,7 @@ mod tests {
     fn group_read_denied_yields_group_authorization_failed() {
         let authorizer = acl_authorizer();
         let image = MetadataImage::new(uuid::Uuid::nil());
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["ANONYMOUS"];
             client ["share-client"];
@@ -261,7 +261,7 @@ mod tests {
         assert!(cur.is_empty(), "response decoder consumed all bytes");
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["client-a"];
     }
 
@@ -299,7 +299,7 @@ mod tests {
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         finalize_share_version(&broker, 0).await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };
@@ -321,7 +321,7 @@ mod tests {
     /// still gets `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`,
     /// when the protocol itself is unavailable.
     async fn handle_denied_group_heartbeat(broker: &Broker) -> ShareGroupHeartbeatResponse {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };
@@ -333,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(acl_authorizer()))];
         };
@@ -347,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_group_read_denied_preserves_error_response() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(acl_authorizer()))];
         };
@@ -368,7 +368,7 @@ mod tests {
     /// `TOPIC_AUTHORIZATION_FAILED`.
     #[tokio::test]
     async fn handle_malformed_member_id_precedes_topic_authorization() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(acl_authorizer()))];
         };
@@ -485,7 +485,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["ANONYMOUS"];};
         share_heartbeat.response = Some(
             handle(
                 &broker,
@@ -622,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
         // Deliberately no Describe grant for "topic-b".
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(acl_authorizer()))];
         };
@@ -706,7 +706,7 @@ mod tests {
         } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["ANONYMOUS"];
         };

@@ -50,7 +50,7 @@ pub struct AssignedTopicPartitions {
     pub partitions: Vec<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_macros::FlexibleArrayValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_broker_macros::FlexibleArrayValue)]
 #[array_value(
     record = "ConsumerGroupTargetAssignmentMemberValue",
     encode = encode_topic_partitions,
@@ -133,7 +133,7 @@ pub struct CurrentMemberAssignmentValue {
     pub partitions_pending_revocation: Vec<CurrentTopicPartitions>,
 }
 
-#[krabka_macros::flexible_value(record = "ConsumerGroupCurrentMemberAssignmentValue")]
+#[krabka_broker_macros::flexible_value(record = "ConsumerGroupCurrentMemberAssignmentValue")]
 impl CurrentMemberAssignmentValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);

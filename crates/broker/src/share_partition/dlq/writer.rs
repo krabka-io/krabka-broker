@@ -1016,7 +1016,7 @@ mod tests {
             .collect()
     }
 
-    krabka_macros::share_dlq_meters! {
+    krabka_broker_macros::share_dlq_meters! {
     /// What the meters of `group` count: the records written, the attempts to
     /// produce, and the writes that failed.
         meters, BrokerMetrics, ShareGroupIdLabel

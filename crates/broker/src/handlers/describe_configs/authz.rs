@@ -144,7 +144,7 @@ mod tests {
             "t".into(),
             TOPIC_AUTHORIZATION_FAILED,
         );
-        let expected = krabka_macros::tagged_wire!(DescribeConfigsResult {
+        let expected = krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
             error_code: TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_owned()),
             resource_type: ConfigResourceType::Topic.to_wire(),
@@ -199,7 +199,7 @@ mod tests {
         );
         assert!(
             denied
-                == krabka_macros::tagged_wire!(DescribeConfigsResult {
+                == krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                     error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: Some("Cluster authorization failed.".to_owned()),
                     resource_type: ConfigResourceType::ClientMetrics.to_wire(),
@@ -232,7 +232,7 @@ mod tests {
             resource(0, "x"),
         ];
         let refused = |resource_type, name: &str| {
-            krabka_macros::tagged_wire!(DescribeConfigsResult {
+            krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: INVALID_REQUEST,
                 error_message: Some(
                     "This most likely occurs because of a request being malformed by the client \

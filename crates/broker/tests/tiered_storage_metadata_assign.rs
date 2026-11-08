@@ -28,7 +28,7 @@ use {
     tempfile::TempDir,
 };
 
-krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
+krabka_broker_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
 
 /// A running bare broker and the log directory behind it.
 struct BareBroker {

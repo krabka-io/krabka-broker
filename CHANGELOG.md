@@ -55,6 +55,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Removed
 
+- `krabka-macros` drops the 115 macros that only `krabka-broker` invokes, among them `dispatch_table!`, `RegisterMetrics`, `FlexibleEpochValue` and the broker's test fixtures. They are in the new unpublished `krabka-broker-macros` crate and expand to the same code there. `crates/macros/CHANGELOG.md` lists them. Removing public macros breaks the `krabka-macros` API, so the release that carries it is at least a minor version, 1.2.0.
 - `krabka-macros` drops the `#[bootstrap_cli_fields]` attribute and the `connect_cli_client!` macro, which only the operator CLIs used. They flatten `krabka_cli_connection::ConnectionArgs` instead. Removing public macros breaks the `krabka-macros` API, so the release that carries it is at least a minor version, 1.2.0.
 
 ### Fixed

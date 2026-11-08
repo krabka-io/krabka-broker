@@ -33,7 +33,7 @@ use {
     },
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["broker-client"];
 }
 
@@ -49,7 +49,7 @@ async fn check_empty_alter_partition(
     let response = super::handle(broker, request, version.0, ctx)
         .await
         .expect("handle");
-    let expected = krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
         error_code: expected.0,
         topics: Vec::new(),
     });
@@ -74,7 +74,7 @@ async fn start_seeded_partition_broker() -> LiveBrokerFixture {
 
 #[tokio::test]
 async fn handle_denies_cluster_action_for_whole_request() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
         user ["replica"];
@@ -90,7 +90,7 @@ async fn handle_denies_cluster_action_for_whole_request() {
 
 #[tokio::test]
 async fn leader_accepts_empty_alter_partition_request() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] allow_all;
         ready controller_leader;
@@ -112,7 +112,7 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
         directory: _dir,
         broker,
     } = start_seeded_partition_broker().await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["replica"];
     };
@@ -139,7 +139,7 @@ async fn concurrent_isr_updates_revalidate_the_partition_epoch_at_append() {
         directory: _dir,
         broker,
     } = start_seeded_partition_broker().await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["replica"];
     };
@@ -155,9 +155,9 @@ async fn concurrent_isr_updates_revalidate_the_partition_epoch_at_append() {
     responses.sort_unstable_by_key(|response| response.topics[0].partitions[0].error_code);
     let expected = [
         accepted_isr_response(),
-        krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+        krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
             error_code: codes::NONE,
-            topics: vec![krabka_macros::tagged_wire!(RespTopicData {
+            topics: vec![krabka_broker_macros::tagged_wire!(RespTopicData {
                 topic_id: wire_topic_id(),
                 partitions: vec![RespPartitionData {
                     partition_index: 0,
@@ -213,7 +213,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
         directory: _dir,
         broker,
     } = start_seeded_partition_broker().await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["replica"];
     };
@@ -253,7 +253,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
         let partitions = if kind == TopicIdKind::Known {
             partition_epoch += 1;
             vec![
-                krabka_macros::tagged_wire!(RespPartitionData {
+                krabka_broker_macros::tagged_wire!(RespPartitionData {
                     partition_index: 0,
                     error_code: codes::NONE,
                     leader_id: 1,
@@ -273,9 +273,9 @@ async fn topic_row_error_follows_version_and_topic_id() {
         expected.push((
             version,
             kind,
-            krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+            krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
                 error_code: codes::NONE,
-                topics: vec![krabka_macros::tagged_wire!(RespTopicData {
+                topics: vec![krabka_broker_macros::tagged_wire!(RespTopicData {
                     topic_id,
                     partitions,
                 })],
@@ -298,7 +298,7 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
         directory: _dir,
         broker,
     } = start_seeded_partition_broker().await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["replica"];
     };
@@ -325,7 +325,7 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
         let resp = super::handle(&broker, req, version, &ctx)
             .await
             .expect("handle");
-        let expected = krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
             error_code: codes::STALE_BROKER_EPOCH,
             topics: Vec::new(),
         });
@@ -354,11 +354,11 @@ fn single_partition_request(broker: &Broker) -> AlterPartitionRequest {
 }
 
 fn accepted_isr_response() -> AlterPartitionResponse {
-    krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+    krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
         error_code: codes::NONE,
-        topics: vec![krabka_macros::tagged_wire!(RespTopicData {
+        topics: vec![krabka_broker_macros::tagged_wire!(RespTopicData {
             topic_id: wire_topic_id(),
-            partitions: vec![krabka_macros::tagged_wire!(RespPartitionData {
+            partitions: vec![krabka_broker_macros::tagged_wire!(RespPartitionData {
                 partition_index: 0,
                 error_code: codes::NONE,
                 leader_id: 1,

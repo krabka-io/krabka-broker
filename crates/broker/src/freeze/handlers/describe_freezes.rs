@@ -37,7 +37,7 @@ use {
     },
 };
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_describe_topic_freezes",
     api = "DescribeTopicFreezes",
     level = "info"

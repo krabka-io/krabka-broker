@@ -52,7 +52,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     let broker = handle_.broker_arc_for_test();
     handle_.wait_until_transaction_coordinator_ready().await;
 
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["client"];
         client ["one-check"];

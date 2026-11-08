@@ -32,7 +32,7 @@ pub struct ShareGroupMemberMetadataValue {
     pub subscribed_topic_names: Vec<String>,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupMemberMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupMemberMetadataValue")]
 impl ShareGroupMemberMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_member_client(

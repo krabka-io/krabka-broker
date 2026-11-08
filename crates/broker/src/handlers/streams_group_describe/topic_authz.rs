@@ -13,7 +13,7 @@ use crate::{
     handlers::streams_group_heartbeat::topic_authz::dedup_first_seen,
 };
 
-krabka_macros::required_topics! {
+krabka_broker_macros::required_topics! {
     /// Kafka's `requiredTopics`: names from all four topic roles, deduplicated
     /// in first-seen order across stored subtopologies.
     pub(super) fn required_topics(topology: &StreamsGroupTopologyValue) -> Vec<String>;

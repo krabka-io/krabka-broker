@@ -65,7 +65,7 @@ use {
     },
 };
 
-krabka_macros::decoded_dispatch! {
+krabka_broker_macros::decoded_dispatch! {
     /// Validate broker-local values before sending replacement resources to the controller.
     pub async fn dispatch(
         broker: &Broker,
@@ -75,7 +75,7 @@ krabka_macros::decoded_dispatch! {
     )
         [request = AlterConfigsRequest, binding(req)] -> DispatchResult
     {
-        let mut req = krabka_macros::controller_request!(broker, ctx, req, version; self::handle, self::request_refusal);
+        let mut req = krabka_broker_macros::controller_request!(broker, ctx, req, version; self::handle, self::request_refusal);
         let duplicates = duplicate_resource_flags(req.resources.iter());
         let mut indexed_responses = Vec::new();
         let mut forwarded_indices = Vec::new();
@@ -159,7 +159,7 @@ fn preprocess_resource(
     )
 }
 
-krabka_macros::config_alter_handler! { request = AlterConfigsRequest, response = AlterConfigsResponse, operation = "AlterConfigs", audit = audit_resources_for, process = process_resource, audits_in_process = true }
+krabka_broker_macros::config_alter_handler! { request = AlterConfigsRequest, response = AlterConfigsResponse, operation = "AlterConfigs", audit = audit_resources_for, process = process_resource, audits_in_process = true }
 
 /// Names the audited resource and the keys the request changes on it.
 ///

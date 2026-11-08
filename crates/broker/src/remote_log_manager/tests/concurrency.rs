@@ -91,7 +91,7 @@ impl TestRsm {
     }
 }
 
-#[krabka_macros::missing_remote_reads(delete_ok)]
+#[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
 impl RemoteStorageManager for TestRsm {
     fn copy_log_segment_data(

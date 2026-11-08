@@ -109,7 +109,7 @@ fn request(
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -168,7 +168,7 @@ async fn check_trim_response(
     let response = drive(broker, request, context).await;
     assert!(
         response
-            == krabka_macros::unthrottled_wire!(DeleteRecordsResponse {
+            == krabka_broker_macros::unthrottled_wire!(DeleteRecordsResponse {
                 topics: expected_trim_rows()
                     .topic(expected.topic)
                     .indices(expected.indices)
@@ -260,7 +260,7 @@ async fn pending_partition_fixture(
 
 #[tokio::test]
 async fn handle_denied_topic_returns_topic_auth_rows() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, p, peer);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -474,15 +474,19 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         )
         .await;
 
-        let expected = krabka_macros::unthrottled_wire!(DeleteRecordsResponse {
-            topics: vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-                name: topic.into(),
-                partitions: vec![krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                    partition_index: 0,
-                    low_watermark: expected_low_watermark,
-                    error_code: codes::NONE,
-                })],
-            })],
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteRecordsResponse {
+            topics: vec![krabka_broker_macros::tagged_wire!(
+                DeleteRecordsTopicResult {
+                    name: topic.into(),
+                    partitions: vec![krabka_broker_macros::tagged_wire!(
+                        DeleteRecordsPartitionResult {
+                            partition_index: 0,
+                            low_watermark: expected_low_watermark,
+                            error_code: codes::NONE,
+                        }
+                    )],
+                }
+            )],
         });
         check!(resp == expected, "{topic}");
     }
@@ -494,7 +498,7 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 
 #[tokio::test]
 async fn a_refused_trim_deletes_nothing() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, principal, peer, ctx);
         boot [handler_fixture_support::start_with_break_glass(gated_config)];
         user ["admin"];
@@ -512,14 +516,18 @@ async fn a_refused_trim_deletes_nothing() {
 
     let resp = drive_trim(&broker, &test_context(&principal, &peer), request().call()).await;
 
-    let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: "orders".to_owned(),
-        partitions: vec![krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-            partition_index: 0,
-            low_watermark: -1,
-            error_code: codes::POLICY_VIOLATION,
-        })],
-    })];
+    let expected = vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: "orders".to_owned(),
+            partitions: vec![krabka_broker_macros::tagged_wire!(
+                DeleteRecordsPartitionResult {
+                    partition_index: 0,
+                    low_watermark: -1,
+                    error_code: codes::POLICY_VIOLATION,
+                }
+            )],
+        }
+    )];
     assert!(resp.topics == expected, "{resp:?}");
     // The refusal refused: the log start offset did not move.
     check!(part.log_start_offset().unwrap() == before);
@@ -553,20 +561,22 @@ fn expected_trim_rows(
         low_watermark,
         error,
     };
-    vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: setup.topic.to_owned(),
-        partitions: setup
-            .indices
-            .iter()
-            .map(
-                |index| krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                    partition_index: index.0,
-                    low_watermark: setup.low_watermark.0,
-                    error_code: setup.error.0,
-                })
-            )
-            .collect(),
-    })]
+    vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: setup.topic.to_owned(),
+            partitions: setup
+                .indices
+                .iter()
+                .map(
+                    |index| krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                        partition_index: index.0,
+                        low_watermark: setup.low_watermark.0,
+                        error_code: setup.error.0,
+                    })
+                )
+                .collect(),
+        }
+    )]
 }
 
 /// A trim the partition has already satisfied answers success and deletes
@@ -800,21 +810,23 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
     ])
     .await;
 
-    let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: topic.to_owned(),
-        partitions: vec![
-            krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                partition_index: 0,
-                low_watermark: -1,
-                error_code: codes::NOT_LEADER_OR_FOLLOWER,
-            }),
-            krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                partition_index: 1,
-                low_watermark: -1,
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            }),
-        ],
-    })];
+    let expected = vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: topic.to_owned(),
+            partitions: vec![
+                krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                    partition_index: 0,
+                    low_watermark: -1,
+                    error_code: codes::NOT_LEADER_OR_FOLLOWER,
+                }),
+                krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                    partition_index: 1,
+                    low_watermark: -1,
+                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                }),
+            ],
+        }
+    )];
     assert!(resp.topics == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
@@ -1040,7 +1052,7 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
         }],
         ..Default::default()
     };
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(replicator, peer, ctx);
         user ["replicator"];
         client ["replica-2"];
@@ -1063,7 +1075,7 @@ async fn delete_to(
     #[builder(into, default)] offset: Offset,
     #[builder(into, default = RequestTimeoutMillis (200))] timeout: RequestTimeoutMillis,
 ) -> Vec<DeleteRecordsTopicResult> {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(admin, peer, ctx);
         user ["admin"];
     };

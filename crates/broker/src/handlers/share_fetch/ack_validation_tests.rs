@@ -61,7 +61,7 @@ struct RowCodes {
 #[derive(Debug)]
 struct DenyOnePrincipal;
 
-krabka_macros::test_authorizer!(DenyOnePrincipal, request; {
+krabka_broker_macros::test_authorizer!(DenyOnePrincipal, request; {
     if request.principal.name == DENIED
         && request.resource_type == ResourceType::Topic
         && request.operation == AclOperation::Read
@@ -159,7 +159,7 @@ async fn share_fetch(
                 .into_iter()
                 .map(|row| FetchPartition {
                     partition_index: row.index.0,
-                    acknowledgement_batches: krabka_macros::acknowledgement_batches!(FetchAcknowledgeBatch; [row.batches]),
+                    acknowledgement_batches: krabka_broker_macros::acknowledgement_batches!(FetchAcknowledgeBatch; [row.batches]),
                     ..Default::default()
                 })
                 .collect(),

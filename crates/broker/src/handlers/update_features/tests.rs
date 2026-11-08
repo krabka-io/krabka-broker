@@ -28,7 +28,7 @@ const PREFIX: &str =
     "The update failed for all features since the following feature had an error: ";
 
 fn refused(message: &str) -> UpdateFeaturesResponse {
-    krabka_macros::unthrottled_wire!(UpdateFeaturesResponse {
+    krabka_broker_macros::unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::INVALID_UPDATE_VERSION,
         error_message: Some(format!("{PREFIX}{message}")),
         results: vec![],
@@ -36,13 +36,13 @@ fn refused(message: &str) -> UpdateFeaturesResponse {
 }
 
 fn accepted(features: &[&str]) -> UpdateFeaturesResponse {
-    krabka_macros::unthrottled_wire!(UpdateFeaturesResponse {
+    krabka_broker_macros::unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::NONE,
         error_message: None,
         results: features
             .iter()
             .map(
-                |&feature| krabka_macros::tagged_wire!(UpdatableFeatureResult {
+                |&feature| krabka_broker_macros::tagged_wire!(UpdatableFeatureResult {
                     feature: feature.into(),
                     error_code: codes::NONE,
                     error_message: Some("NONE".into()),
@@ -58,7 +58,7 @@ async fn handle_denies_cluster_alter_with_top_level_error() {
 
     let (resp, broker_handle, _dir) = Box::pin(call_with(Arc::new(DenyAll), req)).await;
 
-    let expected = krabka_macros::unthrottled_wire!(UpdateFeaturesResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("Cluster authorization failed.".to_owned()),
         results: vec![],

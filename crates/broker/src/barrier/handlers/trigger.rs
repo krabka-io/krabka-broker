@@ -45,7 +45,7 @@ use {
     krabka_units::{Time, millis},
 };
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_trigger_barrier",
     api = "TriggerBarrier",
     level = "info"

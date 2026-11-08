@@ -98,7 +98,7 @@ fn authorization_request<'a>(
     }
 }
 
-krabka_macros::named_acl_gates!(
+krabka_broker_macros::named_acl_gates!(
     group_read_denied: Group(Read, group_id),
     group_delete_denied: Group(Delete, group_id),
     /// The `Describe` gate on `Group(group_id)`, the twin of [`group_read_denied`].
@@ -172,7 +172,7 @@ fn topics_decided<'a>(
 /// denies to `ctx`'s principal.
 ///
 /// A name the caller never passed is absent, so a lookup reads it as allowed.
-#[krabka_macros::topic_filter(Deny)]
+#[krabka_broker_macros::topic_filter(Deny)]
 pub fn denied_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
@@ -186,7 +186,7 @@ pub fn denied_topics<'a>(
 /// allows to `ctx`'s principal, the twin of [`denied_topics`].
 ///
 /// A name the caller never passed is absent, so a lookup reads it as denied.
-#[krabka_macros::topic_filter(Allow)]
+#[krabka_broker_macros::topic_filter(Allow)]
 pub fn allowed_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,

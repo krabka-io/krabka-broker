@@ -62,7 +62,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_set_topic_freeze",
     api = "SetTopicFreeze",
     level = "info"

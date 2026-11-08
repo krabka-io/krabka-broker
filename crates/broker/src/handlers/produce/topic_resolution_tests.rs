@@ -131,7 +131,7 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> CaseOu
     };
 
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["producer"];
         client ["producer-client"];

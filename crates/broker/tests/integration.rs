@@ -387,7 +387,7 @@ fn fetched_e2e(lifecycle: &RpcLifecycle) {
     );
 }
 
-krabka_macros::request_frame_fixture!(one_way_request);
+krabka_broker_macros::request_frame_fixture!(one_way_request);
 
 #[derive(Default)]
 struct OneWayProduce {

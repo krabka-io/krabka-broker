@@ -254,7 +254,7 @@ async fn wait_for_dead_letters(
 }
 
 // A header of `record` as text.
-krabka_macros::record_header_text!(header, lossy);
+krabka_broker_macros::record_header_text!(header, lossy);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct RejectRangesSetup<'a> {
@@ -323,7 +323,7 @@ async fn reject_ranges(
     );
 }
 
-krabka_macros::share_dlq_meters!(
+krabka_broker_macros::share_dlq_meters!(
     /// What the `DeadLetterQueue*` meters of the group count on the broker: the
     /// records written, the attempts to produce, and the writes that failed.
     meters,

@@ -13,7 +13,7 @@ use {
 
 /// TOML shape of `[delegation_token]`. Maps to the three `delegation_token_*`
 /// fields on [`crate::BrokerConfig`].
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileDelegationTokenConfig {
     /// HMAC master key. Overridden by `KRABKA_DELEGATION_TOKEN_SECRET_KEY`

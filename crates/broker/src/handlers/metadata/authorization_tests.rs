@@ -62,7 +62,7 @@ impl Grants {
     }
 }
 
-krabka_macros::test_authorizer!(Grants, request; {
+krabka_broker_macros::test_authorizer!(Grants, request; {
     if request.principal.name != TESTER
         || self.0.lock().expect("grants").contains(&Grant {
             resource_type: request.resource_type,
@@ -136,7 +136,7 @@ async fn start(auto_create_topics_enable: bool) -> Fixture {
 impl Fixture {
     async fn metadata(&self, version: i16, request: &MetadataRequest) -> MetadataResponse {
         let shared = self.broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(user, address, ctx);
             user [TESTER];
             client ["metadata-client"];

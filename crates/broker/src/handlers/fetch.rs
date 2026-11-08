@@ -708,7 +708,7 @@ mod tests {
     #[derive(Debug)]
     struct TopicReadOnly;
 
-    krabka_macros::test_authorizer!(TopicReadOnly, request; {
+    krabka_broker_macros::test_authorizer!(TopicReadOnly, request; {
         if request.operation == AclOperation::Read {
             AuthorizationResult::Allow
         } else {
@@ -961,7 +961,7 @@ mod tests {
         request
             .encode(&mut encoded, KIP_595_FETCH_VERSION)
             .expect("encode WAL fetch");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer);
             identity [broker_fixture_support::sasl_principal("broker-2")];
             address [peer()];

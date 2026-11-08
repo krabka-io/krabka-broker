@@ -69,7 +69,7 @@ pub(super) fn request(
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 
@@ -109,7 +109,7 @@ pub(super) fn img_with(
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
         partition_epoch: partition_epoch.0,
-        ..krabka_macros::reassignment_fields! { assignment { assignment } builder { reassignment_partition() } }.call()
+        ..krabka_broker_macros::reassignment_fields! { assignment { assignment } builder { reassignment_partition() } }.call()
     }));
     img
 }

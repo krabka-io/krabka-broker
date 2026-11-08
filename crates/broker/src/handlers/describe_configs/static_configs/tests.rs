@@ -67,7 +67,7 @@ fn config_with(idle: Option<Time>, overrides: &[ListenerWindow<'_>]) -> IdleCase
 const LONG: i8 = 5;
 
 fn expected(name: &str, value: &str, source: i8) -> DescribeConfigsResourceResult {
-    krabka_macros::tagged_wire!(DescribeConfigsResourceResult {
+    krabka_broker_macros::tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         read_only: true,

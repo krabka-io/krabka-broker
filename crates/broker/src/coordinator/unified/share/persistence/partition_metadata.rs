@@ -80,7 +80,7 @@ pub struct ShareGroupStatePartitionMetadataValue {
     pub deleting: Vec<DeletingTopic>,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupStatePartitionMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupStatePartitionMetadataValue")]
 impl ShareGroupStatePartitionMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         for topics in [&self.initializing, &self.initialized] {

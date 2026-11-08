@@ -216,11 +216,11 @@ mod tests {
         let t = topics_for(&e);
         // Alphabetical topics, ascending partitions.
         let expected = vec![
-            krabka_macros::tagged_wire!(TopicData {
+            krabka_broker_macros::tagged_wire!(TopicData {
                 topic: "a".to_owned(),
                 partitions: vec![1],
             }),
-            krabka_macros::tagged_wire!(TopicData {
+            krabka_broker_macros::tagged_wire!(TopicData {
                 topic: "b".to_owned(),
                 partitions: vec![0, 2],
             }),
@@ -228,7 +228,7 @@ mod tests {
         assert!(t == expected);
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -302,7 +302,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(context);user ["admin"];};
+        krabka_broker_macros::request_test_identity! {bind(context);user ["admin"];};
         let request = DescribeTransactionsRequest {
             transactional_ids: vec![
                 String::new(),
@@ -404,7 +404,7 @@ mod tests {
         use krabka_log::ProducerId;
 
         let version = describe_transactions_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(fixture_authorizers::SimpleAclAuthorizer::new(
                         HashSet::new()
@@ -435,11 +435,11 @@ mod tests {
             .await
             .expect("seed the transaction");
 
-        let topic_a = krabka_macros::tagged_wire!(TopicData {
+        let topic_a = krabka_broker_macros::tagged_wire!(TopicData {
             topic: "a".to_owned(),
             partitions: vec![0],
         });
-        let topic_b = krabka_macros::tagged_wire!(TopicData {
+        let topic_b = krabka_broker_macros::tagged_wire!(TopicData {
             topic: "b".to_owned(),
             partitions: vec![1],
         });

@@ -306,7 +306,7 @@ mod tests {
             .split(',')
             .map(|spec| {
                 let (kind, name) = spec.split_once(':').unwrap();
-                krabka_macros::tagged_wire!(ConfigResource {
+                krabka_broker_macros::tagged_wire!(ConfigResource {
                     resource_name: name.into(),
                     resource_type: requested_resource_type(kind)
                 })
@@ -316,7 +316,7 @@ mod tests {
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_list_config_resources",fixtures=[config_resource_listing:ConfigResourceListingScenario]);
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -363,13 +363,13 @@ mod tests {
     /// past every type KIP-1142 defines.
     #[tokio::test]
     async fn v1_unsupported_resource_type_fails_the_whole_request() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(broker_handle, _dir, broker, ctx);
             boot [listing_broker("t-a")];
             user ["admin"];
         );
 
-        let unsupported = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
+        let unsupported = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             config_resources: vec![],
         });
@@ -404,7 +404,7 @@ mod tests {
     /// pattern as `cluster_describe_configs_gates_the_enumeration`.
     #[tokio::test]
     async fn v1_all_supported_types_still_succeed() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(broker_handle, _dir, broker, ctx);
             boot [listing_broker("t-a")];
             user ["admin"];
@@ -414,7 +414,7 @@ mod tests {
         let resp = handle(&broker, &req, VERSION, &ctx);
 
         let topics = listed_topics(&broker, "t-a");
-        let expected = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
         });
@@ -424,7 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn denied_handler_response_preserves_error_fields() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] deny_all;
             user ["alice"];
@@ -433,7 +433,7 @@ mod tests {
 
         let resp = handle(&broker, &req, VERSION, &ctx);
 
-        let expected = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
         });
@@ -455,11 +455,11 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let req = topic_listing_request();
         let topics = listed_topics(&broker, "orders");
-        let allowed = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
+        let allowed = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
         });
-        let denied = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
+        let denied = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
         });
@@ -468,7 +468,7 @@ mod tests {
         cases.insert(3, ("read", Some(AclOperation::Read), &denied));
         for (user, grant, expected) in cases {
             grant_optional_cluster_operation(&broker_handle, user, grant).await;
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(ctx);
                 user [user];
             };
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_handler_response_preserves_resource_fields() {
-        krabka_macros::broker_test_setup!(
+        krabka_broker_macros::broker_test_setup!(
             bind(broker_handle, _dir, broker, ctx);
             boot [listing_broker("orders")];
             user ["admin"];

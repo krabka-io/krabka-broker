@@ -163,7 +163,7 @@ enum Violation {
     FenceDiverged,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_macros::ModelEpochLedger)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_broker_macros::ModelEpochLedger)]
 struct TxnProj {
     pid: i64,
     epoch: i16,
@@ -334,7 +334,7 @@ impl Model for TxnModel {
     }}
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { TxnProj;
+        krabka_broker_macros::model_properties! { TxnProj;
         // HEADLINE: a fenced or overtaken EndTxn never writes Complete*.
         always "fenced_end_txn_never_finalizes" => |s| {
             !s.violations.contains(&Violation::FencedEndTxnFinalized)
@@ -409,7 +409,7 @@ impl Model for TxnModel {
     fn within_boundary(&self, state: &Self::State) -> bool { state.epoch <= self.max_epoch }
 }
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
     fn run(model: TxnModel, label: &str, pinned_unique_states: usize)
     [bfs = run_bfs, pin = assert_pinned_count, depth = MAX_DEPTH, states = MAX_STATES, order = "properties_first", checker = checker]

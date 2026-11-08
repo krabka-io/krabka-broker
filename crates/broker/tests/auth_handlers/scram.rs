@@ -207,8 +207,11 @@ pub async fn scram_authenticate(
         .call()
         .await?;
 
-    let (client_first, client) =
-        krabka_macros::scram_client_first!(setup.user, setup.password.as_str(), setup.mechanism)?;
+    let (client_first, client) = krabka_broker_macros::scram_client_first!(
+        setup.user,
+        setup.password.as_str(),
+        setup.mechanism
+    )?;
     corr.0 += 1;
     let first = sasl_authenticate_on()
         .stream(stream)
@@ -524,7 +527,7 @@ async fn prepared_scram_final(authentication: &mut ScramAuthentication) {
         .call()
         .await
         .unwrap();
-    let (client_first, client) = krabka_macros::scram_client_first!(
+    let (client_first, client) = krabka_broker_macros::scram_client_first!(
         "alice",
         alice_password().as_str(),
         SaslMechanism::ScramSha256

@@ -316,7 +316,7 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
 )]
 #[test_macro(tokio::test)]
 async fn handle_rejects_each_invalid_v3_client_info_field(name: &str, version: &str) {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
 
     let req = request(name, version);
     let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
@@ -331,7 +331,7 @@ async fn handle_rejects_each_invalid_v3_client_info_field(name: &str, version: &
 
 #[tokio::test]
 async fn handle_accepts_legacy_request_without_client_info() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
     let req = ApiVersionsRequest::default();
     let mut req_bytes = BytesMut::with_capacity(req.encoded_len(0));
     req.encode(&mut req_bytes, 0)
@@ -350,7 +350,7 @@ async fn handle_accepts_legacy_request_without_client_info() {
 
 #[tokio::test]
 async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
     submit_handshake_metadata(
         &broker,
         || {
@@ -440,7 +440,7 @@ const ROUTED_NODE_ID: i32 = 42;
 /// `REBOOTSTRAP_REQUIRED`, compared against this broker's `node_id`.
 #[tokio::test]
 async fn handle_applies_kip1242_routing_checks() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, principal, peer, context);
         boot [broker_fixture_support::start_broker_with(|cfg| {
             cfg.broker_id = ROUTED_NODE_ID;
@@ -513,7 +513,7 @@ async fn handle_applies_kip1242_routing_checks() {
 async fn handle_reports_and_records_a_request_quota_throttle() {
     use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
 
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
+    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
     submit_handshake_metadata(
         &broker,
         || {

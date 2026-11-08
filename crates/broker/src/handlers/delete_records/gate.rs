@@ -23,7 +23,7 @@ use {
     uuid::Uuid,
 };
 
-krabka_macros::partition_gate! {
+krabka_broker_macros::partition_gate! {
 /// KFC-9: find the approved proposal that authorizes a trim of one partition,
 /// and stamp it consumed.
 ///

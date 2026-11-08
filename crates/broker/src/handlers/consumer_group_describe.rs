@@ -419,7 +419,7 @@ mod tests {
     // The same literal member identity appears in the input view and expected wire member.
     // Their assignments remain separate, including the independently expected wire mapping.
 
-    krabka_macros::member_identity_fixtures! {
+    krabka_broker_macros::member_identity_fixtures! {
         plain fn view_member(member_id: &str) -> DescribeMember {
         assigned_partitions: HashMap::new(),
         partitions_pending_revocation: HashMap::new(),
@@ -440,7 +440,7 @@ mod tests {
     }
 
     fn topic(topic_id: Uuid, topic_name: &str, partitions: &[i32]) -> TopicPartitions {
-        krabka_macros::tagged_wire!(TopicPartitions {
+        krabka_broker_macros::tagged_wire!(TopicPartitions {
             topic_id,
             topic_name: topic_name.into(),
             partitions: partitions.to_vec(),
@@ -448,12 +448,12 @@ mod tests {
     }
 
     fn assigned(topics: Vec<TopicPartitions>) -> Assignment {
-        krabka_macros::tagged_wire!(Assignment {
+        krabka_broker_macros::tagged_wire!(Assignment {
             topic_partitions: topics,
         })
     }
 
-    krabka_macros::member_identity_fixtures! {
+    krabka_broker_macros::member_identity_fixtures! {
         tagged fn wire_member(member_id: &str) -> Member {
         assignment: assigned(vec![]),
         target_assignment: assigned(vec![]),
@@ -462,7 +462,7 @@ mod tests {
     }
 
     fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
-        krabka_macros::tagged_wire!(DescribedGroup {
+        krabka_broker_macros::tagged_wire!(DescribedGroup {
             error_code: codes::NONE,
             error_message: None,
             group_id: "cg".into(),
@@ -583,7 +583,7 @@ mod tests {
 
         let resp = response(vec![first, second]);
 
-        let expected = krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
             groups: vec![
                 error_group_row("a", codes::GROUP_ID_NOT_FOUND, None),
                 error_group_row("b", codes::UNSUPPORTED_VERSION, None),
@@ -593,7 +593,7 @@ mod tests {
     }
 
     fn error_group_row(group_id: &str, error_code: i16, message: Option<&str>) -> DescribedGroup {
-        krabka_macros::tagged_wire!(DescribedGroup {
+        krabka_broker_macros::tagged_wire!(DescribedGroup {
             error_code,
             error_message: message.map(str::to_owned),
             group_id: group_id.to_owned(),
@@ -618,7 +618,7 @@ mod tests {
             allow_acl().operation(AclOperation::Describe).call(),
         ));
         let authorizer = acl_authorizer();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             client ["alice-client"];
@@ -680,7 +680,7 @@ mod tests {
         broker.group_coordinator.mark_share("share-group");
         broker.group_coordinator.mark_streams("streams-group");
         let _share_actor = broker.group_coordinator.get_or_create_share("share-actor");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["admin"];
             client ["admin-client"];
@@ -735,7 +735,7 @@ mod tests {
                 .expect("ConsumerGroupDescribe handler");
 
             assert!(
-                resp == krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
+                resp == krabka_broker_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
                     groups: vec![expected],
                 }),
                 "{group_id:?}"
@@ -764,7 +764,7 @@ mod tests {
             handler_fixture_support::lead_group_partition_elsewhere(&broker_handle, &broker, "")
                 .await;
         }
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["admin"];
             client ["admin-client"];
@@ -775,7 +775,7 @@ mod tests {
             .expect("ConsumerGroupDescribe handler");
 
         assert2::assert!(
-            resp == krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
+            resp == krabka_broker_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
                 groups: vec![
                     error_group_row("", codes::INVALID_GROUP_ID, None),
                     error_group_row(
@@ -812,12 +812,12 @@ mod tests {
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
         let authorizer = acl_authorizer();
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_group_with_controller_peer(authorizer)];
         };
         set_group_version(&broker, GroupFeatureLevel(0)).await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["nobody"];
             client ["consumer-client"];
@@ -850,7 +850,7 @@ mod tests {
     #[tokio::test]
     async fn handle_orders_denied_rows_before_allowed_rows() {
         let authorizer = acl_authorizer();
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_group_with_controller_peer(authorizer)];
         };
@@ -867,7 +867,7 @@ mod tests {
             )])
             .await
             .expect("grant alice Describe on allowed");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             client ["alice-client"];
@@ -910,7 +910,7 @@ mod tests {
         let _ = broker
             .group_coordinator
             .get_or_create_consumer("live-group");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["admin"];
             client ["admin-client"];

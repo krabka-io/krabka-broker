@@ -46,7 +46,7 @@ struct KafkaError {
 // is not written here is not a wire code, and a constant that is written here
 // cannot escape the check against the extracted Kafka table, message
 // included.
-krabka_macros::wire_codes! {
+krabka_broker_macros::wire_codes! {
     release KAFKA_RANGE_CODES {
         NONE = 0 => "NONE";
         UNKNOWN_SERVER_ERROR = -1

@@ -100,7 +100,7 @@ fn longest<'a>(strings: impl IntoIterator<Item = &'a str>) -> usize {
 }
 
 // Required fields precede optional fields, then the request's nested strings.
-krabka_macros::record_strings! {
+krabka_broker_macros::record_strings! {
     JoinGroupRequest(self) {
         required(group_id, member_id, protocol_type);
         optional(group_instance_id, reason);

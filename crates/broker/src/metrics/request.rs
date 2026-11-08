@@ -350,7 +350,7 @@ mod tests {
     /// `test-util` feature, which this workspace does not turn on, so a test
     /// reads a histogram the way Prometheus does.
     async fn render(metrics: &BrokerMetrics) -> String {
-        krabka_macros::metric_registry_fixture!(metrics, out, registry; expect("encode registry"));
+        krabka_broker_macros::metric_registry_fixture!(metrics, out, registry; expect("encode registry"));
         out
     }
 
@@ -487,7 +487,7 @@ mod tests {
         assert!(m.in_flight_requests.get() == 1);
         assert!(m.active_connections.get() == 5);
 
-        krabka_macros::metric_registry_fixture!(m, buf, r; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(m, buf, r; unwrap());
         assert!(
             buf.contains("krabka_broker_request_duration_seconds_count{api_key=\"Produce\"} 2"),
             "expected 2 Produce latency samples in:\n{buf}"
@@ -514,7 +514,7 @@ mod tests {
         }
         m.record_connection_close(ConnectionCloseReason::Idle);
 
-        krabka_macros::metric_registry_fixture!(m, buf, r; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(m, buf, r; unwrap());
 
         // A `Family` renders its series in map order, so sort before
         // comparing: what matters is the set of series and their values.

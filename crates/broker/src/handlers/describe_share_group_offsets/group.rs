@@ -189,7 +189,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyDescribeOnTopic(&'static str);
 
-    krabka_macros::test_authorizer!(DenyDescribeOnTopic, request; {
+    krabka_broker_macros::test_authorizer!(DenyDescribeOnTopic, request; {
         if request.resource_type == ResourceType::Topic
             && request.operation == AclOperation::Describe
             && request.resource_name == self.0
@@ -277,7 +277,7 @@ mod tests {
         image: &krabka_metadata::MetadataImage,
         request: DescribeShareGroupOffsetsRequestGroup,
     ) -> DescribeShareGroupOffsetsResponseGroup {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, context);
             user ["alice"];
             client ["admin-client"];
@@ -293,7 +293,7 @@ mod tests {
         index: PartitionIndex,
         start_offset: Offset,
     ) -> DescribeShareGroupOffsetsResponsePartition {
-        krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
+        krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
             partition_index: index.0,
             start_offset: start_offset.0,
             leader_epoch: 0,
@@ -304,7 +304,7 @@ mod tests {
     }
 
     fn denied_partition(index: PartitionIndex) -> DescribeShareGroupOffsetsResponsePartition {
-        krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
+        krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
             partition_index: index.0,
             start_offset: -1,
             leader_epoch: 0,
@@ -382,7 +382,7 @@ mod tests {
             .secret_partitions(TopicPartitionCount(2))
             .call();
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_share_broker().authorizer(Arc::new(DenyDescribeOnTopic("secret"))).support(broker_fixture_support::ShareApiSupport::Enabled).call()];
             ready {
@@ -439,13 +439,14 @@ mod tests {
 
         let topic_id = uuid::Uuid::from_u128(0xD5C0);
         let orders_wire_id = WireUuid(*topic_id.as_bytes());
-        let orders_row = krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
-            topic_name: "orders".into(),
-            topic_id: orders_wire_id,
-            partitions: vec![normal_partition(PartitionIndex(0), Offset(33))],
-        });
+        let orders_row =
+            krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
+                topic_name: "orders".into(),
+                topic_id: orders_wire_id,
+                partitions: vec![normal_partition(PartitionIndex(0), Offset(33))],
+            });
         let secret_denied_row =
-            krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
+            krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
                 topic_name: "secret".into(),
                 topic_id: WireUuid::default(),
                 partitions: vec![
@@ -487,7 +488,7 @@ mod tests {
                 requested.push(topic("secret", vec![PartitionIndex(0), PartitionIndex(1)]));
             }
 
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind(principal, peer, ctx);
                 user ["alice"];
                 client ["admin-client"];
@@ -501,12 +502,13 @@ mod tests {
             )
             .await;
 
-            let expected = krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
-                group_id: "g1".into(),
-                topics: case.expected,
-                error_code: codes::NONE,
-                error_message: None,
-            });
+            let expected =
+                krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
+                    group_id: "g1".into(),
+                    topics: case.expected,
+                    error_code: codes::NONE,
+                    error_message: None,
+                });
             assert!(result == expected, "case: {}", case.name);
             broker_handle.shutdown().await;
         }
@@ -591,13 +593,13 @@ mod tests {
     /// failing this assertion.
     #[tokio::test]
     async fn empty_topic_list_never_reaches_the_coordinator() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_share_allow_all()];
         };
         let image = image_with_topic("orders", uuid::Uuid::from_u128(1));
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             client ["admin-client"];
@@ -612,7 +614,7 @@ mod tests {
         )
         .await;
 
-        let expected = krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
+        let expected = krabka_broker_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
             group_id: "g3".into(),
             topics: Vec::new(),
             error_code: codes::NONE,

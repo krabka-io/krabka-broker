@@ -546,7 +546,8 @@ pub async fn sasl_scram_authenticate_on(
         .await?;
 
     // ── 3. SCRAM client-first → server-first.
-    let (client_first, client) = krabka_macros::scram_client_first!(user, password, mechanism)?;
+    let (client_first, client) =
+        krabka_broker_macros::scram_client_first!(user, password, mechanism)?;
     let scram_first_response = sasl_authenticate_on()
         .stream(stream)
         .auth_bytes(Bytes::from(client_first))

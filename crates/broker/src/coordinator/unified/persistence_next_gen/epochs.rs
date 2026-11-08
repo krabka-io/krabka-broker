@@ -23,7 +23,7 @@
 //! tagged-field trailer, the single `0` byte whose absence is what makes
 //! Kafka's reader underflow.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "ConsumerGroupMetadataValue")]
 pub struct GroupMetadataValue {
     pub epoch: i32,
@@ -32,7 +32,7 @@ pub struct GroupMetadataValue {
     pub metadata_hash: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "ConsumerGroupTargetAssignmentMetadataValue")]
 pub struct TargetAssignmentMetadataValue {
     pub assignment_epoch: i32,

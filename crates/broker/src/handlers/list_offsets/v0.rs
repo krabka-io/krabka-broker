@@ -379,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, admin, socket);
                     boot [start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
                                 HashSet::from(["denied"]),
@@ -464,7 +464,7 @@ mod tests {
     }
     async fn answer(broker: &BrokerHandle, request: &[u8]) -> Bytes {
         let shared = broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(admin, socket);
             user ["admin"];
         };

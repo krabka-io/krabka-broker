@@ -81,7 +81,7 @@ use {
     tokio::time::{Instant, error::Elapsed},
 };
 
-krabka_macros::decoded_dispatch! {
+krabka_broker_macros::decoded_dispatch! {
     /// Apply explicit assignments and placement rules after the request reaches the controller.
     pub async fn dispatch(
         broker: &Broker,

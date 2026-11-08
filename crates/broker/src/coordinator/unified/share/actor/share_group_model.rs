@@ -167,7 +167,7 @@ impl State {
     }
 }
 
-krabka_macros::projection_identity!(State, projection);
+krabka_broker_macros::projection_identity!(State, projection);
 
 #[derive(Clone, Debug)]
 struct ShareModel;
@@ -419,7 +419,7 @@ impl Model for ShareModel {
     }}
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { State;
+        krabka_broker_macros::model_properties! { State;
         always "ownership_coordinate_uniqueness" => |state| { assignment_coordinates_unique(&state.group) },
         always "member_epoch_fencing" => |state| { epochs_fenced(&state.group) },
         always "assignment_within_metadata" => |state| { assignments_in_metadata(state) },

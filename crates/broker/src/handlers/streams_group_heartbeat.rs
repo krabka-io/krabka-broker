@@ -182,7 +182,7 @@ mod tests {
 
     macro_rules! ready_alice_broker {
         ($($binding:ident),+ $(,)?) => {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind($($binding),+);
                 boot [join_ready_broker()];
                 user ["alice"];
@@ -256,7 +256,7 @@ mod tests {
             cfg.default_replication_factor = 1;
         })
         .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
         };
@@ -624,7 +624,7 @@ mod tests {
             .expect("join-ready broker")
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
+        krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; };
         streams_creation.response = Some(
             handle(
                 &broker,
@@ -724,13 +724,13 @@ mod tests {
         };
 
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(true)];
         };
         set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
         };
@@ -801,7 +801,7 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["streams-client"];
     }
 
@@ -834,12 +834,12 @@ mod tests {
 
     async fn check_protocol_disabled(enabled: bool, level: i16, group_id: &str) {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(enabled)];
         };
         set_streams_version(&broker, level).await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
         };
@@ -909,7 +909,7 @@ mod tests {
             cfg.streams_group.acceptable_recovery_lag = LAG;
         })
         .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
         };
@@ -987,7 +987,7 @@ mod tests {
             )])
             .await
             .expect("store the group override");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
         };

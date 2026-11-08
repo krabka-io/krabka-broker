@@ -78,7 +78,7 @@ async fn boot() -> StartedBroker {
 }
 
 async fn create_topic(broker: &Broker, name: &str) {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(admin, address, ctx);
         user [ADMIN_GRANTS];
         client ["produce-txn-authz-admin"];
@@ -104,7 +104,7 @@ async fn create_topic(broker: &Broker, name: &str) {
 async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
     use crate::handlers::init_producer_id::handle as init_producer_id_handle;
 
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(grantee, address, ctx);
         user ["TransactionalId:Write"];
         client ["produce-txn-authz-open"];
@@ -196,7 +196,7 @@ async fn drive(
         .maybe_transactional_id(transactional_id)
         .records(records)
         .call();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user [grants];
         client ["produce-txn-authz"];

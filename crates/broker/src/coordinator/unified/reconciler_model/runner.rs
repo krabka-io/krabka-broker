@@ -21,7 +21,7 @@ const MAX_DEPTH: usize = 60;
 pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 552;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 3_813;
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
     pub(super) fn run(model: ReconModel, label: &str, pinned_unique_states: usize)
     [bfs = run_bfs, pin = assert_pinned_count, depth = MAX_DEPTH, states = MAX_STATES, order = "properties_last", checker = checker]

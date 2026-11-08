@@ -465,7 +465,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -547,7 +547,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyTopics(&'static [&'static str]);
 
-    krabka_macros::test_authorizer!(DenyTopics, request; {
+    krabka_broker_macros::test_authorizer!(DenyTopics, request; {
         if request.resource_type == ResourceType::Topic
             && request.operation == AclOperation::Describe
             && self.0.contains(&request.resource_name)
@@ -683,7 +683,7 @@ mod tests {
     }
     #[tokio::test]
     async fn denied_topic_survives_truncation() {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(DenyTopics(&["c"])), ordered_a_b_topics)]; user ["admin"];);
+        krabka_broker_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(DenyTopics(&["c"])), ordered_a_b_topics)]; user ["admin"];);
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
@@ -743,7 +743,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -794,7 +794,7 @@ mod tests {
     /// pagination walks them.
     #[tokio::test]
     async fn duplicate_requested_names_dedupe_and_sort() {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), ordered_a_b_topics)]; user ["admin"];);
+        krabka_broker_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), ordered_a_b_topics)]; user ["admin"];);
         let req = request()
             .topics(
                 vec!["b", "a", "b", "a"]
@@ -834,7 +834,7 @@ mod tests {
     )]
     #[test_macro(tokio::test)]
     async fn invalid_cursor_fails_the_whole_request(cursor: Option<RequestCursor>) {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").build()])]; user ["admin"];);
+        krabka_broker_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").build()])]; user ["admin"];);
         let req = request().maybe_cursor(cursor).call();
 
         let resp = describe(&broker, req, &ctx).await;
@@ -856,7 +856,7 @@ mod tests {
     /// response_partition_limit), 1)`.
     #[tokio::test]
     async fn zero_partition_limit_floors_to_one() {
-        krabka_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").partitions(2).build()])]; user ["admin"];);
+        krabka_broker_macros::broker_test_setup!(bind(broker_handle, _dir, broker, ctx); boot [seeded_topics_broker(Arc::new(AllowAllAuthorizer), || [TopicSetup::builder().topic("a").partitions(2).build()])]; user ["admin"];);
         let req = request().response_partition_limit(0).call();
 
         let resp = describe(&broker, req, &ctx).await;
@@ -910,7 +910,7 @@ mod tests {
             .await;
         }
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -1131,7 +1131,7 @@ mod tests {
         broker_handle.shutdown().await;
     }
     async fn orders_topic(broker: &Broker) -> DescribeTopicPartitionsResponseTopic {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

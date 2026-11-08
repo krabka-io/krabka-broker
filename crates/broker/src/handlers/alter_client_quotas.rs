@@ -111,7 +111,7 @@ async fn answer(
         );
     }
 
-    Ok(krabka_macros::unthrottled_wire!(
+    Ok(krabka_broker_macros::unthrottled_wire!(
         AlterClientQuotasResponse {
             entries: entry_results,
         }

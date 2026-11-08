@@ -27,7 +27,7 @@ use {
     std::{collections::HashSet, sync::Arc},
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -36,10 +36,10 @@ fn expected_entry(
     error_code: i16,
     error_message: Option<String>,
 ) -> RespEntry {
-    krabka_macros::tagged_wire!(RespEntry {
+    krabka_broker_macros::tagged_wire!(RespEntry {
         error_code,
         error_message,
-        entity: vec![krabka_macros::tagged_wire!(RespEntity {
+        entity: vec![krabka_broker_macros::tagged_wire!(RespEntity {
             entity_type: entity.entity_type.into(),
             entity_name: entity.entity_name.map(str::to_owned),
         })],
@@ -47,7 +47,7 @@ fn expected_entry(
 }
 
 fn expected_response(entries: Vec<RespEntry>) -> AlterClientQuotasResponse {
-    krabka_macros::unthrottled_wire!(AlterClientQuotasResponse { entries })
+    krabka_broker_macros::unthrottled_wire!(AlterClientQuotasResponse { entries })
 }
 
 #[bon::builder]
@@ -103,7 +103,7 @@ fn whole_request_error_answers_every_entry() {
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_entry() {
     let version = 1;
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -139,7 +139,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
 async fn cluster_alter_configs_gates_the_quota_write() {
     let version = 1;
     let empty_super_users = HashSet::new();
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(Arc::new(fixture_authorizers::SimpleAclAuthorizer::new(
                 empty_super_users,
@@ -262,7 +262,7 @@ async fn handle_reports_entry_results_and_obeys_validate_only(validate_only: boo
 #[tokio::test]
 async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     let version = 1;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -279,7 +279,7 @@ async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     ]);
 
     for (validate_only, stored) in [(true, [None, None]), (false, [Some(1024.0), Some(4.0)])] {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };

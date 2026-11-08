@@ -125,7 +125,7 @@ async fn named_topic_fetch_returns_committed_offset() {
         broker,
     } = start_seeded_offset_broker().await;
 
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer, ctx);
         user ["admin"];
         client ["consumer"];
@@ -233,7 +233,7 @@ async fn resolve_pending_txn_offsets(
 }
 
 async fn fetch(broker: &Broker, version: i16, req: &OffsetFetchRequest) -> OffsetFetchResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer, ctx);
         user ["admin"];
         client ["consumer"];
@@ -697,7 +697,7 @@ async fn refused_topics_follow_the_answered_topics() {
 #[derive(Debug)]
 struct DescribeKnownTopic;
 
-krabka_macros::test_authorizer!(DescribeKnownTopic, req; {
+krabka_broker_macros::test_authorizer!(DescribeKnownTopic, req; {
     let allowed = req.resource_type != krabka_metadata::ResourceType::Topic
         || (req.operation == krabka_metadata::AclOperation::Describe
             && req.resource_name == KNOWN_NAME);
@@ -1094,7 +1094,7 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
     ];
 
     for row in rows {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
         };
@@ -1202,7 +1202,7 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
         },
     ];
 
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
     };
@@ -1227,7 +1227,7 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
 /// which here holds no member.
 #[tokio::test]
 async fn offset_fetch_of_a_streams_group_outlives_its_stopped_actor() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
     };
@@ -1282,7 +1282,7 @@ async fn offset_fetch_of_a_streams_group_outlives_its_stopped_actor() {
 /// The legacy single-group shape (v0-v7) creates no group for an unknown id.
 #[tokio::test]
 async fn legacy_offset_fetch_creates_no_group() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
     };

@@ -121,8 +121,8 @@ fn partition_record_from_election_setup(setup: ElectionSetup<'_>) -> PartitionRe
 }
 
 // Input partition for election tests, before any leader or ISR change.
-krabka_macros::fixture_constructors! { election: pub img_with_partition -> MetadataImage = image_from_election_setup; }
-krabka_macros::fixture_constructors! { election: pub seed_partition -> PartitionRecord = partition_record_from_election_setup; }
+krabka_broker_macros::fixture_constructors! { election: pub img_with_partition -> MetadataImage = image_from_election_setup; }
+krabka_broker_macros::fixture_constructors! { election: pub seed_partition -> PartitionRecord = partition_record_from_election_setup; }
 
 /// Run a failover scan whose metrics are not inspected by the test.
 pub async fn failover(

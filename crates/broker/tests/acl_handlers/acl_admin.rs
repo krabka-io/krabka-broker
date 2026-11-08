@@ -80,7 +80,7 @@ pub async fn create_topic_as_admin(addr: SocketAddr, name: &str, partitions: i32
         .await;
 }
 
-krabka_macros::wire_test_driver!(plain pub drive_create_acls_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_create_acls_as_plain {
     request: CreateAclsRequest,
     response: CreateAclsResponse,
     api: ApiRequestSetup {
@@ -90,7 +90,7 @@ krabka_macros::wire_test_driver!(plain pub drive_create_acls_as_plain {
     operation: "CreateAcls",
 });
 
-krabka_macros::wire_test_driver!(plain pub drive_describe_acls_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_describe_acls_as_plain {
     request: DescribeAclsRequest,
     response: DescribeAclsResponse,
     api: ApiRequestSetup {
@@ -100,7 +100,7 @@ krabka_macros::wire_test_driver!(plain pub drive_describe_acls_as_plain {
     operation: "DescribeAcls",
 });
 
-krabka_macros::wire_test_driver!(plain pub drive_delete_acls_as_plain {
+krabka_broker_macros::wire_test_driver!(plain pub drive_delete_acls_as_plain {
     request: DeleteAclsRequest,
     response: DeleteAclsResponse,
     api: ApiRequestSetup {

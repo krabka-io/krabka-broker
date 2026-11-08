@@ -108,7 +108,7 @@ async fn produce_batches(broker: &BrokerHandle, topic: &str) {
 /// Appends one batch of [`RECORDS_PER_BATCH`] records to `partition`.
 pub(super) async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["producer"];
         client ["producer-client"];

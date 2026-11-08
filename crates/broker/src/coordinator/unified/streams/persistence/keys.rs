@@ -42,7 +42,7 @@ pub const KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER: i16 = 21;
 pub const KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT: i16 = 22;
 pub const KEY_STREAMS_TOPOLOGY: i16 = 23;
 
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::GroupRecordKey)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::GroupRecordKey)]
 #[group_key(invalid = "unknown streams-group key version")]
 pub enum StreamsGroupKey {
     #[group_key(version = KEY_STREAMS_GROUP_METADATA)]

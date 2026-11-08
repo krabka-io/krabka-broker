@@ -56,7 +56,7 @@ const DEFAULT_CONFIG: i8 = 5;
 
 macro_rules! expected_response {
     ($topics:expr) => {
-        krabka_macros::unthrottled_wire!(CreateTopicsResponse { topics: $topics })
+        krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse { topics: $topics })
     };
 }
 
@@ -64,7 +64,7 @@ async fn dispatch_v4_as_admin(
     broker: &Broker,
     request: &CreateTopicsRequest,
 ) -> CreateTopicsResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -129,7 +129,7 @@ fn expected_configs(overrides: &[ConfigPair<'_>]) -> Vec<CreatableTopicConfigs> 
             };
             let (value, config_source) =
                 stored.map_or(unset, |value| (Some(value), DYNAMIC_TOPIC_CONFIG));
-            krabka_macros::tagged_wire!(CreatableTopicConfigs {
+            krabka_broker_macros::tagged_wire!(CreatableTopicConfigs {
                 name: row.name.to_owned(),
                 value: (!row.is_sensitive())
                     .then_some(value)
@@ -158,7 +158,7 @@ fn expected_topic(
     #[builder(default)] configs: Vec<CreatableTopicConfigs>,
     #[builder(into, default)] topic_config_error_code: KafkaErrorCode,
 ) -> CreatableTopicResult {
-    krabka_macros::tagged_wire!(CreatableTopicResult {
+    krabka_broker_macros::tagged_wire!(CreatableTopicResult {
         name: name.into(),
         topic_id,
         error_code: error_code.0,
@@ -184,7 +184,7 @@ fn check_created_topic_response(
     setup: CreatedTopicExpectation<'_>,
 ) {
     assert!(response.topics.len() == 1);
-    let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
             expected_topic()
                 .name(setup.name)
@@ -251,7 +251,7 @@ fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -288,7 +288,7 @@ async fn invalid_config_answer(
 /// which Kafka's `ControllerApis.createTopics` never answers for a topic row.
 #[tokio::test]
 async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
     bind(broker_handle, _dir, broker, p, peer);
     boot [start_broker] deny_all;
     user ["alice"];
@@ -487,7 +487,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
 
         let image = broker_handle.controller_image_for_test();
         let created_ok = error_code == codes::NONE;
-        let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
             topics: vec![
                 expected_topic()
                     .name(&name)
@@ -533,7 +533,7 @@ async fn handle_success_persists_topic_config_and_success_fields() {
 
     let resp = drive_single_topic(&broker, &req, &test_context(&p, &peer)).await;
     assert!(resp.topics[0].topic_id != ProtoUuid([0; 16]));
-    let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
             // Randomly generated per create; the non-nil assertion above pins it.
             expected_topic()
@@ -832,7 +832,7 @@ async fn handle_creates_a_diskless_topic_and_opens_its_partitions_on_the_wal_pat
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
     };
@@ -1017,7 +1017,7 @@ async fn duplicate_topic_reports_error_without_success_fields() {
     let second = drive(&broker, &req, &test_context(&p, &peer)).await;
 
     assert!(second.topics.len() == 1);
-    let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![expected_empty_topic(
             "dupe",
             codes::TOPIC_ALREADY_EXISTS,
@@ -1144,7 +1144,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
     } = start_broker(Arc::new(AllowAllAuthorizer)).await;
     seed_controller_quota(&broker_handle, 2.0).await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
     };
@@ -1197,7 +1197,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
 #[derive(Debug)]
 struct DenyDescribeConfigs;
 
-krabka_macros::test_authorizer!(DenyDescribeConfigs, req; {
+krabka_broker_macros::test_authorizer!(DenyDescribeConfigs, req; {
     if req.operation == krabka_metadata::AclOperation::DescribeConfigs {
         AuthorizationResult::Deny
     } else {
@@ -1228,7 +1228,7 @@ async fn created_topic_configs_separate_a_request_value_from_an_inherited_defaul
             .unwrap_or_else(|| panic!("{name} in the configs list"))
     };
     // The value this very request carried, at DYNAMIC_TOPIC_CONFIG (1).
-    let expected_retention = krabka_macros::tagged_wire!(CreatableTopicConfigs {
+    let expected_retention = krabka_broker_macros::tagged_wire!(CreatableTopicConfigs {
         name: "retention.ms".into(),
         value: Some("60000".into()),
         read_only: false,
@@ -1237,7 +1237,7 @@ async fn created_topic_configs_separate_a_request_value_from_an_inherited_defaul
     });
     check!(entry("retention.ms") == expected_retention);
     // A key the request never mentioned, at DEFAULT_CONFIG (5).
-    let expected_cleanup = krabka_macros::tagged_wire!(CreatableTopicConfigs {
+    let expected_cleanup = krabka_broker_macros::tagged_wire!(CreatableTopicConfigs {
         name: "cleanup.policy".into(),
         value: Some("delete".into()),
         read_only: false,
@@ -1283,7 +1283,7 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
 /// `AdminClient` fails every accessor on the row once the code is set.
 #[tokio::test]
 async fn create_without_describe_configs_withholds_the_configs_but_creates_the_topic() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, p, peer);
         boot [start_broker(Arc::new(DenyDescribeConfigs))];
         user ["admin"];
@@ -1292,7 +1292,7 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
 
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
-    let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![
             expected_topic()
                 .name("undescribable")
@@ -1313,13 +1313,13 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
 /// `DescribeConfigs` check there too: nothing it decides can reach the wire.
 #[tokio::test]
 async fn v4_response_encodes_without_the_kip_525_fields() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(Arc::new(DenyDescribeConfigs))];
     };
     let req = request(vec![topic_with_config("legacy")]);
     let resp = dispatch_v4_as_admin(&broker, &req).await;
-    let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![expected_empty_topic("legacy", codes::NONE, None)],
     });
     assert!(resp == expected);
@@ -1371,7 +1371,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
     };
@@ -1462,7 +1462,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
 
             let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
 
-            let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+            let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
                 topics: vec![expected_empty_topic(
                     name,
                     *error_code,
@@ -1555,7 +1555,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     ];
 
     for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -1585,7 +1585,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         };
         let resp = dispatch_v4_as_admin(&broker, &request(vec![topic])).await;
 
-        let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
             topics: vec![expected_empty_topic(
                 "manual",
                 error_code,
@@ -1689,7 +1689,7 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
         outcome,
     } in rows
     {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -1702,7 +1702,7 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
         for &node_id in shutting_down {
             begin_controlled_shutdown(&broker_handle, node_id).await;
         }
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["admin"];
         };
@@ -1850,7 +1850,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
     ];
 
     for (label, case) in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] controller_peer;
         };
@@ -1858,7 +1858,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             acl_fixtures::seed_case_acls(&broker, case.acls).await;
         }
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -1926,7 +1926,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             .chain(denied.into_iter().map(row))
             .chain([protected_row])
             .collect();
-        let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse { topics });
+        let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse { topics });
         check!(resp == expected, "case: {label}");
 
         let image = broker_handle.controller_image_for_test();
@@ -2001,7 +2001,7 @@ async fn cluster_create_and_describe_configs_probes_leave_no_denial_behind() {
     ];
 
     for (label, acls, error_code, (cluster_create, describe_configs, topic_create)) in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] controller_peer;
         };
@@ -2075,7 +2075,7 @@ fn topic_creation_rows() -> TopicCreationRows {
 async fn existing_create_topic(topic_creation_rows: &mut TopicCreationRows) {
     let started = start_broker(Arc::new(AllowAllAuthorizer)).await;
     let broker = started.broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
     let response = drive(
         &broker,
         &request(vec![topic("t", 1, 1)]),
@@ -2138,7 +2138,7 @@ async fn request_topic_creation_rows(
         .expect("existing topic broker")
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
     let req = CreateTopicsRequest {
         validate_only: validate,
         ..request(topics)
@@ -2297,7 +2297,7 @@ async fn a_config_value_over_short_max_value_answers_invalid_config() {
     let key = LEADER_THROTTLED_REPLICAS_KEY;
     let fits = vec!["0:1"; 8_000].join(",");
     let too_long = vec!["0:1"; 8_200].join(",");
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker] allow_all;
     };

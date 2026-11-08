@@ -714,7 +714,7 @@ struct DenyCertificatePrincipal;
 /// The certificate principal that [`DenyCertificatePrincipal`] refuses.
 const DENIED_CERTIFICATE_PRINCIPAL: &str = "CN=bad";
 
-krabka_macros::test_authorizer!(DenyCertificatePrincipal, request; {
+krabka_broker_macros::test_authorizer!(DenyCertificatePrincipal, request; {
     if request.principal.name == DENIED_CERTIFICATE_PRINCIPAL {
         AuthorizationResult::Deny
     } else {

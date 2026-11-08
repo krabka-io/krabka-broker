@@ -459,7 +459,7 @@ fn logged_value(
 #[derive(Debug)]
 struct DeniesReadOnB;
 
-krabka_macros::test_authorizer! { DeniesReadOnB, request; {
+krabka_broker_macros::test_authorizer! { DeniesReadOnB, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read
         && request.resource_name == "b"

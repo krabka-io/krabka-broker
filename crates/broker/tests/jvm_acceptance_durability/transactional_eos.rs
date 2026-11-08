@@ -61,7 +61,7 @@ use {
 ///
 /// The probe prints `ZOMBIEPROBE fenced=<exception simple name>`, or
 /// `ZOMBIEPROBE fenced=none` when nothing fenced it at all.
-const ZOMBIE_PRODUCER_JAVA: &str = krabka_macros::java_string_producer_source!(
+const ZOMBIE_PRODUCER_JAVA: &str = krabka_broker_macros::java_string_producer_source!(
     r#"
 
 public final class ZombieProducer {

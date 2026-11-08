@@ -33,7 +33,7 @@ use {
 };
 
 // Fails leader-epoch checkpoint writes as a full disk would.
-krabka_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
+krabka_broker_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
 
 pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");

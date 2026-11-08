@@ -95,7 +95,7 @@ pub async fn dispatch(
     ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let request = decode_request::<ElectLeadersRequest>(req_bytes, version)?;
-    let request = krabka_macros::controller_request!(broker, ctx, request, version; self::handle, self::request_refusal);
+    let request = krabka_broker_macros::controller_request!(broker, ctx, request, version; self::handle, self::request_refusal);
     if let Some(answer) = to_active_controller(
         broker,
         elect_leaders_request::API_KEY,

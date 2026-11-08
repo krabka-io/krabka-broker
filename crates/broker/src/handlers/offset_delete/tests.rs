@@ -181,7 +181,7 @@ async fn delete_group_offsets(
         .expect("started broker")
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["offset-delete-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["offset-delete-client"]; };
     offset_deletion.before_ms = now_ms();
     offset_deletion.response = Some(
         handle(&broker, request, offset_delete_response::MAX_VERSION, &ctx)
@@ -351,7 +351,7 @@ async fn delete_counting_writes(
     group_id: &str,
     topics: &[RequestTopic<'_>],
 ) -> (OffsetDeleteResponse, i64) {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, ctx);
         user ["alice"];
         client ["offset-delete-client"];

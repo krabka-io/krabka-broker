@@ -49,7 +49,7 @@ fn request(
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["broker-heartbeat-test"];
 }
 
@@ -60,7 +60,7 @@ krabka_macros::wire_codec_helpers! {
 /// it gets the heartbeat answer.
 #[tokio::test]
 async fn every_heartbeat_needs_cluster_action() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(Arc::new(broker_fixture_support::GrantsInPrincipalName))];
         ready controller_leader;
@@ -96,7 +96,7 @@ async fn every_heartbeat_needs_cluster_action() {
 
 #[tokio::test]
 async fn handle_leader_success_preserves_response_shape() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] allow_all;
         ready controller_leader;
@@ -113,7 +113,7 @@ async fn handle_leader_success_preserves_response_shape() {
         .await
         .expect("BrokerHeartbeat handler");
 
-    let expected = krabka_macros::unthrottled_wire!(BrokerHeartbeatResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(BrokerHeartbeatResponse {
         error_code: codes::NONE,
         is_caught_up: true,
         is_fenced: false,
@@ -187,7 +187,7 @@ impl Cluster {
     async fn start() -> Self {
         use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(handle, dir, broker);
             boot [start_broker] allow_all;
             ready controller_leader;
@@ -238,7 +238,7 @@ impl Cluster {
     }
 
     async fn heartbeat(&self, broker_id: i32, epoch: i64, offset: i64, shut_down: bool) -> Answer {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };

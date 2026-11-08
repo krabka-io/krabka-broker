@@ -416,7 +416,7 @@ mod tests {
         denied_topics: Vec<String>,
     }
 
-    krabka_macros::test_authorizer!(ScenarioAuthorizer, req; {
+    krabka_broker_macros::test_authorizer!(ScenarioAuthorizer, req; {
         use krabka_metadata::{AclOperation, ResourceType};
         let allowed = match (req.resource_type, req.operation) {
             (ResourceType::Group, AclOperation::Read) => self.group_read,
@@ -457,7 +457,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -552,7 +552,7 @@ mod tests {
         let started = start_share_broker().authorizer(authorizer).call().await;
         if exists {
             let broker = started.broker.broker_arc_for_test();
-            krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+            krabka_broker_macros::request_test_identity! { bind(ctx); user ["alice"]; };
             create_topic(
                 &started.broker,
                 &ctx,
@@ -593,7 +593,7 @@ mod tests {
             .expect("started broker")
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+        krabka_broker_macros::request_test_identity! { bind(ctx); user ["alice"]; };
         let partitions = partitions
             .split(',')
             .map(|partition| partition.parse().expect("partition index"))
@@ -756,7 +756,7 @@ mod tests {
     /// refused with `GROUP_ID_NOT_FOUND` (69), before any actor is touched.
     #[tokio::test]
     async fn invalid_and_wrong_type_group_ids_are_refused() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [handler_fixture_support::start_share_allow_all()];
             user ["alice"];
@@ -798,7 +798,7 @@ mod tests {
     /// change its start offset back.
     #[tokio::test]
     async fn alter_creates_and_persists_a_new_share_group() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [handler_fixture_support::start_share_allow_all()];
             user ["alice"];
@@ -886,7 +886,7 @@ mod tests {
         });
         let started = start_share_broker().authorizer(authorizer).call().await;
         let broker = started.broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
+        krabka_broker_macros::request_test_identity! { bind(ctx); user ["alice"]; };
         let partition = |partition_index| AlterShareGroupOffsetsRequestPartition {
             partition_index,
             start_offset: 42,
@@ -952,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn active_group_rejects_the_whole_reset_batch() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_share_allow_all()];
         };
@@ -963,7 +963,7 @@ mod tests {
         let resp = joining_share_member(&actor, "busy", "member-1", Vec::new()).await;
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -989,7 +989,7 @@ mod tests {
     /// answers `UNKNOWN_TOPIC_OR_PARTITION` and is never initialized.
     #[tokio::test]
     async fn reset_initializes_requested_valid_partitions_at_the_group_epoch() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [handler_fixture_support::start_share_allow_all()];
             user ["alice"];

@@ -60,7 +60,7 @@ pub async fn run(
     let timer = Arc::clone(&cfg.timer);
     // Failed partitions persist across sweeps until compaction succeeds.
     let mut uncleanable = UncleanablePartitions::default();
-    krabka_macros::sweep_loop! {
+    krabka_broker_macros::sweep_loop! {
         timer [&*timer];
         cadence [SweepCadence { first: Duration::ZERO, later: cfg.interval.to_std() }];
         shutdown [&shutdown];

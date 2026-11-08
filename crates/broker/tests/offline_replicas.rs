@@ -71,7 +71,7 @@ const DESCRIBE_TOPIC_PARTITIONS_VERSION: i16 = 0;
 const CONVERGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 // Flexible headers and correlation ID 1 for every request in this suite.
-krabka_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
+krabka_broker_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
 
 /// A running broker, the two log directories behind it, and its address.
 struct TwoDirBroker {

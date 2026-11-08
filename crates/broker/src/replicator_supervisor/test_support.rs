@@ -241,8 +241,8 @@ fn partition_record_from_setup(setup: SupervisorPartitionSetup<'_>) -> MetadataR
     })
 }
 
-krabka_macros::fixture_constructors! { supervisor: pub(super) topic_partition_records -> [MetadataRecord; 2] = topic_partition_records_from_setup; }
-krabka_macros::fixture_constructors! { supervisor: pub(super) partition_record -> MetadataRecord = partition_record_from_setup; }
+krabka_broker_macros::fixture_constructors! { supervisor: pub(super) topic_partition_records -> [MetadataRecord; 2] = topic_partition_records_from_setup; }
+krabka_broker_macros::fixture_constructors! { supervisor: pub(super) partition_record -> MetadataRecord = partition_record_from_setup; }
 
 pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {

@@ -1268,7 +1268,7 @@ mod tests {
         version: i16,
     ) -> ListOffsetsPartitionResponse {
         let broker_arc = broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };

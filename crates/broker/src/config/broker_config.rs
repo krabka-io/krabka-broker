@@ -81,7 +81,7 @@ mod security;
 
 pub use self::security::PlainCredentials;
 
-krabka_macros::broker_config! {
+krabka_broker_macros::broker_config! {
     #[derive(krabka_macros::FieldDefaults)]
     pub struct BrokerConfig {
         // tuning.

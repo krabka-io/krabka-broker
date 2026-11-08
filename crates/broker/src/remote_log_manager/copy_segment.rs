@@ -708,7 +708,7 @@ mod tests {
     /// use it to exercise the failure rollback path.
     struct AlwaysFailRsm;
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for AlwaysFailRsm {
         fn copy_log_segment_data(
@@ -726,7 +726,7 @@ mod tests {
         refuse_delete: bool,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for FailingCopyRsm {
         fn copy_log_segment_data(
             &self,
@@ -750,7 +750,7 @@ mod tests {
     /// Returns caller-selected metadata without touching storage.
     struct ReturningRsm(Option<CustomMetadata>);
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for ReturningRsm {
         fn copy_log_segment_data(
@@ -770,7 +770,7 @@ mod tests {
         seen: Mutex<Vec<RemoteLogSegmentMetadata>>,
     }
 
-    #[krabka_macros::missing_remote_reads(delete_ok)]
+    #[krabka_broker_macros::missing_remote_reads(delete_ok)]
 
     impl RemoteStorageManager for CapturingRsm {
         fn copy_log_segment_data(
@@ -806,7 +806,7 @@ mod tests {
         deleted: Mutex<Vec<Uuid>>,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for DeletingRsm {
         fn copy_log_segment_data(
             &self,
@@ -1034,7 +1034,7 @@ mod tests {
         deleted: Mutex<Vec<Uuid>>,
     }
 
-    #[krabka_macros::missing_remote_reads]
+    #[krabka_broker_macros::missing_remote_reads]
     impl RemoteStorageManager for FlakyStoreRsm {
         fn copy_log_segment_data(
             &self,

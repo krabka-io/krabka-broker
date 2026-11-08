@@ -373,8 +373,8 @@ pub(crate) mod test_support {
         }
     }
 
-    krabka_macros::fixture_constructors! { quota: pub(crate) image_with_quota -> MetadataImage = image_from_quota_setup; }
-    krabka_macros::fixture_constructors! { quota: pub(crate) quota_record -> ClientQuotaRecord = record_from_quota_setup; }
+    krabka_broker_macros::fixture_constructors! { quota: pub(crate) image_with_quota -> MetadataImage = image_from_quota_setup; }
+    krabka_broker_macros::fixture_constructors! { quota: pub(crate) quota_record -> ClientQuotaRecord = record_from_quota_setup; }
 
     pub type QuotaEntitySpec<'a> = Vec<QuotaEntityInput<'a>>;
 

@@ -167,7 +167,7 @@ enum Witness {
     SparedAtTimeout,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_macros::ModelEpochLedger)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_broker_macros::ModelEpochLedger)]
 struct TwoPcProj {
     pid: i64,
     epoch: i16,
@@ -357,7 +357,7 @@ impl Model for TwoPcModel {
     }}
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { TwoPcProj;
+        krabka_broker_macros::model_properties! { TwoPcProj;
         // HEADLINE (KIP-939): the timeout reaper never aborts a 2PC txn.
         always "two_pc_never_reaped" => |s| {
             !s.violations.contains(&Violation::ReapedTwoPc)
@@ -452,7 +452,7 @@ impl Model for TwoPcModel {
     fn within_boundary(&self, state: &Self::State) -> bool { state.epoch <= self.max_epoch }
 }
 
-krabka_macros::model_runner! {
+krabka_broker_macros::model_runner! {
 
     fn run(model: TwoPcModel, label: &str, pinned_unique_states: usize)
     [bfs = run_bfs, pin = assert_pinned_count, depth = MAX_DEPTH, states = MAX_STATES, order = "properties_first", checker = checker]

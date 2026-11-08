@@ -48,7 +48,7 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
     handle(broker, version, correlation_id, body, auth, peer)
 }
 
-#[krabka_macros::token_dispatch]
+#[krabka_broker_macros::token_dispatch]
 pub(super) async fn create_delegation_token_adapter(
     broker: &Broker,
     req: CreateDelegationTokenRequest,
@@ -77,7 +77,7 @@ pub(super) async fn create_delegation_token_adapter(
     resp
 }
 
-#[krabka_macros::token_dispatch]
+#[krabka_broker_macros::token_dispatch]
 pub(super) async fn renew_delegation_token_adapter(
     broker: &Broker,
     req: RenewDelegationTokenRequest,
@@ -109,7 +109,7 @@ pub(super) async fn renew_delegation_token_adapter(
     resp
 }
 
-#[krabka_macros::token_dispatch]
+#[krabka_broker_macros::token_dispatch]
 pub(super) async fn expire_delegation_token_adapter(
     broker: &Broker,
     req: ExpireDelegationTokenRequest,
@@ -135,7 +135,7 @@ pub(super) async fn expire_delegation_token_adapter(
     resp
 }
 
-#[krabka_macros::token_dispatch]
+#[krabka_broker_macros::token_dispatch]
 pub(super) async fn describe_delegation_token_adapter(
     broker: &Broker,
     req: DescribeDelegationTokenRequest,

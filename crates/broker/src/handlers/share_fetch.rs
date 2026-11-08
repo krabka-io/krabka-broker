@@ -213,7 +213,7 @@ pub async fn dispatch(
     Ok(response)
 }
 
-#[krabka_macros::share_request_identity]
+#[krabka_broker_macros::share_request_identity]
 pub async fn handle(
     broker: &Broker,
     req: ShareFetchRequest,
