@@ -69,11 +69,7 @@ impl SharePartitionLeaderManager {
 
         // Miss: load from the persister WITHOUT holding any DashMap guard.
         let leader_epoch = self.leader_epoch_for(topic_id, partition);
-        let loaded = match self
-            .persister
-            .read_state(group, topic_id, partition, leader_epoch)
-            .await
-        {
+        let loaded = match self.persister.read_state(key, leader_epoch).await {
             // Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET` is -1: the
             // record the group coordinator writes when it registers a share
             // partition, before any fetch has resolved where the group starts.

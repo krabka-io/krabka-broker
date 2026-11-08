@@ -264,7 +264,7 @@ mod tests {
                 test_support::{self as handler_fixture_support},
             },
             share_coordinator::{
-                handlers::test_support::lead_share_state_partitions,
+                handlers::test_support::lead_share_state_partitions, key::ShareKeyRef,
                 persister_client::SharePersister,
             },
             test_support::{
@@ -652,11 +652,19 @@ mod tests {
             .topic_id;
         drop(image);
         persister
-            .initialize("g-delete", deleted_id, 0, 4, krabka_log::Offset(10))
+            .initialize(
+                ShareKeyRef::new("g-delete", deleted_id, 0),
+                4,
+                krabka_log::Offset(10),
+            )
             .await
             .expect("seed deleted state");
         persister
-            .initialize("g-delete", kept_id, 0, 6, krabka_log::Offset(20))
+            .initialize(
+                ShareKeyRef::new("g-delete", kept_id, 0),
+                6,
+                krabka_log::Offset(20),
+            )
             .await
             .expect("seed kept state");
 
@@ -709,13 +717,13 @@ mod tests {
             );
 
             let deleted_state = persister
-                .read_state_summary("g-delete", deleted_id, 0)
+                .read_state_summary(ShareKeyRef::new("g-delete", deleted_id, 0))
                 .await
                 .expect("read deleted state");
             assert!(deleted_state.is_none());
         }
         let kept = persister
-            .read_state_summary("g-delete", kept_id, 0)
+            .read_state_summary(ShareKeyRef::new("g-delete", kept_id, 0))
             .await
             .expect("read kept state")
             .expect("kept state");
@@ -823,11 +831,19 @@ mod tests {
             drop(image);
 
             persister
-                .initialize("g-authz", allow_id, 0, 4, krabka_log::Offset(10))
+                .initialize(
+                    ShareKeyRef::new("g-authz", allow_id, 0),
+                    4,
+                    krabka_log::Offset(10),
+                )
                 .await
                 .expect("seed allow-topic state");
             persister
-                .initialize("g-authz", deny_id, 0, 4, krabka_log::Offset(10))
+                .initialize(
+                    ShareKeyRef::new("g-authz", deny_id, 0),
+                    4,
+                    krabka_log::Offset(10),
+                )
                 .await
                 .expect("seed deny-topic state");
 
@@ -902,7 +918,7 @@ mod tests {
             // topic's must be deleted.
             for (name, topic_id) in [("allow-topic", allow_id), ("deny-topic", deny_id)] {
                 let state = persister
-                    .read_state_summary("g-authz", topic_id, 0)
+                    .read_state_summary(ShareKeyRef::new("g-authz", topic_id, 0))
                     .await
                     .expect("read state")
                     .map(|summary| (summary.state_epoch, summary.start_offset));

@@ -10,7 +10,7 @@ use {
         metrics::{BrokerMetrics, ShareGroupLabel},
         network::client::InterBrokerClient,
         partition_registry::PartitionRegistry,
-        share_coordinator::persister_client::SharePersister,
+        share_coordinator::{key::ShareKeyRef, persister_client::SharePersister},
     },
     krabka_client_core::ConnectionOptions,
     krabka_ids::PartitionIndex,
@@ -157,7 +157,7 @@ impl BacklogPoller {
     ) -> Result<i64, SampleError> {
         let spso = self
             .persister
-            .read_state_summary(group_id, topic_id, partition)
+            .read_state_summary(ShareKeyRef::new(group_id, topic_id, partition))
             .await?
             .map_or(-1, |summary| summary.start_offset.0);
         let PartitionOffsets {

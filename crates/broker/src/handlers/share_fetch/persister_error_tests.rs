@@ -361,7 +361,7 @@ async fn a_read_of_an_uninitialized_state_fails_until_the_state_is_initialized()
     };
 
     let read_code = match persister
-        .read_state(GROUP, share_topic_uuid(topic_id), 0, 0)
+        .read_state(ShareKeyRef::new(GROUP, share_topic_uuid(topic_id), 0), 0)
         .await
     {
         Err(BrokerError::SharePartitionState { code, .. }) => Some(code),

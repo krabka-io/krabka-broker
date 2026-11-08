@@ -358,7 +358,8 @@ mod tests {
                 },
             },
             share_coordinator::{
-                coordinator::ShareStateSummary, handlers::test_support::lead_share_state_partitions,
+                coordinator::ShareStateSummary,
+                handlers::test_support::lead_share_state_partitions, key::ShareKeyRef,
             },
             test_support::{
                 ControllerPeerAllowed, DenyAll, ShareApiSupport,
@@ -574,7 +575,7 @@ mod tests {
                     .group_coordinator
                     .share_persister()
                     .expect("share persister")
-                    .read_state_summary("g-acl", topic_id, 0)
+                    .read_state_summary(ShareKeyRef::new("g-acl", topic_id, 0))
                     .await
                     .expect("state summary"),
             );
@@ -691,7 +692,7 @@ mod tests {
                 .group_coordinator
                 .share_persister()
                 .expect("share persister")
-                .read_state_summary("g-acl", topic_id, 0)
+                .read_state_summary(ShareKeyRef::new("g-acl", topic_id, 0))
                 .await
                 .expect("state summary");
             assert!(share_offset_alteration.summary_before.as_slice() == [after]);
@@ -849,7 +850,7 @@ mod tests {
             .cloned()
             .expect("share persister");
         let summary = persister
-            .read_state_summary("g-new", topic_id, 0)
+            .read_state_summary(ShareKeyRef::new("g-new", topic_id, 0))
             .await
             .expect("read state")
             .expect("state present");
@@ -865,7 +866,7 @@ mod tests {
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
         let summary_after = persister
-            .read_state_summary("g-new", topic_id, 0)
+            .read_state_summary(ShareKeyRef::new("g-new", topic_id, 0))
             .await
             .expect("read state")
             .expect("state present");
@@ -1048,7 +1049,7 @@ mod tests {
             );
 
             let summary = persister
-                .read_state_summary("g-reset", topic_id, 0)
+                .read_state_summary(ShareKeyRef::new("g-reset", topic_id, 0))
                 .await
                 .expect("read state")
                 .expect("state present");

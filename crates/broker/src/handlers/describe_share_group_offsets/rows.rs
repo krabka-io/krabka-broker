@@ -18,6 +18,7 @@ use {
         error::BrokerError,
         share_coordinator::{
             coordinator::{ShareStateSummary, UNINITIALIZED_START_OFFSET},
+            key::ShareKeyRef,
             persister_client::SharePersister,
         },
     },
@@ -64,7 +65,8 @@ impl ShareSummaries for SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
-        self.read_state_summary(group, topic_id, partition).await
+        self.read_state_summary(ShareKeyRef::new(group, topic_id, partition))
+            .await
     }
 }
 

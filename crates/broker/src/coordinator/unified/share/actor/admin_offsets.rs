@@ -13,7 +13,7 @@ use {
             share::state::{IdentifiedTopic, ShareGroupState},
         },
         error::BrokerError,
-        share_coordinator::persister_client::SharePersister,
+        share_coordinator::{key::ShareKeyRef, persister_client::SharePersister},
     },
     krabka_log::Offset,
     krabka_protocol::primitives::uuid::Uuid,
@@ -193,9 +193,7 @@ pub async fn reset_offsets(
     for request in &requests {
         let result = persister
             .initialize(
-                &state.group_id,
-                request.topic_id,
-                request.partition,
+                ShareKeyRef::new(&state.group_id, request.topic_id, request.partition),
                 state_epoch,
                 Offset(request.start_offset),
             )
@@ -314,7 +312,7 @@ pub async fn delete_offsets(
         let mut error_code = codes::NONE;
         for partition in &partitions {
             if let Err(error) = persister
-                .delete(&state.group_id, topic_id, *partition)
+                .delete(ShareKeyRef::new(&state.group_id, topic_id, *partition))
                 .await
             {
                 tracing::warn!(

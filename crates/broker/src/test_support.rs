@@ -23,6 +23,7 @@
 
 pub use crate::handlers::test_support::StartedBroker;
 use {
+    crate::share_coordinator::key::ShareKeyRef,
     krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
     krabka_protocol::owned::{
         api_versions_request::API_KEY,
@@ -1274,9 +1275,7 @@ pub async fn initialize_share_state(
         .share_persister()
         .expect("share persister")
         .initialize(
-            group,
-            topic_id,
-            partition,
+            ShareKeyRef::new(group, topic_id, partition),
             1,
             krabka_log::Offset(UNINITIALIZED_START_OFFSET),
         )
