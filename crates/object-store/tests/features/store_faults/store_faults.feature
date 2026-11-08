@@ -1,8 +1,10 @@
-Feature: Fault drills reproduce a misbehaving object store
+Feature: Fault drills answer the broker as a misbehaving object store would
 
-  A fault drill wraps an object store so that it throttles, fails, loses
-  objects and stalls the way a real S3 bucket does during an incident. The
-  broker's tiered-storage and diskless drills, in
+  A fault drill wraps an object store so that its answers look like those of
+  an S3 bucket during an incident: throttled, failed, lost and stalled calls.
+  The faults are injected in front of the store, so the broker meets each one
+  as the final answer to a call. The retries and timeouts of the store's own
+  client never see them. The broker's tiered-storage and diskless drills, in
   crates/broker/src/remote_log_manager/tests/store_faults.rs and
   crates/broker/src/diskless/flusher.rs, run the production paths against it
   and assert on which calls failed and how many reached the store.
@@ -30,7 +32,7 @@ Feature: Fault drills reproduce a misbehaving object store
       When a broker attempts to read the archived segment
       Then the read returns the archived segment
 
-    Scenario: Throttled puts also throttle a large upload in parts
+    Scenario: Throttled puts refuse to start a large upload in parts
       Given the store answers every put with SlowDown
       When a broker attempts to upload a large segment file in parts
       Then the broker sees a backend failure naming SlowDown
@@ -41,6 +43,19 @@ Feature: Fault drills reproduce a misbehaving object store
       And the store answers every read with NoSuchKey
       When a broker attempts to look up the size of the archived segment
       Then the broker sees the archived segment as not found
+
+  Rule: A failed part or a failed completion fails the whole upload in parts
+
+    Scenario Outline: A failed step of an upload in parts leaves no segment
+      Given the store answers every <step> with <fault>
+      When a broker attempts to upload a large segment file in parts
+      Then the broker sees a backend failure naming <fault>
+      And the store holds no segment
+
+      Examples:
+        | case                | step       | fault         |
+        | a throttled part    | part       | SlowDown      |
+        | a failed completion | completion | InternalError |
 
   Rule: A transport fault reaches the broker as a backend failure, a lost object as not found
 

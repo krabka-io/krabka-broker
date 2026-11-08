@@ -57,6 +57,9 @@ enum EventField {
     Delta,
     Offset,
     Ratio,
+    Load,
+    Rate,
+    Headroom,
     Replicas,
     Peer,
     Error,
@@ -70,6 +73,9 @@ impl EventField {
             Self::Delta => "delta",
             Self::Offset => "offset",
             Self::Ratio => "ratio",
+            Self::Load => "load",
+            Self::Rate => "rate",
+            Self::Headroom => "headroom",
             Self::Replicas => "replicas",
             Self::Peer => "peer",
             Self::Error => "error",
@@ -83,6 +89,7 @@ enum JsonType {
     Text,
     Boolean,
     Number,
+    Null,
 }
 
 // A key the formatter writes on every entry.
@@ -167,6 +174,11 @@ mod broker {
             EventField::Delta => tracing::info!(delta = -3_i64, "lag changed"),
             EventField::Offset => tracing::info!(offset = u64::MAX, "offset committed"),
             EventField::Ratio => tracing::info!(ratio = 0.5_f64, "cleaner ran"),
+            EventField::Load => tracing::info!(load = f64::NAN, "request handler sampled"),
+            EventField::Rate => tracing::info!(rate = f64::INFINITY, "fetch window closed"),
+            EventField::Headroom => {
+                tracing::warn!(headroom = f64::NEG_INFINITY, "quota exhausted");
+            }
             EventField::Replicas => tracing::info!(replicas = ?vec![1, 2, 3], "partition created"),
             EventField::Peer => {
                 let peer: SocketAddr = ([10, 0, 0, 7], 9092).into();
@@ -406,6 +418,11 @@ fn entry_field_typed(log_scenario: &LogScenario, field: EventField, kind: JsonTy
             let number = serde_json::from_str::<Value>(&value);
             assert!(let Ok(number @ Value::Number(_)) = number, "{value} is a JSON number");
             number
+        }
+        JsonType::Null => {
+            let null = serde_json::from_str::<Value>(&value);
+            assert!(let Ok(null @ Value::Null) = null, "{value} is JSON null");
+            null
         }
     };
     assert!(log_scenario.entry().get(field.name()) == Some(&expected));

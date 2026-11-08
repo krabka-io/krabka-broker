@@ -1,0 +1,142 @@
+{
+  "date": "2026-11-07",
+  "status": "paired-rf3-destination-denial-clean-restart-pass",
+  "qualification_pass": false,
+  "scope": "one source record, one source/destination/state partition per cluster, three combined nodes each; RF3/minISR2 with all ISR3 verified before and after whole-process clean restart; no crash-window claim",
+  "private_artifacts": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107",
+  "candidate": {
+    "source_revision": "c51d444b3c290b307bb9cb43b2f4faed9344a603",
+    "working_tree_note": "Only tools/kafka44/DlqDeniedDestination.java changed during production build; no Rust edits. Immutable binary copies retained under private_artifacts/bin.",
+    "build_command": "TMPDIR=RUN/tmp CARGO_TARGET_DIR=EXISTING_WARM_TARGET CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo build --locked -p krabka-broker --bin krabka-broker -p krabka-format --bin krabka-format",
+    "broker_sha256": "07495afa62f59249f7006561209cd1c09b132f49a0dad4e2f461a654fb41bfbd",
+    "format_sha256": "fea274ad80f93339cb7b5fbd4ad4fdcc30e2674c5efd5b196cd598968d0bd5e8",
+    "format_commands": [
+      [
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/bin/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/native1/data-current",
+        "--node-id",
+        "1",
+        "--cluster-id",
+        "REVRM1RFU1RDTFVTVEVSMg",
+        "--release-version",
+        "4.4-IV2",
+        "--directory-id",
+        "zWV8cQTpQpSZrJvL3YVotA",
+        "--initial-controllers",
+        "1@127.0.0.1:64516:zWV8cQTpQpSZrJvL3YVotA,2@127.0.0.1:64519:4PWSzC4eQBqK88gK6i1OsA,3@127.0.0.1:64522:8U0C5Ru1RniCn_ssz1f76A"
+      ],
+      [
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/bin/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/native2/data-current",
+        "--node-id",
+        "2",
+        "--cluster-id",
+        "REVRM1RFU1RDTFVTVEVSMg",
+        "--release-version",
+        "4.4-IV2",
+        "--directory-id",
+        "4PWSzC4eQBqK88gK6i1OsA",
+        "--initial-controllers",
+        "1@127.0.0.1:64516:zWV8cQTpQpSZrJvL3YVotA,2@127.0.0.1:64519:4PWSzC4eQBqK88gK6i1OsA,3@127.0.0.1:64522:8U0C5Ru1RniCn_ssz1f76A"
+      ],
+      [
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/bin/krabka-format",
+        "--log-dir",
+        "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-20261107/native3/data-current",
+        "--node-id",
+        "3",
+        "--cluster-id",
+        "REVRM1RFU1RDTFVTVEVSMg",
+        "--release-version",
+        "4.4-IV2",
+        "--directory-id",
+        "8U0C5Ru1RniCn_ssz1f76A",
+        "--initial-controllers",
+        "1@127.0.0.1:64516:zWV8cQTpQpSZrJvL3YVotA,2@127.0.0.1:64519:4PWSzC4eQBqK88gK6i1OsA,3@127.0.0.1:64522:8U0C5Ru1RniCn_ssz1f76A"
+      ]
+    ],
+    "startup_command": "RUN/bin/krabka-broker --config-file RUN/nativeN/broker.toml --controller-listen-addr 127.0.0.1:PORT --metrics-listen-addr none --health-listen-addr none"
+  },
+  "oracle": {
+    "image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+    "containers": [
+      "dlq-rf3-next-corrected-1",
+      "dlq-rf3-next-corrected-2",
+      "dlq-rf3-next-corrected-3"
+    ],
+    "startup": "host networking; uid/gid1001; node directory mounted /evidence; kafka-server-start.sh /evidence/broker.properties; heap128-384MB",
+    "format": "kafka-storage.sh format --cluster-id REVRM1RFU1RDTFVTVEVSMQ --release-version 4.4-IV2 --config /evidence/broker.properties"
+  },
+  "fixture": {
+    "path": "tools/kafka44/DlqDeniedDestination.java",
+    "sha256": "72d1179643c8c1d4920df65ac2fd8438a98221396c8eefc9d14e5bf6678a9d96",
+    "client_jar_sha256": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+    "suffix": "rf3final",
+    "commands": [
+      "javac -cp LIBS/* -d RUN/classes tools/kafka44/DlqDeniedDestination.java",
+      "java -cp RUN/classes:LIBS/* DlqDeniedDestination AUTH PLAIN run rf3final 3 2",
+      "java -cp RUN/classes:LIBS/* DlqDeniedDestination AUTH PLAIN verify rf3final 3 2"
+    ]
+  },
+  "observed": {
+    "per_peer": [
+      "anonymous direct destination Produce denied with TopicAuthorizationException",
+      "authenticated admin source Produce offset0, share REJECT commit succeeds",
+      "internal manager terminal authorization failure logs; native error29",
+      "destination no records in8-second window",
+      "source admin startOffset0/lag0 and no redelivery in5-second verify windows before/after restart",
+      "source/destination/state topic replicas3/ISR3 and minISR2 before/after restart"
+    ],
+    "decoded_replica_phase_observations": 12,
+    "each_state_sequence": [
+      3,
+      4
+    ],
+    "each_final_startOffset": 0,
+    "each_final_deliveryCompleteCount": 1
+  },
+  "setup_failures_preserved": [
+    "initial oracle uid1000 failed volume permissions; corrected1001 used fresh directories/containers",
+    "PLAINTEXT anonymous controller without superuser deadlocked StandardAuthorizer cold bootstrap; final oracle uses controller-only SASL admin superuser, interbroker anonymous unchanged; final scenario rerun fresh rf3final",
+    "native initial unmanaged launch children exited with exec shell; managed command sessions used subsequently"
+  ],
+  "limits": [
+    "not full qualification suite; qualification_pass remains false",
+    "completed-write clean process restart, not crash/power loss/partition or fsync fault",
+    "one partition and record, no denied creation or recovery-after-ACL-repair",
+    "oracle controller listener SASL admin; candidate controller PLAINTEXT anonymous with broad cluster ACL; destination-producing principal anonymous on both",
+    "terminal denial deliberately archives without DLQ copy, matching released behavior; no exactly-once guarantee"
+  ],
+  "shutdown": "all owned final oracle containers stopped, candidate managed processes gracefully stopped; stopped containers/data retained",
+  "artifacts_sha256": {
+    "native-after.txt": "bf03423787708ffacd79bb36f830c99b53d8293c24dfe357b534cee27874d87c",
+    "native-before.txt": "af33b694db3c14a871e8e1a4282ec68b9bdfd8849007a621ade5d9425eb74835",
+    "native-node1-state-after.txt": "1141485f6db6f7966db04d3eb8aeafd71dae2c7e0597cfb9474932cba1999a3b",
+    "native-node1-state-before.txt": "5311c5a647b1256395519e0cbc93310f80d44b07b689316588a109783cd0fbb8",
+    "native-node1.toml": "8482013ec4db017717f40133ffcbd8d759acbf40a67b0509217498cebb56947c",
+    "native-node2-state-after.txt": "1c8ab51c7c4340c3480bf0c868eea3105f8c820838a2592828fa3464bac1db82",
+    "native-node2-state-before.txt": "14c2a165c8deb4c768d072c119de50c8d2882e40d8aa367ad6e9506e9cbc5e71",
+    "native-node2.toml": "d25a70f48c00036aec93569d753d0cdb42a43aa5f7430bc95b86e9bc7a30909c",
+    "native-node3-state-after.txt": "cc2f0de4af9e0ce21583d2d2b19b8f5b15c57bb716c77771a3d6c9cedcbeda15",
+    "native-node3-state-before.txt": "46d1e92024a0a462be7c08a1112c2b6e5dab2660dde6fd1af6ead04df67f81da",
+    "native-node3.toml": "af97351ebda9e26c907ac9f3af1bb050b8c1ff34965a944f30b4e68c74e60d98",
+    "native-run.txt": "cb766c4494bf254678a0e7b107571ae1b8f9fe44e8ca6130ec441e5c728c81f2",
+    "native-terminal-error.txt": "d8cad755368c620c765be7ccdd12f55c39266efee0496fefcc4c2c689c2050d8",
+    "oracle-after.txt": "3bea4f5a0910f55affe7810bd9048352839f276fa6c7d4e573e50821b140e8e4",
+    "oracle-before.txt": "072e608145fce86279fc82be7c90e9c4b023f3c0d40ee946598d831bf536ab16",
+    "oracle-node1-state-after.txt": "fb3877592fbf817717e1054478aa2d1e7076939595d3ced6a76f2052afb1ac04",
+    "oracle-node1-state-before.txt": "ce4860b4cc7b266dfa1422cd4181fef3966bd01d07ecaf7c92707261baf6fd09",
+    "oracle-node1.properties": "c55593e66e57ee16b647a6d7c7f680a305a06fee9f143ccbf4b931afb2dcb093",
+    "oracle-node2-state-after.txt": "0ba41f0bcc05dc2b6ed64feb06fbc3659e2edb018d4a3c4661567a56dfee9470",
+    "oracle-node2-state-before.txt": "34aabf11afc917c7f8002af969a0d2cfea1101223e9d975ba4e902269aad8180",
+    "oracle-node2.properties": "e5064ca5136c001039ee18980b2659dd9407ed0c44c92c29bb1d7e1deb7931d5",
+    "oracle-node3-state-after.txt": "4fb5131be3ae86fbd6babe2aaccc5b005ffa70ca689413ab0350f43acf8a94d1",
+    "oracle-node3-state-before.txt": "856f40843d29873bf4a56bc079ae4247f5331378ad038deaba426b268c041d2a",
+    "oracle-node3.properties": "98891ff4f64670fede920a0a6110fa198839032751e134108b6918dd3dd8a904",
+    "oracle-run.txt": "8cacd3d0ba2b87f473785f4a443815f22c2f7e90b5793142fa07b149b94fa7ad",
+    "oracle-terminal-error.txt": "667f6c51b0ebfc9db45f4e9c8d8a3935bb9d641095026321366c2e0e6edd5fb8",
+    "state-summary.json": "5ff4c6d6e53b4f2e13d1627fe3d69de625f41afc16be893c74c4e19d19b1a185"
+  }
+}

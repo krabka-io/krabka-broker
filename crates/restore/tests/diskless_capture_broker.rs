@@ -26,7 +26,6 @@ use {
         archive::ArchiveArgs,
         capture::capture_key,
         cli::CaptureSigningArgs,
-        connection::SecurityArgs,
         manifest::{DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, Manifest},
         run,
     },
@@ -34,6 +33,7 @@ use {
         Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId, RemoteStorageBackend,
         RlmmKind, testing,
     },
+    krabka_cli_connection::SecurityArgs,
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, CreateTopicSpec, TopicMutationOptions,
     },

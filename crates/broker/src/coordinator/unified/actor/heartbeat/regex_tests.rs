@@ -446,6 +446,7 @@ async fn a_takeover_whose_regex_batch_failed_leaves_the_consumer_group() {
             actor::test_support::{actor_services, coordinator_with_log, rpc},
             group::CoordinatorGroup,
             offsets_log::fake::InMemoryOffsetsLog,
+            test_support::stop_group_actor,
         },
         std::sync::Arc,
         tokio::sync::oneshot,
@@ -457,6 +458,9 @@ async fn a_takeover_whose_regex_batch_failed_leaves_the_consumer_group() {
         Arc::new(metadata(false)),
         Arc::clone(&log),
     );
+    // The registry holds the actor this turn runs for until it stops.
+    let _ = coord.get_or_create_classic("g");
+    stop_group_actor(&coord, "g").await;
     let mut group = CoordinatorGroup::new_classic("g");
     log.fail_append_after(1);
 

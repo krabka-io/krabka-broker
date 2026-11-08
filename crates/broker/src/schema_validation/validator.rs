@@ -37,6 +37,7 @@ mod cache;
 mod check;
 mod compiled;
 mod references;
+mod registry;
 mod reject;
 #[cfg(test)]
 mod test_support;

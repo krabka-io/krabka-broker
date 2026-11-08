@@ -66,6 +66,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-barrier` | Operator CLI for barrier groups: define a group, trigger and list cuts, verify a cut against the log. |
 | `krabka-guard` | Operator CLI for topic write freezes and break-glass proposals: freeze, thaw, propose, approve. |
 | `krabka-backup` | Operator CLI for restore inputs: capture the RLMM and metadata snapshots and group offsets, verify a capture, put offsets back. |
+| `krabka-cli-connection` | The cluster connection every operator CLI shares: `--bootstrap-server` and a Kafka `--command-config` properties file for TLS and SASL. |
 | `krabka-format` | Formats a fresh log directory: Kafka's `meta.properties`, bootstrap records, the singleton `VotersRecord`. |
 | `krabka-restore` | Offline point-in-time restore of a bootable log directory from a KIP-405 archive. |
 | `krabka-throttle` | Quota token buckets (Creusot-verified). |

@@ -91,6 +91,8 @@ krabka-compression = { version = "0.8.0", default-features = false, features = [
 # `dr_roundtrip` drives the operator's own backup tool: the capture it asserts
 # on is the one an operator runs, not a re-implementation of it.
 krabka-backup = { version = "1.1.5", path = "../backup-cli" }
+# The `--command-config` flag group a capture takes.
+krabka-cli-connection = { path = "../cli-connection" }
 krabka-broker = { version = "1.1.5", path = "../broker", features = ["test-helpers"] }
 # `dr_roundtrip` reads a group's committed offsets back with `OffsetFetch`.
 krabka-client-admin = { version = "0.8.0" }

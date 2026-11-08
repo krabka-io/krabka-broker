@@ -16,7 +16,7 @@ use {
         broker::{
             DisklessRuntime,
             adapters::ControllerAdapter,
-            audit::{AuditPipeline, start_audit_pipeline},
+            audit::{AuditPipeline, AuditSigner, start_audit_pipeline},
             gauges::{GaugeObservability, GaugeStorage, spawn_broker_gauge_updater},
             liveness::{
                 LivenessLogDirs, LivenessReporting, LivenessStartup, start_liveness_services,
@@ -238,13 +238,15 @@ pub(super) struct StorageRefs<'a> {
     pub(super) log_dir_ids: &'a LogDirIds,
 }
 
-/// The three things the runtime needs pre-built: the diskless WAL runtime, the
-/// metric registry the coordinators already report into, and the health state
-/// the readiness probe and the gauge sampler both read.
+/// What the runtime needs pre-built: the diskless WAL runtime, the metric
+/// registry the coordinators already report into, the health state the
+/// readiness probe and the gauge sampler both read, and the audit signing key.
 pub(super) struct RuntimeDeps<'a> {
     pub(super) diskless_runtime: &'a DisklessRuntime,
     pub(super) metrics: BrokerMetrics,
     pub(super) health: Option<HealthState>,
+    /// The checkpoint signing key startup loaded, if one is configured.
+    pub(super) audit_signer: Option<AuditSigner>,
 }
 
 pub(super) async fn start_broker_runtime(
@@ -260,6 +262,7 @@ pub(super) async fn start_broker_runtime(
         diskless_runtime,
         metrics,
         health,
+        audit_signer,
     } = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
     let throttle_state = Arc::new(ThrottleState::new());
@@ -278,6 +281,7 @@ pub(super) async fn start_broker_runtime(
         writer_handle: audit_writer_handle,
     } = start_audit_pipeline(
         config,
+        audit_signer,
         &**controller,
         storage.partitions,
         &metrics,
