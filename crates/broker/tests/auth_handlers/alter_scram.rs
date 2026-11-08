@@ -17,15 +17,11 @@ use {
         support::{
             acl::use_simple_acl_authorizer,
             sasl::{ScramAlgorithm, sasl_temp_config, scram_upsertion},
-            wire::{
-                CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup,
-            },
+            wire::HeaderEncoding as RequestHeaderEncoding,
         },
     },
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerHandle},
-    krabka_ids::ApiKey as WireApiKey,
     krabka_protocol::owned::{
         alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
         alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
@@ -132,7 +128,11 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     // ── 1. ApiVersions (v0, non-flexible).
     let av_req = ApiVersionsRequest::default();
     let av_body = encode_named(&av_req, 0, "ApiVersions")?;
-    let _ = round_trip(&mut stream, SocketExchangeSetup::default(), &av_body).await?;
+    let _ = round_trip()
+        .stream(&mut stream)
+        .body(&av_body)
+        .call()
+        .await?;
 
     // ── 2. SaslHandshake v1.
     sasl_handshake_on()
@@ -162,17 +162,14 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
 
     // ── 4. AlterUserScramCredentials v0 (api_key 51, flexible from v0).
     let auscr_body = encode_named(&req, 0, "AUSCR")?;
-    let auscr_resp_bytes = round_trip(
-        &mut stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(51),
-            correlation: WireCorrelationId(4),
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-        &auscr_body,
-    )
-    .await?;
+    let auscr_resp_bytes = round_trip()
+        .stream(&mut stream)
+        .api_key(51)
+        .correlation(4)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&auscr_body)
+        .call()
+        .await?;
     decode_named::<AlterUserScramCredentialsResponse>(&auscr_resp_bytes, 0, "AUSCR")
 }
 

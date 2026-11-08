@@ -8,6 +8,11 @@ release that contains `krabka-macros`.
 
 ### Changed (breaking)
 
+- `wire_test_driver!(socket ..)` generates a `bon` builder (`stream`,
+  optional `api_key`, `version`, `correlation` and `header`, then `body`)
+  that forwards to `kafka_wire::round_trip`, instead of a function taking a
+  `SocketExchangeSetup`. The caller needs `bon` and `krabka_ids`. The
+  `flexible` mode keeps its signature.
 - `fixture_constructors!`'s `temporary_partition` and `open_partition`
   domains default their builder members directly (`STANDALONE_TOPIC`, the
   partition index's and storage mode's `Default`) instead of reading

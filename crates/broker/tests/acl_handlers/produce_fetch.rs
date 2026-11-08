@@ -16,7 +16,7 @@ use {
         ERR_TOPIC_AUTHORIZATION_FAILED,
         client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
         framing::CLIENT_ID,
-        kafka_wire::{PlainAuthenticationSetup, plain_authentication_setup},
+        kafka_wire::PlainAuthenticationSetup,
         polling::retry_produce_until_allowed,
         sasl_cluster::{start_alice_topic_grant, start_denied_foo},
         support::{
@@ -69,7 +69,9 @@ async fn unauthorized_topic_produce(data_access: &mut TopicDataAccess) {
         drive_produce_as_plain(
             addr,
             single_record_produce_request("foo", 0, b"hello"),
-            &plain_authentication_setup().client_id(CLIENT_ID).call(),
+            &PlainAuthenticationSetup::builder()
+                .client_id(CLIENT_ID)
+                .build(),
         )
         .await
         .expect("Produce must round-trip"),
@@ -116,10 +118,13 @@ async fn unauthorized_topic_fetch(data_access: &mut TopicDataAccess) {
         .listen_addr();
     let req = named_topic_fetch("foo", FetchLimits::one_mebibyte(RequestWaitMillis(0)));
     data_access.fetched = Some(
-        drive_fetch_as_plain(addr, req, &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            ..Default::default()
-        })
+        drive_fetch_as_plain(
+            addr,
+            req,
+            &PlainAuthenticationSetup::builder()
+                .client_id(CLIENT_ID)
+                .build(),
+        )
         .await
         .expect("Fetch must round-trip"),
     );

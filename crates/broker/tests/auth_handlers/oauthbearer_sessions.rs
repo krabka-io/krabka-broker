@@ -27,16 +27,12 @@ use {
         support::{
             sasl::{plain_authentication_body, sasl_temp_config},
             sasl_plaintext_config,
-            wire::{
-                CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup,
-            },
+            wire::HeaderEncoding as RequestHeaderEncoding,
         },
     },
     assert2::assert,
     bytes::BytesMut,
     krabka_broker::{Broker, BrokerHandle},
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -64,17 +60,15 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
     metadata_request::MetadataRequest::default()
         .encode(&mut md_body, 12)
         .expect("Metadata encode must succeed");
-    let _ = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(98),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &md_body,
-    )
-    .await;
+    let _ = round_trip()
+        .stream(stream)
+        .api_key(3)
+        .version(12)
+        .correlation(98)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&md_body)
+        .call()
+        .await;
 }
 
 /// Test #1: a successful OAUTHBEARER authentication carries
@@ -440,21 +434,21 @@ async fn live_bearer_metadata(lifetime: &mut TokenSession) {
     metadata_request::MetadataRequest::default()
         .encode(&mut body, 12)
         .expect("Metadata encode must succeed");
-    let response = round_trip(
-        lifetime
-            .stream
-            .as_mut()
-            .expect("an authenticated connection"),
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(lifetime.metadata_correlation),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &body,
-    )
-    .await
-    .expect("Metadata RPC must succeed after authentication");
+    let response = round_trip()
+        .stream(
+            lifetime
+                .stream
+                .as_mut()
+                .expect("an authenticated connection"),
+        )
+        .api_key(3)
+        .version(12)
+        .correlation(lifetime.metadata_correlation)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&body)
+        .call()
+        .await
+        .expect("Metadata RPC must succeed after authentication");
     lifetime.metadata = Some(
         metadata_response::MetadataResponse::decode(&mut &response[..], 12)
             .expect("Metadata decode must succeed"),
@@ -498,21 +492,20 @@ async fn switch_bearer_mechanism(lifetime: &mut TokenSession) {
     }
     .encode(&mut body, 1)
     .expect("SaslHandshake encode must succeed");
-    let response = round_trip(
-        lifetime
-            .stream
-            .as_mut()
-            .expect("an authenticated bearer connection"),
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(200),
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .expect("handshake round-trip");
+    let response = round_trip()
+        .stream(
+            lifetime
+                .stream
+                .as_mut()
+                .expect("an authenticated bearer connection"),
+        )
+        .api_key(17)
+        .version(1)
+        .correlation(200)
+        .body(&body)
+        .call()
+        .await
+        .expect("handshake round-trip");
     lifetime.handshake = Some(
         sasl_handshake_response::SaslHandshakeResponse::decode(&mut &response[..], 1)
             .expect("SaslHandshake decode must succeed"),
@@ -535,20 +528,19 @@ fn recognized_but_changed_mechanism(lifetime: &TokenSession) {
 #[when("another frame follows the bearer mechanism switch")]
 async fn frame_after_mechanism_switch(lifetime: &mut TokenSession) {
     lifetime.next_frame = Some(
-        round_trip(
-            lifetime
-                .stream
-                .as_mut()
-                .expect("a mechanism-switch connection"),
-            SocketExchangeSetup {
-                api_key: WireApiKey(17),
-                version: WireApiVersion(1),
-                correlation: WireCorrelationId(201),
-                ..Default::default()
-            },
-            &lifetime.handshake_body,
-        )
-        .await,
+        round_trip()
+            .stream(
+                lifetime
+                    .stream
+                    .as_mut()
+                    .expect("a mechanism-switch connection"),
+            )
+            .api_key(17)
+            .version(1)
+            .correlation(201)
+            .body(&lifetime.handshake_body)
+            .call()
+            .await,
     );
 }
 
@@ -597,18 +589,15 @@ async fn untimed_plain_authentication(lifetime: &mut TokenSession) {
     }
     .encode(&mut handshake, 1)
     .unwrap();
-    let response = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(2),
-            ..Default::default()
-        },
-        &handshake,
-    )
-    .await
-    .expect("SaslHandshake round-trip");
+    let response = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(1)
+        .correlation(2)
+        .body(&handshake)
+        .call()
+        .await
+        .expect("SaslHandshake round-trip");
     lifetime.handshake = Some(
         sasl_handshake_response::SaslHandshakeResponse::decode(&mut &response[..], 1).unwrap(),
     );

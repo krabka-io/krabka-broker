@@ -15,16 +15,12 @@ use {
         kafka_wire::exchange,
         support::{
             sasl::sasl_plaintext_mechanisms,
-            wire::{
-                CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup, request_frame, write_frame,
-            },
+            wire::{HeaderEncoding as RequestHeaderEncoding, request_frame, write_frame},
         },
     },
     assert2::{assert, check},
     bytes::BytesMut,
     krabka_broker::{Broker, BrokerHandle},
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -125,17 +121,14 @@ async fn plain_handshake(stream: &mut TcpStream, version: i16) -> SaslHandshakeR
     }
     .encode(&mut body, version)
     .unwrap();
-    let bytes = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(version),
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .expect("SaslHandshake round-trip");
+    let bytes = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(version)
+        .body(&body)
+        .call()
+        .await
+        .expect("SaslHandshake round-trip");
     let mut cur: &[u8] = &bytes;
     SaslHandshakeResponse::decode(&mut cur, version).expect("SaslHandshakeResponse must decode")
 }
@@ -712,19 +705,19 @@ async fn raw_token_metadata(gate: &mut SaslGate) {
     let mut body = BytesMut::new();
     MetadataRequest::default().encode(&mut body, 12).unwrap();
     gate.metadata = Some(
-        round_trip(
-            gate.stream
-                .as_mut()
-                .expect("a raw-token authenticated socket"),
-            SocketExchangeSetup {
-                api_key: WireApiKey(3),
-                version: WireApiVersion(12),
-                correlation: WireCorrelationId(2),
-                header: RequestHeaderEncoding::Flexible,
-            },
-            &body,
-        )
-        .await,
+        round_trip()
+            .stream(
+                gate.stream
+                    .as_mut()
+                    .expect("a raw-token authenticated socket"),
+            )
+            .api_key(3)
+            .version(12)
+            .correlation(2)
+            .header(RequestHeaderEncoding::Flexible)
+            .body(&body)
+            .call()
+            .await,
     );
 }
 
@@ -742,18 +735,15 @@ fn raw_token_can_use_data_plane(gate: &SaslGate) {
 async fn api_versions_mid_exchange(gate: &mut SaslGate) {
     let mut body = BytesMut::new();
     ApiVersionsRequest::default().encode(&mut body, 3).unwrap();
-    let response = round_trip(
-        gate.stream.as_mut().expect("a v1 PLAIN handshake"),
-        SocketExchangeSetup {
-            version: WireApiVersion(3),
-            correlation: WireCorrelationId(2),
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .expect("ApiVersions gets an error response");
+    let response = round_trip()
+        .stream(gate.stream.as_mut().expect("a v1 PLAIN handshake"))
+        .version(3)
+        .correlation(2)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&body)
+        .call()
+        .await
+        .expect("ApiVersions gets an error response");
     let mut cursor: &[u8] = &response;
     gate.versions =
         Some(ApiVersionsResponse::decode(&mut cursor, 3).expect("ApiVersionsResponse must decode"));
@@ -778,17 +768,15 @@ async fn non_authentication_request(gate: &mut SaslGate, request: String) {
         .unwrap_or_else(|| panic!("unknown mid-exchange request {request}"));
     let started = Instant::now();
     gate.mid_response = Some(
-        round_trip(
-            gate.stream.as_mut().expect("a v1 PLAIN handshake"),
-            SocketExchangeSetup {
-                api_key: WireApiKey(case.api_key),
-                version: WireApiVersion(case.version),
-                correlation: WireCorrelationId(2),
-                header: RequestHeaderEncoding::Flexible,
-            },
-            &case.body,
-        )
-        .await,
+        round_trip()
+            .stream(gate.stream.as_mut().expect("a v1 PLAIN handshake"))
+            .api_key(case.api_key)
+            .version(case.version)
+            .correlation(2)
+            .header(RequestHeaderEncoding::Flexible)
+            .body(&case.body)
+            .call()
+            .await,
     );
     gate.elapsed = Some(started.elapsed());
     gate.mid_case = Some(case);

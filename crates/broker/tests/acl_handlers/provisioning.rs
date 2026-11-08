@@ -145,10 +145,13 @@ async fn acl_unprivileged_create(acls: &mut AclProvisioning) {
         ],
         ..Default::default()
     };
-    let resp = drive_create_acls_as_plain(addr, req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let resp = drive_create_acls_as_plain(
+        addr,
+        req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("CreateAcls request must round-trip even when denied");
     acls.created = Some(resp);

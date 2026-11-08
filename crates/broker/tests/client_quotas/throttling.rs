@@ -75,11 +75,13 @@ const API_VERSIONS_VERSION: i16 = 3;
 
 /// Open the fixture's Alice session without charging a second handshake.
 async fn alice_quota_connection(addr: SocketAddr, context: &str) -> TcpStream {
-    kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        password: b"alice-secret".to_vec(),
-        ..Default::default()
-    })
+    kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .password(b"alice-secret")
+            .build(),
+    )
     .await
     .expect(context)
 }
@@ -120,11 +122,14 @@ async fn produce_when_acl_applied(
 ) -> ProduceResponse {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let r = drive_produce_sasl(addr, records.clone(), &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            password: (b"alice-secret").to_vec(),
-            ..Default::default()
-        })
+        let r = drive_produce_sasl(
+            addr,
+            records.clone(),
+            &PlainAuthenticationSetup::builder()
+                .client_id(CLIENT_ID)
+                .password(b"alice-secret")
+                .build(),
+        )
         .await;
         let code = r
             .responses
@@ -353,11 +358,11 @@ async fn quota_fetch_records(quota: &mut QuotaEnforcement) {
             count: ProduceRecordCount(8),
             ..Default::default()
         },
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user: "admin",
-            password: (b"admin-secret").to_vec(),
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user("admin")
+            .password(b"admin-secret")
+            .build(),
     )
     .await;
     let part = &produce_resp.responses[0].partition_responses[0];

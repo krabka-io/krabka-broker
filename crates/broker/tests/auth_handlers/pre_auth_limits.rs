@@ -25,14 +25,13 @@ use {
             topics::metadata_topic,
             wire::{
                 CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup, request_frame as support_request_frame,
+                request_frame as support_request_frame,
             },
         },
     },
     assert2::{assert, check},
     bytes::{BufMut, BytesMut},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions},
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -144,17 +143,14 @@ async fn api_versions(
     version: i16,
     request: &api_versions_request::ApiVersionsRequest,
 ) -> api_versions_response::ApiVersionsResponse {
-    let body = round_trip(
-        stream,
-        SocketExchangeSetup {
-            version: WireApiVersion(version),
-            header: RequestHeaderEncoding::from_wire(version >= 3),
-            ..Default::default()
-        },
-        &encode(request, version),
-    )
-    .await
-    .expect("ApiVersions answer");
+    let body = round_trip()
+        .stream(stream)
+        .version(version)
+        .header(RequestHeaderEncoding::from_wire(version >= 3))
+        .body(&encode(request, version))
+        .call()
+        .await
+        .expect("ApiVersions answer");
     api_versions_response::ApiVersionsResponse::decode(&mut &body[..], version)
         .expect("decode ApiVersions")
 }
@@ -172,17 +168,14 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
         },
         1,
     );
-    let answer = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(2),
-            ..Default::default()
-        },
-        &handshake,
-    )
-    .await?;
+    let answer = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(1)
+        .correlation(2)
+        .body(&handshake)
+        .call()
+        .await?;
     let answer = sasl_handshake_response::SaslHandshakeResponse::decode(&mut &answer[..], 1)
         .expect("decode handshake");
     if answer.error_code != 0 {
@@ -192,17 +185,15 @@ async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::E
         auth_bytes: bytes::Bytes::from(format!("\0admin\0{password}").into_bytes()),
         ..Default::default()
     };
-    let answer = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(36),
-            version: WireApiVersion(2),
-            correlation: WireCorrelationId(3),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &encode(&token, 2),
-    )
-    .await?;
+    let answer = round_trip()
+        .stream(stream)
+        .api_key(36)
+        .version(2)
+        .correlation(3)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&encode(&token, 2))
+        .call()
+        .await?;
     let answer = sasl_authenticate_response::SaslAuthenticateResponse::decode(&mut &answer[..], 2)
         .expect("decode authenticate");
     if answer.error_code != 0 {
@@ -426,17 +417,14 @@ async fn incomplete_plain_exchange(limits: &mut PreAuthentication) {
         },
         1,
     );
-    round_trip(
-        limits.stream.as_mut().expect("a PLAIN socket"),
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            ..Default::default()
-        },
-        &handshake,
-    )
-    .await
-    .expect("handshake");
+    round_trip()
+        .stream(limits.stream.as_mut().expect("a PLAIN socket"))
+        .api_key(17)
+        .version(1)
+        .body(&handshake)
+        .call()
+        .await
+        .expect("handshake");
 }
 
 #[given("the requested cluster id is stale and node id is 41")]
@@ -516,21 +504,21 @@ async fn authenticated_admin_socket(limits: &mut PreAuthentication) {
 
 #[when("the authenticated socket sends that large Metadata request")]
 async fn authenticated_large_request(limits: &mut PreAuthentication) {
-    let body = round_trip(
-        limits
-            .stream
-            .as_mut()
-            .expect("an authenticated PLAIN socket"),
-        SocketExchangeSetup {
-            api_key: WireApiKey(3),
-            version: WireApiVersion(12),
-            correlation: WireCorrelationId(4),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        &limits.metadata_request,
-    )
-    .await
-    .expect("Metadata after authentication");
+    let body = round_trip()
+        .stream(
+            limits
+                .stream
+                .as_mut()
+                .expect("an authenticated PLAIN socket"),
+        )
+        .api_key(3)
+        .version(12)
+        .correlation(4)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&limits.metadata_request)
+        .call()
+        .await
+        .expect("Metadata after authentication");
     limits.metadata = Some(
         metadata_response::MetadataResponse::decode(&mut &body[..], 12).expect("decode Metadata"),
     );
@@ -582,17 +570,14 @@ fn delayed_failed_authentication(limits: &PreAuthentication) {
 
 #[when("the client sends an unsupported ApiVersions request")]
 async fn unsupported_api_version(limits: &mut PreAuthentication) {
-    let body = round_trip(
-        limits.stream.as_mut().expect("a pre-authentication socket"),
-        SocketExchangeSetup {
-            version: WireApiVersion(i16::MAX),
-            header: RequestHeaderEncoding::Flexible,
-            ..Default::default()
-        },
-        &[0xff],
-    )
-    .await
-    .expect("UNSUPPORTED_VERSION answer");
+    let body = round_trip()
+        .stream(limits.stream.as_mut().expect("a pre-authentication socket"))
+        .version(i16::MAX)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(&[0xff])
+        .call()
+        .await
+        .expect("UNSUPPORTED_VERSION answer");
     limits.versions = Some(
         api_versions_response::ApiVersionsResponse::decode(&mut &body[..], 0).expect("decode"),
     );

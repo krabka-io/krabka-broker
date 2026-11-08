@@ -44,11 +44,24 @@ pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
             <Token![,]>::parse(&parser)?;
             let client = Expr::parse(&parser)?;
             moxy::template! {
-                {{ attributes }} {{ visibility }} async fn {{ name }}<S: ::tokio::io::AsyncRead + ::tokio::io::AsyncWrite + Unpin>(
-                    stream: &mut S, setup: crate::support::wire::SocketExchangeSetup, body: &[u8],
+                {{ attributes }} #[::bon::builder] {{ visibility }} async fn {{ name }}<S: ::tokio::io::AsyncRead + ::tokio::io::AsyncWrite + Unpin>(
+                    stream: &mut S,
+                    #[builder(into)] api_key: Option<::krabka_ids::ApiKey>,
+                    #[builder(into)] version: Option<::krabka_ids::ApiVersion>,
+                    #[builder(into)] correlation: Option<crate::support::wire::CorrelationId>,
+                    header: Option<crate::support::wire::HeaderEncoding>,
+                    body: &[u8],
                 ) -> ::std::io::Result<Vec<u8>> {
-                    let exchange = crate::kafka_wire::ExchangeSetup::for_socket(setup, {{ client }});
-                    crate::kafka_wire::exchange_round_trip(stream, exchange, body).await
+                    crate::kafka_wire::round_trip()
+                        .stream(stream)
+                        .maybe_api_key(api_key)
+                        .maybe_version(version)
+                        .maybe_correlation(correlation)
+                        .client_id({{ client }})
+                        .maybe_header(header)
+                        .body(body)
+                        .call()
+                        .await
                 }
             }
         }
@@ -61,14 +74,16 @@ pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
                 {{ attributes }} {{ visibility }} async fn {{ name }}(
                     stream: &mut ::tokio::net::TcpStream, setup: crate::support::wire::ApiRequestSetup, body: &[u8],
                 ) -> ::std::io::Result<Vec<u8>> {
-                    let exchange = crate::kafka_wire::ExchangeSetup::for_socket(
-                        crate::support::wire::SocketExchangeSetup {
-                            api_key: setup.api_key, version: setup.version,
-                            correlation: crate::support::wire::CorrelationId({{ correlation }}),
-                            header: crate::support::wire::HeaderEncoding::Flexible,
-                        }, {{ client }},
-                    );
-                    crate::kafka_wire::exchange_round_trip(stream, exchange, body).await
+                    crate::kafka_wire::round_trip()
+                        .stream(stream)
+                        .api_key(setup.api_key)
+                        .version(setup.version)
+                        .correlation(crate::support::wire::CorrelationId({{ correlation }}))
+                        .client_id({{ client }})
+                        .header(crate::support::wire::HeaderEncoding::Flexible)
+                        .body(body)
+                        .call()
+                        .await
                 }
             }
         }
@@ -143,11 +158,16 @@ mod tests {
     #[test]
     fn framing_and_codec_adapters_keep_their_selected_header_and_diagnostic() {
         let socket = compact(&expand(&"socket pub exchange, CLIENT".parse().unwrap()).unwrap());
-        assert!(socket.contains("ExchangeSetup::for_socket(setup,CLIENT)"));
+        assert!(socket.contains("::bon::builder") && socket.contains("asyncfnexchange"));
+        assert!(
+            socket
+                .contains(".maybe_correlation(correlation).client_id(CLIENT).maybe_header(header)")
+        );
         let flexible = compact(&expand(&"flexible exchange, CLIENT, 7".parse().unwrap()).unwrap());
         assert!(
             flexible.contains("CorrelationId(7)") && flexible.contains("HeaderEncoding::Flexible")
         );
+        assert!(flexible.contains(".client_id(CLIENT)"));
         let plain_tokens = expand(&"plain pub send { request: schema::Request, response: schema::Response, api: API, operation: \"decode response\", }".parse().unwrap()).unwrap();
         let plain = compact(&plain_tokens);
         assert!(

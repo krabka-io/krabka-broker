@@ -15,13 +15,9 @@ use {
         support::{
             sasl::{provision_scram, sasl_plaintext_mechanisms, start_broker},
             sasl_plaintext_config,
-            wire::{
-                CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
-                SocketExchangeSetup,
-            },
+            wire::HeaderEncoding as RequestHeaderEncoding,
         },
     },
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::owned::{
         metadata_request::MetadataRequest, metadata_response::MetadataResponse,
     },
@@ -36,12 +32,9 @@ use {
 
 pub mod common_imports {
     pub use {
-        assert2::check,
-        krabka_broker::Broker,
-        krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
+        assert2::check, krabka_broker::Broker,
         krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
-        krabka_security::SaslMechanism,
-        tokio::net::TcpStream,
+        krabka_security::SaslMechanism, tokio::net::TcpStream,
     };
 }
 
@@ -64,17 +57,15 @@ pub async fn sasl_authenticate_round_trip(
     stream: &mut TcpStream,
     body: &[u8],
 ) -> io::Result<Vec<u8>> {
-    round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(36),
-            version: WireApiVersion(2),
-            correlation: WireCorrelationId(3),
-            header: RequestHeaderEncoding::Flexible,
-        },
-        body,
-    )
-    .await
+    round_trip()
+        .stream(stream)
+        .api_key(36)
+        .version(2)
+        .correlation(3)
+        .header(RequestHeaderEncoding::Flexible)
+        .body(body)
+        .call()
+        .await
 }
 
 /// admin PLAIN test password, built at runtime.

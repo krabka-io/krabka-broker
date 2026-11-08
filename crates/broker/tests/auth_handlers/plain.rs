@@ -15,7 +15,7 @@ use {
         support::{
             client::scrape_metrics as scrape_metrics_client,
             sasl::plain_authentication_body,
-            wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding, SocketExchangeSetup},
+            wire::{CorrelationId, HeaderEncoding as RequestHeaderEncoding},
         },
     },
     assert2::assert,
@@ -120,11 +120,14 @@ async fn drive_sasl_plain_session_on(
     user: &str,
     password: &[u8],
 ) -> Result<(), io::Error> {
-    sasl_plain_authenticate_on(stream, &PlainAuthenticationSetup {
-        client_id: "krabka-sasl-test",
-        user,
-        password: (password).to_vec(),
-    })
+    sasl_plain_authenticate_on(
+        stream,
+        &PlainAuthenticationSetup::builder()
+            .client_id("krabka-sasl-test")
+            .user(user)
+            .password(password)
+            .build(),
+    )
     .await?;
     metadata_probe(stream, 4).await
 }
@@ -392,17 +395,14 @@ async fn authenticate_without_handshake(authentication: &mut PlainAuthentication
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let auth_body = plain_authentication_body("alice", alice_password().as_bytes());
     authentication.raw_result = Some(
-        round_trip(
-            &mut stream,
-            SocketExchangeSetup {
-                api_key: WireApiKey(36),
-                version: WireApiVersion(2),
-                header: RequestHeaderEncoding::Flexible,
-                ..Default::default()
-            },
-            &auth_body,
-        )
-        .await,
+        round_trip()
+            .stream(&mut stream)
+            .api_key(36)
+            .version(2)
+            .header(RequestHeaderEncoding::Flexible)
+            .body(&auth_body)
+            .call()
+            .await,
     );
     authentication.stream = Some(stream);
 }

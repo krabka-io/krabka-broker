@@ -12,12 +12,12 @@
 use {
     crate::{
         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-        rpc::send_create_delegation_token,
+        rpc::send_delegation_token_rpc,
         support::{
             sasl::delegation_token_defaults,
             tls::{
-                CertificateDer, ClientAuthMode, ClientConfig, PemObject as _, PinnedCertVerifier,
-                ServerName, TcpStream, TlsConfig, TlsConnector,
+                CertificateDer, ClientAuthMode, ClientConfig, DEV_CERT, DEV_KEY, PemObject as _,
+                PinnedCertVerifier, ServerName, TcpStream, TlsConfig, TlsConnector,
             },
         },
     },
@@ -32,9 +32,6 @@ use {
     tempfile::TempDir,
     tokio_rustls::{client::TlsStream, rustls::crypto::aws_lc_rs::default_provider},
 };
-
-const DEV_CERT: &str = include_str!("../fixtures/security/dev_cert.pem");
-const DEV_KEY: &str = include_str!("../fixtures/security/dev_key.pem");
 
 /// A running broker, its log and certificate directories, and its listen
 /// address.
@@ -172,12 +169,12 @@ async fn anonymous_token_creation(anonymous: &mut AnonymousTokenRequest) {
     anonymous.response = Some(
         if anonymous.protocol.expect("listener configured") == ListenerProtocol::Ssl {
             let mut stream = tls_connect_without_client_cert(addr).await;
-            send_create_delegation_token(&mut stream, 1, &request)
+            send_delegation_token_rpc(&mut stream, 1, &request)
                 .await
                 .expect("CreateDelegationToken")
         } else {
             let mut stream = TcpStream::connect(addr).await.expect("TCP connect");
-            send_create_delegation_token(&mut stream, 1, &request)
+            send_delegation_token_rpc(&mut stream, 1, &request)
                 .await
                 .expect("CreateDelegationToken")
         },

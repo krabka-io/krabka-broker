@@ -153,10 +153,9 @@ async fn alice_group_join_denied(authorization: &mut ResourceAuthorization) {
     let denied = drive_join_group_as_plain(
         addr,
         join_group_request("cg-1"),
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            ..Default::default()
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
     )
     .await
     .expect("JoinGroup must round-trip");
@@ -228,10 +227,13 @@ async fn alice_group_join_authorized(authorization: &mut ResourceAuthorization) 
         .expect("member id assigned")
         .member_id
         .clone();
-    let joined = drive_join_group_as_plain(addr, req2, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let joined = drive_join_group_as_plain(
+        addr,
+        req2,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("second JoinGroup must round-trip");
     authorization.joined = Some(joined);
@@ -254,10 +256,13 @@ async fn alice_transactional_producer(authorization: &mut ResourceAuthorization)
     let req = init_producer_request()
         .maybe_transactional_id(Some("tx-1".to_owned()))
         .call();
-    let resp = drive_init_producer_id_as_plain(addr, req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let resp = drive_init_producer_id_as_plain(
+        addr,
+        req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("InitProducerId must round-trip");
     authorization.initialized = Some(resp);

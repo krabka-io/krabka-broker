@@ -57,11 +57,10 @@ impl Session {
                 plain::plain_authenticate(
                     &mut self.stream,
                     &mut self.correlation,
-                    &PlainAuthenticationSetup {
-                        client_id: "krabka-sasl-test",
-                        user,
-                        ..Default::default()
-                    },
+                    &PlainAuthenticationSetup::builder()
+                        .client_id("krabka-sasl-test")
+                        .user(user)
+                        .build(),
                 )
                 .await
             }

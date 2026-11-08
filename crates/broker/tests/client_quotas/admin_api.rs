@@ -146,10 +146,10 @@ async fn quota_alice_unauthorized_alter(quota_admin: &mut ClientQuotaAdmin) {
                     false,
                 )])],
                 &QuotaAlterSetup {
-                    authentication: PlainAuthenticationSetup::with_password(
-                        CLIENT_ID,
-                        b"alice-secret",
-                    ),
+                    authentication: PlainAuthenticationSetup::builder()
+                        .client_id(CLIENT_ID)
+                        .password(b"alice-secret")
+                        .build(),
                     ..Default::default()
                 },
             )

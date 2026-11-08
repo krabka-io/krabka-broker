@@ -142,10 +142,7 @@ pub async fn start_admin_alice() -> (BrokerHandle, TempDir, SocketAddr) {
 
 use {
     crate::{
-        rpc::{
-            check_created_identity, send_create_delegation_token, send_describe_delegation_token,
-            send_expire_delegation_token, send_renew_delegation_token,
-        },
+        rpc::{check_created_identity, send_delegation_token_rpc},
         wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
     },
     assert2::{assert, check},
@@ -271,7 +268,7 @@ async fn mint_named_token(
         request.owner_principal_type = Some("User".into());
         request.owner_principal_name = Some(owner);
     }
-    let response = send_create_delegation_token(
+    let response = send_delegation_token_rpc(
         tokens
             .sessions
             .get_mut(&principal)
@@ -375,7 +372,7 @@ async fn mint_from_token_session(tokens: &mut TokenWorkflow) {
         .as_mut()
         .expect("token authenticated");
     tokens.created = Some(
-        send_create_delegation_token(stream, 200, &CreateDelegationTokenRequest {
+        send_delegation_token_rpc(stream, 200, &CreateDelegationTokenRequest {
             max_lifetime_ms: -1,
             ..Default::default()
         })
@@ -397,7 +394,7 @@ async fn renew_named_token(
         .hmac
         .clone();
     tokens.renewed = Some(
-        send_renew_delegation_token(
+        send_delegation_token_rpc(
             tokens
                 .sessions
                 .get_mut(&principal)
@@ -436,7 +433,7 @@ fn named_token_renewed_window(tokens: &TokenWorkflow, alias: String) {
 #[rstest_bdd_macros::when("{principal} describes tokens using owner filter User {owner}")]
 async fn describe_named_tokens(tokens: &mut TokenWorkflow, principal: String, owner: String) {
     tokens.described = Some(
-        send_describe_delegation_token(
+        send_delegation_token_rpc(
             tokens
                 .sessions
                 .get_mut(&principal)
@@ -493,7 +490,7 @@ async fn expire_named_token(
         .hmac
         .clone();
     tokens.expired = Some(
-        send_expire_delegation_token(
+        send_delegation_token_rpc(
             tokens
                 .sessions
                 .get_mut(&principal)

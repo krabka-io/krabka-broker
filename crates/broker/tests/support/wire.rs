@@ -67,16 +67,6 @@ impl<R: krabka_protocol::ProtocolRequest, const V: i16> krabka_protocol::Protoco
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SocketExchangeSetup {
-    pub header: HeaderEncoding,
-    #[default(krabka_ids::ApiKey(18))]
-    pub api_key: krabka_ids::ApiKey,
-    pub version: krabka_ids::ApiVersion,
-    #[default(CorrelationId(1))]
-    pub correlation: CorrelationId,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub struct ApiRequestSetup {
     #[default(krabka_ids::ApiKey(18))]
     pub api_key: krabka_ids::ApiKey,

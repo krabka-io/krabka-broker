@@ -85,19 +85,6 @@ pub enum ResponseHeaderSelection {
     Exact(frames::HeaderEncoding),
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ExchangeSetup<'a> {
-    #[default(krabka_ids::ApiKey(18))]
-    pub api_key: krabka_ids::ApiKey,
-    pub version: krabka_ids::ApiVersion,
-    #[default(frames::CorrelationId(1))]
-    pub correlation: frames::CorrelationId,
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    pub header: frames::HeaderEncoding,
-    pub response_header: ResponseHeaderSelection,
-}
-
 /// Send one framed request and strip the chosen response header.
 ///
 /// # Errors
@@ -117,22 +104,6 @@ pub async fn round_trip<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let setup = ExchangeSetup {
-        api_key,
-        version,
-        correlation,
-        client_id,
-        header,
-        response_header,
-    };
-    let ExchangeSetup {
-        api_key,
-        version: api_version,
-        correlation: corr_id,
-        client_id,
-        header,
-        response_header,
-    } = setup;
     let response_header = match response_header {
         ResponseHeaderSelection::ByProtocol if api_key.0 == API_VERSIONS_KEY => {
             frames::HeaderEncoding::Legacy
@@ -142,8 +113,8 @@ where
     };
     let frame = frames::request_frame()
         .api_key(api_key)
-        .version(api_version)
-        .correlation(corr_id)
+        .version(version)
+        .correlation(correlation)
         .header(header)
         .client_id(client_id)
         .body(body)
@@ -160,66 +131,24 @@ where
     let mut cur = &resp[..];
     frames::strip_response_header(
         &mut cur,
-        corr_id.0,
+        correlation.0,
         response_header == frames::HeaderEncoding::Flexible,
     )?;
     Ok(cur.to_vec())
 }
 
-pub async fn exchange_round_trip<S>(
-    stream: &mut S,
-    exchange: ExchangeSetup<'_>,
-    body: &[u8],
-) -> io::Result<Vec<u8>>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    round_trip()
-        .stream(stream)
-        .api_key(exchange.api_key.0)
-        .version(exchange.version.0)
-        .correlation(exchange.correlation.0)
-        .client_id(exchange.client_id)
-        .header(exchange.header)
-        .response_header(exchange.response_header)
-        .body(body)
-        .call()
-        .await
-}
-
-#[derive(Clone, krabka_macros::FieldDefaults)]
+/// SASL/PLAIN credentials and the client ID a connection authenticates with.
+#[derive(Clone, bon::Builder)]
 pub struct PlainAuthenticationSetup<'a> {
-    #[default("krabka-broker-test")]
+    #[builder(default = "krabka-broker-test")]
     pub client_id: &'a str,
-    #[default("alice")]
+    #[builder(default = "alice")]
     pub user: &'a str,
-    #[default(sasl::alice_password().into_bytes())]
+    #[builder(into, default = sasl::alice_password().into_bytes())]
     pub password: Vec<u8>,
 }
 
-#[bon::builder]
-pub fn plain_authentication_setup<'a>(
-    #[builder(default = "krabka-broker-test")] client_id: &'a str,
-    #[builder(default = "alice")] user: &'a str,
-    #[builder(default = sasl::alice_password().into_bytes())] password: Vec<u8>,
-) -> PlainAuthenticationSetup<'a> {
-    PlainAuthenticationSetup {
-        client_id,
-        user,
-        password,
-    }
-}
-
 impl<'a> PlainAuthenticationSetup<'a> {
-    /// Bind a named test password to a suite's client ID.
-    pub fn with_password(client_id: &'a str, password: &[u8]) -> Self {
-        Self {
-            client_id,
-            password: password.to_vec(),
-            ..Default::default()
-        }
-    }
-
     /// The admin fixture's super-user credentials, bound to a suite's client ID.
     pub fn admin(client_id: &'a str) -> Self {
         Self {
@@ -245,11 +174,9 @@ pub async fn sasl_plain_authenticate(
     Ok(stream)
 }
 
-#[derive(krabka_macros::FieldDefaults)]
 pub struct PlainRequestSetup<'a> {
     pub authentication: PlainAuthenticationSetup<'a>,
     pub api: frames::ApiRequestSetup,
-    #[default("request")]
     pub operation: &'a str,
 }
 
@@ -447,19 +374,6 @@ pub fn decode_named<R: for<'de> Decode<'de>>(
         .map_err(|error| io::Error::other(format!("{operation} decode: {error}")))
 }
 
-impl<'a> ExchangeSetup<'a> {
-    pub fn for_socket(setup: frames::SocketExchangeSetup, client_id: &'a str) -> Self {
-        Self {
-            api_key: setup.api_key,
-            version: setup.version,
-            correlation: setup.correlation,
-            client_id,
-            header: setup.header,
-            ..Default::default()
-        }
-    }
-}
-
 /// Exchange a legacy frame.
 ///
 /// # Panics
@@ -502,64 +416,57 @@ where
     Q: Encode,
     R: for<'de> Decode<'de>,
 {
-    let setup = ExchangeSetup {
-        api_key,
-        version,
-        correlation,
-        client_id,
-        header,
-        response_header,
-    };
     let mut body = BytesMut::new();
     request
-        .encode(&mut body, setup.version.0)
+        .encode(&mut body, version.0)
         .map_err(io::Error::other)?;
     let bytes = round_trip()
         .stream(stream)
-        .api_key(setup.api_key)
-        .version(setup.version)
-        .correlation(setup.correlation)
-        .client_id(setup.client_id)
-        .header(setup.header)
-        .response_header(setup.response_header)
+        .api_key(api_key)
+        .version(version)
+        .correlation(correlation)
+        .client_id(client_id)
+        .header(header)
+        .response_header(response_header)
         .body(&body)
         .call()
         .await?;
-    R::decode(&mut &bytes[..], setup.version.0).map_err(io::Error::other)
+    R::decode(&mut &bytes[..], version.0).map_err(io::Error::other)
 }
 
 /// Send one typed raw request on a fresh connection, retaining its encoded body length.
 ///
 /// # Panics
 /// Panics on encoding, connection, framing or response-decoding failure, as the raw fixtures do.
+#[bon::builder]
 pub async fn request_once<Q, R>(
     addr: SocketAddr,
     request: &Q,
-    api: (i16, i16),
+    #[builder(into)] api_key: krabka_ids::ApiKey,
+    #[builder(into)] version: krabka_ids::ApiVersion,
     client_id: &str,
-    header: (i32, bool),
+    #[builder(into, default = frames::CorrelationId(1))] correlation: frames::CorrelationId,
+    #[builder(default)] header: frames::HeaderEncoding,
 ) -> (usize, R)
 where
     Q: Encode,
     R: for<'de> Decode<'de>,
 {
-    let (api_key, version) = api;
-    let (correlation_id, flexible) = header;
     let mut body = BytesMut::new();
-    request.encode(&mut body, version).unwrap();
+    request.encode(&mut body, version.0).unwrap();
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let response = round_trip()
         .stream(&mut stream)
         .api_key(api_key)
         .version(version)
-        .correlation(correlation_id)
+        .correlation(correlation)
         .client_id(client_id)
-        .header(frames::HeaderEncoding::from_wire(flexible))
+        .header(header)
         .body(&body)
         .call()
         .await
         .unwrap();
-    let response = R::decode(&mut &response[..], version).unwrap();
+    let response = R::decode(&mut &response[..], version.0).unwrap();
     (body.len(), response)
 }
 
@@ -902,11 +809,11 @@ pub async fn create_configured_topic_sasl(
     create_topic_sasl(
         addr,
         configured_topic_row(topic),
-        &PlainAuthenticationSetup {
-            client_id,
-            user,
-            password: (password).to_vec(),
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(client_id)
+            .user(user)
+            .password(password)
+            .build(),
     )
     .await;
 }
@@ -993,7 +900,8 @@ pub async fn elect_leaders_plaintext(
 #[bon::builder]
 pub async fn produce_sasl_with_ids(
     addr: SocketAddr,
-    #[builder(default)] authentication: PlainAuthenticationSetup<'_>,
+    #[builder(default = PlainAuthenticationSetup::builder().build())]
+    authentication: PlainAuthenticationSetup<'_>,
     #[builder(default = "krabka-broker-test")] produce_client_id: &'_ str,
     #[builder(default)] records: ZeroFilledRecordsSetup,
 ) -> ProduceResponse {

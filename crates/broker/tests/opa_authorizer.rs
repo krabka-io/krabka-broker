@@ -183,11 +183,11 @@ async fn produce_when_partition_ready(
     drive_produce_as_plain(
         addr,
         single_record_produce_request(topic, 0, b"hello"),
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (password).to_vec(),
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(password)
+            .build(),
     )
     .await
 }

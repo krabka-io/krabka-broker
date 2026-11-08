@@ -100,11 +100,14 @@ pub async fn drive_fetch_sasl(
 
     let req = consumer_fetch_request(topic);
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass)
+            .build(),
+    )
     .await
     .expect("SASL authenticate for Fetch");
     let mut body = BytesMut::new();

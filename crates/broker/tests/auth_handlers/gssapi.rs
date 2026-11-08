@@ -10,17 +10,11 @@ use {
     crate::{
         harness::{round_trip, start_broker_stream},
         inter_broker::drive_inter_broker_client_then_apiversions,
-        support::{
-            gssapi::broker_config,
-            manifest_dir,
-            sasl::sasl_temp_config,
-            wire::{CorrelationId as WireCorrelationId, SocketExchangeSetup},
-        },
+        support::{gssapi::broker_config, manifest_dir, sasl::sasl_temp_config},
     },
     assert2::assert,
     bytes::BytesMut,
     krabka_broker::{config::InterBrokerCredentials, network::client::InterBrokerClient},
-    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -79,16 +73,13 @@ async fn select_kerberos(kerberos: &mut KerberosPeer) {
     let stream = kerberos.stream.as_mut().expect("peer connection");
     let mut body = BytesMut::new();
     ApiVersionsRequest::default().encode(&mut body, 0).unwrap();
-    let response = round_trip(
-        stream,
-        SocketExchangeSetup {
-            correlation: WireCorrelationId(0),
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .unwrap();
+    let response = round_trip()
+        .stream(stream)
+        .correlation(0)
+        .body(&body)
+        .call()
+        .await
+        .unwrap();
     ApiVersionsResponse::decode(&mut &response[..], 0).unwrap();
     let mut body = BytesMut::new();
     SaslHandshakeRequest {
@@ -97,18 +88,15 @@ async fn select_kerberos(kerberos: &mut KerberosPeer) {
     }
     .encode(&mut body, 1)
     .unwrap();
-    let response = round_trip(
-        stream,
-        SocketExchangeSetup {
-            api_key: WireApiKey(17),
-            version: WireApiVersion(1),
-            correlation: WireCorrelationId(1),
-            ..Default::default()
-        },
-        &body,
-    )
-    .await
-    .unwrap();
+    let response = round_trip()
+        .stream(stream)
+        .api_key(17)
+        .version(1)
+        .correlation(1)
+        .body(&body)
+        .call()
+        .await
+        .unwrap();
     kerberos.handshake = Some(SaslHandshakeResponse::decode(&mut &response[..], 1).unwrap());
 }
 
