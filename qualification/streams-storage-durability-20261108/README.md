@@ -80,3 +80,18 @@ operation order and syscall results are preserved. Full Clippy, released JVM
 execution, and physical power cuts were not run in this bounded lane. A private
 temporary directory and an existing Cargo target were execution settings only,
 not software acceptance requirements.
+
+## Recovery verification (2026-11-08)
+
+After runtime recovery, reviewed commit `aed78cd51f139322d82d9add00fab3220545107d`
+and independently matched both source SHA-256 values above. The retained test
+executable at `projects/kafka44-storage-gap/target/debug/deps/krabka_broker-bb7bc4369afd524b`
+(relative to the coordinator workspace) exactly matches the executable SHA-256
+above. Direct execution against the retained source, with a private `TMPDIR`,
+again passed **5/5 filesystem tests** and **29/29 actor-description tests**
+(including the bounded Stateright model, 3.24 seconds). Changed-file nightly
+Rustfmt and `git diff --check` passed. This was a replay of the identified binary,
+not a fresh Cargo compilation or a rerun of the recorded strace fault injection.
+Source review confirmed file sync precedes rename, directory sync precedes
+successful mutation acknowledgement, and directory-sync errors are transient.
+No additional source defect was found; the qualification boundaries above remain.
