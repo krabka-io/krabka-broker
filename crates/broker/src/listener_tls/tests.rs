@@ -4,11 +4,8 @@ use {
     krabka_security::ListenerProtocol,
     rcgen::{CertificateParams, DnType, KeyPair},
     rstest_bdd::datatable::Rows,
-    rustls::crypto::aws_lc_rs,
     std::{fs, fs::File, time::Duration},
 };
-
-fn install_provider() { drop(aws_lc_rs::default_provider().install_default()); }
 
 /// A certificate and its PKCS#8 key, both PEM.
 struct Identity {
@@ -47,7 +44,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        install_provider();
+        ensure_crypto_provider();
         let dir = tempfile::tempdir().expect("tempdir");
         let static_identity = identity("localhost", &["localhost"]);
         let cert_chain_path = dir.path().join("static-cert.pem");
