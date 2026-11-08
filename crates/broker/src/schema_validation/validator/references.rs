@@ -3,10 +3,8 @@
 //! The caller owns the operation deadline, including all nested requests.
 
 use {
-    krabka_schema_serde::{
-        error::SchemaSerdeError,
-        registry::{RegistryClient, model::SchemaReference},
-    },
+    super::registry::RegistryReads,
+    krabka_schema_serde::{error::SchemaSerdeError, registry::model::SchemaReference},
     std::collections::{HashMap, HashSet},
 };
 
@@ -37,7 +35,7 @@ struct ReferenceClosure {
 }
 
 pub(super) async fn reference_sources_ordered(
-    client: &RegistryClient,
+    client: &impl RegistryReads,
     references: &[SchemaReference],
     remaining_bytes: usize,
 ) -> Result<ReferenceSources, SchemaSerdeError> {
@@ -57,7 +55,7 @@ pub(super) async fn reference_sources_ordered(
 }
 
 async fn resolve_reference_sources(
-    client: &RegistryClient,
+    client: &impl RegistryReads,
     references: &[SchemaReference],
     closure: &mut ReferenceClosure,
     depth: usize,
@@ -122,6 +120,7 @@ mod tests {
         super::*,
         crate::schema_validation::validator::test_support::response_endpoint,
         assert2::{assert, check},
+        krabka_schema_serde::registry::RegistryClient,
         wiremock::{MockServer, ResponseTemplate},
     };
 

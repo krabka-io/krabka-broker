@@ -165,7 +165,7 @@ fn truncate_to_removes_future_empty_producer_snapshots() {
     let dir = tempdir().unwrap();
     let mut log = rolling_test_log(dir.path());
     append_samples(&mut log, 3, 2);
-    assert2::assert!(log.producer_state.is_empty());
+    assert2::assert!(log.producers.entries.is_empty());
 
     log.truncate_to(Offset(2)).unwrap();
 

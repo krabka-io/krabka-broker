@@ -37,18 +37,27 @@ impl FromMeta for Words {
                 "expected `#[step_param(\"word\", ...)]`: one or more string literals",
             )
         };
-        let MetaContent::List(group) = &meta.content else {
-            return Err(malformed());
-        };
-        let parser = Parser::from_tokens(&group.tokens);
-        let list = List::<LitStr, Token![,]>::parse_all(&parser).map_err(|_| malformed())?;
-        let mut words = list.iter().cloned();
+        let mut words = string_literals(meta, malformed)?.into_iter();
         let primary = words.next().ok_or_else(malformed)?;
         Ok(Self {
             primary,
             aliases: words.collect(),
         })
     }
+}
+
+/// The string literals of an attribute such as `#[step_param("a", "b")]`,
+/// or `malformed()` when it is not a parenthesized list of them.
+pub fn string_literals(
+    meta: &Meta,
+    malformed: impl Fn() -> ParseError,
+) -> Result<Vec<LitStr>, ParseError> {
+    let MetaContent::List(group) = &meta.content else {
+        return Err(malformed());
+    };
+    let parser = Parser::from_tokens(&group.tokens);
+    let list = List::<LitStr, Token![,]>::parse_all(&parser).map_err(|_| malformed())?;
+    Ok(list.iter().cloned().collect())
 }
 
 /// One variant: its name and its words.

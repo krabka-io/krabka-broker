@@ -15,7 +15,6 @@ use {
     },
     krabka_ids::Offset,
     krabka_units::prelude::TimeExt as _,
-    std::sync::PoisonError,
 };
 
 /// Whether a topic schedules delivery, and its clock bound in milliseconds.
@@ -139,13 +138,7 @@ impl Log {
     /// that does not schedule delivery, where every durable record is visible.
     #[must_use]
     pub fn delivery_watermark(&self) -> Offset {
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .delivery_policy
-            != DeliveryPolicy::Scheduled
-        {
+        if self.config().delivery_policy != DeliveryPolicy::Scheduled {
             return self.log_end_offset();
         }
         self.bounded_watermark()
@@ -217,7 +210,7 @@ impl Log {
     /// Whether this topic schedules delivery, and its clock bound in
     /// milliseconds.
     fn delivery_settings(&self) -> DeliverySettings {
-        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+        let config = self.config();
         DeliverySettings {
             scheduled: config.delivery_policy == DeliveryPolicy::Scheduled,
             uncertainty_ms: config.delivery_clock_uncertainty.millis_i64_trunc(),

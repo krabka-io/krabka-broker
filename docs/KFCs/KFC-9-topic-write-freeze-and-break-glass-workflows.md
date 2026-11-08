@@ -169,7 +169,7 @@ Every label set is bounded. `break_glass_bypassed` is the one an operator should
 
 ### The Command
 
-`krabka-guard` is one command for one incident. The crate is a library as well as a binary, for the reason `krabka-barrier` and `krabka-format` are. A test that spawns a binary needs a Cargo working tree, and a Bazel test sandbox has none. So the tests call `run_from_args` in process. `--bootstrap-server` is required and also reads `KRABKA_BOOTSTRAP_SERVER`, which is what `krabka-barrier` does.
+`krabka-guard` is one command for one incident. The crate is a library as well as a binary, for the reason `krabka-barrier` and `krabka-format` are. A test that spawns a binary needs a Cargo working tree, and a Bazel test sandbox has none. So the tests call `run_from_args` in process. `--bootstrap-server` is required and also reads `KRABKA_BOOTSTRAP_SERVER`, which is what `krabka-barrier` does. `--command-config` takes the Kafka client properties file that `kafka-topics --command-config` takes, so the tool reaches a TLS or SASL listener and the broker authenticates the principal that `--principal` names.
 
 ```
 krabka-guard freeze set --topic orders --reason "DR cutover" [--sign-with key.pk8 --key-id alice-yubi]

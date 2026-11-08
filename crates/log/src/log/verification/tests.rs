@@ -238,7 +238,7 @@ fn an_append_and_the_expiration_window_clear_the_guard() {
     let mut data = transactional_batch(PID, 0, &["a"]);
     data.base_sequence = 0;
     log.append(&mut data).unwrap();
-    assert!(log.verification_states.is_empty());
+    assert!(log.producers.verifications.is_empty());
     assert!(log.check_transactional_append(batch(0, 1, true), guard) == Ok(()));
 
     let other = TransactionalBatch {
@@ -255,7 +255,14 @@ fn an_append_and_the_expiration_window_clear_the_guard() {
     };
     log.maybe_start_transaction_verification(later, false, (CLOCK.0 + CLOCK.1, CLOCK.1))
         .unwrap();
-    assert!(log.verification_states.keys().copied().collect::<Vec<_>>() == vec![ProducerId(3000)]);
+    assert!(
+        log.producers
+            .verifications
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+            == vec![ProducerId(3000)]
+    );
 }
 
 /// A truncation and a hard reset drop the verification state, as a reopen of
@@ -276,7 +283,7 @@ fn a_truncation_and_a_reset_clear_the_verification_state(name: &str) {
     } else {
         log.reset_to(Offset(1)).unwrap();
     }
-    assert2::assert!(log.verification_states.is_empty(), "{name}");
+    assert2::assert!(log.producers.verifications.is_empty(), "{name}");
     assert2::assert!(
         log.check_transactional_append(batch(0, 5, true), guard)
             == Err(TransactionAppendRefusal::InvalidTransactionState),
@@ -348,21 +355,21 @@ fn clear_verification_after_append_preserves_guard_only_for_epoch_bump_control()
     let _guard = log
         .maybe_start_transaction_verification(batch(0, 0, true), true, CLOCK)
         .unwrap();
-    assert!(!log.verification_states.is_empty());
+    assert!(!log.producers.verifications.is_empty());
 
     // Mismatched epoch control marker clears guard
     log.clear_verification_after_append(ProducerId(PID), 1, true);
-    assert!(log.verification_states.is_empty());
+    assert!(log.producers.verifications.is_empty());
 
     // Re-start and verify matching epoch control marker preserves guard
     log.maybe_start_transaction_verification(batch(0, 0, true), true, CLOCK)
         .unwrap();
     log.clear_verification_after_append(ProducerId(PID), 0, true);
-    assert!(!log.verification_states.is_empty());
+    assert!(!log.producers.verifications.is_empty());
 
     // Non-control batch at matching epoch clears guard
     log.clear_verification_after_append(ProducerId(PID), 0, false);
-    assert!(log.verification_states.is_empty());
+    assert!(log.producers.verifications.is_empty());
 }
 
 /// An idempotent batch of `records` records from producer `PID` at `epoch`,

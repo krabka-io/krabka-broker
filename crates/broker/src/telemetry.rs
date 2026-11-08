@@ -27,7 +27,7 @@
 
 // Re-export the generic OTLP pipeline from krabka-telemetry.
 pub use krabka_telemetry::{OtlpConfig, OtlpProtocol, TelemetryError, TelemetryGuard, init};
-use {std::net::SocketAddr, tracing::field::Empty};
+use {crate::handlers, std::net::SocketAddr, tracing::field::Empty};
 
 /// `tracing` target carrying per-request server spans. The broker keeps it off
 /// the `fmt` layer's default filter so request spans only materialise for OTLP.
@@ -66,20 +66,18 @@ pub fn request_span(
 /// Map a Kafka request `api_key` to its canonical protocol name, used as
 /// the `OTel` span name.
 ///
-/// This function takes the name from the generated [`krabka_protocol::ApiKey`]
-/// registry, so it stays in sync with the schemas. That registry's variant
-/// names are the canonical Kafka request names. Keys outside the registry
-/// render as `"Unknown"`, so the broker still emits a span.
+/// The name comes from `handlers::api_name`, the lookup the request metrics
+/// label from: the generated [`krabka_protocol::ApiKey`] registry for Kafka
+/// keys, and the krabka-private name table for the private RPCs. A key that
+/// neither knows renders as `"Unknown"`, so the broker still emits a span.
 #[must_use]
-pub fn api_name(api_key: i16) -> &'static str {
-    krabka_protocol::ApiKey::from_i16(api_key).map_or("Unknown", Into::into)
-}
+pub fn api_name(api_key: i16) -> &'static str { handlers::api_name(api_key).unwrap_or("Unknown") }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::test_support::peer,
+        crate::{handlers::private_api_keys::KRABKA_PRIVATE_APIS, test_support::peer},
         assert2::check,
         std::{fmt::Debug, mem, sync},
         tracing::subscriber,
@@ -92,10 +90,21 @@ mod tests {
         api_versions = { 18, "ApiVersions" },
         alter_user_scram_credentials = { 51, "AlterUserScramCredentials" },
         create_acls = { 30, "CreateAcls" },
+        get_replica_log_info = { 1020, "GetReplicaLogInfo" },
         unknown = { 9999, "Unknown" },
+        unknown_private = { 1000, "Unknown" },
     )]
     fn api_name_known_and_unknown(api_key: i16, want: &str) {
         assert2::assert!(api_name(api_key) == want, "api key {api_key}");
+    }
+
+    /// A krabka-private RPC's span carries the name from the shared table,
+    /// the same name its request metrics use, not `Unknown`.
+    #[test]
+    fn krabka_private_api_spans_follow_the_shared_table() {
+        for api in KRABKA_PRIVATE_APIS {
+            assert2::assert!(api_name(api.api_key) == api.name, "{api:?}");
+        }
     }
 
     #[test]

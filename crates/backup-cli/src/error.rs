@@ -5,7 +5,7 @@
 //! sit beside `krabka restore`'s own: `2` is a bad argument in both tools, `4`
 //! is an unreadable archive in both, and `5` is an integrity failure in both.
 
-use std::io::Error;
+use {krabka_cli_connection::CommandConfigError, std::io::Error};
 
 /// Everything that can stop a capture, a verification, or an offset restore.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +73,17 @@ pub const EXIT_INTEGRITY: i32 = 5;
 pub const EXIT_CLUSTER: i32 = 6;
 /// Exit code for a node whose only metadata checkpoint is the format-time one.
 pub const EXIT_STALE_METADATA: i32 = 7;
+
+/// An unreadable `--command-config` file is an unreadable local file, and one
+/// whose properties conflict is a bad argument.
+impl From<CommandConfigError> for BackupError {
+    fn from(error: CommandConfigError) -> Self {
+        match error {
+            CommandConfigError::Io(error) => Self::Io(error),
+            CommandConfigError::Invalid(message) => Self::InvalidArgument(message),
+        }
+    }
+}
 
 /// A contradictory `--archive-*` flag set is a bad argument like any other.
 impl From<krabka_object_store::ArchiveArgsError> for BackupError {

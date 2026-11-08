@@ -22,6 +22,13 @@ pub enum LegacyRecordsError {
     #[error("recursive compressed wrapper not allowed")]
     NestedCompression,
 
+    /// A v2 batch whose codec v0/v1 cannot carry, which Kafka refuses to
+    /// down-convert with `UNSUPPORTED_COMPRESSION_TYPE`.
+    #[error("{codec:?} batches cannot be down-converted to v0/v1")]
+    UnsupportedCompression {
+        codec: krabka_compression::CompressionType,
+    },
+
     #[error("malformed legacy record: {0}")]
     Malformed(String),
 

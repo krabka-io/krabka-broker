@@ -8,7 +8,7 @@ use {
     krabka_bdd::Given,
     krabka_compression::CompressionType,
     krabka_protocol::records::{Attributes, Record, RecordBatch, RecordHeader, TimestampType},
-    krabka_records_legacy::{Magic, Message, attrs, v2_to_legacy},
+    krabka_records_legacy::{LegacyRecordsError, Magic, Message, attrs, v2_to_legacy},
     rstest_bdd_macros::{given, then, when},
 };
 
@@ -45,6 +45,26 @@ impl From<TargetMagic> for Magic {
     }
 }
 
+/// A codec that a v2 batch can name.
+#[derive(Debug, Clone, Copy, krabka_bdd::StepParam)]
+enum BatchCodec {
+    Gzip,
+    Snappy,
+    Lz4,
+    Zstd,
+}
+
+impl From<BatchCodec> for CompressionType {
+    fn from(codec: BatchCodec) -> Self {
+        match codec {
+            BatchCodec::Gzip => Self::Gzip,
+            BatchCodec::Snappy => Self::Snappy,
+            BatchCodec::Lz4 => Self::Lz4,
+            BatchCodec::Zstd => Self::Zstd,
+        }
+    }
+}
+
 /// A codec that both a v2 batch and a legacy wrapper can name.
 #[derive(Debug, Clone, Copy, krabka_bdd::StepParam)]
 enum LegacyCodec {
@@ -67,8 +87,8 @@ impl From<LegacyCodec> for CompressionType {
 struct Broker;
 
 impl Broker {
-    fn down_convert(batch: &RecordBatch, magic: Magic) -> Bytes {
-        v2_to_legacy(batch, magic).expect("a well-formed v2 batch down-converts")
+    fn down_convert(batch: &RecordBatch, magic: Magic) -> Result<Bytes, LegacyRecordsError> {
+        v2_to_legacy(batch, magic)
     }
 }
 
@@ -203,11 +223,20 @@ fn commit_marker_batch() -> RecordBatch {
 
 struct DownConversion {
     batch: Given<RecordBatch>,
-    legacy: Given<Bytes>,
+    legacy: Given<Result<Bytes, LegacyRecordsError>>,
 }
 
 impl DownConversion {
-    fn message_set(&self) -> LegacyMessageSet { LegacyMessageSet::read(self.legacy.get()) }
+    /// The legacy bytes of a down-conversion that the scenario expects to
+    /// succeed.
+    fn legacy_bytes(&self) -> &Bytes {
+        self.legacy
+            .get()
+            .as_ref()
+            .expect("a well-formed v2 batch down-converts")
+    }
+
+    fn message_set(&self) -> LegacyMessageSet { LegacyMessageSet::read(self.legacy_bytes()) }
 }
 
 #[rstest::fixture]
@@ -263,7 +292,7 @@ fn batch_with_timestamp_delta(
 }
 
 #[given("a v2 batch compressed with {codec}")]
-fn compressed_batch(down_conversion: &mut DownConversion, codec: LegacyCodec) {
+fn compressed_batch(down_conversion: &mut DownConversion, codec: BatchCodec) {
     down_conversion.batch.set(batch_of(
         BASE_OFFSET,
         BASE_TIMESTAMP,
@@ -306,7 +335,18 @@ fn down_convert(down_conversion: &mut DownConversion, magic: TargetMagic) {
 
 #[then("the legacy message set is empty")]
 fn message_set_is_empty(down_conversion: &DownConversion) {
-    assert!(*down_conversion.legacy.get() == Bytes::new());
+    assert!(*down_conversion.legacy_bytes() == Bytes::new());
+}
+
+/// Kafka's `KafkaApis` answers the partition with this error code when
+/// `RecordsUtil.downConvert` throws `UnsupportedCompressionTypeException`.
+#[then("the down-conversion is refused with UNSUPPORTED_COMPRESSION_TYPE")]
+fn refused_as_unsupported_compression(down_conversion: &DownConversion) {
+    assert!(
+        let Err(LegacyRecordsError::UnsupportedCompression {
+            codec: CompressionType::Zstd
+        }) = down_conversion.legacy.get()
+    );
 }
 
 #[then("the legacy record at offset {offset} has the same key and value")]

@@ -9,6 +9,7 @@
 
 use {
     clap::{Parser, Subcommand},
+    krabka_cli_connection::ConnectionArgs,
     krabka_units::{Time, convert::TimeExt as _, parse},
 };
 
@@ -16,14 +17,21 @@ use {
 ///
 /// Shared by the binary and by [`crate::run_from_args`], so both accept
 /// exactly the same flags.
-#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-barrier",
     version,
     about = "Define barrier groups, trigger cuts, and verify a cut against the log"
 )]
-pub struct Cli {}
+pub struct Cli {
+    /// Where the cluster is.
+    #[command(flatten)]
+    pub connection: ConnectionArgs,
+
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// The subcommands, one per barrier api.
 #[derive(Subcommand)]
@@ -128,7 +136,11 @@ fn parse_timeout(raw: &str) -> Result<Time, String> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::{assert, check},
+        std::path::PathBuf,
+    };
 
     krabka_macros::duration_parser_fixture!(
         {
@@ -178,6 +190,40 @@ mod tests {
         "localhost:9092",
         "describe"
     ]);
+
+    /// `--command-config` reaches a TLS or SASL listener the way
+    /// `kafka-topics --command-config` does, and it is refused after the
+    /// subcommand, where no connection flag goes.
+    #[test]
+    fn the_command_config_comes_before_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "krabka-barrier",
+            "-b",
+            "broker-1:9093",
+            "--command-config",
+            "/etc/krabka/barrier.properties",
+            "describe",
+        ])
+        .expect("parses");
+        check!(
+            cli.connection.security.command_config
+                == Some(PathBuf::from("/etc/krabka/barrier.properties"))
+        );
+        let plaintext = Cli::try_parse_from(["krabka-barrier", "-b", "broker-1:9093", "describe"])
+            .expect("parses");
+        check!(plaintext.connection.security.command_config == None);
+        assert!(
+            Cli::try_parse_from([
+                "krabka-barrier",
+                "-b",
+                "broker-1:9093",
+                "describe",
+                "--command-config",
+                "/etc/krabka/barrier.properties",
+            ])
+            .is_err()
+        );
+    }
 
     /// A group with no periodic injection is the default, and it reaches the
     /// wire as the -1 the broker reads as "on demand only".
