@@ -500,6 +500,161 @@ mod tests {
         }
     }
 
+    /// A typed response for `api_key` whose buried `ThrottleTimeMs` is 10 ms,
+    /// with fields on both sides of it, encoded at `version`.
+    fn buried_throttle_body(api_key: ApiKeyCode, version: ApiVersion) -> BytesMut {
+        use krabka_protocol::{
+            Encode,
+            owned::{
+                create_delegation_token_response::CreateDelegationTokenResponse,
+                describe_delegation_token_response::{
+                    DescribeDelegationTokenResponse, DescribedDelegationToken,
+                },
+                expire_delegation_token_response::ExpireDelegationTokenResponse,
+                offset_delete_response::{
+                    OffsetDeleteResponse, OffsetDeleteResponsePartition, OffsetDeleteResponseTopic,
+                },
+                renew_delegation_token_response::RenewDelegationTokenResponse,
+            },
+        };
+
+        fn encoded(response: &impl Encode, version: ApiVersion) -> BytesMut {
+            let mut out = BytesMut::new();
+            response
+                .encode(&mut out, version)
+                .expect("encodable response");
+            out
+        }
+
+        match ApiKey::from_i16(api_key) {
+            Some(ApiKey::CreateDelegationToken) => encoded(
+                &CreateDelegationTokenResponse {
+                    principal_type: "User".to_owned(),
+                    principal_name: "alice".to_owned(),
+                    expiry_timestamp_ms: 2_000,
+                    token_id: "token-1".to_owned(),
+                    hmac: Bytes::from_static(b"mac"),
+                    throttle_time_ms: 10,
+                    ..Default::default()
+                },
+                version,
+            ),
+            Some(ApiKey::RenewDelegationToken) => encoded(
+                &RenewDelegationTokenResponse {
+                    expiry_timestamp_ms: 3_000,
+                    throttle_time_ms: 10,
+                    ..Default::default()
+                },
+                version,
+            ),
+            Some(ApiKey::ExpireDelegationToken) => encoded(
+                &ExpireDelegationTokenResponse {
+                    expiry_timestamp_ms: 4_000,
+                    throttle_time_ms: 10,
+                    ..Default::default()
+                },
+                version,
+            ),
+            Some(ApiKey::DescribeDelegationToken) => encoded(
+                &DescribeDelegationTokenResponse {
+                    tokens: vec![DescribedDelegationToken {
+                        principal_type: "User".to_owned(),
+                        principal_name: "bob".to_owned(),
+                        token_id: "token-2".to_owned(),
+                        ..Default::default()
+                    }],
+                    throttle_time_ms: 10,
+                    ..Default::default()
+                },
+                version,
+            ),
+            Some(ApiKey::OffsetDelete) => encoded(
+                &OffsetDeleteResponse {
+                    throttle_time_ms: 10,
+                    topics: vec![OffsetDeleteResponseTopic {
+                        name: "orders".to_owned(),
+                        partitions: vec![OffsetDeleteResponsePartition {
+                            partition_index: 3,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                version,
+            ),
+            other => panic!("{other:?} carries no buried throttle"),
+        }
+    }
+
+    /// The exact frame sent after a 250 ms request-quota delay, for every
+    /// version of every api whose `ThrottleTimeMs` is not the first field.
+    /// The goldens were captured from the per-api dispatcher as it stood
+    /// before its two parallel matches were folded into one table.
+    #[yare::parameterized(
+        create_delegation_token_v1 = { 38, 1, false, "0000000700000004557365720005616c696365000000000000000000000000000007d000000000000000000007746f6b656e2d31000000036d6163000000fa" },
+        create_delegation_token_v2 = { 38, 2, true, "00000007000000055573657206616c696365000000000000000000000000000007d0000000000000000008746f6b656e2d31046d6163000000fa00" },
+        create_delegation_token_v3 = { 38, 3, true, "00000007000000055573657206616c6963650101000000000000000000000000000007d0000000000000000008746f6b656e2d31046d6163000000fa00" },
+        renew_delegation_token_v1 = { 39, 1, false, "0000000700000000000000000bb8000000fa" },
+        renew_delegation_token_v2 = { 39, 2, true, "000000070000000000000000000bb8000000fa00" },
+        expire_delegation_token_v1 = { 40, 1, false, "0000000700000000000000000fa0000000fa" },
+        expire_delegation_token_v2 = { 40, 2, true, "000000070000000000000000000fa0000000fa00" },
+        describe_delegation_token_v1 = { 41, 1, false, "000000070000000000010004557365720003626f620000000000000000000000000000000000000000000000000007746f6b656e2d320000000000000000000000fa" },
+        describe_delegation_token_v2 = { 41, 2, true, "0000000700000002055573657204626f6200000000000000000000000000000000000000000000000008746f6b656e2d32010100000000fa00" },
+        describe_delegation_token_v3 = { 41, 3, true, "0000000700000002055573657204626f62010100000000000000000000000000000000000000000000000008746f6b656e2d32010100000000fa00" },
+        offset_delete_v0 = { 47, 0, false, "000000070000000000fa0000000100066f726465727300000001000000030000" },
+    )]
+    fn a_buried_throttle_is_raised_to_the_delay_in_place(
+        api_key: ApiKeyCode,
+        version: ApiVersion,
+        body_flexible: bool,
+        golden: &str,
+    ) {
+        let body = buried_throttle_body(api_key, version);
+        let bytes = encode_response(api_key, 7, body_flexible, &body).expect("response");
+
+        let patched = patch_response_throttle(
+            bytes,
+            api_key,
+            ResponseShape {
+                version,
+                body_flexible,
+            },
+            krabka_units::millis(250),
+        );
+
+        assert2::assert!(hex::encode(&patched) == golden);
+    }
+
+    /// A body that does not decode at its version is sent as the handler
+    /// wrote it, whichever buried-throttle api it belongs to.
+    #[yare::parameterized(
+        create_delegation_token = { 38, 3, true },
+        renew_delegation_token = { 39, 2, true },
+        expire_delegation_token = { 40, 2, true },
+        describe_delegation_token = { 41, 3, true },
+        offset_delete = { 47, 0, false },
+    )]
+    fn a_buried_throttle_body_that_does_not_decode_is_sent_unchanged(
+        api_key: ApiKeyCode,
+        version: ApiVersion,
+        body_flexible: bool,
+    ) {
+        let bytes = encode_response(api_key, 7, body_flexible, &[0xff]).expect("response");
+
+        let patched = patch_response_throttle(
+            bytes.clone(),
+            api_key,
+            ResponseShape {
+                version,
+                body_flexible,
+            },
+            krabka_units::millis(250),
+        );
+
+        assert2::assert!(patched == bytes);
+    }
+
     #[test]
     fn malformed_buried_response_is_unchanged() {
         let bytes = Bytes::from_static(&[0, 0, 0, 7, 0]);
