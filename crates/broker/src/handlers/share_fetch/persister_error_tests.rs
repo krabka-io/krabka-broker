@@ -205,7 +205,7 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
 
         let state_epoch = shared
             .share_partition_leaders
-            .peek_for_test(&name, share_topic_uuid(topic_id), 0)
+            .peek_for_test(ShareKeyRef::new(&name, share_topic_uuid(topic_id), 0))
             .expect("the fetch cached the share partition")
             .lock()
             .await
@@ -234,7 +234,7 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
         };
         let cached = shared
             .share_partition_leaders
-            .peek_for_test(&name, share_topic_uuid(topic_id), 0)
+            .peek_for_test(ShareKeyRef::new(&name, share_topic_uuid(topic_id), 0))
             .is_some();
         let next = share_fetch(&broker, &name, 3, topic_id, None).await;
 
@@ -307,7 +307,11 @@ async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
     let fetch = share_fetch(&broker, "fetch-group", 0, topic_id, None).await;
     let fetch_cached = shared
         .share_partition_leaders
-        .peek_for_test("fetch-group", share_topic_uuid(topic_id), 0)
+        .peek_for_test(ShareKeyRef::new(
+            "fetch-group",
+            share_topic_uuid(topic_id),
+            0,
+        ))
         .is_some();
     let _ = share_fetch(&broker, "acknowledge-group", 0, topic_id, None).await;
     let acknowledge = share_acknowledge(
@@ -320,7 +324,11 @@ async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
     .await;
     let acknowledge_cached = shared
         .share_partition_leaders
-        .peek_for_test("acknowledge-group", share_topic_uuid(topic_id), 0)
+        .peek_for_test(ShareKeyRef::new(
+            "acknowledge-group",
+            share_topic_uuid(topic_id),
+            0,
+        ))
         .is_some();
 
     assert!(
@@ -356,7 +364,7 @@ async fn a_read_of_an_uninitialized_state_fails_until_the_state_is_initialized()
     let cached = || {
         shared
             .share_partition_leaders
-            .peek_for_test(GROUP, share_topic_uuid(topic_id), 0)
+            .peek_for_test(ShareKeyRef::new(GROUP, share_topic_uuid(topic_id), 0))
             .is_some()
     };
 

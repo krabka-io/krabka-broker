@@ -53,6 +53,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::Partition,
         producer_state::ProducerState,
+        share_coordinator::key::ShareKeyRef,
         share_partition::state::RecordState,
         test_support::{
             ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, StandalonePartitionSetup,
@@ -1009,7 +1010,11 @@ pub async fn share_record_states(
     let cell = broker
         .broker_arc_for_test()
         .share_partition_leaders
-        .peek_for_test(group, uuid::Uuid::from_bytes(topic_id.0), 0)
+        .peek_for_test(ShareKeyRef::new(
+            group,
+            uuid::Uuid::from_bytes(topic_id.0),
+            0,
+        ))
         .expect("a loaded share partition");
     let state = cell.lock().await;
     state

@@ -104,7 +104,7 @@ impl SharePartitionLeaderManager {
                 if fences_the_partition(code)
                     && let Some(cell) = cell
                 {
-                    self.invalidate_cell(group, topic_id, partition, cell);
+                    self.invalidate_cell(key, cell);
                 }
                 Err(code)
             }
@@ -120,9 +120,7 @@ impl SharePartitionLeaderManager {
     /// therefore never gets `NONE` for an acknowledgement that is not durable.
     pub(crate) async fn apply_durably(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         cell: &Arc<Mutex<AcquisitionState>>,
         st: &mut AcquisitionState,
         apply: impl FnOnce(&mut AcquisitionState) -> i16,
@@ -132,11 +130,6 @@ impl SharePartitionLeaderManager {
         if *st == before {
             return code;
         }
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         match self.persist_if_dirty(key, Some(cell), st).await {
             Ok(()) => code,
             Err(write_code) => {
@@ -272,7 +265,7 @@ mod tests {
         let cell = Arc::new(Mutex::new(before.clone()));
 
         let accepted = mgr
-            .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
+            .apply_durably(ShareKeyRef::new("g1", tid, 0), &cell, &mut st, |st| {
                 let actions = [
                     AckAction::Disposition(AckType::Release),
                     AckAction::Disposition(AckType::Accept),
@@ -286,7 +279,7 @@ mod tests {
             .await;
         let rolled_back = st == before;
         let refused = mgr
-            .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
+            .apply_durably(ShareKeyRef::new("g1", tid, 0), &cell, &mut st, |st| {
                 st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, 5)
                     .err()
                     .unwrap_or(codes::NONE)
@@ -333,7 +326,7 @@ mod tests {
             let cell = Arc::new(Mutex::new(st.clone()));
 
             let code = mgr
-                .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
+                .apply_durably(ShareKeyRef::new("g1", tid, 0), &cell, &mut st, |st| {
                     st.acknowledge("m1", Offset(1), Offset(3), ack, max_attempts)
                         .err()
                         .unwrap_or(codes::NONE)

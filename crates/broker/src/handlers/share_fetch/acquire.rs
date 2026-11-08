@@ -360,7 +360,7 @@ async fn apply_piggybacked_acks(
         )
     });
     let code = mgr
-        .apply_durably(group, p.topic_id, p.partition_index, cell, st, |st| {
+        .apply_durably(share_key(group, p), cell, st, |st| {
             apply_acknowledgements(st, &application, batches)
         })
         .await;
@@ -578,13 +578,13 @@ async fn acquire_partition(
     // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
     // and answers UNKNOWN_TOPIC_OR_PARTITION for a share partition that no
     // earlier fetch on this broker loaded.
-    if has_acks && mgr.cached(group, p.topic_id, p.partition_index).is_none() {
+    if has_acks && mgr.cached(share_key(group, p)).is_none() {
         p.out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
         has_acks = false;
     }
     // A failed state read fails the partition and caches nothing, as
     // Kafka's `SharePartitionManager.handleInitializationException` does.
-    let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
+    let cell = match mgr.get_or_load(share_key(group, p)).await {
         Ok(cell) => cell,
         Err(code) => {
             if has_acks {
@@ -1204,7 +1204,7 @@ mod tests {
         // the next write of that state is fenced.
         let cell = shared
             .share_partition_leaders
-            .peek_for_test(group, key, 0)
+            .peek_for_test(ShareKeyRef::new(group, key, 0))
             .expect("the fetch cached the share partition");
         let state_epoch = {
             let mut st = cell.lock().await;
@@ -1239,7 +1239,7 @@ mod tests {
         .await;
         let cached = shared
             .share_partition_leaders
-            .peek_for_test(group, key, 0)
+            .peek_for_test(ShareKeyRef::new(group, key, 0))
             .is_some();
         let next = fetch(3, Vec::new(), false).await;
 

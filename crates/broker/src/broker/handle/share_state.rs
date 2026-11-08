@@ -206,7 +206,7 @@ impl BrokerHandle {
             match self
                 .broker
                 .share_partition_leaders
-                .peek_for_test(group, topic_id, partition)
+                .peek_for_test(ShareKeyRef::new(group, topic_id, partition))
             {
                 Some(cell) => cell.lock().await.count_acquired_batches() == n,
                 None => false,
@@ -371,9 +371,7 @@ mod tests {
         // The share coordinator refuses a read of a key with no state, so the
         // cell is cached directly. This part checks only the acquired count.
         let acquired_cell = broker.share_partition_leaders.insert_for_test(
-            acquired_group,
-            acquired_topic_id,
-            0,
+            ShareKeyRef::new(acquired_group, acquired_topic_id, 0),
             AcquisitionState::new(krabka_log::Offset(0)),
         );
         assert2::assert!(

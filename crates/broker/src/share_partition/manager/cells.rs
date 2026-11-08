@@ -25,7 +25,7 @@ use {
 };
 
 impl SharePartitionLeaderManager {
-    /// Gets the acquisition-state cell for `(group, topic_id, partition)`, and
+    /// Gets the acquisition-state cell for `key`, and
     /// loads it lazily on a miss.
     ///
     /// On a cache miss the method reads the durable state from the persister
@@ -54,15 +54,13 @@ impl SharePartitionLeaderManager {
     /// cache. A read error never becomes a start offset.
     pub(crate) async fn get_or_load(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Arc<Mutex<AcquisitionState>>, i16> {
-        let key = ShareKeyRef {
+        let ShareKeyRef {
             group,
             topic_id,
             partition,
-        };
+        } = key;
         if let Some(cell) = self.leaders.get(key.lookup()) {
             return Ok(Arc::clone(cell.value()));
         }
@@ -238,23 +236,13 @@ impl SharePartitionLeaderManager {
         }
     }
 
-    /// The cached acquisition cell of `(group, topic_id, partition)`, with no
+    /// The cached acquisition cell of `key`, with no
     /// persister load.
     ///
     /// An acknowledgement goes only to a share partition that a fetch on this
     /// broker loaded: Kafka's `SharePartitionManager.acknowledge` answers
     /// `UNKNOWN_TOPIC_OR_PARTITION` for one that is not in its cache.
-    pub(crate) fn cached(
-        &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-    ) -> Option<Arc<Mutex<AcquisitionState>>> {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
+    pub(crate) fn cached(&self, key: ShareKeyRef<'_>) -> Option<Arc<Mutex<AcquisitionState>>> {
         self.leaders
             .get(key.lookup())
             .map(|cell| Arc::clone(cell.value()))
@@ -267,15 +255,13 @@ impl SharePartitionLeaderManager {
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) fn peek_for_test(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Option<Arc<Mutex<AcquisitionState>>> {
-        self.cached(group, topic_id, partition)
+        self.cached(key)
     }
 
     /// Drops `cell` from the cache when it is still the cached cell for
-    /// `(group, topic_id, partition)`.
+    /// `key`.
     ///
     /// A request that held a fenced cell can finish after another request
     /// loaded a replacement. Removing by key alone would then drop the
@@ -283,16 +269,9 @@ impl SharePartitionLeaderManager {
     /// machine for the same share partition.
     pub(crate) fn invalidate_cell(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         cell: &Arc<Mutex<AcquisitionState>>,
     ) {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         self.leaders
             .remove_if(key.lookup(), |_, cached| Arc::ptr_eq(cached, cell));
     }
@@ -313,23 +292,16 @@ impl SharePartitionLeaderManager {
     #[cfg(test)]
     pub(crate) fn insert_for_test(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         state: AcquisitionState,
     ) -> Arc<Mutex<AcquisitionState>> {
         let cell = Arc::new(Mutex::new(state));
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
         self.leaders.insert(key.to_key(), Arc::clone(&cell));
         cell
     }
 
     /// Drops the cached acquisition-state cell for
-    /// `(group, topic_id, partition)`.
+    /// `key`.
     ///
     /// The next `get_or_load` then re-reads the durable SPSO. The admin offset
     /// RPCs call this method after `AlterShareGroupOffsets` or
@@ -337,14 +309,7 @@ impl SharePartitionLeaderManager {
     /// `ShareFetch` on this broker thus sees an in-flight reset. A cell on
     /// another broker refreshes on its own next load, which matches the classic
     /// offset-reset behavior.
-    pub(crate) fn invalidate(&self, group: &str, topic_id: uuid::Uuid, partition: i32) {
-        let key = ShareKeyRef {
-            group,
-            topic_id,
-            partition,
-        };
-        self.leaders.remove(key.lookup());
-    }
+    pub(crate) fn invalidate(&self, key: ShareKeyRef<'_>) { self.leaders.remove(key.lookup()); }
 }
 
 #[cfg(test)]
@@ -358,6 +323,7 @@ mod tests {
             partition::test_support::{test_partition, update_log_config},
             partition_registry::PartitionRegistry,
             remote_reader::test_support::{sparse_remote_segment_reader_with_max_timestamp, tp},
+            share_coordinator::key::ShareKeyRef,
             share_partition::{
                 manager::test_support::{
                     manager, manager_with_image_and_partitions, open_data_partition,
@@ -657,13 +623,15 @@ mod tests {
         let tid = uuid::Uuid::from_bytes([21; 16]);
 
         let loads = [
-            mgr.get_or_load("g1", tid, 0).await.err(),
-            mgr.get_or_load("g1", tid, 0).await.err(),
+            mgr.get_or_load(ShareKeyRef::new("g1", tid, 0)).await.err(),
+            mgr.get_or_load(ShareKeyRef::new("g1", tid, 0)).await.err(),
         ];
 
         assert!(
-            (loads, mgr.peek_for_test("g1", tid, 0).is_none())
-                == ([Some(codes::COORDINATOR_NOT_AVAILABLE); 2], true)
+            (
+                loads,
+                mgr.peek_for_test(ShareKeyRef::new("g1", tid, 0)).is_none()
+            ) == ([Some(codes::COORDINATOR_NOT_AVAILABLE); 2], true)
         );
     }
 
@@ -673,15 +641,23 @@ mod tests {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([23; 16]);
         let stale = Arc::new(Mutex::new(AcquisitionState::new(Offset(0))));
-        let replacement = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+        let replacement = mgr.insert_for_test(
+            ShareKeyRef::new("g1", tid, 0),
+            AcquisitionState::new(Offset(0)),
+        );
 
-        mgr.invalidate_cell("g1", tid, 0, &stale);
+        mgr.invalidate_cell(ShareKeyRef::new("g1", tid, 0), &stale);
         let kept = mgr
-            .peek_for_test("g1", tid, 0)
+            .peek_for_test(ShareKeyRef::new("g1", tid, 0))
             .is_some_and(|cached| Arc::ptr_eq(&cached, &replacement));
-        mgr.invalidate_cell("g1", tid, 0, &replacement);
+        mgr.invalidate_cell(ShareKeyRef::new("g1", tid, 0), &replacement);
 
-        assert!((kept, mgr.peek_for_test("g1", tid, 0).is_none()) == (true, true));
+        assert!(
+            (
+                kept,
+                mgr.peek_for_test(ShareKeyRef::new("g1", tid, 0)).is_none()
+            ) == (true, true)
+        );
     }
 
     #[tokio::test]
@@ -689,12 +665,20 @@ mod tests {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([24; 16]);
 
-        let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+        let cell = mgr.insert_for_test(
+            ShareKeyRef::new("g1", tid, 0),
+            AcquisitionState::new(Offset(0)),
+        );
         let cached = mgr
-            .peek_for_test("g1", tid, 0)
+            .peek_for_test(ShareKeyRef::new("g1", tid, 0))
             .is_some_and(|peeked| Arc::ptr_eq(&cell, &peeked));
-        mgr.invalidate("g1", tid, 0);
+        mgr.invalidate(ShareKeyRef::new("g1", tid, 0));
 
-        assert!((cached, mgr.peek_for_test("g1", tid, 0).is_none()) == (true, true));
+        assert!(
+            (
+                cached,
+                mgr.peek_for_test(ShareKeyRef::new("g1", tid, 0)).is_none()
+            ) == (true, true)
+        );
     }
 }

@@ -22,6 +22,7 @@ use {
             create_topic as create_topic_from_test_support, produce_records,
             share_acknowledge_wire, share_fetch_wire,
         },
+        share_coordinator::key::ShareKeyRef,
         share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
         test_support::{KafkaErrorCode, initialize_share_state},
     },
@@ -380,7 +381,11 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
         };
         let states = shared
             .share_partition_leaders
-            .peek_for_test(&group, uuid::Uuid::from_bytes(topic_id.0), 0)
+            .peek_for_test(ShareKeyRef::new(
+                &group,
+                uuid::Uuid::from_bytes(topic_id.0),
+                0,
+            ))
             .expect("the fetch cached the share partition")
             .lock()
             .await

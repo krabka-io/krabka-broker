@@ -32,7 +32,7 @@ use {
             ApiVersion, ErrorResponse as _, RequestContext, denied_topics, group_coordinator_error,
             group_read_denied,
         },
-        share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
+        share_coordinator::{coordinator::message::UNKNOWN_TOPIC_OR_PARTITION, key::ShareKeyRef},
         task_util::{AskError, ask},
     },
     krabka_metadata::{AclOperation, MetadataImage},
@@ -156,9 +156,11 @@ fn apply_reset_codes(
         };
         partition.error_code = error_code;
         if error_code == codes::NONE {
-            broker
-                .share_partition_leaders
-                .invalidate(gid, topic_id, partition.partition_index);
+            broker.share_partition_leaders.invalidate(ShareKeyRef::new(
+                gid,
+                topic_id,
+                partition.partition_index,
+            ));
         }
     }
 

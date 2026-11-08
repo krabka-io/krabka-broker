@@ -28,6 +28,7 @@ use {
             ApiVersion, ErrorResponse as _, RequestContext, acl_denied, group_coordinator_error,
             share_group_not_found_message,
         },
+        share_coordinator::key::ShareKeyRef,
         task_util::{AskError, ask},
     },
     krabka_metadata::{AclOperation, ResourceType},
@@ -160,7 +161,7 @@ pub async fn handle(
                 for partition in partitions {
                     broker
                         .share_partition_leaders
-                        .invalidate(&gid, topic_id, partition);
+                        .invalidate(ShareKeyRef::new(&gid, topic_id, partition));
                 }
                 DeleteShareGroupOffsetsResponseTopic {
                     topic_name,
