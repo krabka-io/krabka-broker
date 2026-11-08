@@ -937,10 +937,7 @@ def bdd_directory_bindings(suite, source = _LIBRDKAFKA):
         if directory == None or not directory.value.rstrip("/"):
             fail("unreadable krabka_bdd::scenarios! directory in %s" % source)
         if "tags" in macro_argument_words(rest):
-            fail(
-                "krabka_bdd::scenarios!(\"%s\", tags = ..) in %s: the KIP matrix " % (directory.value, source) +
-                "cannot apply a tag filter, so it would read scenarios the suite leaves out",
-            )
+            fail("krabka_bdd::scenarios! directory %s in %s has tags = ..: the KIP matrix cannot apply a tag filter, so it would read scenarios the suite leaves out" % (directory.value, source))
         found.append(directory.value.rstrip("/"))
     return found
 
