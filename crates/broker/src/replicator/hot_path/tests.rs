@@ -277,13 +277,13 @@ async fn the_seam_replicates_the_bytes_the_broker_partition_replicates() {
             let template = make_batch(records, payload);
 
             let mut for_seam = template.clone();
-            for_seam.base_offset = seam.next_offset().0;
+            for_seam.base_offset = seam.next_offset().unwrap().0;
             seam.replicate(for_seam)
                 .await
                 .unwrap_or_else(|error| panic!("{name}: seam rejected the batch: {error}"));
 
             let mut for_production = template;
-            for_production.base_offset = production.log_end_offset().0;
+            for_production.base_offset = production.log_end_offset().unwrap().0;
             production
                 .replicate_batch(for_production)
                 .await
@@ -296,7 +296,7 @@ async fn the_seam_replicates_the_bytes_the_broker_partition_replicates() {
             name
         );
         assert!(
-            seam.next_offset() == production.log_end_offset(),
+            seam.next_offset().unwrap() == production.log_end_offset().unwrap(),
             "{}",
             name
         );
@@ -323,7 +323,7 @@ async fn the_walk_the_perf_note_prices_counts_the_bytes_the_append_lands() {
         let mut walked = 0_usize;
         for _ in 0..3 {
             let mut batch = make_batch(records, payload);
-            batch.base_offset = seam.next_offset().0;
+            batch.base_offset = seam.next_offset().unwrap().0;
             walked += batch.encoded_batch_len();
             seam.replicate(batch)
                 .await
@@ -343,19 +343,19 @@ async fn the_seam_takes_a_batch_only_at_the_offset_next_offset_reports() {
     let dir = tempfile::tempdir().expect("tempdir");
     let seam = ReplicaSeam::spawn(dir.path()).expect("open the seam's follower log");
 
-    assert!(seam.next_offset() == Offset(0));
+    assert!(seam.next_offset().unwrap() == Offset(0));
 
     let mut first = make_batch(4, 32);
-    first.base_offset = seam.next_offset().0;
+    first.base_offset = seam.next_offset().unwrap().0;
     seam.replicate(first)
         .await
         .expect("the first batch appends");
-    assert!(seam.next_offset() == Offset(4));
+    assert!(seam.next_offset().unwrap() == Offset(4));
 
     // Re-stamping at an offset the log has already passed is exactly what a
     // seam that forgot to advance would produce, so it must not be accepted.
     let mut stale = make_batch(4, 32);
     stale.base_offset = 0;
     assert!(seam.replicate(stale).await.is_err());
-    assert!(seam.next_offset() == Offset(4));
+    assert!(seam.next_offset().unwrap() == Offset(4));
 }

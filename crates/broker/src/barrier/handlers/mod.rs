@@ -76,10 +76,11 @@ pub const NO_EPOCH: i64 = -1;
 /// | `InvalidDefinition` | `INVALID_CONFIG` (40) |
 /// | `StateNotLocal`, `Persist` | `COORDINATOR_NOT_AVAILABLE` (15) |
 ///
-/// `InvalidDefinition` reaches this function only for a retention or an
-/// interval that is out of range, because [`alter_groups`] rejects a malformed
-/// topic list, and a group or topic name over 32767 bytes, with
-/// `INVALID_REQUEST` before the coordinator sees the entry.
+/// `InvalidDefinition` reaches this function only for a retention, an
+/// interval or a topic count outside the configured bounds, and for a create
+/// past the group cap, because [`alter_groups`] rejects a malformed topic
+/// list, and a group or topic name over 32767 bytes, with `INVALID_REQUEST`
+/// before the coordinator sees the entry.
 pub fn error_code(error: &BarrierError) -> i16 {
     match error {
         BarrierError::InjectionInProgress { .. } => codes::BARRIER_INJECTION_IN_PROGRESS,

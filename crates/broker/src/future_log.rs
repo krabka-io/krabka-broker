@@ -25,7 +25,7 @@
 //! `log_dir::scan_future` and re-spawns the replicator.
 
 use {
-    crate::{error::BrokerError, log_dir::FUTURE_SUFFIX, throttle::TokenBucket},
+    crate::{error::BrokerError, log_dir::FUTURE_SUFFIX, throttle::ReplicationQuota},
     krabka_log::Log,
     krabka_units::{ByteSize, Time},
     std::{
@@ -143,7 +143,7 @@ pub enum MoveError {
 pub struct MovePolicy {
     pub retry_backoff: Time,
     pub read_chunk: ByteSize,
-    pub throttle: Arc<TokenBucket>,
+    pub throttle: Arc<ReplicationQuota>,
 }
 
 /// The longest directory name Kafka lets a future log take.
@@ -206,7 +206,7 @@ fn canonicalize_or_self(p: &Path) -> PathBuf {
 mod tests {
     use {
         super::*,
-        crate::throttle::TokenBucket,
+        crate::throttle::ReplicationQuota,
         assert2::assert,
         krabka_units::{kibibytes, millis},
     };
@@ -216,11 +216,11 @@ mod tests {
         let policy = MovePolicy {
             retry_backoff: millis(7),
             read_chunk: kibibytes(4),
-            throttle: Arc::new(TokenBucket::new()),
+            throttle: Arc::new(ReplicationQuota::new()),
         };
 
         assert!(policy.retry_backoff == millis(7));
         assert!(policy.read_chunk == kibibytes(4));
-        assert!(policy.throttle.byte_rate() == krabka_units::bytes_per_sec(0));
+        assert!(policy.throttle.bound().is_none());
     }
 }

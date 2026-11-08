@@ -18,13 +18,12 @@
 //! (`isShareGroupsEnabled`: `share.version` 1 or more in the image).
 
 use {
-    super::{
-        Active, LoadStatus, ShareCoordinator, ShareStateKey3, Term, state_machine::StateRecord,
-    },
+    super::{Active, LoadStatus, ShareCoordinator, Term, state_machine::StateRecord},
     crate::{
         coordinator::topic_deletion::deleted_topics,
         features::share_groups_enabled,
         metadata_source::next_image_until_shutdown,
+        share_coordinator::key::ShareKey,
         time_util::{duration_millis, sleep_until_opt},
     },
     krabka_ids::PartitionIndex,
@@ -44,7 +43,7 @@ struct PartitionKeys {
     term: Term,
     generation: u64,
     revision: u64,
-    keys: Vec<ShareStateKey3>,
+    keys: Vec<ShareKey>,
 }
 
 impl PartitionKeys {
@@ -81,19 +80,19 @@ impl ShareCoordinator {
         bucket: PartitionKeys,
         active: &Active<'_>,
         filter: impl Fn(&uuid::Uuid) -> bool,
-    ) -> Vec<ShareStateKey3> {
+    ) -> Vec<ShareKey> {
         if bucket.still_active(active)
             && bucket.revision == self.state_key_revision(active.term.partition)
         {
             return bucket.keys;
         }
-        let mut keys: Vec<ShareStateKey3> = self
+        let mut keys: Vec<ShareKey> = self
             .state
             .iter()
             .filter(|entry| {
-                let (group, topic_id, partition) = entry.key();
-                filter(topic_id)
-                    && self.state_partition_for(group, topic_id, *partition)
+                let key = entry.key();
+                filter(&key.topic_id)
+                    && self.state_partition_for(&key.group, &key.topic_id, key.partition)
                         == Some(active.term.partition)
             })
             .map(|entry| entry.key().clone())
@@ -131,9 +130,10 @@ impl ShareCoordinator {
             return Vec::new();
         }
         for entry in &self.state {
-            let (group, topic_id, partition) = entry.key();
-            if filter(topic_id)
-                && let Some(state_partition) = self.state_partition_for(group, topic_id, *partition)
+            let key = entry.key();
+            if filter(&key.topic_id)
+                && let Some(state_partition) =
+                    self.state_partition_for(&key.group, &key.topic_id, key.partition)
                 && let Some(bucket) = partitions.get_mut(&state_partition)
             {
                 bucket.keys.push(entry.key().clone());
@@ -203,20 +203,17 @@ impl ShareCoordinator {
             let keys =
                 self.current_partition_keys(bucket, &active, |topic_id| deleted.contains(topic_id));
             let mut appended = 0;
-            for (group, topic_id, partition) in keys {
-                let Some(entry) = self.entry(&group, topic_id, partition) else {
+            for key in keys {
+                let Some(entry) = self.entry(key.as_key_ref()) else {
                     continue;
                 };
                 let _st = entry.lock().await;
-                match self
-                    .tombstone(active.term, &group, topic_id, partition)
-                    .await
-                {
+                match self.tombstone(active.term, key.as_key_ref()).await {
                     Ok(()) => appended += 1,
                     Err(error) => warn!(
-                        group,
-                        %topic_id,
-                        partition,
+                        group = key.group,
+                        topic_id = %key.topic_id,
+                        partition = key.partition,
                         ?error,
                         "share state of a deleted topic not tombstoned"
                     ),
@@ -253,7 +250,7 @@ impl ShareCoordinator {
             let mut cells = Vec::with_capacity(keys.len());
             let mut all_cold = true;
             for key in keys {
-                let Some(entry) = self.entry(&key.0, key.1, key.2) else {
+                let Some(entry) = self.entry(key.as_key_ref()) else {
                     continue;
                 };
                 {
@@ -266,7 +263,7 @@ impl ShareCoordinator {
                 continue;
             }
             let mut appended = 0;
-            for ((group, topic_id, partition), entry) in cells {
+            for (key, entry) in cells {
                 let mut st = entry.lock().await;
                 let now = self.now_ms();
                 if now.saturating_sub(st.write_timestamp) < interval {
@@ -277,9 +274,7 @@ impl ShareCoordinator {
                     .append_state_record(
                         active.term,
                         &mut st,
-                        &group,
-                        topic_id,
-                        partition,
+                        key.as_key_ref(),
                         StateRecord::Snapshot(snapshot),
                     )
                     .await;
@@ -287,9 +282,9 @@ impl ShareCoordinator {
                 match result {
                     Ok(()) => appended += 1,
                     Err(error) => warn!(
-                        group,
-                        %topic_id,
-                        partition,
+                        group = key.group,
+                        topic_id = %key.topic_id,
+                        partition = key.partition,
                         ?error,
                         "cold share-state snapshot failed"
                     ),

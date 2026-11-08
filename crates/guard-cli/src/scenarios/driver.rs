@@ -1,16 +1,17 @@
 //! The cluster a scenario runs against, and the operator actions it takes.
 //!
 //! Every action builds the command line an operator would type and runs it
-//! through [`dispatch`], over a client that the broker authenticates as that
-//! operator. The flags live here and nowhere else, so a scenario says what an
-//! operator wants and this module says how the tool is asked for it.
+//! through [`run_command`], over a client that the broker authenticates as that
+//! operator, with two buffers in place of stdout and stderr. The flags live
+//! here and nowhere else, so a scenario says what an operator wants and this
+//! module says how the tool is asked for it.
 
 use {
-    super::params::{KeySource, Lifetime, LocalKeys, Operator, Outcome, Scope},
-    crate::{
-        cli::Cli,
-        command::{dispatch, set_freeze_report_of},
+    super::{
+        params::{KeySource, Lifetime, LocalKeys, Operator, Scope},
+        transcript::Run,
     },
+    crate::{cli::Cli, command::run_command, run_with},
     clap::Parser as _,
     krabka_broker::{
         Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper,
@@ -38,14 +39,6 @@ use {
     },
     tempfile::TempDir,
 };
-
-/// What the tool reported for one freeze or thaw.
-pub struct Reported {
-    /// The outcome its exit code names.
-    pub outcome: Outcome,
-    /// The line it printed on stderr, if any.
-    pub stderr: Option<String>,
-}
 
 /// The reason every freeze and thaw in the scenarios gives. No rule depends
 /// on its text.
@@ -216,23 +209,21 @@ impl Cluster {
     /// Run the tool as `operator` with `args` after the bootstrap flag.
     ///
     /// A command line the parser refuses never reaches a broker, which is the
-    /// [`Outcome::CommandLineRefused`] outcome.
-    pub async fn guard(&self, operator: Operator, args: &[&str]) -> Outcome {
+    /// [`Run::command_line_refused`] outcome.
+    pub async fn guard(&self, operator: Operator, args: &[&str]) -> Run {
         let mut command_line = vec!["krabka-guard", "--bootstrap-server", "scenario"];
         command_line.extend_from_slice(args);
         let Ok(cli) = Cli::try_parse_from(command_line) else {
-            return Outcome::CommandLineRefused;
+            return Run::command_line_refused();
         };
         let client = self.client(operator).await;
-        let code = match dispatch(&client, cli.command).await {
-            Ok(code) => code,
-            Err(failure) => failure.exit_code(),
-        };
-        Outcome::from_exit_code(code)
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = run_command(&client, cli.command, &mut stdout, &mut stderr).await;
+        Run::new(code, &stdout, &stderr)
     }
 
     /// `operator` freezes `scope`.
-    pub async fn freeze(&self, operator: Operator, scope: &Scope, signing: Signing) -> Outcome {
+    pub async fn freeze(&self, operator: Operator, scope: &Scope, signing: Signing) -> Run {
         let mut args = vec![
             "freeze",
             "set",
@@ -253,7 +244,7 @@ impl Cluster {
         scope: &Scope,
         proposal: uuid::Uuid,
         signing: Signing,
-    ) -> Reported {
+    ) -> Run {
         let proposal = proposal.to_string();
         let mut args = vec![
             "freeze",
@@ -267,38 +258,7 @@ impl Cluster {
         ];
         let flags = self.signing_flags(operator, signing);
         args.extend(flags.iter().map(String::as_str));
-        self.guard_set_freeze(operator, &args).await
-    }
-
-    /// Run a freeze or a thaw as `operator`, and keep the line it prints on
-    /// stderr beside the outcome.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `args` name a command that sets no freeze.
-    pub async fn guard_set_freeze(&self, operator: Operator, args: &[&str]) -> Reported {
-        let mut command_line = vec!["krabka-guard", "--bootstrap-server", "scenario"];
-        command_line.extend_from_slice(args);
-        let Ok(cli) = Cli::try_parse_from(command_line) else {
-            return Reported {
-                outcome: Outcome::CommandLineRefused,
-                stderr: None,
-            };
-        };
-        let client = self.client(operator).await;
-        match set_freeze_report_of(&client, cli.command)
-            .await
-            .expect("a freeze or a thaw")
-        {
-            Ok(report) => Reported {
-                outcome: Outcome::from_exit_code(report.exit),
-                stderr: report.stderr,
-            },
-            Err(failure) => Reported {
-                outcome: Outcome::from_exit_code(failure.exit_code()),
-                stderr: Some(failure.message().to_owned()),
-            },
-        }
+        self.guard(operator, &args).await
     }
 
     /// The `--sign-with`, `--key-id` and `--principal` flags for `signing`.
@@ -333,15 +293,15 @@ impl Cluster {
 
     /// `operator` opens a proposal for `action` on `target`.
     ///
-    /// Returns the outcome and, when the cluster holds a proposal it did not
-    /// hold before, that proposal's id.
+    /// Returns the run and, when the cluster holds a proposal it did not hold
+    /// before, that proposal's id.
     pub async fn propose(
         &self,
         operator: Operator,
         action: &str,
         target: &str,
         lifetime: &Lifetime,
-    ) -> (Outcome, Option<uuid::Uuid>) {
+    ) -> (Run, Option<uuid::Uuid>) {
         let before = self.proposals().await;
         let mut args = vec![
             "break-glass",
@@ -356,7 +316,7 @@ impl Cluster {
         if let Lifetime::Typed(ttl) = lifetime {
             args.extend(["--ttl", ttl.as_str()]);
         }
-        let outcome = self.guard(operator, &args).await;
+        let run = self.guard(operator, &args).await;
         let opened = self
             .proposals()
             .await
@@ -367,7 +327,7 @@ impl Cluster {
                     .any(|old| old.proposal_id == stored.proposal_id)
             })
             .map(|stored| uuid::Uuid::from_bytes(stored.proposal_id.0));
-        (outcome, opened)
+        (run, opened)
     }
 
     /// `operator` approves `proposal`, signed with `key` when one is given.
@@ -376,7 +336,7 @@ impl Cluster {
         operator: Operator,
         proposal: uuid::Uuid,
         key: Option<KeySource>,
-    ) -> Outcome {
+    ) -> Run {
         let proposal = proposal.to_string();
         let mut args = vec!["break-glass", "approve", "--proposal", &proposal];
         let (path, key_id) = match key {
@@ -397,7 +357,7 @@ impl Cluster {
     }
 
     /// `operator` withdraws `proposal`.
-    pub async fn withdraw(&self, operator: Operator, proposal: uuid::Uuid) -> Outcome {
+    pub async fn withdraw(&self, operator: Operator, proposal: uuid::Uuid) -> Run {
         let proposal = proposal.to_string();
         self.guard(operator, &[
             "break-glass",
@@ -409,7 +369,7 @@ impl Cluster {
     }
 
     /// `operator` verifies the registry against `trust_file`.
-    pub async fn verify(&self, operator: Operator, trust_file: &Path) -> Outcome {
+    pub async fn verify(&self, operator: Operator, trust_file: &Path) -> Run {
         let trust_file = trust_file.display().to_string();
         self.guard(operator, &[
             "freeze",
@@ -419,6 +379,16 @@ impl Cluster {
             &trust_file,
         ])
         .await
+    }
+
+    /// `operator` lists the registry without verifying it.
+    pub async fn list_registry(&self, operator: Operator) -> Run {
+        self.guard(operator, &["freeze", "list"]).await
+    }
+
+    /// `operator` lists every proposal the cluster holds.
+    pub async fn list_proposals(&self, operator: Operator) -> Run {
+        self.guard(operator, &["break-glass", "list"]).await
     }
 
     /// The trust file the verifying operator's machine holds.
@@ -492,9 +462,12 @@ impl Cluster {
 }
 
 /// Run the shipped entry point against `bootstrap`, exactly as the binary
-/// runs it, connect step included.
-pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Outcome {
+/// runs it, connect step included, with buffers in place of its streams.
+pub async fn run_binary(bootstrap: &str, args: &[&str]) -> Run {
     let mut command_line = vec!["krabka-guard", "--bootstrap-server", bootstrap];
     command_line.extend_from_slice(args);
-    Outcome::from_exit_code(crate::run_from_args(command_line).await)
+    let cli = Cli::parse_from(command_line);
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = run_with(cli, &mut stdout, &mut stderr).await;
+    Run::new(code, &stdout, &stderr)
 }

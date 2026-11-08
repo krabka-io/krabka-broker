@@ -20,7 +20,11 @@ use {
     },
     assert2::{assert, check},
     krabka_protocol::owned::produce_response::PartitionProduceResponse,
-    std::{panic, sync::Arc, thread},
+    std::{
+        panic,
+        sync::{Arc, PoisonError},
+        thread,
+    },
 };
 
 /// Poison the partition's log mutex the way a production panic would: a
@@ -76,5 +80,12 @@ async fn the_segment_bytes_gate_refuses_an_oversize_batch_on_a_poisoned_log() {
         ..Default::default()
     };
     assert!(resp == want);
-    check!(partition.log_end_offset().0 == 0);
+    // The partition's queries fail closed on the poisoned log, so read the
+    // log itself to see that nothing was appended.
+    let log_end = partition
+        .log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .log_end_offset();
+    check!(log_end.0 == 0);
 }

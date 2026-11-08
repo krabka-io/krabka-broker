@@ -1199,6 +1199,63 @@ mod tests {
         );
     }
 
+    /// A request that the backtrack limit fails leaves no instance, and no
+    /// connection, behind, as Kafka's cache keeps nothing when
+    /// `createClientInstance` throws.
+    #[test]
+    fn a_selector_past_the_backtrack_limit_stores_no_instance() {
+        let (image, client) = backtrack_limit_case();
+        let rows = [
+            ("get", Step::Get),
+            ("push", Step::Push(push(TelemetrySubscriptionId::default()))),
+        ];
+        for (name, step) in rows {
+            let m = manager();
+            run().m(&m).img(&image).attrs(&client).step(step).call();
+            let stored = {
+                let state = m.state.lock().unwrap_or_else(PoisonError::into_inner);
+                (state.instances.len(), state.connections.len())
+            };
+            assert!(stored == (0, 0), "{name}");
+        }
+    }
+
+    /// An instance due a rebuild whose new selector runs past the limit keeps
+    /// its old subscription, and every request tries the rebuild again until
+    /// the subscriptions change.
+    #[test]
+    fn a_rebuild_past_the_backtrack_limit_keeps_the_old_instance() {
+        let m = manager();
+        let before = all_metrics_img("60000");
+        let mut after = before.clone();
+        test_support::apply_config(&mut after, "slow", &[
+            test_support::ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            test_support::ConfigEntry {
+                key: "match",
+                value: r"client_id=((x+x+)+)\2y",
+            },
+        ]);
+        let client = backtracking_client();
+        let start = Instant::now();
+        let old = expect_assignment(m.get_subscription_at(&before, &client, start));
+        let rejected = reject_get(KafkaErrorCode(codes::UNKNOWN_SERVER_ERROR));
+        for later in [1, 2] {
+            let at = start + Duration::from_secs(later);
+            assert!(run().m(&m).img(&after).attrs(&client).now(at).call() == rejected);
+        }
+        let kept = m
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .instances
+            .get(&client.client_instance_id)
+            .map(|inst| (inst.subscription_id, inst.subscription_version));
+        assert!(kept == Some((old.subscription_id, 1)));
+    }
+
     rstest_bdd_macros::scenarios!(
         "tests/features/migrated/src/client_metrics/manager.feature",
         fixtures = [telemetry_timeline: TelemetryTimeline],

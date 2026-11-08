@@ -264,7 +264,7 @@ async fn a_prune_trims_only_committed_snapshots() {
         coord.maybe_prune(PartitionIndex(0)).await;
 
         check!(
-            part.log_start_offset() == log_start,
+            part.log_start_offset().unwrap() == log_start,
             "committed {committed}"
         );
     }

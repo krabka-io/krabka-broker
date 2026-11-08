@@ -3,7 +3,7 @@
 use {
     crate::{
         EXIT_BAD_SIGNATURE, EXIT_MISMATCH, EXIT_NO_APPROVAL, EXIT_REFUSED, EXIT_UNREACHABLE,
-        EXIT_USAGE,
+        EXIT_USAGE, pattern_name,
     },
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
     std::{fmt, str::FromStr},
@@ -63,6 +63,11 @@ impl Scope {
             Self::Topic(_) => PATTERN_TYPE_LITERAL,
             Self::Prefix(_) => PATTERN_TYPE_PREFIXED,
         }
+    }
+
+    /// The scope as a freeze listing writes it, such as `literal:payments`.
+    pub fn listed(&self) -> String {
+        format!("{}:{}", pattern_name(self.pattern_type()), self.name())
     }
 
     /// The command-line flag that names this scope.

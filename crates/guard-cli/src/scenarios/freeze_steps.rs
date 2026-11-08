@@ -35,8 +35,8 @@ async fn record_freeze(
     signing: Signing,
 ) {
     let cluster = guard.cluster().await;
-    let outcome = cluster.freeze(operator, scope, signing).await;
-    guard.outcome.set(outcome);
+    let run = cluster.freeze(operator, scope, signing).await;
+    guard.record(run);
 }
 
 /// `operator` thaws `scope` with the scenario's proposal, and the outcome is
@@ -49,9 +49,8 @@ async fn record_thaw(
 ) {
     let proposal = *guard.proposal.get();
     let cluster = guard.cluster().await;
-    let reported = cluster.thaw(operator, scope, proposal, signing).await;
-    guard.outcome.set(reported.outcome);
-    guard.stderr = reported.stderr;
+    let run = cluster.thaw(operator, scope, proposal, signing).await;
+    guard.record(run);
 }
 
 /// Thaws carry the acting operator's own signature.
@@ -86,8 +85,8 @@ async fn tries_to_freeze(guard: &mut GuardScenario, operator: Operator, scope: S
             "--reason",
             driver::REASON,
         ];
-        let outcome = driver::run_binary(UNREACHABLE_BOOTSTRAP, &args).await;
-        guard.outcome.set(outcome);
+        let run = driver::run_binary(UNREACHABLE_BOOTSTRAP, &args).await;
+        guard.record(run);
     } else {
         record_freeze(guard, operator, &scope, Signing::Unsigned).await;
     }
@@ -132,8 +131,9 @@ async fn tries_to_thaw_unsigned(guard: &mut GuardScenario, operator: Operator, s
 async fn has_lifted(guard: &mut GuardScenario, operator: Operator, scope: Scope) {
     let cluster = guard.cluster().await;
     let proposal = async {
-        assert!(cluster.freeze(operator, &scope, Signing::Unsigned).await == Outcome::Success);
-        let (outcome, proposal) = cluster
+        let frozen = cluster.freeze(operator, &scope, Signing::Unsigned).await;
+        assert!(frozen.outcome == Outcome::Success);
+        let (proposed, proposal) = cluster
             .propose(
                 operator,
                 "thaw-topic-freeze",
@@ -141,13 +141,14 @@ async fn has_lifted(guard: &mut GuardScenario, operator: Operator, scope: Scope)
                 &Lifetime::Default,
             )
             .await;
-        assert!(outcome == Outcome::Success);
+        assert!(proposed.outcome == Outcome::Success);
         let proposal = proposal.expect("the propose opened a proposal");
         for approver in Operator::ALL
             .into_iter()
             .filter(|approver| *approver != operator)
         {
-            assert!(cluster.approve(approver, proposal, None).await == Outcome::Success);
+            let approved = cluster.approve(approver, proposal, None).await;
+            assert!(approved.outcome == Outcome::Success);
         }
         let thawed = cluster
             .thaw(operator, &scope, proposal, own_signature(operator))
@@ -201,7 +202,7 @@ fn tool_explains_no_freeze(guard: &GuardScenario, scope: Scope) {
         "error 42 (the registry holds no freeze at this exact scope, so there is nothing to \
          thaw): {target} has no live freeze entry, so there is nothing to thaw"
     );
-    assert!(guard.stderr.as_deref() == Some(expected.as_str()));
+    assert!(guard.transcript.get().stderr == format!("{expected}\n"));
 }
 
 #[then("the registry still holds the freeze on {scope}")]

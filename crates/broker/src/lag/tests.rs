@@ -126,7 +126,7 @@ fn append_records(partition: &Partition, count: i32) {
 /// The follower fetches everything the leader holds, as its replica fetcher
 /// would.
 async fn follower_fetches_everything(partition: &Partition) {
-    let leader_log_end = partition.log_end_offset();
+    let leader_log_end = partition.log_end_offset().unwrap();
     partition.replica_state.lock().await.update_follower_leo(
         FOLLOWER,
         leader_log_end,

@@ -12,14 +12,14 @@ pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Parse
     let [endpoint_doc, access_doc, secret_doc] = mode_docs(
         meta,
         [
-            "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).",
-            "Explicit access key id. Falls back to the AWS credential chain\n(env vars, instance profile, …) when omitted.",
-            "Explicit secret access key. Falls back to the AWS credential chain\nwhen omitted.",
+            "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2). When\nomitted, `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or `AWS_ENDPOINT`,\napplies, and with none of them the AWS endpoint for the region.",
+            "Explicit access key id. Set it together with `secret_access_key`; the\npair wins over every `AWS_*` credential variable. When both are omitted,\nthe AWS credential chain applies; see `[remote_storage.s3]`.",
+            "Explicit secret access key. Set it together with `access_key_id`.\nWhen both are omitted, the AWS credential chain applies.",
         ],
         [
-            "Optional custom endpoint URL, for example `http://minio:9000` or an R2\nendpoint.",
-            "Optional explicit access key id. Without it, the backend falls back to\nthe AWS credential chain.",
-            "Optional explicit secret access key. Without it, the backend falls back\nto the AWS credential chain.",
+            "Optional custom endpoint URL, for example `http://minio:9000` or an R2\nendpoint. Without it, `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or\n`AWS_ENDPOINT`, applies.",
+            "Optional explicit access key id. With `secret_access_key` it wins over\nevery `AWS_*` credential variable. Without either, the backend falls back\nto the AWS credential chain.",
+            "Optional explicit secret access key. Without it and `access_key_id`,\nthe backend falls back to the AWS credential chain.",
         ],
     )?;
     let new_fields = moxy::template! {

@@ -6,6 +6,12 @@
 //! checked locally reports what the check proved, entry by entry, and reserves
 //! the signature exit code for a signature that failed rather than one it could
 //! not check.
+//!
+//! Every line goes to a writer the caller hands in: stdout for what the broker
+//! answered, stderr for why it refused. The binary passes the real streams, and
+//! the scenarios pass buffers so they read what an operator would. A write that
+//! fails is dropped, as `krabka-barrier` drops one: an operator who closed the
+//! pipe has stopped reading, and the exit code still says what happened.
 
 use {
     super::{
@@ -14,6 +20,7 @@ use {
         verify::{CheckedEntry, VerifyOutcome},
     },
     krabka_protocol::krabka::{break_glass as bg, freeze as api},
+    std::io::Write,
 };
 
 /// The exit code that one broker error code becomes.
@@ -73,9 +80,9 @@ pub fn described_error(code: i16, message: Option<&str>) -> String {
     )
 }
 
-/// Print a refusal and turn it into an exit code.
-pub fn report_error(code: i16, message: Option<&str>) -> i32 {
-    eprintln!("{}", described_error(code, message));
+/// Write a refusal to `err` and turn it into an exit code.
+pub fn report_error(err: &mut impl Write, code: i16, message: Option<&str>) -> i32 {
+    _ = writeln!(err, "{}", described_error(code, message));
     exit_for_code(code)
 }
 
@@ -90,7 +97,7 @@ pub struct SetFreezeReport {
     pub exit: i32,
 }
 
-/// The report for one freeze or thaw, without printing it.
+/// The report for one freeze or thaw, without writing it.
 ///
 /// A thaw that the broker answers with `INVALID_REQUEST` names a scope the
 /// registry holds no entry for. The tool never sends the other request that
@@ -125,26 +132,36 @@ pub fn set_freeze_report(response: &api::SetTopicFreezeResponse, frozen: bool) -
     }
 }
 
-/// Print the outcome of one freeze or thaw, and turn it into an exit code.
-pub fn report_set_freeze(response: &api::SetTopicFreezeResponse, frozen: bool) -> i32 {
+/// Write the outcome of one freeze or thaw, and turn it into an exit code.
+pub fn report_set_freeze(
+    out: &mut impl Write,
+    err: &mut impl Write,
+    response: &api::SetTopicFreezeResponse,
+    frozen: bool,
+) -> i32 {
     let report = set_freeze_report(response, frozen);
     if let Some(line) = &report.stdout {
-        println!("{line}");
+        _ = writeln!(out, "{line}");
     }
     if let Some(line) = &report.stderr {
-        eprintln!("{line}");
+        _ = writeln!(err, "{line}");
     }
     report.exit
 }
 
 /// One line per registry entry.
-pub fn print_freeze(freeze: &api::DescribedTopicFreeze, checked: Option<&CheckedEntry>) {
+pub fn print_freeze(
+    out: &mut impl Write,
+    freeze: &api::DescribedTopicFreeze,
+    checked: Option<&CheckedEntry>,
+) {
     let proof = match checked.map(|entry| entry.unproved) {
         None => String::new(),
         Some(None) => format!("\tverified by {}", freeze.key_id),
         Some(Some(unproved)) => format!("\t{}", unproved.reason()),
     };
-    println!(
+    _ = writeln!(
+        out,
         "{}:{}\tset by {} at {}\t{}{proof}",
         pattern_name(freeze.pattern_type),
         freeze.scope,
@@ -155,7 +172,7 @@ pub fn print_freeze(freeze: &api::DescribedTopicFreeze, checked: Option<&Checked
 }
 
 /// One block per proposal.
-pub fn print_proposal(proposal: &bg::DescribedBreakGlassProposal) {
+pub fn print_proposal(out: &mut impl Write, proposal: &bg::DescribedBreakGlassProposal) {
     let state = if proposal.withdrawn {
         "withdrawn"
     } else if proposal.consumed_at_ms > 0 {
@@ -163,18 +180,17 @@ pub fn print_proposal(proposal: &bg::DescribedBreakGlassProposal) {
     } else {
         "open"
     };
-    println!(
-        "proposal {} {state}",
-        uuid::Uuid::from_bytes(proposal.proposal_id.0)
-    );
-    println!("  action     {}", action_name(proposal.action));
-    println!("  target     {}", proposal.target);
-    println!("  proposer   {}", proposal.proposer);
-    println!("  reason     {}", proposal.reason);
-    println!("  created    {}", proposal.created_at_ms);
-    println!("  expires    {}", proposal.expires_at_ms);
+    let id = uuid::Uuid::from_bytes(proposal.proposal_id.0);
+    _ = writeln!(out, "proposal {id} {state}");
+    _ = writeln!(out, "  action     {}", action_name(proposal.action));
+    _ = writeln!(out, "  target     {}", proposal.target);
+    _ = writeln!(out, "  proposer   {}", proposal.proposer);
+    _ = writeln!(out, "  reason     {}", proposal.reason);
+    _ = writeln!(out, "  created    {}", proposal.created_at_ms);
+    _ = writeln!(out, "  expires    {}", proposal.expires_at_ms);
     for approval in &proposal.approvals {
-        println!(
+        _ = writeln!(
+            out,
             "  approved   {} at {} {}",
             approval.principal,
             approval.approved_at_ms,
@@ -213,19 +229,31 @@ fn approval_evidence(approval: &bg::BreakGlassApproval) -> String {
 /// A signature that failed outranks a key this machine does not hold, because
 /// the first says the tool checked and the answer is wrong, and the second says
 /// the tool could not check.
-pub fn report_verify(freezes: &[api::DescribedTopicFreeze], outcome: &VerifyOutcome) -> i32 {
+pub fn report_verify(
+    out: &mut impl Write,
+    err: &mut impl Write,
+    freezes: &[api::DescribedTopicFreeze],
+    outcome: &VerifyOutcome,
+) -> i32 {
     for (freeze, checked) in freezes.iter().zip(&outcome.entries) {
-        print_freeze(freeze, Some(checked));
+        print_freeze(out, freeze, Some(checked));
     }
     if outcome.any_signature_failed() {
-        eprintln!("the registry does not verify against the operator keys on this machine");
+        _ = writeln!(
+            err,
+            "the registry does not verify against the operator keys on this machine"
+        );
         return EXIT_BAD_SIGNATURE;
     }
     if outcome.any_key_is_unknown() {
-        eprintln!("the registry names an operator key that this machine does not hold");
+        _ = writeln!(
+            err,
+            "the registry names an operator key that this machine does not hold"
+        );
         return EXIT_MISMATCH;
     }
-    println!(
+    _ = writeln!(
+        out,
         "{} of {} entries are proved by an operator signature",
         outcome.proved(),
         outcome.entries.len()

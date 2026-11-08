@@ -62,12 +62,15 @@ impl SharePartitionLeaderManager {
 #[cfg(test)]
 mod tests {
     use {
-        crate::share_partition::{
-            dlq::{DlqError, DlqRequest, DlqSink},
-            manager::test_support::manager_with_dlq,
-            state::{
-                AckType, AcquisitionState, DlqRange, RecordState,
-                test_support::{DeadLetterQueue, acquire_window},
+        crate::{
+            share_coordinator::key::ShareKeyRef,
+            share_partition::{
+                dlq::{DlqError, DlqRequest, DlqSink},
+                manager::test_support::manager_with_dlq,
+                state::{
+                    AckType, AcquisitionState, DlqRange, RecordState,
+                    test_support::{DeadLetterQueue, acquire_window},
+                },
             },
         },
         assert2::assert,
@@ -128,8 +131,12 @@ mod tests {
             .unwrap();
         let ranges = state.take_pending_dlq();
         let cell = Arc::new(Mutex::new(state));
-        let key = ("g1".to_owned(), uuid::Uuid::nil(), 0);
-        manager.dispatch_dead_letters(&key, &cell, ranges.clone());
+        let key = ShareKeyRef {
+            group: "g1",
+            topic_id: uuid::Uuid::nil(),
+            partition: 0,
+        };
+        manager.dispatch_dead_letters(key, &cell, ranges.clone());
         timeout(Duration::from_secs(2), sink.entered.notified())
             .await
             .unwrap();
@@ -156,7 +163,7 @@ mod tests {
                 }]
         );
         drop(state);
-        manager.dispatch_dead_letters(&key, &cell, ranges);
+        manager.dispatch_dead_letters(key, &cell, ranges);
         yield_now().await;
         assert!(manager.background_tasks.len() == 0);
     }

@@ -394,5 +394,4 @@ fn every_message_is_log_append_time(down_conversion: &DownConversion, timestamp:
 krabka_bdd::scenarios!(
     "tests/features/down_conversion",
     fixtures = [down_conversion: DownConversion],
-    tags = "not @formulated and not @inprogress",
 );

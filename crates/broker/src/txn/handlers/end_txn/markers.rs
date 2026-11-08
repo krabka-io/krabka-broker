@@ -454,15 +454,15 @@ mod tests {
                 .failure
                 .is_some()
         );
-        assert!(part.log_end_offset() == Offset(0));
+        assert!(part.log_end_offset().unwrap() == Offset(0));
 
         // The metadata reconcile installs this broker as the leader.
         part.install_leader_change(1, 1).await;
         let written = dispatch_markers(context, &partitions, &entry, MarkerType::Commit).await;
         assert!(written.failure.is_none());
 
-        assert!(part.log_end_offset() == Offset(1));
-        assert!(part.last_stable_offset(Offset(1)) == Offset(1));
+        assert!(part.log_end_offset().unwrap() == Offset(1));
+        assert!(part.last_stable_offset(Offset(1)).unwrap() == Offset(1));
     }
 
     /// #882: a marker failure on one partition must not abandon the others
@@ -545,7 +545,7 @@ mod tests {
             .expect("the unreachable remote partition must fail");
         assert!(classify_marker_failure(&error) == MarkerFailureClass::Retriable);
         // The local partition's marker landed despite the remote failure.
-        assert!(local_partition.log_end_offset() == Offset(1));
+        assert!(local_partition.log_end_offset().unwrap() == Offset(1));
     }
 
     /// The local leg of the fan-out counts a marker as written only once the
@@ -609,7 +609,7 @@ mod tests {
                         let appended = part.append_notify.notified();
                         tokio::pin!(appended);
                         appended.as_mut().enable();
-                        if part.log_end_offset() >= Offset(1) {
+                        if part.log_end_offset().unwrap() >= Offset(1) {
                             break;
                         }
                         appended.await;

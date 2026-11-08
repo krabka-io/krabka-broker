@@ -76,5 +76,5 @@ Feature: Rollback distinguishes durable mutation from normal index rebuilding
 
   Scenario: tests: the refusal is kafkas with the sources range
     Given the rollback source supports feature levels seven through thirty
-    When the rollback guard explains refusal of metadata.version thirty-three
+    When the rollback guard explains refusal of metadata.version thirty-four
     Then the refusal uses Kafka's FeatureLevelRecord wording and the source range

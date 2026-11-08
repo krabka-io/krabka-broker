@@ -87,7 +87,10 @@ pub(super) async fn compute_proposal(
         // Append publishes its HW under this lock after releasing the log
         // lock. Read LEO here too: a pre-await sample could clamp an append's
         // newer HW back down when this scan finally acquires replica state.
-        let leader_leo = part.log_end_offset();
+        // A poisoned log proposes nothing and moves no high watermark.
+        let Ok(leader_leo) = part.log_end_offset() else {
+            return None;
+        };
         let previous = state.hw;
         let proposal = propose_with_policy(&mut state, policy, record, leader_leo, epoch_start);
         // An ISR shrink can arrive before the scan learns that the removed

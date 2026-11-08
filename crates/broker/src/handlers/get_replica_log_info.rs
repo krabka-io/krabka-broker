@@ -70,12 +70,22 @@ pub fn handle(
             },
             |part| {
                 let epoch = part.current_leader_epoch.load(Ordering::Acquire);
+                let log_end_offset = match part.log_end_offset() {
+                    Ok(log_end_offset) => log_end_offset,
+                    Err(error) => {
+                        return unanswered(
+                            partition,
+                            codes::from_broker_error(&error),
+                            "partition log unavailable",
+                        );
+                    }
+                };
                 PartitionLogInfo {
                     partition,
                     last_written_leader_epoch: epoch,
                     current_leader_epoch: epoch,
                     // Unwrap the `Offset` into the wire `i64` field.
-                    log_end_offset: part.log_end_offset().0,
+                    log_end_offset: log_end_offset.0,
                     error_code: codes::NONE,
                     error_message: None,
                     ..Default::default()

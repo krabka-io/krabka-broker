@@ -163,9 +163,11 @@ Every other outcome maps onto a code Kafka already defines.
 | The receiver of key 1014 does not lead the partition | `NOT_LEADER_OR_FOLLOWER` (6) |
 | The receiver of key 1014 has a stale leader epoch | `FENCED_LEADER_EPOCH` (74) |
 
+Before the first group brings `__barrier_state` into being, no broker coordinates any group, so a request that names a group gets `RESOURCE_NOT_FOUND` from every broker. `NOT_COORDINATOR` would send the caller to look for a coordinator that does not exist. Once the topic exists, a group whose state partition another broker leads gets `NOT_COORDINATOR`.
+
 `TOPIC_ALREADY_EXISTS` is the only already-exists code Kafka gives, and a barrier group is not a topic. The alternative was a second krabka-private code, and reusing one Kafka code that a caller can already read is worth more than an exact name.
 
-A malformed topic list is refused with `INVALID_REQUEST` before the coordinator sees the entry, so what reaches `INVALID_CONFIG` is only a retention or an interval out of range. A group name or a topic name over 32767 bytes is refused the same way on `AlterBarrierGroups`, and a group name over 32767 bytes on every partition of `WriteBarrierMarkers`, because the barrier records encode both as INT16-length strings.
+A malformed topic list is refused with `INVALID_REQUEST` before the coordinator sees the entry, so what reaches `INVALID_CONFIG` is a retention, an interval or a topic count outside the configured bounds, or a create past the group cap. A group name or a topic name over 32767 bytes is refused the same way on `AlterBarrierGroups`, and a group name over 32767 bytes on every partition of `WriteBarrierMarkers`, because the barrier records encode both as INT16-length strings.
 
 Every response carries its outcome as a code in a row or in a top-level field, and never as a transport failure. A caller reads one response shape whatever happened.
 
@@ -184,9 +186,9 @@ Every response carries its outcome as a code in a row or in a top-level field, a
 
 `barrier_state_num_partitions` fixes the group-to-partition map. A change moves every group to a new coordinator, so an operator should set it once.
 
-The last three keys in that table are declared and are not enforced. No code path reads `barrier_max_groups`, `barrier_max_topics_per_group` or `barrier_min_injection_interval`. The coordinator's own `validate_spec` rejects an empty topic list, an empty topic name, a duplicate topic name, a `retained_cuts` below one, and an interval at or below zero, and it checks nothing against the operator's configured bounds. So a cluster accepts an unbounded number of groups, an unbounded topic list, and a one-millisecond injection interval.
+The coordinator enforces the last three keys in that table. A create or an update whose topic list is longer than `barrier_max_topics_per_group`, whose interval is shorter than `barrier_min_injection_interval`, or whose `retained_cuts` is above `barrier_retained_cuts` is refused with `InvalidDefinition`, which the response carries as `INVALID_CONFIG` (40). A create that would take the broker past `barrier_max_groups` live groups is refused the same way. The cap is checked before the group has an entry, so a refused create leaves the group count where it was. These checks run beside the ones that need no configuration: an empty topic list, an empty or duplicate topic name, a `retained_cuts` below one, and an interval at or below zero.
 
-This note is here because nothing in the repository will report it. The `BarrierGroupLabel` rustdoc states that metric cardinality is bounded by `barrier_max_groups` "because the coordinator rejects a new group past that cap", and no such rejection exists. Group name reaches a Prometheus label, so an unbounded group count is unbounded metric cardinality. Closing the gap is three checks in `validate_spec` against a `BarrierConfig` that carries the three values, and not a change to this design.
+`barrier_max_groups` counts the groups that one broker coordinates, not the groups of the cluster. A broker that takes over another broker's state partitions recovers their groups whatever its own count is, and the cap applies only to a new create. Group name reaches a Prometheus label. The cap bounds the groups that one broker holds at a time, and so the label sets those groups add. It does not bound the label sets over a broker's lifetime: the series of a deleted group stay until the broker restarts, so a cycle of creates and deletes still adds label sets.
 
 The retry back-off, its ceiling and the scheduler tick are not operator-tunable. They are compiled defaults of 100 ms, 5 s and 1 s.
 
@@ -408,7 +410,7 @@ A consumer group's committed offset can land on a marker's offset, and that is h
 
 krabka is greenfield and undeployed, so there is no migration and no compatibility shim. A cluster that defines no barrier group carries no `__barrier_state` topic and behaves exactly as it did.
 
-The three unenforced limits in [Broker Configuration](#broker-configuration) are the one place where a documented interface and the code disagree today.
+The limits in [Broker Configuration](#broker-configuration) are enforced. A definition past one of them is refused with `INVALID_CONFIG`, and a create past `barrier_max_groups` leaves no group behind.
 
 ## Test Plan
 

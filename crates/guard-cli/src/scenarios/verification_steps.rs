@@ -4,11 +4,11 @@
 
 use {
     super::{
-        driver::{self, Signing},
+        driver::Signing,
         params::{BrokerAnswer, KeySource, LocalKeys, Operator, Outcome, RegistryContents, Scope},
         world::GuardScenario,
     },
-    crate::{code_name, exit_for_code},
+    crate::{code_name, exit_for_code, run_from_args},
     assert2::assert,
     rstest_bdd_macros::{given, then, when},
 };
@@ -50,7 +50,7 @@ async fn registry_holds(guard: &mut GuardScenario, entries: RegistryContents) {
     let cluster = guard.cluster().await;
     for (operator, scope, signing) in freezes_in(entries) {
         let scope: Scope = scope.parse().expect("a scope the driver names");
-        assert!(cluster.freeze(operator, &scope, signing).await == Outcome::Success);
+        assert!(cluster.freeze(operator, &scope, signing).await.outcome == Outcome::Success);
     }
 }
 
@@ -67,8 +67,8 @@ fn no_broker_listens(guard: &mut GuardScenario) { guard.unreachable = true; }
 async fn operator_verifies(guard: &mut GuardScenario) {
     let trust_file = guard.trust_file.get().clone();
     let cluster = guard.cluster().await;
-    let outcome = cluster.verify(Operator::Alice, &trust_file).await;
-    guard.outcome.set(outcome);
+    let run = cluster.verify(Operator::Alice, &trust_file).await;
+    guard.record(run);
 }
 
 #[when("the broker answers a request with {answer}")]
@@ -87,15 +87,21 @@ fn operator_reads(guard: &GuardScenario, explanation: String) {
 /// The bootstrap address for a command line that never reaches a broker.
 const NO_BROKER: &str = "127.0.0.1:1";
 
-/// The shipped entry point runs, so its parse step decides the outcome.
+/// The shipped entry point, with its own parse step, decides the outcome.
+async fn run_entry_point(args: &[&str]) -> Outcome {
+    let mut command_line = vec!["krabka-guard", "--bootstrap-server", NO_BROKER];
+    command_line.extend_from_slice(args);
+    Outcome::from_exit_code(run_from_args(command_line).await)
+}
+
 #[when("an operator runs the tool with a flag it does not know")]
 async fn runs_with_unknown_flag(guard: &mut GuardScenario) {
-    let outcome = driver::run_binary(NO_BROKER, &["freeze", "list", "--no-such-flag"]).await;
+    let outcome = run_entry_point(&["freeze", "list", "--no-such-flag"]).await;
     guard.outcome.set(outcome);
 }
 
 #[when("an operator asks the tool for help")]
 async fn asks_for_help(guard: &mut GuardScenario) {
-    let outcome = driver::run_binary(NO_BROKER, &["--help"]).await;
+    let outcome = run_entry_point(&["--help"]).await;
     guard.outcome.set(outcome);
 }

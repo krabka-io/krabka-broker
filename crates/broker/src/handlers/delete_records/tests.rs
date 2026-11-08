@@ -257,7 +257,7 @@ async fn check_trim_frontier(
         setup.topic
     );
     check!(
-        partition.log_start_offset() == setup.frontier,
+        partition.log_start_offset().unwrap() == setup.frontier,
         "{}",
         setup.topic
     );
@@ -284,7 +284,7 @@ async fn pending_partition_fixture(
         .partitions
         .get(topic, PartitionIndex(0))
         .expect("the partition is local");
-    let before = part.log_start_offset();
+    let before = part.log_start_offset().unwrap();
     PendingPartitionFixture { part, before }
 }
 
@@ -563,7 +563,7 @@ async fn a_refused_trim_deletes_nothing() {
         .partitions
         .get("orders", krabka_ids::PartitionIndex(0))
         .expect("the partition is local");
-    let before = part.log_start_offset();
+    let before = part.log_start_offset().unwrap();
 
     let resp = drive_trim(&broker, &test_context(&principal, &peer), request().call()).await;
 
@@ -577,7 +577,7 @@ async fn a_refused_trim_deletes_nothing() {
     })];
     assert!(resp.topics == expected, "{resp:?}");
     // The refusal refused: the log start offset did not move.
-    check!(part.log_start_offset() == before);
+    check!(part.log_start_offset().unwrap() == before);
     broker_handle.shutdown().await;
 }
 
@@ -711,7 +711,7 @@ async fn a_frozen_topic_refuses_a_trim() {
         .topic(topic)
         .call()
         .await;
-    check!(part.log_start_offset() == before);
+    check!(part.log_start_offset().unwrap() == before);
     broker_handle.shutdown().await;
 }
 
@@ -738,7 +738,7 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
         .error(codes::NOT_LEADER_OR_FOLLOWER)
         .call()
         .await;
-    check!(part.log_start_offset() == before);
+    check!(part.log_start_offset().unwrap() == before);
     broker_handle.shutdown().await;
 }
 
@@ -803,7 +803,7 @@ async fn a_compact_only_topic_refuses_a_trim() {
             "{policy}"
         );
         check!(
-            part.log_start_offset() == krabka_log::Offset(log_start),
+            part.log_start_offset().unwrap() == krabka_log::Offset(log_start),
             "{policy}"
         );
     }
@@ -1186,7 +1186,7 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
                 .error(codes::REQUEST_TIMED_OUT)
                 .call()
     );
-    check!(partition.log_start_offset() == krabka_log::Offset(4));
+    check!(partition.log_start_offset().unwrap() == krabka_log::Offset(4));
 
     // The follower catches up while a second request waits.
     let waiting = {
@@ -1387,7 +1387,7 @@ async fn a_tiered_trim_whose_archive_is_not_ready_deletes_nothing() {
     );
     let TieredTopic { part, tp } =
         tiered_topic(&broker_handle, &ctx, "delete-records-not-ready").await;
-    let before = part.log_start_offset();
+    let before = part.log_start_offset().unwrap();
     let ReaderWithDir { reader, dir: _dir } = reader_with_metadata(|| Arc::new(NotReadyRlmm));
     let archive = ArchiveFloor {
         reader: &reader,
@@ -1398,7 +1398,7 @@ async fn a_tiered_trim_whose_archive_is_not_ready_deletes_nothing() {
     let trimmed = trim_behind_archive(Some(&archive), &part, krabka_log::Offset(3)).await;
 
     check!(let Err(TrimFailure::Archive(RemoteStorageError::NotReady { .. })) = trimmed);
-    check!(part.log_start_offset() == before);
+    check!(part.log_start_offset().unwrap() == before);
 
     broker_handle.shutdown().await;
 }

@@ -410,7 +410,7 @@ mod tests {
         rollback.range = Some(LevelRange { min: 7, max: 30 });
     }
 
-    #[when("the rollback guard explains refusal of metadata.version thirty-three")]
+    #[when("the rollback guard explains refusal of metadata.version thirty-four")]
     fn explain_rollback_refusal(rollback: &mut RollbackObservation) {
         rollback.refusal = Some(refusal_message(
             rollback.range.expect("the source range was supplied"),
@@ -422,7 +422,7 @@ mod tests {
         check!(
             rollback.refusal.as_deref()
                 == Some(
-                    "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30"
+                    "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=34), but this controller only supports versions 7-30"
                 )
         );
     }

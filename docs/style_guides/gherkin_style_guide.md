@@ -99,13 +99,15 @@ A tag is an index entry that a reader can understand. Every tag must earn its pl
 | `@inprogress` | Automation or production code is incomplete. The test passes while the scenario fails, and fails once the scenario passes. |
 | `@journey` | An end-to-end flow across many rules. See [Journeys](#journeys). |
 | `@manual` | Checked by a person, not automated. Generated as `#[ignore = "manual"]`. Rare and discouraged: automate the check instead where you can. |
+| `@only_in_process` | With `drivers = [..]`, the scenario runs against the in-process driver alone, for behavior the wire cannot reach. |
+| `@only_wire` | With `drivers = [..]`, the scenario runs against the Kafka-wire driver alone, for behavior only a real client sees. |
 
-The tags and their meanings live in one glossary, [`crates/bdd-model/glossary.toml`](../../crates/bdd-model/glossary.toml), and this table is rendered from it.
+The tags and their meanings live in one glossary, [`crates/bdd-model/glossary.toml`](../../crates/bdd-model/glossary.toml). This table is its `krabka-bdd tags-table` output, and `aspect check-gherkin` fails when the two differ.
 
 - Do not add `@done`. The absence of a lifecycle tag means done.
 - `krabka_bdd::scenarios!` rejects every tag that the glossary does not define (`unknown-tag`), a tag that differs from a defined one only in case (`tag-case-duplicate`), and a ticket or story id (`ticket-tag`).
 - Do not add tags that only the automation understands, such as `@use_mock_store`.
-- Add a new tag to the glossary, with its meaning, in the same change that first uses it, and update this table to match.
+- Add a new tag to the glossary, with its meaning, in the same change that first uses it, and replace this table with the new `krabka-bdd tags-table` output.
 
 ## Journeys
 
@@ -292,6 +294,20 @@ A `Feature:` or `Rule:` description holds two kinds of line, and the lint advise
 | `ragged-table` | Table rows of different widths. gherkin truncates a long row without a word, so the lint counts the raw `\|` characters. | Give every row the same number of cells. |
 
 `one-when`, `max-steps`, `star-step` and `scenario-outside-rule` exempt `@journey` scenarios; no other rule exempts anything. A tag on the feature or the rule counts for every scenario in it. A table cell may hold `-` to mean "empty".
+
+### The `krabka-bdd` tool
+
+`crates/bdd-cli` builds `krabka-bdd`, the same lint and model outside the compiler. Run it with `cargo run -q -p krabka-bdd-cli -- <command>` or `bazel run //crates/bdd-cli:krabka-bdd -- <command>`.
+
+| Command | What it does |
+| :--- | :--- |
+| `lint [--baseline FILE] [--write-baseline] PATH...` | Lints every `.feature` under the paths, errors and advisories both. With `--baseline` it ratchets: a new error fails, and so does a baseline entry that no longer fires, so the baseline only shrinks. Advisories never fail. |
+| `map PATH...` | Renders each feature as an example map: the feature 🟨, its rules 🟦, their examples 🟩 and the open questions 🟥, with the `@formulated` and `@inprogress` counts. Readiness notes flag three or more open questions (not ready to automate), more than six rules (split the feature) and a rule with one example (add a counter-example or a boundary). Use it for the business review of a formulated feature. |
+| `docs [--out-dir DIR] PATH...` | A living-documentation index by capability folder: each feature with its rules, scenarios, tags and journeys, linked relative to `DIR`. |
+| `glossary [--min-steps N] PATH...` | Advice for a person to review: words steps use in at least `N` steps that the glossary does not define, and glossary terms no step uses. The default of 3 is noisy over the whole repository; raise it to see the terms worth defining. |
+| `tags-table` | The tag table above, rendered from the glossary. |
+
+`aspect check-gherkin`, which CI runs in its `checks` job, lints every feature under `crates/` against [`crates/bdd-cli/gherkin-baseline.tsv`](../../crates/bdd-cli/gherkin-baseline.tsv) and checks that the tag table above is the `tags-table` output. That is how the house style reaches features that still run through the plain rstest-bdd macros, `tests/features/migrated/` included, without failing on what they already break. When you fix a feature, remove its lines from the baseline, or rewrite it with `lint --baseline crates/bdd-cli/gherkin-baseline.tsv --write-baseline crates`. Never add a line for a new finding: fix the feature.
 
 ## Review checklist
 

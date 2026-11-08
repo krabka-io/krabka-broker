@@ -9,7 +9,7 @@ use {
             },
         },
         config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
-        partition::{Partition, WriterMessage},
+        partition::{Partition, WriterMessage, test_support::poison_log},
         test_support::{
             UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
             write_bootstrap_records,
@@ -640,28 +640,66 @@ async fn a_fault_while_joining_the_quorum_fails_the_start_without_waiting_on_bac
     );
 }
 
+/// What goes wrong before a stop, for the clean-shutdown proof tests.
+#[derive(Clone, Copy, Debug)]
+enum BeforeStop {
+    Nothing,
+    FatalFault,
+    PoisonedLog,
+    PanickedWriter,
+}
+
 /// Kafka halts the process on a controller fault, so no `LogManager.shutdown`
 /// runs and no `.kafka_cleanshutdown` is written: the restart registers with
 /// `previousBrokerEpoch` -1, an unclean shutdown for ELR. A stop that a fault
 /// caused leaves no proof either, and an ordinary stop still does.
+///
+/// Kafka's `LogManager.shutdown` writes the marker for a directory only when
+/// every log's close job succeeded. A partition log whose mutex a panicked
+/// task poisoned is not closed, and a partition writer that panicked may have
+/// stopped halfway through an append, so either one withholds the proof and
+/// the next start recovers.
 #[tokio::test]
-async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
-    for (name, faulted, proof_expected) in [
-        ("an ordinary stop", false, true),
-        ("a stop after a fatal fault", true, false),
+async fn only_a_clean_stop_leaves_a_clean_shutdown_proof() {
+    for (before_stop, proof_expected) in [
+        (BeforeStop::Nothing, true),
+        (BeforeStop::FatalFault, false),
+        (BeforeStop::PoisonedLog, false),
+        (BeforeStop::PanickedWriter, false),
     ] {
         let dir = tempdir().unwrap();
-        let handle = start_default_broker(dir.path()).await.handle;
-        if faulted {
-            let mut should_shutdown = handle.should_shutdown_rx();
-            latch_unsupported_fault(&handle, &mut should_shutdown).await;
+        let ShutdownFixture {
+            handle, partition, ..
+        } = shutdown_fixture(dir.path(), LocalPartitionSetup {
+            topic: "proof",
+            ..Default::default()
+        })
+        .await;
+        match before_stop {
+            BeforeStop::Nothing => {}
+            BeforeStop::FatalFault => {
+                let mut should_shutdown = handle.should_shutdown_rx();
+                latch_unsupported_fault(&handle, &mut should_shutdown).await;
+            }
+            BeforeStop::PoisonedLog => poison_log(&partition),
+            BeforeStop::PanickedWriter => {
+                let writer = partition
+                    .take_writer_handle()
+                    .expect("the partition's writer");
+                writer.abort();
+                let panicked: JoinHandle<()> = task::spawn(async { panic!("the writer panics") });
+                while !panicked.is_finished() {
+                    task::yield_now().await;
+                }
+                *partition.writer_handle.lock().unwrap() = Some(panicked);
+            }
         }
 
         handle.shutdown().await;
 
         check!(
             dir.path().join(".kafka_cleanshutdown").exists() == proof_expected,
-            "{name}"
+            "{before_stop:?}"
         );
     }
 }

@@ -53,7 +53,7 @@ pub(super) fn topic_min_insync_replicas(
 /// stored value does not parse, takes `broker_default`: the broker-wide
 /// `compression.type`, static or dynamic, that the partition's base
 /// `LogConfig` carries.
-pub(super) fn resolve_topic_compression(
+pub fn resolve_topic_compression(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     broker_default: Option<krabka_compression::CompressionType>,

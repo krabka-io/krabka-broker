@@ -874,7 +874,7 @@ mod tests {
     /// the last group-metadata record.
     async fn reloaded_view(log: &InMemoryOffsetsLog) -> ClassicView {
         let mut reloaded = ClassicGroup::new("g");
-        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await, 0);
+        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await);
         build_classic_view(&reloaded)
     }
 

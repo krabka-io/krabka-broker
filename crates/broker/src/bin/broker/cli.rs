@@ -357,6 +357,12 @@ pub struct Args {
     /// OTLP heartbeat interval. `0s` disables heartbeats.
     #[arg(long, env = "KRABKA_OTLP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::non_negative_time)]
     pub krabka_otlp_heartbeat_interval: Option<Time>,
+
+    /// Google Cloud project whose Cloud Trace holds the broker's traces. With
+    /// it set and OTLP export on, a log entry written inside a traced span
+    /// links to its trace in Cloud Logging. Unset, entries carry no trace keys.
+    #[arg(long, env = "KRABKA_GCP_PROJECT_ID")]
+    pub gcp_project_id: Option<String>,
 }
 
 /// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
@@ -696,6 +702,7 @@ mod tests {
         krabka-otlp-timeout KRABKA_OTLP_TIMEOUT [] +------++--------\n\
         otel-exporter-otlp-timeout-secs OTEL_EXPORTER_OTLP_TIMEOUT_SECS [] +++++++++++++++++\n\
         krabka-otlp-heartbeat-interval KRABKA_OTLP_HEARTBEAT_INTERVAL [] +------++--------\n\
+        gcp-project-id KRABKA_GCP_PROJECT_ID [] +++++++++++++++++\n\
 ";
     rstest_bdd_macros::scenarios!("tests/features/migrated/src/bin/broker/cli.feature", fixtures = [cluster_id_command: ClusterIdCommand]);
 }

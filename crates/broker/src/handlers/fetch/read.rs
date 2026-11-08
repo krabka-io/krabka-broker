@@ -6,7 +6,7 @@
 use krabka_protocol::records::FileRegion;
 use {
     super::{
-        FetchWatermarks, VisibilityWindow, compute_visibility_window, fetch_reader,
+        FetchReaderExt as _, FetchWatermarks, VisibilityWindow, compute_visibility_window,
         plan::refused_read,
     },
     crate::{
@@ -24,6 +24,7 @@ use {
         records::RecordsPayload,
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    krabka_verified::FetchReader,
     std::{
         fmt, io,
         sync::{Arc, Mutex, PoisonError},
@@ -36,8 +37,7 @@ use {
 /// The read fills `out` in place with a `RecordsPayload::Raw`. It returns the
 /// byte-size estimate of the records it put in `out`, or 0 when it put none.
 ///
-/// When `read_committed` is `true`, on a consumer fetch with
-/// `isolation_level=1`:
+/// For a `read_committed` consumer (`isolation_level=1`):
 /// - the raw bytes are clamped at `min(lso, hw)`, so
 ///   `base_offset < min(lso, hw)`
 /// - there is NO server-side batch filtering. Aborted batches and control
@@ -45,11 +45,10 @@ use {
 ///   client side with the list below
 /// - `out.aborted_transactions` comes from the partition's `.txnindex` files
 ///
-/// When `is_follower_fetch` is `true`:
+/// For a follower:
 /// - the raw bytes go up to LEO, with no HW clamp
 ///
-/// When `read_committed` is `false` and `is_follower_fetch` is `false`, on a
-/// consumer fetch in `read_uncommitted`:
+/// For a consumer fetch in `read_uncommitted`:
 /// - the raw bytes are clamped at HW, so `base_offset < hw`
 /// - `out.aborted_transactions` is `None`
 ///
@@ -72,8 +71,7 @@ pub(super) struct ReadRequest {
     pub(super) hot_tail: Option<Arc<HotTailCache>>,
     pub(super) fetch_offset: Offset,
     pub(super) max_bytes: i32,
-    pub(super) read_committed: bool,
-    pub(super) is_follower_fetch: bool,
+    pub(super) reader: FetchReader,
     pub(super) sendfile_capable: bool,
     pub(super) sendfile_min_bytes: usize,
 }
@@ -151,8 +149,7 @@ async fn read_local_log(
         hot_tail,
         fetch_offset,
         max_bytes,
-        read_committed,
-        is_follower_fetch,
+        reader,
         sendfile_capable,
         sendfile_min_bytes,
     } = request;
@@ -161,14 +158,7 @@ async fn read_local_log(
         log_start,
         window: w,
         plan,
-    } = plan_read(
-        part,
-        fetch_offset,
-        hw,
-        read_committed,
-        is_follower_fetch,
-        out,
-    );
+    } = plan_read(part, fetch_offset, hw, reader, out);
     // Log mutex released here.
 
     // The cache answers with whole batches, so it takes the window's limit and
@@ -177,7 +167,7 @@ async fn read_local_log(
     // watermark of KFC-1 is a second cap on the same window, and a cache that
     // ignored it would hand out a batch the log read path would have held back.
     if part.diskless
-        && !read_committed
+        && !reader.is_read_committed()
         && let ReadPlan::Read { limit_offset, .. } = &plan
         && let (Some(topic_id), Some(hot_tail)) = (topic_id, hot_tail.as_ref())
         && let Some(bytes) = hot_tail.get(
@@ -192,8 +182,7 @@ async fn read_local_log(
             out,
             &w,
             log_start,
-            read_committed,
-            is_follower_fetch,
+            reader,
             Vec::new(),
             Some(RecordsPayload::Raw(bytes)),
         ));
@@ -231,8 +220,7 @@ async fn read_local_log(
         out,
         &w,
         log_start,
-        read_committed,
-        is_follower_fetch,
+        reader,
         aborted_txns,
         records,
     ))
@@ -523,8 +511,7 @@ fn finish_read(
     response: &mut PartitionData,
     window: &VisibilityWindow,
     log_start: Offset,
-    read_committed: bool,
-    follower_fetch: bool,
+    reader: FetchReader,
     aborted: Vec<AbortedTransaction>,
     records: Option<RecordsPayload>,
 ) -> usize {
@@ -532,7 +519,7 @@ fn finish_read(
     response.high_watermark = window.response_hw.0;
     response.log_start_offset = log_start.0;
     response.last_stable_offset = window.response_lso.0;
-    if read_committed && !follower_fetch {
+    if reader.is_read_committed() {
         response.aborted_transactions = Some(aborted);
     }
     let bytes = records.as_ref().map_or(0, RecordsPayload::payload_len);
@@ -628,8 +615,7 @@ fn plan_read(
     partition: &Partition,
     fetch_offset: Offset,
     high_watermark: Offset,
-    read_committed: bool,
-    follower_fetch: bool,
+    reader: FetchReader,
     response: &mut PartitionData,
 ) -> PlannedWindow {
     let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
@@ -647,11 +633,11 @@ fn plan_read(
     let deliverable = deliverable_offset(
         &mut log,
         high_watermark,
-        follower_fetch,
+        reader.is_follower(),
         partition.delivery.now_ms(),
     );
     let window = compute_visibility_window(
-        fetch_reader(follower_fetch, read_committed),
+        reader,
         FetchWatermarks {
             log_start: local_log_start,
             hw: high_watermark,
@@ -734,6 +720,7 @@ mod tests {
             records::{Attributes, Record, RecordBatch, RecordsError, RecordsPayload},
         },
         krabka_units::prelude::{ByteSizeExt as _, mebibytes},
+        krabka_verified::{FetchReader, Isolation},
         std::{
             io,
             sync::{Arc, Mutex, MutexGuard},
@@ -1132,8 +1119,7 @@ mod tests {
             hot_tail: None,
             fetch_offset: Offset(fetch_offset),
             max_bytes: 1 << 20,
-            read_committed: false,
-            is_follower_fetch: false,
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             sendfile_capable: false,
             sendfile_min_bytes: 0,
         }
@@ -1226,20 +1212,25 @@ mod tests {
         }
         // LEO is 2 while HW and LSO trail it at 1.
         partition.replica_state.lock().await.hw = Offset(1);
-        for (follower, committed) in [(false, false), (false, true), (true, false), (true, true)] {
+        for reader in [
+            FetchReader::Consumer(Isolation::ReadUncommitted),
+            FetchReader::Consumer(Isolation::ReadCommitted),
+            FetchReader::Follower,
+        ] {
             for (offset, expected) in [
                 (2, PartitionData {
                     high_watermark: 1,
                     last_stable_offset: 1,
                     log_start_offset: 0,
-                    aborted_transactions: (committed && !follower).then(Vec::new),
+                    aborted_transactions: (reader
+                        == FetchReader::Consumer(Isolation::ReadCommitted))
+                    .then(Vec::new),
                     ..PartitionData::default()
                 }),
                 (3, expected_offset_out_of_range()),
             ] {
                 let request = super::ReadRequest {
-                    is_follower_fetch: follower,
-                    read_committed: committed,
+                    reader,
                     ..consumer_request(offset)
                 };
                 let mut out = PartitionData {
@@ -1250,13 +1241,10 @@ mod tests {
                     &partition,
                     request,
                     &mut out,
-                    &format!("follower={follower}, committed={committed}, offset={offset}"),
+                    &format!("{reader:?}, offset={offset}"),
                 )
                 .await;
-                assert!(
-                    out == expected,
-                    "follower={follower}, committed={committed}, offset={offset}"
-                );
+                assert!(out == expected, "{reader:?}, offset={offset}");
             }
         }
     }
@@ -1315,7 +1303,7 @@ mod tests {
             super::do_read(
                 &partition,
                 super::ReadRequest {
-                    read_committed: true,
+                    reader: FetchReader::Consumer(Isolation::ReadCommitted),
                     ..consumer_request(1)
                 },
                 &LogDirRegistry::default(),
@@ -1351,11 +1339,11 @@ mod tests {
         let cases = [
             ("read_uncommitted consumer", consumer_request(0)),
             ("read_committed consumer", super::ReadRequest {
-                read_committed: true,
+                reader: FetchReader::Consumer(Isolation::ReadCommitted),
                 ..consumer_request(0)
             }),
             ("follower", super::ReadRequest {
-                is_follower_fetch: true,
+                reader: FetchReader::Follower,
                 ..consumer_request(0)
             }),
         ];

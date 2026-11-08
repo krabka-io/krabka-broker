@@ -142,7 +142,7 @@ async fn a_promotion_decides_from_the_producer_state_of_the_log() {
                 decide(&tracker, 0).await,
                 decide(&tracker, 6).await,
             ],
-            partition.log_end_offset(),
+            partition.log_end_offset().unwrap(),
         ));
         let mut earlier = NO_EARLIER_BATCHES;
         earlier[0] = Some(retained(0, 0));

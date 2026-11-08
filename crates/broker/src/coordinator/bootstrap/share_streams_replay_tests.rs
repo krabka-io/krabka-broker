@@ -14,7 +14,6 @@ use {
         },
     },
     assert2::{assert, check},
-    krabka_protocol::records::RecordBatch,
     std::{collections::HashMap, sync::Arc},
 };
 
@@ -220,7 +219,6 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
     };
 
     let coord = super::test_support::bare_coordinator();
-    let batch = RecordBatch::default();
     let mut acc = Replayed::default();
 
     let malformed_share = persistence::parse_key(
@@ -236,7 +234,6 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
             &mut acc,
             malformed_share,
             &bytes::Bytes::from_static(&[0]),
-            &batch,
         )
         .is_err()
     );
@@ -268,7 +265,6 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
         }
         .encode()
         .unwrap(),
-        &batch,
     )
     .unwrap();
     // Kafka's `getOrMaybeCreatePersistedStreamsGroup(groupId, true)`: the
