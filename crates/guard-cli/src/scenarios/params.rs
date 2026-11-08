@@ -3,7 +3,7 @@
 use {
     crate::{
         EXIT_BAD_SIGNATURE, EXIT_MISMATCH, EXIT_NO_APPROVAL, EXIT_REFUSED, EXIT_UNREACHABLE,
-        pattern_name,
+        EXIT_USAGE, pattern_name,
     },
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
     std::{fmt, str::FromStr},
@@ -164,6 +164,9 @@ pub enum Outcome {
     /// The parser refused the command line, so nothing reached a broker.
     #[step_param("a refused command line")]
     CommandLineRefused,
+    /// `64`: the shipped entry point refused the command line.
+    #[step_param("a usage error")]
+    UsageError,
 }
 
 impl Outcome {
@@ -181,6 +184,7 @@ impl Outcome {
             EXIT_MISMATCH => Self::UnverifiableRegistry,
             EXIT_NO_APPROVAL => Self::MissingApproval,
             EXIT_BAD_SIGNATURE => Self::SignatureFailure,
+            EXIT_USAGE => Self::UsageError,
             other => panic!("exit code {other} is not one the README defines"),
         }
     }

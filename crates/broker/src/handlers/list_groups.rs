@@ -137,8 +137,8 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
 
     // ── KIP-848 next-gen consumer groups (group_type "consumer") ────────
     // `consumer_group_ids` returns every id of the shared `groups` map. The
-    // `Describe` arm replies only for a live consumer-kind group, so a classic
-    // group, and a Streams-locked offset home, answer nothing here.
+    // `Describe` arm gives a view only for a live consumer-kind group, so a
+    // classic group, and a Streams-locked offset home, answer `None` here.
     for gid in coordinator.consumer_group_ids() {
         if emitted.contains(&gid) || coordinator.group_type(&gid) == Some(GroupType::Streams) {
             continue;
@@ -146,7 +146,8 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
         let Some(handle) = coordinator.find(&gid) else {
             continue;
         };
-        if let Ok(view) = ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
+        if let Ok(Some(view)) = ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await
+        {
             let group = listed(
                 gid,
                 CONSUMER_PROTOCOL_TYPE.into(),

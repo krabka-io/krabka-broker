@@ -47,7 +47,9 @@ pub fn backend(error: impl fmt::Display) -> ObjectStoreError {
 ///
 /// A non-success status is an error naming `operation`, the status and the
 /// body. Transient transport failures, 408, 429, and server errors retry
-/// within `retry`'s attempt and wall-clock bounds.
+/// within `retry`'s attempt and wall-clock bounds. When those bounds run out,
+/// the error is [`ObjectStoreError::Unavailable`]; any other failure is
+/// [`ObjectStoreError::Backend`].
 pub async fn read_ok_body(
     request: reqwest::RequestBuilder,
     operation: &str,
@@ -60,7 +62,7 @@ pub async fn read_ok_body(
             let attempt = request.try_clone().ok_or_else(|| {
                 backend(format!("{operation}: control-plane GET cannot be cloned"))
             })?;
-            let (result, retryable) = match attempt.send().await {
+            let (message, retryable) = match attempt.send().await {
                 Ok(response) => {
                     let status = response.status();
                     let retryable_status = status.is_server_error()
@@ -69,27 +71,30 @@ pub async fn read_ok_body(
                     match response.bytes().await {
                         Ok(body) if status.is_success() => return Ok(body),
                         Ok(body) => (
-                            Err(backend(format!(
+                            format!(
                                 "{operation} returned {status}: {}",
                                 String::from_utf8_lossy(&body)
-                            ))),
+                            ),
                             retryable_status,
                         ),
                         Err(error) => (
-                            Err(backend(format!(
+                            format!(
                                 "{operation} returned {status}, but its body could not be read: {error}"
-                            ))),
+                            ),
                             status.is_success() || retryable_status,
                         ),
                     }
                 }
-                Err(error) => {
-                    let retryable = !error.is_builder() && !error.is_redirect();
-                    (Err(backend(error)), retryable)
-                }
+                Err(error) => (
+                    error.to_string(),
+                    !error.is_builder() && !error.is_redirect(),
+                ),
             };
-            if !retryable || retries >= retry.max_retries {
-                return result;
+            if !retryable {
+                return Err(ObjectStoreError::Backend(message));
+            }
+            if retries >= retry.max_retries {
+                return Err(ObjectStoreError::Unavailable(message));
             }
             retries += 1;
             time::sleep(backoff).await;
@@ -98,7 +103,9 @@ pub async fn read_ok_body(
     };
     time::timeout(retry.retry_timeout, attempts)
         .await
-        .map_err(|_| backend(format!("{operation}: retry deadline exceeded")))?
+        .map_err(|_| {
+            ObjectStoreError::Unavailable(format!("{operation}: retry deadline exceeded"))
+        })?
 }
 
 /// Sends a SigV4-signed `GET` for `url` and decodes the XML response body.
@@ -148,7 +155,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn a_request_that_never_reaches_the_store_is_a_backend_error() {
+    async fn a_request_that_never_reaches_the_store_can_be_retried() {
         let HttpListener { listener, endpoint } = http_listener().await;
         drop(listener);
 
@@ -160,21 +167,41 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert2::assert!(let ObjectStoreError::Backend(message) = error);
+        assert2::assert!(let ObjectStoreError::Unavailable(message) = error);
         check!(message.contains("error sending request"), "{message}");
     }
 
+    /// How a control-plane request ended.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Outcome {
+        Answered,
+        Unavailable,
+        Refused,
+        Other,
+    }
+
+    impl Outcome {
+        fn of(result: &Result<bytes::Bytes, ObjectStoreError>) -> Self {
+            match result {
+                Ok(_) => Self::Answered,
+                Err(ObjectStoreError::Unavailable(_)) => Self::Unavailable,
+                Err(ObjectStoreError::Backend(_)) => Self::Refused,
+                Err(_) => Self::Other,
+            }
+        }
+    }
+
     #[yare::parameterized(
-        no_retries = { 0, vec!["503 Service Unavailable"], false },
-        retry_503 = { 1, vec!["503 Service Unavailable", "200 OK"], true },
-        no_retry_forbidden = { 2, vec!["403 Forbidden"], false },
-        retry_rate_limit = { 1, vec!["429 Too Many Requests", "200 OK"], true },
+        no_retries = { 0, vec!["503 Service Unavailable"], Outcome::Unavailable },
+        retry_503 = { 1, vec!["503 Service Unavailable", "200 OK"], Outcome::Answered },
+        no_retry_forbidden = { 2, vec!["403 Forbidden"], Outcome::Refused },
+        retry_rate_limit = { 1, vec!["429 Too Many Requests", "200 OK"], Outcome::Answered },
     )]
     #[test_macro(tokio::test)]
     async fn control_plane_retries_transient_statuses_only_within_the_attempt_budget(
         max_retries: usize,
         statuses: Vec<&str>,
-        succeeds: bool,
+        want: Outcome,
     ) {
         let pages = statuses
             .into_iter()
@@ -190,7 +217,7 @@ mod tests {
             },
         )
         .await;
-        check!(result.is_ok() == succeeds);
+        check!(Outcome::of(&result) == want);
         server.await.unwrap();
     }
 
@@ -217,7 +244,7 @@ mod tests {
         )
         .await;
         server.abort();
-        check!(result.is_err());
+        check!(Outcome::of(&result) == Outcome::Unavailable);
         check!(attempts.load(SeqCst) == 2);
     }
 
@@ -244,10 +271,7 @@ mod tests {
         .await
         .unwrap_err();
         server.await.unwrap();
-        check!(
-            error
-                .to_string()
-                .contains("permission check returned 403 Forbidden")
-        );
+        assert2::assert!(let ObjectStoreError::Backend(message) = error);
+        check!(message.contains("permission check returned 403 Forbidden"));
     }
 }

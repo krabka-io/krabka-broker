@@ -1,5 +1,7 @@
 //! Broker response codes this command-line tool names specially.
 
+/// Kafka's `INVALID_REQUEST`. A thaw of a scope with no live entry earns it.
+pub const INVALID_REQUEST: i16 = 42;
 pub const BREAK_GLASS_APPROVAL_REQUIRED: i16 = 1006;
 pub const BREAK_GLASS_DUPLICATE_APPROVER: i16 = 1007;
 pub const BREAK_GLASS_NOT_AN_APPROVER: i16 = 1008;

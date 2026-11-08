@@ -19,9 +19,10 @@ use {
             ApiVersion, RequestContext,
             authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
             consumer_group_describe::{DescribedTopics, hide_undescribable_topics},
-            group_coordinator_error, group_describe_denied, share_group_not_found_message,
+            group_actor_error_code, group_coordinator_error, group_describe_denied,
+            share_group_not_found_message,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_protocol::owned::{
         share_group_describe_request::ShareGroupDescribeRequest,
@@ -103,11 +104,8 @@ pub async fn handle(
         .await;
         described.push(match asked {
             Ok(view) => view.into_described_group(&image),
-            Err(AskError::Closed) => {
-                DescribedGroup::error_row(gid, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
-            }
-            Err(AskError::Dropped) => {
-                DescribedGroup::error_row(gid, codes::UNKNOWN_SERVER_ERROR, None)
+            Err(error) => {
+                DescribedGroup::error_row(gid, group_actor_error_code(broker, gid, error), None)
             }
         });
     }

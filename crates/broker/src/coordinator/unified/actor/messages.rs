@@ -57,8 +57,10 @@ pub enum GroupActorMessage {
         commit: super::commit_validation::CommitRequest,
         reply: oneshot::Sender<Result<(), ErrorCode>>,
     },
+    /// The live consumer group's view, or `None` when the live group is
+    /// classic. An actor that drops the reply sender has stopped.
     Describe {
-        reply: oneshot::Sender<DescribeView>,
+        reply: oneshot::Sender<Option<DescribeView>>,
     },
 
     // ── classic protocol (parking) ──
@@ -98,9 +100,11 @@ pub enum GroupActorMessage {
     ClassicDelete {
         reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },
-    /// Read-only classic snapshot for the admin handlers.
+    /// Read-only classic snapshot for the admin handlers, or `None` when the
+    /// live group is a consumer group. An actor that drops the reply sender
+    /// has stopped.
     ClassicInspect {
-        reply: oneshot::Sender<ClassicView>,
+        reply: oneshot::Sender<Option<ClassicView>>,
     },
     /// `OffsetDelete`'s group check on the LIVE group, whatever its kind:
     /// Kafka's `validateOffsetDelete` error, or the topics the group

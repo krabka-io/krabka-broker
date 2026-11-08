@@ -21,6 +21,7 @@ use {
             group::{GroupOffsets, OffsetEntry, OffsetFetchMember, OffsetFetchSelection},
             streams::actor::validate_streams_group_offset_fetch,
         },
+        handlers::group_actor_error_code,
         task_util::ask,
     },
     krabka_protocol::owned::offset_fetch_response as wire,
@@ -68,7 +69,9 @@ pub(super) async fn fetch_offsets(
         }
     })
     .await
-    .unwrap_or_else(|_| Ok(GroupOffsets::default()))
+    // An actor that stopped with the fetch in its mailbox answers no
+    // offsets: an empty answer would send the consumer to its reset policy.
+    .unwrap_or_else(|error| Err(group_actor_error_code(broker, group_id, error)))
 }
 
 /// Build the topic-name ordered fetch-all view using either wire row shape.

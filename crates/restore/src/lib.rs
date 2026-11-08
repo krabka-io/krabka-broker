@@ -172,15 +172,34 @@ where
 /// Returns [`RestoreError`] for a bad bound, a bound that names a topic
 /// partition the archive does not hold, a target that is not empty, an
 /// archive that cannot be read, a segment that fails verification, or a target
-/// that rejects a write. `--continue-on-corrupt` turns a verification failure
-/// into a skipped segment in the report instead of an error.
+/// that rejects a write. `--continue-on-corrupt` turns a damaged segment into
+/// a skipped segment in the report instead of an error. A segment the archive
+/// cannot be read for still stops the restore.
 pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> {
+    restore_with(args, open_archive).await
+}
+
+/// [`restore`], reading the archive that `open` returns for `args`.
+///
+/// **Testing seam.** A drill passes an `open` that wraps the archive in a
+/// misbehaving store, such as a
+/// [`FaultInjectingStore`](krabka_object_store::fault::FaultInjectingStore).
+/// The arguments and the target are checked before `open` runs, as in
+/// [`restore`].
+///
+/// # Errors
+///
+/// The errors of [`restore`], and whatever `open` returns.
+pub async fn restore_with(
+    args: &RestoreArgs,
+    open: impl FnOnce(&RestoreArgs) -> Result<ArchiveStore, RestoreError>,
+) -> Result<RestoreReport, RestoreError> {
     args.validate()?;
     // Check the target before the archive scan. An operator who pointed at a
     // live data directory learns it in a second, not after a full download.
     ensure_empty_log_dir(&args.target.log_dir)?;
 
-    let store = open_archive(args)?;
+    let store = open(args)?;
     let diskless_capture = diskless::load(args.archive.diskless_wal_capture.as_deref()).await?;
     let mut archive = inventory(&store, args).await?;
     let authenticity::AuthenticatedInputs {
@@ -285,9 +304,9 @@ struct PhaseInputs<'a> {
 /// Verify and write one partition's archived segments.
 ///
 /// Returns `None` for a partition with no segments. Under
-/// `--continue-on-corrupt` a segment that fails verification, other than for
-/// authenticity, is pushed onto `skipped` and the next segment is written as
-/// following a skipped predecessor. The keys of every verified segment of an
+/// `--continue-on-corrupt` a segment whose archived copy is damaged, as
+/// [`RestoreError::is_segment_damage`] decides, is pushed onto `skipped` and
+/// the next segment is written as following a skipped predecessor. The keys of every verified segment of an
 /// authenticated archive are added to `consumed`.
 async fn restore_partition(
     inputs: &PhaseInputs<'_>,
@@ -321,10 +340,7 @@ async fn restore_partition(
         };
         let verified = match verification {
             Ok(verified) => verified,
-            Err(error)
-                if args.continue_on_corrupt
-                    && !matches!(error, RestoreError::Authenticity { .. }) =>
-            {
+            Err(error) if args.continue_on_corrupt && error.is_segment_damage() => {
                 skipped.push(SkippedSegment {
                     topic: entry.partition.topic.clone(),
                     partition: entry.partition.partition,

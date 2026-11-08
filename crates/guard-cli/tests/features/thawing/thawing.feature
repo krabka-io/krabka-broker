@@ -37,7 +37,8 @@ Feature: Lifting a freeze spends an approved proposal for exactly that scope
       Given alice has frozen every topic starting with tenant-a.
       And alice holds a proposal to thaw literal:tenant-a.orders with 2 approvals
       When alice tries to thaw the tenant-a.orders topic with that proposal
-      Then the registry still holds the freeze on every topic starting with tenant-a.
+      Then the tool explains that the registry holds no freeze on the tenant-a.orders topic
+      And the registry still holds the freeze on every topic starting with tenant-a.
 
   Rule: A spent proposal cannot be reused
 

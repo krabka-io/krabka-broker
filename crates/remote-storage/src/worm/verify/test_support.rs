@@ -102,6 +102,31 @@ impl Archive {
 
     /// The same archive, on a store the caller chose.
     pub(super) async fn build_on(store: Arc<dyn ObjectStore>, runs: &[usize]) -> Self {
+        Self::build_rooted(store, runs, |_| PREFIX).await
+    }
+
+    /// One chain run of `segments` segments, whose first `stray_count` sit
+    /// below `stray_root` and the rest below [`PREFIX`]: what a broker
+    /// configured with a padded prefix leaves when `krabka.version` 3 is
+    /// finalized part-way through the chain.
+    pub(super) async fn build_split(stray_root: &str, stray_count: usize, segments: usize) -> Self {
+        Self::build_rooted(Arc::new(InMemory::new()), &[segments], |index| {
+            if index < stray_count {
+                stray_root
+            } else {
+                PREFIX
+            }
+        })
+        .await
+    }
+
+    /// Builds the archive with segment `i` below `root(i)`. [`Self::dir`] is
+    /// the partition directory below [`PREFIX`] whatever the roots.
+    async fn build_rooted<'r>(
+        store: Arc<dyn ObjectStore>,
+        runs: &[usize],
+        root: impl Fn(usize) -> &'r str,
+    ) -> Self {
         let ops = ObjectStoreClient::new(Arc::clone(&store));
         let TestSigner { signer, public_key } = signer(KEY_ID);
         let archiver = WormArchiver::new(Some(Arc::clone(&signer)));
@@ -114,10 +139,16 @@ impl Archive {
             let mut prev_head = ChainHead::GENESIS;
             for seq in 0..*run {
                 let md = metadata(index);
+                let segment_dir = format!("{}/{}", root(index), partition_dir_name(&md));
+                // The key the store keeps, as a manifest names it.
+                let stored = |suffix: &str| {
+                    Path::from(format!("{segment_dir}/{}", segment_file_name(&md, suffix)))
+                        .to_string()
+                };
                 let log_body = format!("segment-{index}-log-body").into_bytes();
                 let index_body = format!("segment-{index}-index").into_bytes();
-                let log_key = format!("{dir}/{}", segment_file_name(&md, ".log"));
-                let index_key = format!("{dir}/{}", segment_file_name(&md, ".index"));
+                let log_key = stored(".log");
+                let index_key = stored(".index");
                 let entries = vec![
                     put_entry(&ops, ".log", &log_key, &log_body).await,
                     put_entry(&ops, ".index", &index_key, &index_body).await,
@@ -132,7 +163,7 @@ impl Archive {
                     .unwrap(),
                 );
                 let sealed = archiver.seal(&stamped, entries.clone()).unwrap();
-                let manifest_key = format!("{dir}/{}", segment_file_name(&md, MANIFEST_SUFFIX));
+                let manifest_key = stored(MANIFEST_SUFFIX);
                 put_raw(&ops, &manifest_key, sealed.bytes.clone()).await;
                 prev_head = manifest_head(&sealed.manifest.body);
                 segments.push(Segment {

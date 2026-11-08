@@ -4,7 +4,7 @@ use {
     crate::broker::Broker,
     krabka_audit::{
         AuditError, AuditLog, AuditMode, AuditRecord, AuditSink, AuditStats, AuditWriter,
-        AuditWriterParams, ChainState, MemorySink,
+        AuditWriterParams, ChainState, MemorySink, OcsfVersion, OcsfVersionSwitch,
     },
     krabka_units::prelude::hours,
     std::sync::Arc,
@@ -36,6 +36,7 @@ impl PausedAudit {
         let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
         let params = AuditWriterParams {
             product: Broker::audit_product(),
+            ocsf_version: OcsfVersionSwitch::new(OcsfVersion::V1),
             chain: ChainState::new(),
             sink: Arc::<Self>::clone(&sink),
             timer: Arc::new(qubit_clock::StdTimer::new()),

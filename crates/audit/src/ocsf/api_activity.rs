@@ -6,8 +6,8 @@
 
 use {
     super::{
-        ProductInfo,
-        envelope::{metadata, status_id, user},
+        OcsfVersion,
+        envelope::{Envelope, status_id, user},
     },
     crate::{
         chain::to_hex,
@@ -23,11 +23,14 @@ pub(super) fn ocsf_admin_operation(
     operation: &str,
     resources: &[AuditResource],
     time_ms: i64,
-    product: &ProductInfo,
+    envelope: &Envelope<'_>,
 ) -> serde_json::Value {
-    // class 6003 API Activity, activity 0 = Unknown/Other (operation in `api`).
+    // class 6003 API Activity. The operation is named in `api` either way.
     let class_uid = 6003_i64;
-    let activity_id = 0_i64;
+    let activity_id = match envelope.version {
+        OcsfVersion::V1 => UNKNOWN,
+        OcsfVersion::V2 => admin_activity_id(operation),
+    };
     let res: Vec<serde_json::Value> = resources
         .iter()
         .map(|r| json!({ "type": r.resource_type, "name": r.name }))
@@ -43,8 +46,44 @@ pub(super) fn ocsf_admin_operation(
         "actor": { "user": user(principal) },
         "src_endpoint": { "ip": source.ip, "port": source.port },
         "resources": res,
-        "metadata": metadata(product),
+        "metadata": envelope.metadata(),
     })
+}
+
+/// OCSF API Activity 0, Unknown.
+const UNKNOWN: i64 = 0;
+
+/// The OCSF API Activity id of the Kafka admin API `operation`, in a
+/// version 2 record: 1 Create, 2 Read, 3 Update or 4 Delete, or 0 Unknown.
+///
+/// The table names every API the broker audits as an admin operation, by its
+/// exact Kafka name, so a new audited API takes 0 until it is added here.
+/// None of them reads: the broker audits only APIs that change cluster state.
+fn admin_activity_id(operation: &str) -> i64 {
+    const CREATE: i64 = 1;
+    const UPDATE: i64 = 3;
+    const DELETE: i64 = 4;
+    match operation {
+        "CreateTopics" | "CreatePartitions" | "CreateAcls" | "CreateDelegationToken" => CREATE,
+        "AlterConfigs"
+        | "IncrementalAlterConfigs"
+        | "AlterClientQuotas"
+        | "AlterPartitionReassignments"
+        | "AlterUserScramCredentials"
+        | "UpdateFeatures"
+        | "ElectLeaders"
+        | "SetTopicFreeze"
+        | "AddRaftVoter"
+        | "RemoveRaftVoter"
+        | "RenewDelegationToken"
+        | "ExpireDelegationToken" => UPDATE,
+        "DeleteTopics"
+        | "DeleteAcls"
+        | "DeleteRecords"
+        | "UnregisterBroker"
+        | "UnregisterController" => DELETE,
+        _ => UNKNOWN,
+    }
 }
 
 /// Borrowed view of the [`AuditEvent::PrivilegedAction`] fields.
@@ -73,11 +112,12 @@ pub(super) struct PrivilegedFields<'a> {
 
 pub(super) fn ocsf_privileged_action(
     f: &PrivilegedFields<'_>,
-    product: &ProductInfo,
+    envelope: &Envelope<'_>,
 ) -> serde_json::Value {
-    // class 6003 API Activity, activity 0 = Unknown/Other (operation in `api`).
+    // class 6003 API Activity, activity 0 = Unknown in both versions: a
+    // break-glass transition is named in `api` and `privileged_action`.
     let class_uid = 6003_i64;
-    let activity_id = 0_i64;
+    let activity_id = UNKNOWN;
     let counterparties: Vec<serde_json::Value> = f.counterparties.iter().map(user).collect();
     json!({
         "class_uid": class_uid,
@@ -110,6 +150,6 @@ pub(super) fn ocsf_privileged_action(
             // auditor rebuilding the signed preimage reads it from here.
             "signed_at_ms": f.signed_at_ms,
         },
-        "metadata": metadata(product),
+        "metadata": envelope.metadata(),
     })
 }

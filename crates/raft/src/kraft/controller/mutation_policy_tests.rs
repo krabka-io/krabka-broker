@@ -116,7 +116,8 @@ fn freeze_staleness_precedes_tail_and_second_freeze_is_permanent_refusal() {
         false,
         |_| false,
     );
-    assert!(matches!(stale, Err(RaftError::ChangeRejected(_))));
+    assert!(let Err(RaftError::FreezeRefused { key, refusal }) = stale);
+    assert!((key.as_str(), refusal) == ("Literal:orders", FreezeRefusal::Stale));
     let newer = policy.check_compare_and_set_records(
         &[MetadataRecord::V1TopicFreeze(freeze("orders", 11))],
         false,

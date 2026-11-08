@@ -26,7 +26,7 @@ use {
     reserved_port::reserve_port,
     std::{
         fs::{self, File},
-        net::SocketAddr,
+        net::{Ipv4Addr, SocketAddr},
         path::Path,
         process::{Command, Stdio},
         thread,
@@ -88,7 +88,7 @@ struct FatalControllerStartup {
 #[rstest::fixture]
 fn fatal_startup() -> FatalControllerStartup {
     let directory = tempfile::tempdir().expect("process workspace");
-    let (controller_reservation, controller) = reserve_port();
+    let (controller_reservation, controller) = reserve_port((Ipv4Addr::LOCALHOST, 0));
     FatalControllerStartup {
         directory,
         _controller_reservation: controller_reservation,

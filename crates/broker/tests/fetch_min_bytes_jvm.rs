@@ -28,7 +28,7 @@ mod wire;
 
 use {
     crate::{
-        support::discovery::topic_metadata_request,
+        support::{HeldPort, discovery::topic_metadata_request},
         wire::{FetchFacts, SeededTopic},
     },
     assert2::assert,
@@ -53,12 +53,20 @@ const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 /// gives up on it.
 const ORACLE_BOOT_BUDGET: Duration = Duration::from_secs(120);
 
+/// The oracle's controller port. It is only ever bound inside the container,
+/// on the container's own network namespace, so it is fixed rather than
+/// reserved on the host.
+const CONTROLLER_PORT: u16 = 9093;
+
 /// A single-node Apache Kafka broker in a container, with its client port
 /// published to the host.
 struct Oracle {
     container: String,
     bootstrap: String,
     _properties: tempfile::TempDir,
+    /// Holds the published client port until the container is removed, so
+    /// nothing else can take it before `docker run -p` binds it.
+    _port: HeldPort,
 }
 
 impl Drop for Oracle {
@@ -73,8 +81,8 @@ impl Oracle {
     /// Boot the oracle. The properties file is bind-mounted, the way the rest
     /// of the JVM harness configures a stock image.
     fn start() -> Self {
-        let port = support::free_port();
-        let controller_port = support::free_port();
+        let held = support::hold_port();
+        let port = held.port();
         let container = support::unique_container_name("krabka-fetch-min-bytes");
         // The broker advertises the published port on loopback, because the
         // only client is on the host.
@@ -82,10 +90,10 @@ impl Oracle {
             "process.roles=broker,controller\n\
              node.id=1\n\
              inter.broker.listener.name=PLAINTEXT\n\
-             controller.quorum.voters=1@localhost:{controller_port}\n\
+             controller.quorum.voters=1@localhost:{CONTROLLER_PORT}\n\
              controller.listener.names=CONTROLLER\n\
              listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT\n\
-             listeners=PLAINTEXT://0.0.0.0:{port},CONTROLLER://0.0.0.0:{controller_port}\n\
+             listeners=PLAINTEXT://0.0.0.0:{port},CONTROLLER://0.0.0.0:{CONTROLLER_PORT}\n\
              advertised.listeners=PLAINTEXT://127.0.0.1:{port}\n\
              offsets.topic.replication.factor=1\n\
              transaction.state.log.replication.factor=1\n\
@@ -132,6 +140,7 @@ impl Oracle {
             container,
             bootstrap: format!("127.0.0.1:{port}"),
             _properties: dir,
+            _port: held,
         }
     }
 

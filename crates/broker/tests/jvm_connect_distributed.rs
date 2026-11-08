@@ -45,7 +45,7 @@ mod support;
 use {
     crate::{
         jvm_acceptance::{create_console_topic_at, describe_console_topic_configs},
-        support::{docker_logs, remove_container},
+        support::{HeldPort, docker_logs, remove_container},
     },
     assert2::assert,
     jvm_acceptance::broker0_advertised,
@@ -94,6 +94,9 @@ const ROUND_TRIP_BUDGET: Duration = Duration::from_secs(180);
 struct ConnectWorker {
     container: String,
     rest: String,
+    /// Holds the published REST port until the worker is removed, so nothing
+    /// else can take it before `docker run -p` binds it.
+    _rest_port: HeldPort,
 }
 
 impl Drop for ConnectWorker {
@@ -106,7 +109,7 @@ impl ConnectWorker {
     /// is what waits for it.
     fn start(bootstrap: &str, lines: &[String]) -> Self {
         let container = support::unique_container_name("krabka-connect");
-        let rest_port = support::free_port();
+        let rest_port = support::hold_port();
         let source_lines = lines.join("\\n");
         // Written as one script rather than a bind mount: the image runs as a
         // non-root user, and everything the worker needs -- the plugin
@@ -145,7 +148,7 @@ impl ConnectWorker {
                 "--name",
                 &container,
                 "-p",
-                &format!("{rest_port}:8083"),
+                &format!("{}:8083", rest_port.port()),
                 "--add-host=host.docker.internal:host-gateway",
                 "--entrypoint",
                 "bash",
@@ -161,7 +164,8 @@ impl ConnectWorker {
         );
         Self {
             container,
-            rest: format!("127.0.0.1:{rest_port}"),
+            rest: format!("127.0.0.1:{}", rest_port.port()),
+            _rest_port: rest_port,
         }
     }
 

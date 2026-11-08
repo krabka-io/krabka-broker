@@ -7,15 +7,18 @@ use {
         GroupActorMessage, GroupKindTag, chrono_now_ms,
         pending_commits::CommitWaits,
         run_actor,
-        test_support::{empty_metadata, make_coordinator},
+        test_support::{
+            completing_classic_group, empty_metadata, make_coordinator, rpc, seed_classic_group,
+        },
     },
     crate::{
         codes,
         coordinator::{
             test_support::offset_entry,
             unified::{
-                config::NextGenConfig, group::CoordinatorGroup,
-                regex_resolver::no_topic_regex_resolver, test_support::stop_group_actor,
+                classic_state::GroupState as ClassicGroupState, config::NextGenConfig,
+                group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver,
+                test_support::stop_group_actor,
             },
         },
         test_support::{BrokenTimer, TimerFailure},
@@ -29,10 +32,11 @@ use {
     std::{
         future::poll_fn,
         sync::{Arc, atomic::Ordering},
-        time::Duration,
+        time::{Duration, Instant},
     },
     tokio::{
         sync::{mpsc, oneshot},
+        task,
         time::timeout,
     },
 };
@@ -213,6 +217,41 @@ async fn the_actor_stops_when_its_tick_cannot_be_re_armed() {
 
     check!(group.empty_since_ms.is_some());
     check!(timer.registrations() == 2);
+}
+
+/// The classic rebalance deadline fires before `m1` rejoins, so the round
+/// removes it and empties the group, and the write of the empty generation
+/// never reaches the log. Kafka's `completeClassicGroupJoin` only warns when
+/// that append fails, and keeps the new generation: the group has no member
+/// left to answer, and a reload brings back the previous generation, whose
+/// members then expire. The actor keeps serving the empty group.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rebalance_deadline_whose_empty_generation_write_fails_keeps_the_actor_running() {
+    let (coord, log) = make_coordinator();
+    let mut group = completing_classic_group(&["m1"]);
+    let state = group.as_classic_mut().unwrap();
+    state.state = ClassicGroupState::Stable;
+    state.prepare_rebalance(Duration::ZERO, Instant::now());
+    state.rebalance_deadline = Some(Instant::now());
+    log.fail_next.store(true, Ordering::SeqCst);
+    let seeded = seed_classic_group(&coord, group);
+
+    let emptied = timeout(Duration::from_secs(5), async {
+        loop {
+            let view = rpc::classic_inspect(&seeded.handle).await;
+            if view.state == ClassicGroupState::Empty {
+                return view;
+            }
+            task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the deadline empties the group");
+
+    check!(emptied.generation_id == seeded.generation + 1);
+    check!(emptied.members.is_empty());
+    check!(log.batches().await.is_empty());
+    check!(!seeded.handle.tx.is_closed(), "the actor keeps running");
 }
 
 /// An unload takes a group out of the registry, waits for its actor to stop,

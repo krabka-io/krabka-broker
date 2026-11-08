@@ -1,24 +1,9 @@
 //! Addressing and fixture paths for the suites that drive Kafka containers.
 //!
 //! A suite that runs a real Kafka container needs three things from here: ports
-//! that a concurrent run has not already taken, a container name that a
+//! that a concurrent run cannot take (held with [`hold_port`]), a container name that a
 //! concurrent run has not already taken, and the directory its fixtures were
 //! staged in, which is not the same under Cargo and under Bazel.
-
-/// A free TCP port on the loopback interface.
-///
-/// Bound and immediately dropped, so the port is free when the caller binds it.
-/// That leaves a window in which something else could take it; the alternative
-/// is a fixed port, which is not a window but a certainty whenever two tests run
-/// at once.
-#[must_use]
-pub fn free_port() -> u16 {
-    net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind an ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
 
 /// Runs a Docker fixture command and returns its trimmed stdout.
 pub fn docker(args: &[&str]) -> String {
@@ -97,18 +82,24 @@ pub struct JvmListeners {
     pub advertised: String,
     /// The controller listener, on its own port.
     pub controller: String,
+    /// Holds the client and controller ports for as long as these listeners
+    /// live, so no other socket takes one before the broker binds it or
+    /// between a broker's stop and its restart. Empty when the caller holds
+    /// the ports itself.
+    pub held: Vec<HeldPort>,
 }
 
 impl JvmListeners {
     /// Allocate a fresh set.
     #[must_use]
     pub fn allocate() -> Self {
-        let client = free_port();
-        let controller = free_port();
+        let client = hold_port();
+        let controller = hold_port();
         Self {
-            listen: format!("0.0.0.0:{client}"),
-            advertised: format!("host.docker.internal:{client}"),
-            controller: format!("0.0.0.0:{controller}"),
+            listen: format!("0.0.0.0:{}", client.port()),
+            advertised: format!("host.docker.internal:{}", client.port()),
+            controller: format!("0.0.0.0:{}", controller.port()),
+            held: vec![client, controller],
         }
     }
 
@@ -189,14 +180,14 @@ pub async fn start_host_broker() -> StartedBroker {
 pub fn init_jvm_tracing(default_filter: &str) { super::init_tracing_with(default_filter); }
 
 use {
-    crate::support::controller_voters,
+    crate::support::{HeldPort, controller_voters, hold_port},
     krabka_broker::NodeId,
     std::{
         array,
         collections::hash_map::DefaultHasher,
         env,
         fs::{self, Permissions},
-        net::{self, IpAddr, Ipv4Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         path::{Path, PathBuf},
         process::{self, Child, Output},
         sync::OnceLock,
@@ -721,11 +712,14 @@ pub fn jvm_admin_config() -> &'static Path {
         .path()
 }
 
-/// Allocate a broker set's client ports before allocating any controller ports.
-pub fn jvm_client_ports<const N: usize>() -> ([u16; N], [String; N], [String; N]) {
-    let ports: [u16; N] = array::from_fn(|_| free_port());
+/// Allocate a broker set's client ports before allocating any controller ports:
+/// the held ports, and each one's listen and advertised address. Keep the
+/// [`HeldPort`]s until the brokers no longer need the ports.
+pub fn jvm_client_ports<const N: usize>() -> ([HeldPort; N], [String; N], [String; N]) {
+    let held: [HeldPort; N] = array::from_fn(|_| hold_port());
+    let ports = held.each_ref().map(HeldPort::port);
     (
-        ports,
+        held,
         ports.map(|port| format!("0.0.0.0:{port}")),
         ports.map(|port| format!("host.docker.internal:{port}")),
     )

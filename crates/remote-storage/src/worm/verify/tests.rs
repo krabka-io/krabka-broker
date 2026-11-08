@@ -28,6 +28,91 @@ async fn an_exact_externally_authenticated_object_is_not_an_orphan() {
     check!(report.ok());
 }
 
+/// A broker configured with a padded prefix writes a partition's early
+/// manifests under the prefix as configured and, once `krabka.version` 3 is
+/// finalized, its later ones under the trimmed prefix. Given the configured
+/// prefix, the verifier reads both halves as one chain, in one directory
+/// named below the trimmed prefix.
+#[yare::parameterized(
+    padded = { " archive " },
+    padded_with_separators = { " /archive/ " },
+)]
+#[test_macro(tokio::test)]
+async fn a_chain_split_across_both_prefix_spellings_verifies_clean(configured: &str) {
+    let archive = Archive::build_split(configured, 2, 4).await;
+    let request = VerifyRequest {
+        prefix: Some(configured.to_owned()),
+        ..Default::default()
+    };
+
+    let report = archive.verify_with(&request).await;
+    let dirs: Vec<&str> = report
+        .partitions
+        .iter()
+        .map(|partition| partition.partition_dir.as_str())
+        .collect();
+    check!(report.ok(), "{report:?}");
+    check!(dirs == vec![archive.dir.as_str()]);
+    check!(report.manifests() == 4);
+    check!(report.global_orphan_objects.is_empty());
+}
+
+/// Split or not, an object no manifest names under the stray spelling is
+/// still an orphan, reported by its stored key.
+#[tokio::test]
+async fn an_orphan_under_the_configured_spelling_is_reported_by_its_stored_key() {
+    let archive = Archive::build_split(" archive ", 1, 2).await;
+    let stray = format!(
+        " archive /{}/{STRAY}",
+        archive.dir.trim_start_matches("archive/")
+    );
+    archive
+        .store
+        .put(
+            &Path::from(stray.as_str()),
+            PutPayload::from_static(b"stray"),
+        )
+        .await
+        .unwrap();
+    let request = VerifyRequest {
+        prefix: Some(" archive ".to_owned()),
+        ..Default::default()
+    };
+
+    let report = archive.verify_with(&request).await;
+    let orphans: Vec<&String> = report
+        .partitions
+        .iter()
+        .flat_map(|partition| &partition.orphan_objects)
+        .collect();
+    check!(report.first_break().is_none());
+    check!(orphans == vec![&stray]);
+}
+
+/// The capture namespace is found below whichever spelling of the prefix it
+/// was written under.
+#[yare::parameterized(
+    as_configured = { " archive /restore-inputs/0001/manifest.json" },
+    trimmed = { "archive/restore-inputs/0001/manifest.json" },
+)]
+#[test_macro(tokio::test)]
+async fn backup_capture_namespace_is_found_below_either_spelling(capture: &str) {
+    let archive = Archive::build_split(" archive ", 1, 2).await;
+    archive
+        .store
+        .put(&Path::from(capture), PutPayload::from_static(b"capture"))
+        .await
+        .unwrap();
+    let request = VerifyRequest {
+        prefix: Some(" archive ".to_owned()),
+        ..Default::default()
+    };
+
+    let report = archive.verify_with(&request).await;
+    check!(report.ok(), "{report:?}");
+    check!(report.global_orphan_objects.is_empty());
+}
+
 #[tokio::test]
 async fn backup_capture_namespace_is_not_a_classic_partition() {
     let archive = Archive::build(&[1]).await;

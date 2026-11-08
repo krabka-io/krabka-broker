@@ -3,8 +3,9 @@
 //! Each rule is a pure function of the configuration, the metadata image and
 //! the connection, so the order of the refusals is the order this module
 //! applies them: the cluster `Alter` gate, the shape of the pattern type, the
-//! scope, the registry ceiling, the operator signature, and the break-glass
-//! approval that a thaw needs.
+//! scope, the live entry a thaw lifts or the registry ceiling a new freeze
+//! meets, the operator signature, and the break-glass approval that a thaw
+//! needs.
 
 pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use {
@@ -45,8 +46,9 @@ pub(super) struct FreezeEnv<'a> {
 /// # Errors
 ///
 /// Returns the [`Refusal`] of the first rule that fails, in this order: the
-/// cluster `Alter` gate, the shape of the pattern type, the scope, the registry
-/// ceiling, the signature, and then the break-glass approval that a thaw needs.
+/// cluster `Alter` gate, the shape of the pattern type, the scope, the live
+/// entry a thaw lifts or the registry ceiling a new freeze meets, the
+/// signature, and then the break-glass approval that a thaw needs.
 pub(super) fn prepare(
     env: &FreezeEnv<'_>,
     req: &SetTopicFreezeRequest,
@@ -69,8 +71,12 @@ pub(super) fn prepare(
     check_scope(pattern_type, &req.scope)?;
 
     let replaces = live_entry(env.image, pattern_type, &req.scope).cloned();
-    if req.frozen && replaces.is_none() {
-        check_limit(env.image, env.config.freeze.max_entries)?;
+    if replaces.is_none() {
+        if req.frozen {
+            check_limit(env.image, env.config.freeze.max_entries)?;
+        } else {
+            return Err(nothing_to_thaw(pattern_type, &req.scope));
+        }
     }
 
     // The Kafka form, not the bare session name. `[[operator_keys]]` is one
@@ -87,6 +93,21 @@ pub(super) fn prepare(
         consumed_proposal,
         signature_verified,
     })
+}
+
+/// The refusal for a thaw of a scope with no live registry entry.
+///
+/// The operator named the wrong scope, so the answer is `INVALID_REQUEST` and
+/// not a broker fault. The check runs before the approval check, so the
+/// break-glass proposal the thaw names stays unspent for the right scope.
+pub(super) fn nothing_to_thaw(pattern_type: PatternType, scope: &str) -> Refusal {
+    Refusal::new(
+        codes::INVALID_REQUEST,
+        format!(
+            "{} has no live freeze entry, so there is nothing to thaw",
+            freeze_target(pattern_type, scope)
+        ),
+    )
 }
 
 /// Refuse a scope that no freeze may cover.

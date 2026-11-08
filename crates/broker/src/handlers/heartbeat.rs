@@ -8,8 +8,8 @@ use {
         broker::Broker,
         codes,
         error::BrokerError,
-        handlers::{ApiVersion, ErrorCodeResponse as _, RequestContext},
-        task_util::ask,
+        handlers::{ApiVersion, ErrorCodeResponse as _, RequestContext, actor_stopped_code},
+        task_util::{AskError, ask},
     },
     krabka_protocol::owned::{
         heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse,
@@ -46,14 +46,22 @@ pub async fn handle(
 
     let error_code = match coordinator.find(&req.group_id) {
         None => codes::UNKNOWN_MEMBER_ID,
-        // A closed mailbox and a dropped reply both read as a member the
-        // group no longer knows.
-        Some(handle) => ask(&handle.tx, |reply| GroupActorMessage::ClassicHeartbeat {
-            req,
-            reply,
-        })
-        .await
-        .unwrap_or(codes::UNKNOWN_MEMBER_ID),
+        // A closed mailbox reads as a member the group no longer knows. An
+        // actor that stopped with the heartbeat in its mailbox still holds
+        // the member in the log, so the member keeps its id and retries.
+        Some(handle) => {
+            let group_id = req.group_id.clone();
+            match ask(&handle.tx, |reply| GroupActorMessage::ClassicHeartbeat {
+                req,
+                reply,
+            })
+            .await
+            {
+                Ok(code) => code,
+                Err(AskError::Closed) => codes::UNKNOWN_MEMBER_ID,
+                Err(AskError::Dropped) => actor_stopped_code(broker, &group_id),
+            }
+        }
     };
 
     Ok(HeartbeatResponse::error(error_code))

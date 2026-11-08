@@ -35,7 +35,7 @@ Feature: Fault drills answer the broker as a misbehaving object store would
     Scenario: Throttled puts refuse to start a large upload in parts
       Given the store answers every put with SlowDown
       When a broker attempts to upload a large segment file in parts
-      Then the broker sees a backend failure naming SlowDown
+      Then the broker sees a retryable failure naming SlowDown
       And the store holds no segment
 
     Scenario: A lost object on reads is also lost to a size lookup
@@ -49,7 +49,7 @@ Feature: Fault drills answer the broker as a misbehaving object store would
     Scenario Outline: A failed step of an upload in parts leaves no segment
       Given the store answers every <step> with <fault>
       When a broker attempts to upload a large segment file in parts
-      Then the broker sees a backend failure naming <fault>
+      Then the broker sees a retryable failure naming <fault>
       And the store holds no segment
 
       Examples:
@@ -57,18 +57,28 @@ Feature: Fault drills answer the broker as a misbehaving object store would
         | a throttled part    | part       | SlowDown      |
         | a failed completion | completion | InternalError |
 
-  Rule: A transport fault reaches the broker as a backend failure, a lost object as not found
+  Rule: A throttled or failing store reaches the broker as a failure it can retry
 
-    Scenario Outline: A transport fault on a write reaches the broker as a backend failure
+    Scenario Outline: A throttled or failing write can be retried
       Given the store answers every put with <fault>
       When a broker attempts to write a segment
-      Then the broker sees a backend failure naming <fault>
+      Then the broker sees a retryable failure naming <fault>
       And the store holds no segment
 
       Examples:
         | case              | fault         |
         | a throttled store | SlowDown      |
         | a failing store   | InternalError |
+
+  Rule: A refused credential reaches the broker as a failure it cannot retry
+
+    Scenario: A write with a refused credential cannot be retried
+      Given the store answers every put with AccessDenied
+      When a broker attempts to write a segment
+      Then the broker sees a fatal failure naming AccessDenied
+      And the store holds no segment
+
+  Rule: A lost object reaches the broker as not found
 
     Scenario: A lost object reaches the broker as not found
       Given a segment has been archived
@@ -86,7 +96,7 @@ Feature: Fault drills answer the broker as a misbehaving object store would
     Scenario: A failed listing counts as an attempt
       Given the store answers every listing with InternalError
       When a broker attempts to list the store
-      Then the broker sees a backend failure naming InternalError
+      Then the broker sees a retryable failure naming InternalError
       And the store has counted 1 listing attempt
 
   Rule: A stalled call answers correctly, only late

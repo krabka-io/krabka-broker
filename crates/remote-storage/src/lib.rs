@@ -175,7 +175,7 @@ pub use {
         RemotePartitionDeleteState, TopicIdPartition,
     },
     metadata_manager::RemoteLogMetadataManager,
-    s3::S3RemoteStorage,
+    s3::{KeyPrefixForm, KeyPrefixGate, S3RemoteStorage},
     storage_manager::{
         IndexType, LOG_FILE_SUFFIX, LogSegmentData, PartitionDirName, RemoteStorageManager,
         SegmentFileName, decode_kafka_uuid, kafka_uuid, parse_partition_dir_name,

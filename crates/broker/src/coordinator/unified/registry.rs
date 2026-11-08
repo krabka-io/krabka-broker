@@ -664,6 +664,7 @@ mod tests {
         let epochs = (
             ask(&consumer.tx, |reply| GroupActorMessage::Describe { reply })
                 .await
+                .expect("a consumer group")
                 .group_epoch,
             ask(&share.tx, |reply| ShareGroupActorMessage::Describe {
                 reply,
@@ -710,7 +711,7 @@ mod tests {
             .send(GroupActorMessage::Describe { reply })
             .await
             .expect("send Describe");
-        assert!(view.await.expect("a describe view").group_epoch == 7);
+        assert!(view.await.expect("a describe view").unwrap().group_epoch == 7);
         coord.shutdown_all().await;
     }
 

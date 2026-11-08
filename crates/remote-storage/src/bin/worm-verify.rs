@@ -16,12 +16,13 @@ use {
     hex::FromHex as _,
     krabka_object_store::{
         IncompleteMultipartUpload, ObjectStoreConfig, S3Config, build_object_store,
-        list_s3_multipart_uploads,
+        list_s3_multipart_uploads, normalize_prefix,
     },
     krabka_remote_storage::{
         ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyBreak,
         VerifyDepth, VerifyRequest, verify_archive,
     },
+    object_store::path::Path as ObjectPath,
     std::{
         collections::BTreeSet, fmt::Write as _, fs, io, path::PathBuf, process::ExitCode, sync::Arc,
     },
@@ -65,8 +66,10 @@ struct VerifyArgs {
     /// Allow plaintext HTTP, for an S3-compatible endpoint served without TLS.
     #[arg(long)]
     allow_http: bool,
-    /// Key prefix inside the bucket or directory. Verifies everything when
-    /// absent.
+    /// Key prefix inside the bucket or directory, as the broker was
+    /// configured with it. The run reads both spellings a broker writes: the
+    /// prefix trimmed of surrounding whitespace and `/`, and the prefix as
+    /// given. Verifies everything when absent.
     #[arg(long, value_name = "PREFIX")]
     prefix: Option<String>,
     /// Verify only the partitions of this topic.
@@ -173,9 +176,7 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
     match verify_archive(&store, &request, &trusted).await {
         Ok(report) => {
             let uploads = match s3 {
-                Some(s3) => list_s3_multipart_uploads(&s3, args.prefix.as_deref())
-                    .await
-                    .map_err(|error| error.to_string()),
+                Some(s3) => list_uploads(&s3, args.prefix.as_deref()).await,
                 None => Ok(Vec::new()),
             };
             render_grade(&report, &grade(&report, &args, uploads))
@@ -185,6 +186,61 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The key prefixes a broker writes for `prefix`: trimmed of surrounding
+/// whitespace and `/`, as `krabka.version` 3 writes it, then as configured, as
+/// every earlier level writes it, when that is a different prefix. `None` is
+/// the whole bucket.
+fn prefix_spellings(prefix: Option<&str>) -> Vec<Option<String>> {
+    let trimmed = normalize_prefix(prefix);
+    let as_configured = prefix
+        .map(|prefix| ObjectPath::from(prefix).to_string())
+        .filter(|prefix| !prefix.is_empty());
+    if as_configured == trimmed {
+        vec![trimmed]
+    } else {
+        vec![trimmed, as_configured]
+    }
+}
+
+/// Every incomplete multipart upload below either spelling of `prefix`, each
+/// once.
+async fn list_uploads(
+    s3: &S3Config,
+    prefix: Option<&str>,
+) -> Result<Vec<IncompleteMultipartUpload>, String> {
+    let mut found: Vec<IncompleteMultipartUpload> = Vec::new();
+    for spelling in prefix_spellings(prefix) {
+        let listed = list_s3_multipart_uploads(s3, spelling.as_deref())
+            .await
+            .map_err(|error| error.to_string())?;
+        for upload in listed {
+            if !found.contains(&upload) {
+                found.push(upload);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// `key` re-rooted from the configured spelling of `prefix` to the trimmed
+/// one, so it compares with the partition directories the report names.
+fn below_trimmed_prefix(key: &str, prefix: Option<&str>) -> String {
+    let spellings = prefix_spellings(prefix);
+    let [trimmed, Some(as_configured)] = spellings.as_slice() else {
+        return key.to_owned();
+    };
+    key.strip_prefix(as_configured.as_str())
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map_or_else(
+            || key.to_owned(),
+            |rest| {
+                trimmed
+                    .as_ref()
+                    .map_or_else(|| rest.to_owned(), |root| format!("{root}/{rest}"))
+            },
+        )
 }
 
 /// Reads every trusted public key the run was given.
@@ -352,7 +408,12 @@ fn scoped_uploads(
                 .iter()
                 .map(|partition| partition.partition_dir.as_str())
                 .collect();
-            uploads.retain(|upload| upload_in_partition(&upload.key, &dirs));
+            uploads.retain(|upload| {
+                upload_in_partition(
+                    &below_trimmed_prefix(&upload.key, args.prefix.as_deref()),
+                    &dirs,
+                )
+            });
         }
         uploads
     })
@@ -699,6 +760,38 @@ mod tests {
             "archive/payments-0-id/segment.log",
             &dirs
         ));
+    }
+
+    #[yare::parameterized(
+        absent = { None, &[None] },
+        clean = { Some("archive"), &[Some("archive")] },
+        slashed = { Some("/archive/"), &[Some("archive")] },
+        padded = { Some(" archive "), &[Some("archive"), Some(" archive ")] },
+        blank = { Some("   "), &[None, Some("   ")] },
+    )]
+    fn uploads_are_listed_below_each_distinct_spelling(
+        prefix: Option<&str>,
+        expected: &[Option<&str>],
+    ) {
+        let expected: Vec<Option<String>> = expected
+            .iter()
+            .map(|spelling| spelling.map(str::to_owned))
+            .collect();
+        assert2::assert!(prefix_spellings(prefix) == expected);
+    }
+
+    #[yare::parameterized(
+        configured_spelling = { Some(" archive "), " archive /orders-0-id/segment.log", "archive/orders-0-id/segment.log" },
+        trimmed_spelling = { Some(" archive "), "archive/orders-0-id/segment.log", "archive/orders-0-id/segment.log" },
+        clean_prefix = { Some("archive"), "archive/orders-0-id/segment.log", "archive/orders-0-id/segment.log" },
+        blank_prefix = { Some("   "), "   /orders-0-id/segment.log", "orders-0-id/segment.log" },
+    )]
+    fn upload_keys_are_compared_below_the_trimmed_prefix(
+        prefix: Option<&str>,
+        key: &str,
+        expected: &str,
+    ) {
+        assert2::assert!(below_trimmed_prefix(key, prefix) == expected);
     }
 
     #[yare::parameterized(

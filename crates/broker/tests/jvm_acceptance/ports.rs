@@ -5,7 +5,7 @@
 //! suites can then run at the same time without one losing the bind.
 
 use {
-    crate::support::{JvmListeners, free_port, jvm_client_ports},
+    crate::support::{HeldPort, JvmListeners, hold_port, jvm_client_ports},
     std::array,
 };
 
@@ -24,18 +24,30 @@ pub struct Ports {
     controller: [String; 3],
     loopback: String,
     minio: u16,
+    /// Holds every port above -- the three client, three controller and the
+    /// `MinIO` ports -- for the whole process, so no other socket takes one
+    /// between scenarios or across a broker restart. Never read.
+    _held: Vec<HeldPort>,
 }
 
 pub fn ports() -> &'static Ports {
     crate::once_value!(Ports, {
         let (client, listen, advertised) = jvm_client_ports::<3>();
-        let controller: [u16; 3] = array::from_fn(|_| free_port());
+        let controller: [HeldPort; 3] = array::from_fn(|_| hold_port());
+        let minio = hold_port();
         Ports {
             client: listen,
             advertised,
-            controller: controller.map(|p| format!("0.0.0.0:{p}")),
-            loopback: format!("127.0.0.1:{}", client[0]),
-            minio: free_port(),
+            controller: controller
+                .each_ref()
+                .map(|held| format!("0.0.0.0:{}", held.port())),
+            loopback: format!("127.0.0.1:{}", client[0].port()),
+            minio: minio.port(),
+            _held: client
+                .into_iter()
+                .chain(controller)
+                .chain([minio])
+                .collect(),
         }
     })
 }
@@ -78,5 +90,6 @@ pub fn cluster_listeners<const N: usize>() -> [JvmListeners; N] {
         listen: ports().client[index].clone(),
         advertised: ports().advertised[index].clone(),
         controller: ports().controller[index].clone(),
+        held: Vec::new(),
     })
 }

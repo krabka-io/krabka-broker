@@ -8,7 +8,7 @@
 
 use {
     super::report_trigger,
-    crate::{Cli, Console, broker_codes::BARRIER_INJECTION_IN_PROGRESS, run_with},
+    crate::{Cli, Console, broker_codes::BARRIER_INJECTION_IN_PROGRESS, run_from_args, run_with},
     clap::Parser as _,
     krabka_bdd::Given,
     krabka_protocol::krabka::barrier::{
@@ -50,6 +50,8 @@ struct OperatorMessages {
     rendered: Given<Rendered>,
     /// The address the tool was pointed at.
     address: Given<String>,
+    /// The code the shipped entry point returned.
+    exit: Given<i32>,
 }
 
 #[rstest::fixture]
@@ -60,6 +62,7 @@ fn operator_messages() -> OperatorMessages {
             "address",
             "When an operator triggers a cut against an address where no broker listens",
         ),
+        exit: Given::new("exit", "When an operator runs the tool"),
     }
 }
 
@@ -192,6 +195,42 @@ fn unreachable_reported(operator_messages: &OperatorMessages, exit: i32) {
         "{rendered:?}"
     );
     assert2::check!(rendered.stderr.contains(address.as_str()), "{rendered:?}");
+}
+
+/// A flag no subcommand defines.
+const UNKNOWN_FLAG: &str = "--no-such-flag";
+
+#[when("an operator runs the tool with a flag it does not know")]
+async fn runs_with_unknown_flag(operator_messages: &mut OperatorMessages) {
+    let exit = run_from_args([
+        "krabka-barrier",
+        "--bootstrap-server",
+        "localhost:9092",
+        "list",
+        "--group",
+        "orders-cut",
+        UNKNOWN_FLAG,
+    ])
+    .await;
+    operator_messages.exit.set(exit);
+}
+
+#[when("an operator asks the tool for help")]
+async fn asks_for_help(operator_messages: &mut OperatorMessages) {
+    let exit = run_from_args(["krabka-barrier", "--help"]).await;
+    operator_messages.exit.set(exit);
+}
+
+/// clap prints its own message on stderr, so the code is what a runbook
+/// reads to tell a typo apart from a broker it could not reach.
+#[then("the tool exits {exit} because the command line is a usage error")]
+fn usage_error_reported(operator_messages: &OperatorMessages, exit: i32) {
+    assert2::check!(*operator_messages.exit.get() == exit);
+}
+
+#[then("the tool prints its help and exits {exit}")]
+fn help_printed(operator_messages: &OperatorMessages, exit: i32) {
+    assert2::check!(*operator_messages.exit.get() == exit);
 }
 
 krabka_bdd::scenarios!(

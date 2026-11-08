@@ -32,7 +32,7 @@ pub use {
     ids::{CheckpointCount, EpochMs, MaxSpoolBytes, RecordCount, Seq, SpoolBytes},
     krabka_ids::NodeId,
     log::{AuditLog, AuditMode, AuditReceiver, AuditWriter, AuditWriterParams},
-    ocsf::{ProductInfo, to_ocsf},
+    ocsf::{OcsfVersion, OcsfVersionSwitch, ProductInfo, to_ocsf},
     signing::{
         FileEd25519Signer, FreezeSigningInput, checkpoint_signing_bytes, freeze_signing_input,
         verify_signature,
