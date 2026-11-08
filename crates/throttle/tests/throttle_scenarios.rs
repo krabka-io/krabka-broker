@@ -1,11 +1,13 @@
 //! Gherkin scenarios for the broker's replication and log-directory-move
 //! quotas, bound to the features under `tests/features`.
 
+mod support;
+
 use {
     krabka_throttle::{QuotaWindow, ReplicationQuota, ThrottleState},
     krabka_units::prelude::{ByteRate, ByteRateExt as _, secs},
     qubit_clock::ManualMonotonicClock,
-    std::{num::NonZeroU32, sync::Arc, time::Duration},
+    std::{num::NonZeroU32, sync::Arc},
 };
 
 /// One kind of throttled traffic, each measured by its own broker quota.
@@ -110,10 +112,7 @@ impl ThrottledBroker {
     /// Removes the throttle rate, as deleting the dynamic broker config does.
     fn unthrottle(&self, traffic: Traffic) { self.quota(traffic).set_bound(None); }
 
-    fn pass(&self, millis: u64) {
-        let advanced = self.clock.advance(Duration::from_millis(millis));
-        assert2::assert!(let Ok(()) = advanced, "manual time moves forward");
-    }
+    fn pass(&self, millis: u64) { support::pass(&self.clock, millis); }
 
     /// Records bytes already moved, as a broker does after its read.
     fn send(&self, traffic: Traffic, sent: u64) { self.quota(traffic).record(sent); }

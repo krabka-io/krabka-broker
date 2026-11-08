@@ -1,11 +1,13 @@
 //! Gherkin scenarios for the token bucket behind the client quotas, bound to
 //! the features under `tests/features/client_quota`.
 
+mod support;
+
 use {
     krabka_throttle::{MICROS_PER_TOKEN, TokenBucket},
     krabka_units::prelude::{ByteRate, ByteRateExt as _, ByteSize, Time, secs},
     qubit_clock::ManualMonotonicClock,
-    std::{sync::Arc, time::Duration},
+    std::sync::Arc,
 };
 
 /// Kafka's default client quota window: `quota.window.num` 11 samples of
@@ -41,10 +43,7 @@ impl ClientQuota {
         self.bucket.set_byte_rate_with_burst(rate, burst);
     }
 
-    fn pass(&self, millis: u64) {
-        let advanced = self.clock.advance(Duration::from_millis(millis));
-        assert2::assert!(let Ok(()) = advanced, "manual time moves forward");
-    }
+    fn pass(&self, millis: u64) { support::pass(&self.clock, millis); }
 
     /// Charges a request in full, as the broker records it, and returns what
     /// the client owes after it, in bytes.
