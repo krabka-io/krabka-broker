@@ -69,6 +69,8 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+# No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 # A format-time metadata checkpoint, for the stale-checkpoint tests.
 krabka-format = { path = "../format" }
 rstest = { workspace = true }

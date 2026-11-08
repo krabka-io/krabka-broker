@@ -7,6 +7,6 @@ Feature: Backup client authentication configuration
     Then the requested backup operation is selected
 
     Examples:
-      | operation       |
-      | capture         |
-      | restore-offsets |
+      | case                      | operation       |
+      | a backup capture          | capture         |
+      | a consumer offset restore | restore-offsets |

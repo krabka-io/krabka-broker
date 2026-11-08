@@ -177,7 +177,10 @@ mod tests {
         assert2::assert!(payload.timestamp == Some(TimestampObservation::ForeignScenario));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/record_isolation", fixtures = [payload: PayloadScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/record_isolation",
+        fixtures = [payload: PayloadScenario],
+    );
 
     #[test]
     fn rejects_short() {

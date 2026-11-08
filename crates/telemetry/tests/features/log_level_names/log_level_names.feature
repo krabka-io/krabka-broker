@@ -5,13 +5,13 @@ Feature: Kafka log severity names
     Then the decoded severity equals the original severity
 
     Examples:
-      | name  |
-      | FATAL |
-      | ERROR |
-      | WARN  |
-      | INFO  |
-      | DEBUG |
-      | TRACE |
+      | case              | name  |
+      | the most severe   | FATAL |
+      | an error          | ERROR |
+      | a warning         | WARN  |
+      | the default level | INFO  |
+      | debug detail      | DEBUG |
+      | the most verbose  | TRACE |
 
   Scenario Outline: Non-level names are rejected
     Given Kafka log level text <name>
@@ -19,9 +19,9 @@ Feature: Kafka log severity names
     Then the text is rejected as a log severity
 
     Examples:
-      | name |
-      | info |
-      | OFF  |
+      | case                       | name |
+      | a level name in lower case | info |
+      | the Kafka OFF threshold    | OFF  |
 
   Scenario: An empty name is rejected
     Given an empty Kafka log level text

@@ -194,5 +194,8 @@ mod tests {
         check!(*md == failure_scenarios_md());
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/failure_diagrams", fixtures = [diagrams: DiagramScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/failure_diagrams",
+        fixtures = [diagrams: DiagramScenario],
+    );
 }

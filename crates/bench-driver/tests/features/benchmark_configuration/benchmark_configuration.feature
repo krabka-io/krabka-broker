@@ -5,9 +5,9 @@ Feature: Operator benchmark configuration and recorded measurements
     Then the broker pod selector is <selector>
 
     Examples:
-      | stack  | selector     |
-      | Krabka | ^demo-broker |
-      | Kafka  | ^demo-kafka- |
+      | case           | stack  | selector     |
+      | Krabka brokers | Krabka | ^demo-broker |
+      | Kafka brokers  | Kafka  | ^demo-kafka- |
 
   Scenario Outline: Acknowledgement settings select the matching producer contract
     Given benchmark acknowledgements <acks>
@@ -15,10 +15,10 @@ Feature: Operator benchmark configuration and recorded measurements
     Then the producer waits for <replicas> replicas
 
     Examples:
-      | acks   | replicas |
-      | none   | zero     |
-      | leader | one      |
-      | all    | all      |
+      | case                               | acks   | replicas |
+      | no acknowledgement                 | none   | zero     |
+      | the leader alone acknowledges      | leader | one      |
+      | every in-sync replica acknowledges | all    | all      |
 
   Scenario Outline: Compression settings select the matching producer codec
     Given benchmark compression <codec>
@@ -26,12 +26,12 @@ Feature: Operator benchmark configuration and recorded measurements
     Then the producer compression codec is <codec>
 
     Examples:
-      | codec  |
-      | none   |
-      | gzip   |
-      | snappy |
-      | lz4    |
-      | zstd   |
+      | case             | codec  |
+      | no compression   | none   |
+      | the gzip codec   | gzip   |
+      | the snappy codec | snappy |
+      | the lz4 codec    | lz4    |
+      | the zstd codec   | zstd   |
 
   Scenario: Omitting compression leaves the producer uncompressed
     Given benchmark compression is omitted
@@ -84,17 +84,17 @@ Feature: Operator benchmark configuration and recorded measurements
     Then the benchmark is refused with <requirement>
 
     Examples:
-      | field               | value  | requirement               |
-      | msg_size            | -1B    | a positive size           |
-      | msg_size            | 0      | a positive size           |
-      | key_size            | -1B    | a size of zero or more    |
-      | batch_size          | -16KiB | a positive size           |
-      | batch_size          | 0      | a positive size           |
-      | linger              | -5ms   | an extent of zero or more |
-      | duration            | -60s   | a positive extent         |
-      | duration            | 0      | a positive extent         |
-      | warmup              | -10s   | an extent of zero or more |
-      | failover.kill_after | -4s    | an extent of zero or more |
+      | case                           | field               | value  | requirement               |
+      | a negative message size        | msg_size            | -1B    | a positive size           |
+      | a zero message size            | msg_size            | 0      | a positive size           |
+      | a negative key size            | key_size            | -1B    | a size of zero or more    |
+      | a negative batch size          | batch_size          | -16KiB | a positive size           |
+      | a zero batch size              | batch_size          | 0      | a positive size           |
+      | a negative linger              | linger              | -5ms   | an extent of zero or more |
+      | a negative duration            | duration            | -60s   | a positive extent         |
+      | a zero duration                | duration            | 0      | a positive extent         |
+      | a negative warmup              | warmup              | -10s   | an extent of zero or more |
+      | a negative failover kill delay | failover.kill_after | -4s    | an extent of zero or more |
 
   Scenario Outline: A paced producer requires a positive event rate
     Given a fixed-rate benchmark paced at <rate>
@@ -102,9 +102,9 @@ Feature: Operator benchmark configuration and recorded measurements
     Then the benchmark is refused with a positive rate
 
     Examples:
-      | rate |
-      | -1/s |
-      | 0    |
+      | case            | rate |
+      | a negative rate | -1/s |
+      | a zero rate     | 0    |
 
   Scenario: Zero-valued options remain valid when they describe runnable work
     Given benchmark scenario YAML
@@ -160,8 +160,7 @@ Feature: Operator benchmark configuration and recorded measurements
     Then measurements retain exact base-unit integers in JSON
 
   Scenario: Missing optional measurements remain missing after reload
-    Given a benchmark run with distinctive throughput latency and resource measurements
-    And the run has no JVM heap nonheap page-cache or startup measurements
+    Given a benchmark run without JVM memory page-cache and startup measurements
     When the benchmark run is saved to JSON and loaded again
     Then unmeasured optional fields stay absent from the run document
     And the benchmark run retains every recorded value

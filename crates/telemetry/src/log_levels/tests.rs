@@ -128,7 +128,10 @@ fn rejected_level(level_name: &LevelNameScenario) {
     check!(level_name.parsed == Some(LevelNameObservation::Rejected));
 }
 
-rstest_bdd_macros::scenarios!("tests/features/log_level_names", fixtures = [level_name: LevelNameScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/log_level_names",
+    fixtures = [level_name: LevelNameScenario],
+);
 
 #[test]
 fn directives_in_the_spec_seed_the_logger_list() {

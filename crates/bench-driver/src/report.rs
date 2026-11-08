@@ -1272,12 +1272,6 @@ mod tests {
         }
     }
 
-    #[rstest_bdd_macros::given("comparable Krabka and Kafka failover measurements")]
-    fn comparable_failover_runs(failover_gate: &mut FailoverGateScenario) {
-        failover_gate.krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
-        failover_gate.kafka = fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000));
-    }
-
     #[rstest_bdd_macros::given(
         "Krabka's {metric} rate is {rate} per second at 6 seconds and recovers at 8 seconds"
     )]
@@ -1321,7 +1315,10 @@ mod tests {
         assert_violation_contains(&failover_gate.violations, &expected);
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/failover_qualification", fixtures = [failover_gate: FailoverGateScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/failover_qualification",
+        fixtures = [failover_gate: FailoverGateScenario],
+    );
 
     #[test]
     fn failover_gate_fails_when_krabka_message_rate_never_recovers() {

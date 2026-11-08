@@ -311,7 +311,10 @@ mod tests {
         }
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/command_config", fixtures = [command_config: CommandConfigScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/command_config",
+        fixtures = [command_config: CommandConfigScenario],
+    );
 
     #[test]
     fn diskless_capture_signing_key_is_an_explicit_pair() {

@@ -1,7 +1,4 @@
 Feature: Failover qualification against Kafka
-  Background:
-    Given comparable Krabka and Kafka failover measurements
-
   Scenario: Producer throughput must recover as quickly as Kafka
     Given Krabka's producer rate is 8500 per second at 6 seconds and recovers at 8 seconds
     When the recorded failover runs are checked against the Kafka baseline
@@ -18,6 +15,6 @@ Feature: Failover qualification against Kafka
     Then the failover gate reports <violation>
 
     Examples:
-      | dropped | latency | violation                                                |
-      | 5       | 42      | Krabka dropped 5 messages vs kafka 0                      |
-      | 0       | 90      | Krabka latency spike 90ms is higher than kafka 42ms        |
+      | case                          | dropped | latency | violation                                           |
+      | messages lost during failover | 5       | 42      | Krabka dropped 5 messages vs kafka 0                |
+      | a latency spike above Kafka   | 0       | 90      | Krabka latency spike 90ms is higher than kafka 42ms |

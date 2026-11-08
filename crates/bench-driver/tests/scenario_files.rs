@@ -8,7 +8,7 @@ use {
     krabka_bench_driver::scenario::{LoadMode, Scenario},
     krabka_units::prelude::*,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenarios, then, when},
+    rstest_bdd_macros::{given, then, when},
     std::{error::Error, fs, path::PathBuf},
 };
 
@@ -29,21 +29,23 @@ fn benchmark() -> BenchmarkScenario {
     }
 }
 
-#[given("benchmark scenario {filename}")]
-fn scenario_path(benchmark: &mut BenchmarkScenario, filename: String) -> Result<(), String> {
+#[given("the shipped benchmark scenario {filename} has been loaded")]
+fn loaded_scenario(
+    benchmark: &mut BenchmarkScenario,
+    filename: String,
+) -> Result<(), Box<dyn Error>> {
     benchmark.paths = vec![corpus::bench_dir("scenarios")?.join(filename)];
-    Ok(())
+    load_scenarios(benchmark)
 }
 
-#[given("all checked in benchmark scenarios")]
-fn corpus_paths(benchmark: &mut BenchmarkScenario) -> Result<(), String> {
+#[given("all checked in benchmark scenarios have been loaded")]
+fn loaded_corpus(benchmark: &mut BenchmarkScenario) -> Result<(), Box<dyn Error>> {
     // Directory discovery follows Bazel runfile symlinks and fails on an empty
     // corpus. New YAML files remain covered before gaining a named scenario.
     benchmark.paths = corpus::yaml_files("scenarios")?;
-    Ok(())
+    load_scenarios(benchmark)
 }
 
-#[when("the benchmark YAML is loaded")]
 fn load_scenarios(benchmark: &mut BenchmarkScenario) -> Result<(), Box<dyn Error>> {
     assert!(!benchmark.paths.is_empty());
     for path in &benchmark.paths {
@@ -89,4 +91,7 @@ fn round_trip(benchmark: &BenchmarkScenario) {
     assert!(benchmark.reparsed == benchmark.loaded);
 }
 
-scenarios!("tests/features/scenario_files", fixtures = [benchmark: BenchmarkScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/scenario_files",
+    fixtures = [benchmark: BenchmarkScenario],
+);

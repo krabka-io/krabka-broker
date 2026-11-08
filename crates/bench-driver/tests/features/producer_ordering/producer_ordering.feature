@@ -5,6 +5,6 @@ Feature: Benchmark producer request ordering
     Then at most <maximum> produce requests are in flight
 
     Examples:
-      | enabled | maximum |
-      | true    | 5       |
-      | false   | 128     |
+      | case                                       | enabled | maximum |
+      | an idempotent producer keeps batch order   | true    | 5       |
+      | a non-idempotent producer pipelines freely | false   | 128     |

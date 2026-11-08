@@ -640,7 +640,14 @@ mod tests {
         check!(settings.selected_compression == Some(Compression::None));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/benchmark_configuration", fixtures = [settings: ProducerSettings, yaml_scenario: YamlScenario, run_document: RunDocument]);
+    krabka_bdd::scenarios!(
+        "tests/features/benchmark_configuration",
+        fixtures = [
+            settings: ProducerSettings,
+            yaml_scenario: YamlScenario,
+            run_document: RunDocument,
+        ],
+    );
 
     struct YamlScenario {
         source: String,
@@ -852,10 +859,10 @@ mod tests {
     )]
     fn measured_run(run_document: &mut RunDocument) { run_document.original = Some(run_output()); }
     #[rstest_bdd_macros::given(
-        "the run has no JVM heap nonheap page-cache or startup measurements"
+        "a benchmark run without JVM memory page-cache and startup measurements"
     )]
-    fn absent_measurements(run_document: &mut RunDocument) {
-        let output = run_document.original.as_mut().expect("run given");
+    fn run_without_optional_measurements(run_document: &mut RunDocument) {
+        let output = run_document.original.insert(run_output());
         output.resource.jvm_heap_used = None;
         output.resource.jvm_nonheap_used = None;
         output.resource.kafka_page_cache_approx = None;

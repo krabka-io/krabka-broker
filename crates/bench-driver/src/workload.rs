@@ -1708,7 +1708,10 @@ mod tests {
         check!(in_flight.cap == Some(maximum));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/producer_ordering", fixtures = [in_flight: InFlightScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/producer_ordering",
+        fixtures = [in_flight: InFlightScenario],
+    );
 
     fn cfg(broker_count: u32) -> DriverConfig {
         DriverConfig {
