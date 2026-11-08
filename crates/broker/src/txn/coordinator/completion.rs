@@ -15,12 +15,14 @@
 
 use {
     super::TxnCoordinator,
-    crate::txn::{
-        handlers::end_txn::completion_producer_identity,
-        marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
-        state::{TxnEntry, TxnState},
-        util::now_millis,
-        version::TxnVersion,
+    crate::{
+        time_util,
+        txn::{
+            handlers::end_txn::completion_producer_identity,
+            marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
+            state::{TxnEntry, TxnState},
+            version::TxnVersion,
+        },
     },
     krabka_log::ProducerId,
     krabka_verified::transaction::{
@@ -277,7 +279,7 @@ impl TxnCoordinator {
             CompletionDecision::Proceed => entry.clone(),
         };
         let identity = completion_producer_identity(&completed);
-        apply_completion(&mut completed, complete, identity, now_millis());
+        apply_completion(&mut completed, complete, identity, time_util::now_ms());
         // The entry stays locked until the completion is written.
         let written = self.put_under_state_partition_lock(completed, txnv).await;
         drop(entry);

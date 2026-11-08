@@ -24,7 +24,8 @@ use {
         error::BrokerError,
         handlers::{ApiVersion, RequestContext, acl_denied},
         re2j::compile_full_match,
-        txn::{state::TxnState, util::now_millis},
+        time_util,
+        txn::state::TxnState,
     },
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
@@ -119,7 +120,7 @@ pub async fn handle(
 
     let state_filter: HashSet<String> = req.state_filters.iter().cloned().collect();
     let pid_filter: HashSet<i64> = req.producer_id_filters.iter().copied().collect();
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
 
     // KIP-664: if filtered states include a string the broker doesn't
     // recognize, surface it in `unknown_state_filters` so the client

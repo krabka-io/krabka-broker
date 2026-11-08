@@ -1,10 +1,7 @@
 //! Independent wire and file-region fixtures shared by network tests and benchmarks.
 
 use {
-    crate::{
-        fixtures::{name, named_items},
-        meta::argument_array,
-    },
+    crate::fixtures::{name, named_items},
     moxy::{ast::ParseError, token::TokenStream},
 };
 
@@ -65,18 +62,6 @@ pub fn jvm_checkpoint_dump(input: TokenStream) -> Result<TokenStream, ParseError
                     "--files", &format!("/work/{filename}"),
                 ])
                 .output().expect("docker run kafka-dump-log")
-        }
-    })
-}
-
-/// Define an epoch-millisecond reader with the caller's attributes and overflow fallback.
-pub fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [signature, overflow]: [TokenStream; 2] = argument_array(input)?;
-    Ok(moxy::template! {
-        {{ signature }}() -> i64 {
-            use ::std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now().duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or({{ overflow }}))
         }
     })
 }

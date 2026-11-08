@@ -24,7 +24,8 @@
 use {
     crate::{
         metadata_source::MetadataSource,
-        txn::{coordinator::TxnCoordinator, util::now_millis, version::resolve_txn_version},
+        time_util,
+        txn::{coordinator::TxnCoordinator, version::resolve_txn_version},
     },
     krabka_units::Time,
     std::sync::Arc,
@@ -60,7 +61,7 @@ async fn sweep_once(coord: &Arc<TxnCoordinator>, controller: &dyn MetadataSource
         .await
         .finished()
         .await;
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let aborted = coord.sweep_expired(now_ms, txnv).await;
     if aborted.is_empty() {
         debug!("txn reaper: no timed-out transactions");

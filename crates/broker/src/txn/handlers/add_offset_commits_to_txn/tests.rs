@@ -5,6 +5,7 @@ use {
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
         test_support::open_partition,
+        time_util,
         txn::{bootstrap, two_pc::should_abort_idle_txn},
     },
     assert2::{assert, check},
@@ -190,7 +191,7 @@ async fn the_reaper_does_not_abort_a_transaction_that_add_offsets_just_opened() 
     check!(code == codes::NONE);
 
     let stored = coordinator.get(TID).expect("entry").lock().await.clone();
-    let now = now_millis();
+    let now = time_util::now_ms();
     check!(
         !should_abort_idle_txn(stored.state, stored.txn_timeout_ms, stored.start_ms, now),
         "start_ms={} now={now}",

@@ -45,7 +45,7 @@ pub const BOUND_MS: i64 = 250;
 
 /// The wall-clock instant that `epoch_ms` names.
 ///
-/// It is the inverse of [`crate::time_util::epoch_millis`] over the constants
+/// It is the inverse of [`krabka_log::epoch_ms`] over the constants
 /// these tests are written in. 0.13 of qubit-clock re-exports no date type, so
 /// a fixture that starts from a millisecond literal such as [`NOW_MS`] has to
 /// build the [`SystemTime`] itself.

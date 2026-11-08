@@ -897,16 +897,6 @@ pub fn jvm_checkpoint_dump_fixture(tokens: TokenStream) -> Result<TokenStream, P
     network_fixtures::jvm_checkpoint_dump(tokens)
 }
 
-/// Define a wall-clock reader preserving caller attributes and overflow behavior.
-///
-/// # Errors
-///
-/// Rejects input outside this macro's syntax.
-#[cfg_attr(not(test), moxy::function)]
-pub fn epoch_millis_fn(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    network_fixtures::epoch_millis(tokens)
-}
-
 /// Generate checked Unix-millisecond fixtures with explicit panic contexts.
 ///
 /// # Errors
@@ -1117,7 +1107,7 @@ mod export_contract_tests {
         meta::{FunctionMacro, empty_input_accepted},
     };
 
-    const FUNCTION_MACROS: [FunctionMacro; 59] = [
+    const FUNCTION_MACROS: [FunctionMacro; 58] = [
         FunctionMacro {
             name: "cli_main",
             expand: cli_main,
@@ -1297,10 +1287,6 @@ mod export_contract_tests {
         FunctionMacro {
             name: "jvm_checkpoint_dump_fixture",
             expand: jvm_checkpoint_dump_fixture,
-        },
-        FunctionMacro {
-            name: "epoch_millis_fn",
-            expand: epoch_millis_fn,
         },
         FunctionMacro {
             name: "unix_millis_fixture",

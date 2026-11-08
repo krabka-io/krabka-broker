@@ -63,6 +63,7 @@
 //! [`verification`]), then the KIP-447 fencing checks.
 
 use {
+    crate::time_util,
     krabka_ids::PartitionIndex,
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::{
@@ -118,7 +119,6 @@ use {
         handlers::{RequestContext, group_partition_loading},
         txn::{
             state::TopicPartition,
-            util::now_millis,
             version::{TxnVersion, resolve_txn_version},
         },
     },
@@ -431,7 +431,7 @@ async fn append_and_mark(
             node_id: broker.config.node_id,
         },
         offsets_partition,
-        now_millis(),
+        time_util::now_ms(),
         sweep,
         checks,
     )
