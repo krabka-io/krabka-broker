@@ -16,26 +16,17 @@ use {
         metadata_source::MetadataSource,
         metrics::{BrokerMetrics, DirectoryLabel, RaftStateLabel},
         partition_registry::PartitionRegistry,
+        time_util,
     },
     krabka_units::convert::TimeExt as _,
     std::{
         collections::{HashMap, HashSet},
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
     },
     tokio::time,
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
 };
-
-/// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
-fn epoch_now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-        .unwrap_or(0)
-}
 
 /// Converts a count to the `i64` a gauge holds, saturating at `i64::MAX`.
 fn gauge_count(count: usize) -> i64 { i64::try_from(count).unwrap_or(i64::MAX) }
@@ -480,7 +471,7 @@ pub(super) fn spawn_broker_gauge_updater(
             };
             cluster.publish(&metrics);
 
-            update_metadata_health_metrics(&metrics, controller.as_ref(), epoch_now_ms());
+            update_metadata_health_metrics(&metrics, controller.as_ref(), time_util::now_ms());
 
             // Broker lifecycle state (#390)
             if let Some(h) = &health {
