@@ -38,6 +38,10 @@
 
 mod support;
 
+/// The dev server certificate scenario 4's TLS listener presents. Nothing
+/// verifies it -- the peer under test never sends a `ClientHello` -- but the
+/// listener will not bind without one.
+use support::tls::{DEV_CERT, DEV_KEY};
 use {
     assert2::assert,
     bytes::{Buf, BufMut, BytesMut},
@@ -68,12 +72,6 @@ use {
         time,
     },
 };
-
-/// The dev server certificate scenario 4's TLS listener presents. Nothing
-/// verifies it -- the peer under test never sends a `ClientHello` -- but the
-/// listener will not bind without one.
-const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
-const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
 
 /// Writes one PEM fixture into `dir` and returns its path.
 fn write_pem(dir: &Path, name: &str, body: &str) -> PathBuf {

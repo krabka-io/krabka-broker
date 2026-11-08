@@ -40,11 +40,8 @@ use {
         encoding::EncodeLabelSet,
         metrics::family::{Family, MetricConstructor},
     },
-    std::{
-        collections::BTreeSet,
-        env, fs, hash,
-        path::{Path, PathBuf},
-    },
+    std::{collections::BTreeSet, env, fs, hash, path::PathBuf},
+    support::repository::repo_root,
 };
 
 mod support;
@@ -60,16 +57,6 @@ const BODY_FILE: &str = "docs/operations/metrics-body.txt";
 
 /// Environment variable naming a path to write the fresh body to.
 const BODY_OUT_ENV: &str = "KRABKA_METRICS_BODY_OUT";
-
-/// The repository root, under Cargo and under Bazel.
-fn repo_root() -> PathBuf {
-    let crate_dir = support::manifest_dir();
-    crate_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/broker sits two levels below the repository root")
-        .to_path_buf()
-}
 
 /// `body` with the sample lines of every counter and gauge family sorted.
 ///

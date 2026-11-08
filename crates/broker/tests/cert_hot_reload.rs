@@ -28,11 +28,9 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
+    support::tls::{DEV_CERT as DEV_CERT_A, DEV_KEY as DEV_KEY_A},
     tokio::time,
 };
-
-const DEV_CERT_A: &str = include_str!("fixtures/security/dev_cert.pem");
-const DEV_KEY_A: &str = include_str!("fixtures/security/dev_key.pem");
 const DEV_CERT_B: &str = include_str!("fixtures/security/dev_cert_alt.pem");
 const DEV_KEY_B: &str = include_str!("fixtures/security/dev_key_alt.pem");
 
