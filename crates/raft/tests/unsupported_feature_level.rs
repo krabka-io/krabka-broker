@@ -38,15 +38,6 @@ const REFUSAL: &str = "Tried to apply FeatureLevelRecord \
     FeatureLevelRecord(name='metadata.version', featureLevel=34), \
     but this controller only supports versions 7-33";
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct FeatureControllerSetup {
-    cluster_id: Uuid,
-    #[default(BootstrapMode::Bootstrap)]
-    mode: BootstrapMode,
-    #[default(UnstableFeatureVersions::Disabled)]
-    unstable: UnstableFeatureVersions,
-}
-
 #[bon::builder]
 fn config(
     dir: &TempDir,
@@ -54,16 +45,6 @@ fn config(
     #[builder(default = BootstrapMode :: Bootstrap)] mode: BootstrapMode,
     #[builder(default = UnstableFeatureVersions :: Disabled)] unstable: UnstableFeatureVersions,
 ) -> ControllerConfig {
-    let setup = FeatureControllerSetup {
-        cluster_id,
-        mode,
-        unstable,
-    };
-    let FeatureControllerSetup {
-        cluster_id,
-        mode,
-        unstable,
-    } = setup;
     let mut cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
     cfg.election_timeout = FAST_ELECTION_TIMEOUT;
     cfg.cluster_id = Some(cluster_id);

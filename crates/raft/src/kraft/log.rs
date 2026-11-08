@@ -627,19 +627,12 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct KraftSeedCount(usize);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct KraftLogSeedSetup {
-        #[default(KraftSeedCount(5))]
-        records: KraftSeedCount,
-    }
-
     #[bon::builder]
     fn append_seeded_records(
         log: &mut KraftLog,
         #[builder(into, default = KraftSeedCount (5))] records: KraftSeedCount,
     ) {
-        let setup = KraftLogSeedSetup { records };
-        for _ in 0..setup.records.0 {
+        for _ in 0..records.0 {
             log.append(&mut batch(0, 1, b"x"), 0).unwrap();
         }
     }
@@ -654,11 +647,10 @@ mod tests {
     fn seeded_log(
         #[builder(into, default = KraftSeedCount (5))] records: KraftSeedCount,
     ) -> LogInDir {
-        let setup = KraftLogSeedSetup { records };
         let LogInDir { mut log, dir } = open_tmp();
         append_seeded_records()
             .log(&mut log)
-            .records(setup.records)
+            .records(records)
             .call();
         LogInDir { log, dir }
     }
