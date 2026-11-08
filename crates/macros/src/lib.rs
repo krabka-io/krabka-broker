@@ -1687,16 +1687,6 @@ pub fn java_string_producer_source(tokens: TokenStream) -> Result<TokenStream, P
     network_fixtures::java_string_producer(tokens)
 }
 
-/// Define a wall-clock reader preserving caller attributes and overflow behavior.
-///
-/// # Errors
-///
-/// Rejects input outside this macro's syntax.
-#[cfg_attr(not(test), moxy::function)]
-pub fn epoch_millis_fn(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    network_fixtures::epoch_millis(tokens)
-}
-
 /// Gate original items or expressions on the supported sendfile platforms.
 #[moxy::function(name = "sendfile_platform")]
 #[expect(
@@ -2130,7 +2120,7 @@ mod export_contract_tests {
         name: &'static str,
         expand: Expand,
     }
-    const FUNCTION_MACROS: [FunctionMacro; 83] = [
+    const FUNCTION_MACROS: [FunctionMacro; 82] = [
         FunctionMacro {
             name: "dispatch_table",
             expand: dispatch_table,
@@ -2402,10 +2392,6 @@ mod export_contract_tests {
         FunctionMacro {
             name: "java_string_producer_source",
             expand: java_string_producer_source,
-        },
-        FunctionMacro {
-            name: "epoch_millis_fn",
-            expand: epoch_millis_fn,
         },
         FunctionMacro {
             name: "unix_millis_fixture",
