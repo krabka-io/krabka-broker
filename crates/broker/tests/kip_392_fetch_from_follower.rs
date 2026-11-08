@@ -106,17 +106,6 @@ use crate::support::client::value_batch as record_batch;
 /// at `offset`, with `rack_id`. The shared `Client` negotiates the broker's
 /// max Fetch version (>= 11). So the client serializes `rack_id` on the wire,
 /// and the decoded response carries `preferred_read_replica`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ConsumerFetchSetup<'a> {
-    #[default("t")]
-    topic: &'a str,
-    #[default(WireUuid::ZERO)]
-    topic_id: WireUuid,
-    offset: krabka_ids::Offset,
-    #[default(RACK_B)]
-    rack: &'a str,
-}
-
 #[bon::builder]
 fn consumer_fetch(
     #[builder(default = "t")] topic: &'_ str,
@@ -124,18 +113,6 @@ fn consumer_fetch(
     #[builder(into, default)] offset: krabka_ids::Offset,
     #[builder(default = RACK_B)] rack: &'_ str,
 ) -> FetchRequest {
-    let setup = ConsumerFetchSetup {
-        topic,
-        topic_id,
-        offset,
-        rack,
-    };
-    let ConsumerFetchSetup {
-        topic,
-        topic_id,
-        offset,
-        rack,
-    } = setup;
     FetchRequest {
         replica_id: -1,
         max_wait_ms: 800,

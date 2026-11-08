@@ -635,13 +635,6 @@ pub async fn start_topic(
     (broker, client, tid)
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct StartGroupTopicSetup<'a> {
-    pub topic: ShareTopicSetup<'a>,
-    #[default("g1")]
-    pub group: &'a str,
-}
-
 /// A running broker, a client connected to it and the id of the data topic it
 /// hosts.
 pub struct StartedShareTopic {
@@ -657,16 +650,15 @@ pub async fn start_group_topic(
     #[builder(default)] topic: ShareTopicSetup<'_>,
     #[builder(default = "g1")] group: &'_ str,
 ) -> StartedShareTopic {
-    let setup = StartGroupTopicSetup { topic, group };
     let (broker, client, topic_id) = Box::pin(
         start_topic()
             .cfg(config)
-            .topic(setup.topic.topic)
-            .partitions(setup.topic.partitions)
+            .topic(topic.topic)
+            .partitions(topic.partitions)
             .call(),
     )
     .await;
-    bootstrap_share_state(&broker, &client, setup.group).await;
+    bootstrap_share_state(&broker, &client, group).await;
     StartedShareTopic {
         broker,
         client,
@@ -748,12 +740,6 @@ pub struct RetryEpochs {
     pub end: ShareSessionEpoch,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct RefetchSetup<'a> {
-    pub session: ShareSessionSetup<'a>,
-    pub epochs: RetryEpochs,
-}
-
 /// Retry empty acquisitions over explicit session epochs, retaining 100ms spacing.
 #[bon::builder]
 pub async fn refetch_while_empty(
@@ -762,8 +748,7 @@ pub async fn refetch_while_empty(
     #[builder(default)] session: ShareSessionSetup<'_>,
     #[builder(default)] epochs: RetryEpochs,
 ) -> share_fetch_response::PartitionData {
-    let setup = RefetchSetup { session, epochs };
-    for epoch in setup.epochs.start.0..setup.epochs.end.0 {
+    for epoch in epochs.start.0..epochs.end.0 {
         if acquired_count(&row) > 0 {
             break;
         }
@@ -771,7 +756,7 @@ pub async fn refetch_while_empty(
         row = fetch_row(
             client,
             share_fetch_req()
-                .session(setup.session.fetch_at(ShareSessionEpoch(epoch)).session)
+                .session(session.fetch_at(ShareSessionEpoch(epoch)).session)
                 .call(),
             FetchSessionMode::Incremental,
         )
@@ -781,19 +766,6 @@ pub async fn refetch_while_empty(
 }
 
 /// An empty incremental session request with explicit forgotten topics and byte budget.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct EmptySessionSetup {
-    #[default("g1".into())]
-    pub group: String,
-    #[default("member".into())]
-    pub member: String,
-    #[default(ShareSessionEpoch(1))]
-    pub epoch: ShareSessionEpoch,
-    #[default(FetchByteLimit(1 << 20))]
-    pub max_bytes: FetchByteLimit,
-    pub forgotten_topics_data: Vec<ForgottenTopic>,
-}
-
 #[bon::builder]
 pub fn empty_session_request(
     #[builder(default = "g1" . into ())] group: String,
@@ -802,20 +774,6 @@ pub fn empty_session_request(
     #[builder(into, default = FetchByteLimit (1 << 20))] max_bytes: FetchByteLimit,
     #[builder(default)] forgotten_topics_data: Vec<ForgottenTopic>,
 ) -> ShareFetchRequest {
-    let setup = EmptySessionSetup {
-        group,
-        member,
-        epoch,
-        max_bytes,
-        forgotten_topics_data,
-    };
-    let EmptySessionSetup {
-        group,
-        member,
-        epoch,
-        max_bytes,
-        forgotten_topics_data,
-    } = setup;
     ShareFetchRequest {
         group_id: Some(group),
         member_id: Some(member),
@@ -866,18 +824,6 @@ pub fn acknowledge_topic(
     }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AcknowledgeRequestSetup {
-    #[default(Some("g1".into()))]
-    pub group_id: Option<String>,
-    #[default(Some("member".into()))]
-    pub member_id: Option<String>,
-    #[default(ShareSessionEpoch(1))]
-    pub epoch: ShareSessionEpoch,
-    pub mode: RenewalMode,
-    pub topics: Vec<AcknowledgeTopic>,
-}
-
 #[bon::builder]
 pub fn acknowledge_request(
     #[builder(required, default = Some ("g1" . into ()))] group_id: Option<String>,
@@ -886,20 +832,6 @@ pub fn acknowledge_request(
     #[builder(default)] mode: RenewalMode,
     #[builder(default)] topics: Vec<AcknowledgeTopic>,
 ) -> ShareAcknowledgeRequest {
-    let setup = AcknowledgeRequestSetup {
-        group_id,
-        member_id,
-        epoch,
-        mode,
-        topics,
-    };
-    let AcknowledgeRequestSetup {
-        group_id,
-        member_id,
-        epoch,
-        mode,
-        topics,
-    } = setup;
     let mut request = ShareAcknowledgeRequest {
         group_id,
         member_id,

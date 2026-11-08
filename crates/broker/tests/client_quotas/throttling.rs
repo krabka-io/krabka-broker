@@ -193,13 +193,6 @@ fn check_successful_produce(response: &ProduceResponse) {
     );
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct QuotaSettingSetup<'a> {
-    #[default("producer_byte_rate")]
-    key: &'a str,
-    value: QuotaValue,
-}
-
 #[bon::builder]
 async fn set_alice_quota(
     broker: &krabka_broker::BrokerHandle,
@@ -207,13 +200,12 @@ async fn set_alice_quota(
     #[builder(default = "producer_byte_rate")] key: &'_ str,
     #[builder(into, default)] value: QuotaValue,
 ) {
-    let setup = QuotaSettingSetup { key, value };
     kafka_wire::quotas::set_user_quota()
         .broker(broker)
         .addr(addr)
         .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
-        .key(setup.key)
-        .value(setup.value)
+        .key(key)
+        .value(value)
         .call()
         .await;
 }

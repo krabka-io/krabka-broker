@@ -114,21 +114,6 @@ pub fn request_body_capacity(body: &[u8]) -> ByteSize {
 ///
 /// # Panics
 /// Panics with the caller's diagnostic if its client ID does not fit the header's i16 length.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct WireFrameSetup<'a> {
-    #[default(krabka_ids::ApiKey(18))]
-    pub api_key: krabka_ids::ApiKey,
-    pub version: krabka_ids::ApiVersion,
-    #[default(CorrelationId(1))]
-    pub correlation: CorrelationId,
-    pub header: HeaderEncoding,
-    #[default("test-client")]
-    pub client_id: &'a str,
-    pub body: &'a [u8],
-    pub capacity: Option<ByteSize>,
-    pub length_context: Option<&'a str>,
-}
-
 #[bon::builder]
 pub fn request_frame(
     #[builder(into, default = krabka_ids :: ApiKey (18))] api_key: krabka_ids::ApiKey,
@@ -140,26 +125,6 @@ pub fn request_frame(
     capacity: Option<ByteSize>,
     length_context: Option<&'_ str>,
 ) -> bytes::BytesMut {
-    let setup = WireFrameSetup {
-        api_key,
-        version,
-        correlation,
-        header,
-        client_id,
-        body,
-        capacity,
-        length_context,
-    };
-    let WireFrameSetup {
-        api_key,
-        version,
-        correlation,
-        header,
-        client_id,
-        body,
-        capacity,
-        length_context,
-    } = setup;
     let mut frame = capacity.map_or_else(bytes::BytesMut::new, |capacity| {
         bytes::BytesMut::with_capacity(capacity.bytes_usize())
     });

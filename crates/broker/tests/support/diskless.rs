@@ -28,14 +28,6 @@ pub fn flush_index_metadata(bootstrap: String, voters: usize) -> RlmmKind {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct WalVoterCount(pub usize);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct PeerCredentialsSetup<'a> {
-    #[default(WalVoterCount(3))]
-    pub voters: WalVoterCount,
-    #[default("diskless-e2e")]
-    pub password: &'a str,
-}
-
 pub fn broker_principal(node: NodeId) -> String { format!("broker-{node}") }
 
 /// Preserve the lazy ordered peer credential construction and checked node ids.
@@ -47,11 +39,10 @@ pub fn peer_credentials(
     #[builder(into, default = WalVoterCount (3))] voters: WalVoterCount,
     #[builder(default = "diskless-e2e")] password: &'_ str,
 ) -> impl Iterator<Item = (String, String)> + '_ {
-    let setup = PeerCredentialsSetup { voters, password };
-    (0..setup.voters.0).map(move |peer| {
+    (0..voters.0).map(move |peer| {
         (
             broker_principal(NodeId(u64::try_from(peer + 1).expect("small cluster"))),
-            setup.password.to_owned(),
+            password.to_owned(),
         )
     })
 }

@@ -69,16 +69,6 @@ pub fn transaction_topic(name: &str, partitions: Vec<i32>) -> AddPartitionsToTxn
 }
 
 /// Both request layouts carry the same explicit transaction and partition set.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct TransactionPartitionsSetup<'a> {
-    #[default("transaction")]
-    pub transactional_id: &'a str,
-    pub producer: ProducerIdentity,
-    pub registration: PartitionRegistration,
-    #[default(vec![transaction_topic("orders", vec![0])])]
-    pub topics: Vec<AddPartitionsToTxnTopic>,
-}
-
 #[bon::builder]
 pub fn partitions_request(
     #[builder(default = "transaction")] transactional_id: &'_ str,
@@ -88,18 +78,6 @@ pub fn partitions_request(
         AddPartitionsToTxnTopic,
     >,
 ) -> AddPartitionsToTxnRequest {
-    let setup = TransactionPartitionsSetup {
-        transactional_id,
-        producer,
-        registration,
-        topics,
-    };
-    let TransactionPartitionsSetup {
-        transactional_id,
-        producer,
-        registration,
-        topics,
-    } = setup;
     AddPartitionsToTxnRequest {
         transactions: vec![AddPartitionsToTxnTransaction {
             transactional_id: transactional_id.into(),
@@ -197,17 +175,6 @@ pub fn partition_error(response: &AddPartitionsToTxnResponse, legacy: bool) -> i
 
 use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct TransactionTopicSetup<'a> {
-    #[default("orders")]
-    pub name: &'a str,
-    #[default(TopicPartitionCount(1))]
-    pub partitions: TopicPartitionCount,
-    pub configs: Vec<CreatableTopicConfig>,
-    #[default("CreateTopics")]
-    pub context: &'a str,
-}
-
 #[bon::builder]
 pub async fn create_topic(
     client: &krabka_client_core::Client,
@@ -216,18 +183,6 @@ pub async fn create_topic(
     #[builder(default)] configs: Vec<CreatableTopicConfig>,
     #[builder(default = "CreateTopics")] context: &'_ str,
 ) {
-    let setup = TransactionTopicSetup {
-        name,
-        partitions,
-        configs,
-        context,
-    };
-    let TransactionTopicSetup {
-        name,
-        partitions,
-        configs,
-        context,
-    } = setup;
     let response = client
         .send(create_topic_request(CreatableTopic {
             configs,
@@ -362,29 +317,22 @@ pub async fn settled_produce(
     .await
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AssignedTransactionTopicSetup<'a> {
-    pub topic: AssignedTopicSetup,
-    pub context: Option<&'a str>,
-}
-
 #[bon::builder]
 pub async fn create_assigned_topic(
     client: &krabka_client_core::Client,
     #[builder(default)] topic: AssignedTopicSetup,
     context: Option<&'_ str>,
 ) -> Uuid {
-    let setup = AssignedTransactionTopicSetup { topic, context };
     let created = client
         .send(create_topic_request(
             assigned_topic()
-                .name(setup.topic.name)
-                .replicas(setup.topic.replicas)
+                .name(topic.name)
+                .replicas(topic.replicas)
                 .call(),
         ))
         .await
         .expect("CreateTopics");
-    match setup.context {
+    match context {
         Some(context) => assert!(created.topics[0].error_code == 0, "{context}: {created:?}"),
         None => assert!(created.topics[0].error_code == 0, "{created:?}"),
     }
@@ -446,17 +394,6 @@ pub async fn read_committed_through(
 
 use krabka_client_core::security::ClientSecurity;
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct TransactionConsumerSetup<'a> {
-    #[default("transaction-reader".into())]
-    pub group: String,
-    #[default("orders")]
-    pub topic: &'a str,
-    #[default(IsolationLevel::ReadCommitted)]
-    pub isolation: IsolationLevel,
-    pub security: Option<ClientSecurity>,
-}
-
 #[bon::builder]
 pub async fn consumer(
     bootstrap: impl Into<String>,
@@ -465,18 +402,6 @@ pub async fn consumer(
     #[builder(default = IsolationLevel :: ReadCommitted)] isolation: IsolationLevel,
     security: Option<ClientSecurity>,
 ) -> Result<Consumer, krabka_client_consumer::ConsumerError> {
-    let setup = TransactionConsumerSetup {
-        group,
-        topic,
-        isolation,
-        security,
-    };
-    let TransactionConsumerSetup {
-        group,
-        topic,
-        isolation,
-        security,
-    } = setup;
     let builder = Consumer::builder()
         .bootstrap(bootstrap)
         .group_id(group)

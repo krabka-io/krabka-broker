@@ -318,11 +318,10 @@ pub async fn create_topic_as_super_user(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] topic: ConfiguredTopicSetup,
 ) {
-    let setup = AutomaticTopicSetup { client_id, topic };
-    let name = setup.topic.name.clone();
-    let request = topics::create_topic_request(configured_topic_row(setup.topic));
+    let name = topic.name.clone();
+    let request = topics::create_topic_request(configured_topic_row(topic));
     let response: CreateTopicsResponse = request_as_plain(addr, &request, &PlainRequestSetup {
-        authentication: PlainAuthenticationSetup::admin(setup.client_id),
+        authentication: PlainAuthenticationSetup::admin(client_id),
         api: ApiRequestSetup {
             api_key: krabka_ids::ApiKey(19),
             version: krabka_ids::ApiVersion(7),
@@ -461,17 +460,6 @@ impl<'a> ExchangeSetup<'a> {
     }
 }
 
-/// Legacy request and response headers with the suite's exact client identity.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct LegacyExchangeSetup<'a> {
-    pub api_key: krabka_ids::ApiKey,
-    pub version: krabka_ids::ApiVersion,
-    #[default(frames::CorrelationId(1))]
-    pub correlation: frames::CorrelationId,
-    #[default("legacy-fetch-test")]
-    pub client_id: &'a str,
-}
-
 /// Exchange a legacy frame.
 ///
 /// # Panics
@@ -485,18 +473,12 @@ pub async fn legacy_round_trip(
     #[builder(default = "legacy-fetch-test")] client_id: &'_ str,
     body: &[u8],
 ) -> Vec<u8> {
-    let setup = LegacyExchangeSetup {
-        api_key,
-        version,
-        correlation,
-        client_id,
-    };
     round_trip()
         .stream(stream)
-        .api_key(setup.api_key)
-        .version(setup.version)
-        .correlation(setup.correlation)
-        .client_id(setup.client_id)
+        .api_key(api_key)
+        .version(version)
+        .correlation(correlation)
+        .client_id(client_id)
         .body(body)
         .call()
         .await
@@ -698,24 +680,6 @@ pub async fn sasl_scram_authenticate_on(
     Ok(())
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SaslHandshakeSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    #[default(frames::CorrelationId(2))]
-    pub correlation: frames::CorrelationId,
-    #[default("PLAIN")]
-    pub mechanism: &'a str,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SaslAuthenticateSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    #[default(frames::CorrelationId(3))]
-    pub correlation: frames::CorrelationId,
-}
-
 /// A successful v1 handshake on an existing SASL session.
 #[bon::builder]
 pub async fn sasl_handshake_on<S>(
@@ -727,21 +691,16 @@ pub async fn sasl_handshake_on<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let setup = SaslHandshakeSetup {
-        client_id,
-        correlation,
-        mechanism,
-    };
     let response: SaslHandshakeResponse = exchange()
         .stream(stream)
         .request(&SaslHandshakeRequest {
-            mechanism: setup.mechanism.to_owned(),
+            mechanism: mechanism.to_owned(),
             ..Default::default()
         })
         .api_key(17)
         .version(1)
-        .correlation(setup.correlation)
-        .client_id(setup.client_id)
+        .correlation(correlation)
+        .client_id(client_id)
         .call()
         .await?;
     if response.error_code != 0 {
@@ -764,10 +723,6 @@ pub async fn sasl_authenticate_on<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let setup = SaslAuthenticateSetup {
-        client_id,
-        correlation,
-    };
     exchange()
         .stream(stream)
         .request(&SaslAuthenticateRequest {
@@ -776,8 +731,8 @@ where
         })
         .api_key(36)
         .version(2)
-        .correlation(setup.correlation)
-        .client_id(setup.client_id)
+        .correlation(correlation)
+        .client_id(client_id)
         .header(frames::HeaderEncoding::Flexible)
         .call()
         .await
@@ -825,14 +780,6 @@ pub struct ZeroFilledRecordsSetup {
     pub topic: String,
     pub value_bytes: ProduceValueBytes,
     pub count: ProduceRecordCount,
-}
-
-#[derive(krabka_macros::FieldDefaults)]
-pub struct SaslProduceSetup<'a> {
-    pub authentication: PlainAuthenticationSetup<'a>,
-    #[default("krabka-broker-test")]
-    pub produce_client_id: &'a str,
-    pub records: ZeroFilledRecordsSetup,
 }
 
 /// A Produce v11-compatible batch of zero-filled records for quota tests.
@@ -906,30 +853,19 @@ pub async fn elect_leaders_response(
         .expect("ElectLeaders round-trip")
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct ElectionExchangeSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    pub election: ElectionSetup,
-}
-
 #[bon::builder]
 pub async fn elect_leaders(
     stream: &mut TcpStream,
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] election: ElectionSetup,
 ) -> Vec<(i32, i16)> {
-    let setup = ElectionExchangeSetup {
-        client_id,
-        election,
-    };
-    let topic = setup.election.topic.clone();
+    let topic = election.topic.clone();
     let req = election_request()
-        .topic(setup.election.topic)
-        .partitions(setup.election.partitions)
-        .kind(setup.election.kind)
+        .topic(election.topic)
+        .partitions(election.partitions)
+        .kind(election.kind)
         .call();
-    let resp = elect_leaders_response(stream, &req, setup.client_id).await;
+    let resp = elect_leaders_response(stream, &req, client_id).await;
 
     assert!(
         resp.error_code == 0,
@@ -954,26 +890,7 @@ pub async fn create_topic_from_request(
     create_topic_plaintext(addr, client_id, topic).await;
 }
 
-/// Automatic placement and client identity, with a one-partition orders topic by default.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AutomaticTopicSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    pub topic: ConfiguredTopicSetup,
-}
-
 /// SASL/PLAIN topic creation defaults to the admin fixture's credentials.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct SaslTopicSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    #[default("admin")]
-    pub user: &'a str,
-    #[default(b"admin-secret")]
-    pub password: &'a [u8],
-    pub topic: ConfiguredTopicSetup,
-}
-
 #[bon::builder]
 pub async fn create_configured_topic_sasl(
     addr: SocketAddr,
@@ -982,19 +899,13 @@ pub async fn create_configured_topic_sasl(
     #[builder(default = b"admin-secret")] password: &'_ [u8],
     #[builder(default)] topic: ConfiguredTopicSetup,
 ) {
-    let setup = SaslTopicSetup {
-        client_id,
-        user,
-        password,
-        topic,
-    };
     create_topic_sasl(
         addr,
-        configured_topic_row(setup.topic),
+        configured_topic_row(topic),
         &PlainAuthenticationSetup {
-            client_id: setup.client_id,
-            user: setup.user,
-            password: (setup.password).to_vec(),
+            client_id,
+            user,
+            password: (password).to_vec(),
         },
     )
     .await;
@@ -1007,11 +918,10 @@ pub async fn create_topic_as_admin(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] topic: ConfiguredTopicSetup,
 ) {
-    let setup = AutomaticTopicSetup { client_id, topic };
     create_configured_topic_sasl()
         .addr(addr)
-        .client_id(setup.client_id)
-        .topic(setup.topic)
+        .client_id(client_id)
+        .topic(topic)
         .call()
         .await;
 }
@@ -1036,16 +946,7 @@ pub async fn create_automatic_topic_plaintext(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] topic: ConfiguredTopicSetup,
 ) {
-    let setup = AutomaticTopicSetup { client_id, topic };
-    create_topic_on_fresh_connection(addr, setup.client_id, configured_topic_row(setup.topic))
-        .await;
-}
-
-#[derive(krabka_macros::FieldDefaults)]
-pub struct AssignedTopicExchangeSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    pub topic: AssignedTopicSetup,
+    create_topic_on_fresh_connection(addr, client_id, configured_topic_row(topic)).await;
 }
 
 /// Create one partition with an explicit ordered assignment over plaintext.
@@ -1055,13 +956,12 @@ pub async fn create_assigned_topic_plaintext(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] topic: AssignedTopicSetup,
 ) {
-    let setup = AssignedTopicExchangeSetup { client_id, topic };
     create_topic_on_fresh_connection(
         addr,
-        setup.client_id,
+        client_id,
         assigned_topic()
-            .name(setup.topic.name)
-            .replicas(setup.topic.replicas)
+            .name(topic.name)
+            .replicas(topic.replicas)
             .call(),
     )
     .await;
@@ -1098,17 +998,12 @@ pub async fn produce_sasl_with_ids(
     #[builder(default)] records: ZeroFilledRecordsSetup,
 ) -> ProduceResponse {
     const VERSION: i16 = 11;
-    let setup = SaslProduceSetup {
-        authentication,
-        produce_client_id,
-        records,
-    };
     let req = produce_records()
-        .topic(setup.records.topic)
-        .value_bytes(setup.records.value_bytes.0)
-        .count(setup.records.count.0)
+        .topic(records.topic)
+        .value_bytes(records.value_bytes.0)
+        .count(records.count.0)
         .call();
-    let mut stream = sasl_plain_authenticate(addr, &setup.authentication)
+    let mut stream = sasl_plain_authenticate(addr, &authentication)
         .await
         .expect("SASL authenticate for Produce");
     let mut body = BytesMut::new();
@@ -1117,7 +1012,7 @@ pub async fn produce_sasl_with_ids(
         .stream(&mut stream)
         .api_key(0)
         .version(VERSION)
-        .client_id(setup.produce_client_id)
+        .client_id(produce_client_id)
         .header(frames::HeaderEncoding::Flexible)
         .body(&body)
         .call()
@@ -1134,8 +1029,7 @@ pub async fn create_configured_topic_plaintext(
     #[builder(default = "krabka-broker-test")] client_id: &'_ str,
     #[builder(default)] topic: ConfiguredTopicSetup,
 ) {
-    let setup = AutomaticTopicSetup { client_id, topic };
-    create_topic_plaintext(addr, setup.client_id, configured_topic_row(setup.topic)).await;
+    create_topic_plaintext(addr, client_id, configured_topic_row(topic)).await;
 }
 
 /// Whether `stream` answers an `ApiVersions` v0 round trip: a connection the

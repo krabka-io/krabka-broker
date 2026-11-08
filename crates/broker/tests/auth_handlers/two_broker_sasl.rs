@@ -65,32 +65,21 @@ async fn reserve_listeners(n: usize) -> ReservedListeners {
 const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] =
     [SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)];
 
-#[derive(krabka_macros::FieldDefaults)]
-struct SaslNodeSetup<'a> {
-    cluster: ClusterNodeSetup<'a>,
-    #[default(&DEFAULT_SASL_ENDPOINTS)]
-    sasl_addrs: &'a [SocketAddr],
-}
-
 #[bon::builder]
 fn sasl_two_listener_config(
     log_dir: &Path,
     #[builder(default)] cluster: ClusterNodeSetup<'_>,
     #[builder(default = & DEFAULT_SASL_ENDPOINTS)] sasl_addrs: &'_ [SocketAddr],
 ) -> BrokerConfig {
-    let setup = SaslNodeSetup {
-        cluster,
-        sasl_addrs,
-    };
-    let listen = setup.cluster.client_addrs[setup.cluster.index.0];
-    let sasl = setup.sasl_addrs[setup.cluster.index.0];
+    let listen = cluster.client_addrs[cluster.index.0];
+    let sasl = sasl_addrs[cluster.index.0];
     let mut cfg = broker_config()
         .log_dir(log_dir)
-        .index(setup.cluster.index.0)
-        .client_addrs(setup.cluster.client_addrs)
-        .controller_addrs(setup.cluster.controller_addrs)
-        .voters(setup.cluster.voters)
-        .mode(setup.cluster.mode)
+        .index(cluster.index.0)
+        .client_addrs(cluster.client_addrs)
+        .controller_addrs(cluster.controller_addrs)
+        .voters(cluster.voters)
+        .mode(cluster.mode)
         .call();
     cfg.listeners = vec![
         listeners::listener("PLAINTEXT", listen, ListenerProtocol::Plaintext),

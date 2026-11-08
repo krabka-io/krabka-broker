@@ -169,15 +169,6 @@ enum TelemetryCompression {
     Invalid(TelemetryCompressionCode),
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct TelemetryPushSetup {
-    #[default(WireUuid::ZERO)]
-    client_instance_id: WireUuid,
-    subscription_id: SubscriptionId,
-    compression: TelemetryCompression,
-    metrics: bytes::Bytes,
-}
-
 #[bon::builder]
 fn telemetry_push_request(
     #[builder(default = WireUuid :: ZERO)] client_instance_id: WireUuid,
@@ -185,18 +176,6 @@ fn telemetry_push_request(
     #[builder(default)] compression: TelemetryCompression,
     #[builder(default)] metrics: bytes::Bytes,
 ) -> PushTelemetryRequest {
-    let setup = TelemetryPushSetup {
-        client_instance_id,
-        subscription_id,
-        compression,
-        metrics,
-    };
-    let TelemetryPushSetup {
-        client_instance_id,
-        subscription_id,
-        compression,
-        metrics,
-    } = setup;
     let compression_type = match compression {
         TelemetryCompression::Uncompressed => 0,
         TelemetryCompression::Invalid(code) => code.0,

@@ -195,17 +195,6 @@ pub async fn produce_value(
     produce(client, topic, topic_id, batch_with_value(value)).await
 }
 
-/// Create a configured schema-validation topic and wait for its local partition.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SchemaTopicSetup<'a> {
-    #[default("validated")]
-    pub name: &'a str,
-    #[default(VALIDATED)]
-    pub configs: &'a [(&'a str, &'a str)],
-    #[default(TopicReplicationFactor(1))]
-    pub replicas: TopicReplicationFactor,
-}
-
 /// The committed `CreateTopics` response supplies the identity, even when another
 /// bootstrap broker's Metadata image has not caught up with the commit yet.
 #[bon::builder]
@@ -216,15 +205,10 @@ pub async fn create_topic(
     #[builder(default = VALIDATED)] configs: &'_ [(&'_ str, &'_ str)],
     #[builder(default = TopicReplicationFactor(1))] replicas: TopicReplicationFactor,
 ) -> WireUuid {
-    let setup = SchemaTopicSetup {
-        name,
-        configs,
-        replicas,
-    };
     let topic = creatable_topic()
-        .name(setup.name.into())
-        .replicas(setup.replicas)
-        .configs(topic_configs(setup.configs.iter().copied()))
+        .name(name.into())
+        .replicas(replicas)
+        .configs(topic_configs(configs.iter().copied()))
         .call();
     let name = topic.name.clone();
     let name = name.as_str();

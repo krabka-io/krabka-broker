@@ -226,19 +226,12 @@ pub async fn create_topic_spec(
 #[derive(Clone, Copy)]
 pub struct ValueRecordCount(pub i32);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ValueBatchSetup {
-    #[default(ValueRecordCount(1))]
-    pub records: ValueRecordCount,
-}
-
 /// One vN record per offset, starting at zero within the batch.
 #[bon::builder]
 pub fn value_batch(
     #[builder(into, default = ValueRecordCount (1))] records: ValueRecordCount,
 ) -> RecordBatch {
-    let setup = ValueBatchSetup { records };
-    let n = setup.records.0;
+    let n = records.0;
     RecordBatch {
         base_offset: 0,
         last_offset_delta: (n - 1).max(0),
@@ -367,17 +360,6 @@ pub async fn create_configured_topic(client: &Client, request: CreateTopicsReque
 /// Panics if the connection cannot be built.
 pub async fn connect_c1(bootstrap: &str) -> Arc<Client> { connect(bootstrap, "c1").await }
 
-/// Client identity and diagnostics for a configured broker fixture.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct BrokerClientSetup<'a> {
-    #[default("krabka-broker-test")]
-    pub client_id: &'a str,
-    #[default("broker start")]
-    pub broker_context: &'a str,
-    #[default("client build")]
-    pub client_context: &'a str,
-}
-
 /// A running broker and a client connected to it.
 pub struct BrokerWithClient {
     pub broker: BrokerHandle,
@@ -396,18 +378,8 @@ pub async fn start_broker_client(
     #[builder(default = "broker start")] broker_context: &'_ str,
     #[builder(default = "client build")] client_context: &'_ str,
 ) -> BrokerWithClient {
-    let setup = BrokerClientSetup {
-        client_id,
-        broker_context,
-        client_context,
-    };
-    let broker = configured_broker(config, Some(setup.broker_context)).await;
-    let client = connect_owned(
-        broker.listen_addr().to_string(),
-        setup.client_id,
-        setup.client_context,
-    )
-    .await;
+    let broker = configured_broker(config, Some(broker_context)).await;
+    let client = connect_owned(broker.listen_addr().to_string(), client_id, client_context).await;
     BrokerWithClient { broker, client }
 }
 

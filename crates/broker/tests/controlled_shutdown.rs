@@ -41,18 +41,6 @@ async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i3
     handle.wait_until_partition_present(topic, partition).await;
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ForcedLeadershipSetup<'a> {
-    #[default("drain-me")]
-    topic: &'a str,
-    #[default(TopicPartitionCount(4))]
-    partitions: TopicPartitionCount,
-    #[default(krabka_metadata::NodeId(1))]
-    leader: krabka_metadata::NodeId,
-    #[default(vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2), krabka_metadata::NodeId(3)])]
-    replicas: Vec<MetadataNodeId>,
-}
-
 /// Injects a `PartitionRecord` that makes `target` the leader for every
 /// partition of `topic`. It uses `submit_metadata_record_for_test` to bypass
 /// the public wire path, so the test does not have to drive `ElectLeaders`.
@@ -66,16 +54,8 @@ async fn force_leadership_for_test(
     #[builder(default = vec ! [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2) , krabka_metadata :: NodeId (3)])]
     replicas: Vec<MetadataNodeId>,
 ) {
-    let setup = ForcedLeadershipSetup {
-        topic,
-        partitions,
-        leader,
-        replicas,
-    };
-    let topic = setup.topic;
-    let partitions = setup.partitions.0;
-    let target = setup.leader.0;
-    let replicas = setup.replicas;
+    let partitions = partitions.0;
+    let target = leader.0;
 
     let image = leader_handle.controller_image_for_test();
     for p in 0..partitions {

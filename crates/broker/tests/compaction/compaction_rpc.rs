@@ -56,18 +56,6 @@ pub async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
         .map_or_default(|t| t.topic_id)
 }
 
-/// One keyed record for the compacted single-partition topic.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ProduceRecordSetup<'a> {
-    #[default("compacted")]
-    pub topic: &'a str,
-    pub topic_id: Uuid,
-    #[default(b"k")]
-    pub key: &'a [u8],
-    #[default(b"v")]
-    pub value: &'a [u8],
-}
-
 /// Produce one record with an explicit key and value to (topic, partition 0).
 #[bon::builder]
 pub async fn produce_record(
@@ -77,18 +65,6 @@ pub async fn produce_record(
     #[builder(default = b"k")] key: &'_ [u8],
     #[builder(default = b"v")] value: &'_ [u8],
 ) {
-    let setup = ProduceRecordSetup {
-        topic,
-        topic_id,
-        key,
-        value,
-    };
-    let ProduceRecordSetup {
-        topic,
-        topic_id,
-        key,
-        value,
-    } = setup;
     let record = Record {
         key: Some(Bytes::copy_from_slice(key)),
         ..value_record(0, Some(Bytes::copy_from_slice(value)))

@@ -161,14 +161,6 @@ pub struct DivergenceReport {
     pub(crate) apis: Vec<ApiRow>,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DivergenceSetup<'a> {
-    #[default(RECORDED)]
-    intents: Intents<'a>,
-    #[default("mirror.gcr.io/apache/kafka:4.4.0")]
-    oracle_image: &'a str,
-}
-
 #[bon::bon]
 impl DivergenceReport {
     /// Join krabka's advertised table against the oracle's.
@@ -188,14 +180,6 @@ impl DivergenceReport {
         #[builder(default = RECORDED)] intents: Intents<'_>,
         #[builder(default = "mirror.gcr.io/apache/kafka:4.4.0")] oracle_image: &'_ str,
     ) -> Self {
-        let setup = DivergenceSetup {
-            intents,
-            oracle_image,
-        };
-        let DivergenceSetup {
-            intents,
-            oracle_image,
-        } = setup;
         let mut keys: Vec<i16> = krabka
             .iter()
             .chain(kafka)
