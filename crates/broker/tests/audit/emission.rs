@@ -12,7 +12,7 @@ use {
         self, OperatorKeysSetup,
         discovery::named_topic_metadata,
         offsets::{delete_records_partition, delete_records_request, delete_records_topic},
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, single_partition_produce},
         records::{batch_from_records, value_record},
         sasl::{ScramAlgorithm, scram_upsertion},
         topics::{creatable_topic, create_topic_request},
@@ -53,12 +53,16 @@ async fn produce_one(p: &support::InProcess, topic: &str, topic_id: Uuid) {
             Some(bytes::Bytes::from_static(b"audited-record")),
         )])
     };
-    let resp = send_batch(&p.client, batch, SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        ..Default::default()
-    })
-    .await;
+    let resp = p
+        .client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic)
+                .topic_id(topic_id)
+                .call(),
+        )
+        .await;
     assert2::check!(resp.responses[0].partition_responses[0].error_code == 0);
 }
 

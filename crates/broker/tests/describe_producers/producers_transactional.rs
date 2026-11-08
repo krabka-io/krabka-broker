@@ -9,7 +9,7 @@ use {
             transactional,
         },
         support::{
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{ProducerSequence, ProducerValuesSetup},
             transactions,
         },
@@ -26,21 +26,19 @@ use {
 fn transaction_values_request(topic_id: Uuid, values: ProducerValuesSetup<'_>) -> ProduceRequest {
     ProduceRequest {
         transactional_id: Some("describe-producers-tid".into()),
-        ..batch_request(
-            transactional(
+        ..single_partition_produce()
+            .records(transactional(
                 batch()
                     .pid(values.pid.0)
                     .epoch(values.epoch.0)
                     .base_seq(values.base_seq.0)
                     .values(values.values)
                     .call(),
-            ),
-            SinglePartitionProduceSetup {
-                topic: ("transactions").into(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
+            ))
+            .topic("transactions")
+            .topic_id(topic_id)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .call()
     }
 }
 

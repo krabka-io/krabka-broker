@@ -7,7 +7,6 @@ use {
             produce_request::ProduceRequest,
             produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, ProduceResponse},
         },
-        primitives::uuid::Uuid,
         records::RecordBatch,
     },
 };
@@ -22,29 +21,6 @@ pub fn leadership_unsettled(code: i16) -> bool {
         code,
         codes::LEADER_NOT_AVAILABLE | codes::NOT_LEADER_OR_FOLLOWER | codes::REQUEST_TIMED_OUT
     )
-}
-
-#[bon::builder]
-pub fn replicated_topic_produce_setup(
-    topic: String,
-    topic_id: [u8; 16],
-) -> SinglePartitionProduceSetup {
-    SinglePartitionProduceSetup {
-        topic,
-        topic_id: Uuid(topic_id),
-        ..SinglePartitionProduceSetup::replicated()
-    }
-}
-
-/// The repeated one-topic form of the replicated Produce setup builder.
-pub fn replicated_topic_produce_for(
-    topic: &str,
-    topic_id: [u8; 16],
-) -> SinglePartitionProduceSetup {
-    replicated_topic_produce_setup()
-        .topic(topic.to_owned())
-        .topic_id(topic_id)
-        .call()
 }
 
 /// Verify the response cardinality before a scenario checks its partition row.
@@ -79,12 +55,6 @@ pub fn expected_partition_success(
     }
 }
 
-/// Build a request for one v2 batch while keeping transport and response checks with the caller.
-pub fn batch_request(batch: RecordBatch, mut setup: SinglePartitionProduceSetup) -> ProduceRequest {
-    setup.records = Some(batch.into());
-    single_partition_produce(setup)
-}
-
 /// Build and encode one v2-batch produce request for a raw-wire test.
 #[bon::builder]
 pub fn encoded_batch_request(
@@ -93,11 +63,11 @@ pub fn encoded_batch_request(
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
     version: i16,
 ) -> bytes::BytesMut {
-    let request = batch_request(batch, SinglePartitionProduceSetup {
-        topic,
-        partition,
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .records(batch)
+        .topic(topic)
+        .partition(partition)
+        .call();
     let mut body = bytes::BytesMut::new();
     krabka_protocol::Encode::encode(&request, &mut body, version).expect("encode ProduceRequest");
     body
@@ -142,26 +112,5 @@ impl BatchSender for krabka_client_core::Connection {
 impl<T: BatchSender + ?Sized> BatchSender for &T {
     async fn send_produce_request(&self, request: ProduceRequest) -> ProduceResponse {
         (**self).send_produce_request(request).await
-    }
-}
-
-/// Send one batch with the default Produce diagnostic; callers keep their response oracles.
-pub async fn send_batch(
-    sender: &(impl BatchSender + ?Sized),
-    batch: RecordBatch,
-    setup: SinglePartitionProduceSetup,
-) -> ProduceResponse {
-    sender
-        .send_produce_request(batch_request(batch, setup))
-        .await
-}
-
-impl SinglePartitionProduceSetup {
-    /// Replication scenarios allow thirty seconds for every replica to acknowledge.
-    pub fn replicated_with_thirty_second_timeout() -> Self {
-        Self {
-            timeout: ProduceTimeoutMillis(30_000),
-            ..Self::replicated()
-        }
     }
 }

@@ -8,7 +8,7 @@ use {
         discovery::{api_versions_request_for, topic_metadata_request},
         fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::{ProduceAcknowledgements, SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::value_record,
         topics::{creatable_topic, create_topic_request},
         wire::write_frame,
@@ -144,14 +144,13 @@ async fn timestamped_records(timestamps: &mut TimestampLookup, datatable: Vec<Ve
         .collect::<Vec<_>>();
     process
         .client
-        .send(batch_request(
-            timestamped_batch(&borrowed),
-            SinglePartitionProduceSetup {
-                topic: "by_ts".into(),
-                topic_id,
-                ..Default::default()
-            },
-        ))
+        .send(
+            single_partition_produce()
+                .records(timestamped_batch(&borrowed))
+                .topic("by_ts")
+                .topic_id(topic_id)
+                .call(),
+        )
         .await
         .unwrap();
     timestamps.process = Some(process);
@@ -304,14 +303,13 @@ async fn append_e2e(lifecycle: &mut RpcLifecycle) {
     lifecycle.produced = Some(
         process
             .client
-            .send(batch_request(
-                record_batch_with_values(&["a", "b", "c"]),
-                SinglePartitionProduceSetup {
-                    topic: "e2e".into(),
-                    topic_id: lifecycle.topic_id,
-                    ..Default::default()
-                },
-            ))
+            .send(
+                single_partition_produce()
+                    .records(record_batch_with_values(&["a", "b", "c"]))
+                    .topic("e2e")
+                    .topic_id(lifecycle.topic_id)
+                    .call(),
+            )
             .await
             .unwrap(),
     );
@@ -461,14 +459,11 @@ async fn send_one_way_frame(
 
 #[when("a Produce v9 frame sends one record with acks zero")]
 async fn unacknowledged_produce(one_way: &mut OneWayProduce) {
-    let produce = batch_request(
-        record_batch_with_values(&["value"]),
-        SinglePartitionProduceSetup {
-            topic: "one-way-produce".into(),
-            acknowledgements: ProduceAcknowledgements::NoResponse,
-            ..Default::default()
-        },
-    );
+    let produce = single_partition_produce()
+        .records(record_batch_with_values(&["value"]))
+        .topic("one-way-produce")
+        .acknowledgements(ProduceAcknowledgements::NoResponse)
+        .call();
     let mut body = BytesMut::new();
     produce.encode(&mut body, 9).expect("encode Produce v9");
     send_one_way_frame(one_way, 0, 9, 1, &body).await;

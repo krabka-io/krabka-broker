@@ -14,7 +14,7 @@ use {
             RequestWaitMillis, build_fetch_session_request, default_fetch_limits,
             fetch_request_for, fetch_topic_row, incremental_session_fetch,
         },
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::single_partition_produce,
     },
     assert2::{assert, check},
     krabka_protocol::owned::fetch_response::FetchResponse,
@@ -57,12 +57,12 @@ async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
 
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {
     let topic_id = topic_id_for(&p.client, topic).await;
-    let req = batch_request(one_record_batch(records), SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        partition: krabka_ids::PartitionIndex(partition),
-        ..Default::default()
-    });
+    let req = single_partition_produce()
+        .records(one_record_batch(records))
+        .topic(topic)
+        .topic_id(topic_id)
+        .partition(krabka_ids::PartitionIndex(partition))
+        .call();
     let resp = p.client.send(req).await.expect("Produce");
     assert!(
         resp.responses[0].partition_responses[0].error_code == 0,

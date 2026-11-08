@@ -11,16 +11,18 @@ use {
         CLIENT_ID, kafka_wire,
         support::{
             discovery::named_topic_metadata,
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::single_partition_produce,
             records::{batch_from_records, value_record},
-            topics::CreateTopicSetup,
             wire::HeaderEncoding as RequestHeaderEncoding,
         },
     },
     assert2::assert,
     bytes::Bytes,
     krabka_protocol::{
-        owned::{metadata_response::MetadataResponse, produce_response::ProduceResponse},
+        owned::{
+            create_topics_request::CreateTopicsRequest, metadata_response::MetadataResponse,
+            produce_response::ProduceResponse,
+        },
         primitives::uuid::Uuid,
         records::{Record, RecordBatch},
     },
@@ -29,8 +31,8 @@ use {
 };
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
-pub async fn create_topic_with_configs(addr: SocketAddr, setup: CreateTopicSetup<'_>) {
-    kafka_wire::create_topic_from_setup(addr, CLIENT_ID, setup).await;
+pub async fn create_topic_with_configs(addr: SocketAddr, request: CreateTopicsRequest) {
+    kafka_wire::create_topic_from_request(addr, CLIENT_ID, request).await;
 }
 
 /// Get `topic_id` with Metadata. Produce and Fetch v9+ need it.
@@ -96,11 +98,11 @@ pub async fn produce_record(
         ..batch_from_records(vec![record])
     };
 
-    let req = batch_request(batch, SinglePartitionProduceSetup {
-        topic: topic.to_owned(),
-        topic_id,
-        ..Default::default()
-    });
+    let req = single_partition_produce()
+        .records(batch)
+        .topic(topic.to_owned())
+        .topic_id(topic_id)
+        .call();
 
     let version: i16 = 9; // flexible, pre-KIP-516 (no topic_id required on the wire at v9)
     let mut stream = TcpStream::connect(addr).await.expect("connect");

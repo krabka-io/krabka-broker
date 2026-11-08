@@ -9,7 +9,7 @@
 use {
     crate::support::{
         client::start_broker_client,
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, single_partition_produce},
         records::value_record,
         topics::{TopicReplicationFactor, creatable_topic, topic_configs},
     },
@@ -258,12 +258,15 @@ pub async fn produce(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    let resp = send_batch(&client, batch, SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        ..Default::default()
-    })
-    .await;
+    let resp = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic)
+                .topic_id(topic_id)
+                .call(),
+        )
+        .await;
     resp.responses[0].partition_responses[0].clone()
 }
 

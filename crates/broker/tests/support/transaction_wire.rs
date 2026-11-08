@@ -2,7 +2,7 @@
 
 use {
     crate::support::{
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
         topics::{
             AssignedTopicSetup, TopicPartitionCount, assigned_topic, creatable_topic,
@@ -149,11 +149,12 @@ fn build_produce_request(setup: TransactionProduceSetup<'_>) -> ProduceRequest {
     ProduceRequest {
         // KIP-890 verification needs the transactional id for transactional batches.
         transactional_id: producer.map(|_| transactional_id.to_owned()),
-        ..batch_request(batch, SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        })
+        ..single_partition_produce()
+            .records(batch)
+            .topic(topic)
+            .topic_id(topic_id)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .call()
     }
 }
 

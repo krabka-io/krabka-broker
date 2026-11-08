@@ -14,7 +14,7 @@ use {
         support::{
             discovery::coordinator_lookup_request,
             offsets::{list_offset_partition, single_partition_list_offsets},
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
             topics::TopicPartitionCount,
             transaction_wire::{
@@ -81,10 +81,11 @@ async fn produce_at(
 ) -> PartitionProduceResponse {
     let request = ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
-        ..batch_request(batch, SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            ..SinglePartitionProduceSetup::replicated()
-        })
+        ..single_partition_produce()
+            .records(batch)
+            .topic(topic)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .call()
     };
     let response = match version.0 {
         10 => client.send(At::<_, 10>(request)).await,

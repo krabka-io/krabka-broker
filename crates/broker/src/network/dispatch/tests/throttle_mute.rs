@@ -211,20 +211,18 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             ..Default::default()
         })
         .collect();
-    let request = single_partition_produce(SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        records: Some(
-            RecordBatch {
-                last_offset_delta: i32::try_from(count - 1).expect("record count"),
-                records,
-                ..Default::default()
-            }
-            .into(),
-        ),
-        acknowledgements: ProduceAcknowledgements::from_wire(WireAcknowledgements(acks)),
-        timeout: ProduceTimeoutMillis(30_000),
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .topic(topic)
+        .records(RecordBatch {
+            last_offset_delta: i32::try_from(count - 1).expect("record count"),
+            records,
+            ..Default::default()
+        })
+        .acknowledgements(ProduceAcknowledgements::from_wire(WireAcknowledgements(
+            acks,
+        )))
+        .timeout(30_000)
+        .call();
     let mut body = BytesMut::new();
     request
         .encode(&mut body, PRODUCE_VERSION)

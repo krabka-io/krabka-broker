@@ -191,19 +191,6 @@ pub fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
             impl Default for TopicReplicationFactor {
                 fn default() -> Self { Self(1) }
             }
-            #[derive(Clone, Copy)]
-            pub(crate) struct CreateTopicSetup<'a> {
-                pub topic: &'a str,
-                pub configs: &'a [(&'a str, &'a str)],
-                pub num_partitions: TopicPartitionCount,
-                pub replication_factor: TopicReplicationFactor,
-                pub timeout: ::krabka_units::Time,
-            }
-            impl Default for CreateTopicSetup<'_> {
-                fn default() -> Self {
-                    Self { topic: "orders", configs: &[], num_partitions: TopicPartitionCount(1), replication_factor: TopicReplicationFactor(1), timeout: ::krabka_units::millis(5_000) }
-                }
-            }
             #[bon::builder]
             pub(crate) fn {{ name }}(
                 #[builder(default = "orders")] topic: &'_ str,
@@ -222,17 +209,6 @@ pub fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
                         ..Default::default()
                     }], timeout_ms: i32::try_from(timeout.millis_i64()).expect("fixture timeout fits Kafka field"), ..Default::default()
                 }
-            }
-            pub(crate) fn configured_topic_request_from(
-                setup: CreateTopicSetup<'_>,
-            ) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
-                configured_topic_request()
-                    .topic(setup.topic)
-                    .configs(setup.configs)
-                    .num_partitions(setup.num_partitions.0)
-                    .replication_factor(setup.replication_factor.0)
-                    .timeout(setup.timeout)
-                    .call()
             }
         }
     })

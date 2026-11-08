@@ -25,7 +25,7 @@ use {
         client::connect_with_context,
         consumer_groups::{collect_routing_values, routing_consumer},
         partitions::{require_non_bootstrap_partitions, start_leader_routing_cluster},
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::value_record,
         shutdown_cluster,
     },
@@ -57,12 +57,15 @@ async fn produce_one(client: &Client, topic: &str, topic_id: Uuid, partition: i3
     batch.last_offset_delta = 0;
     for attempt in 1..=10 {
         let resp = client
-            .send(batch_request(batch.clone(), SinglePartitionProduceSetup {
-                topic: (topic).into(),
-                topic_id,
-                partition: krabka_ids::PartitionIndex(partition),
-                ..SinglePartitionProduceSetup::replicated()
-            }))
+            .send(
+                single_partition_produce()
+                    .records(batch.clone())
+                    .topic(topic)
+                    .topic_id(topic_id)
+                    .partition(krabka_ids::PartitionIndex(partition))
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
             .await
             .expect("produce");
         let err = resp.responses[0].partition_responses[0].error_code;

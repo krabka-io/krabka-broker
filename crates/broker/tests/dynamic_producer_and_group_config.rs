@@ -19,10 +19,10 @@ use {
         client::{connect_client, create_topic_named},
         configs::{BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request},
         consumer_groups::consumer_heartbeat,
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
         records::{now_ms, producer_values_batch},
         topic_id_for,
-        topics::CreateTopicSetup,
+        topics::configured_topic_request,
         transactions::claim_idempotent_producer,
     },
     assert2::{assert, check},
@@ -168,11 +168,7 @@ fn subscribed(member_id: &str, epoch: i32, topics: &[&str]) -> ConsumerGroupHear
 
 /// Create `topic` with one partition, and return its id.
 async fn one_partition_topic(client: &Client, topic: &str) -> Uuid {
-    create_topic_named(client, CreateTopicSetup {
-        topic,
-        ..Default::default()
-    })
-    .await;
+    create_topic_named(client, configured_topic_request().topic(topic).call()).await;
     topic_id_for(client, topic).await
 }
 
@@ -300,23 +296,20 @@ async fn runtime_idle_producer(runtime_config: &mut DynamicRuntime, topic: Strin
         .broker
         .as_ref()
         .expect("runtime broker started");
-    create_topic_named(&p.client, CreateTopicSetup {
-        topic: &topic,
-        ..Default::default()
-    })
-    .await;
+    create_topic_named(&p.client, configured_topic_request().topic(&topic).call()).await;
     let topic_id = topic_id_for(&p.client, &topic).await;
     let producer = claim_idempotent_producer(&p.client).await;
-    let appended = send_batch(
-        &p.client,
-        current_batch(producer.producer_id, producer.producer_epoch),
-        SinglePartitionProduceSetup {
-            topic: topic.clone(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
-    .await;
+    let appended = p
+        .client
+        .send_produce_request(
+            single_partition_produce()
+                .records(current_batch(producer.producer_id, producer.producer_epoch))
+                .topic(topic.clone())
+                .topic_id(topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
+        .await;
     assert!(appended.responses[0].partition_responses[0].error_code == 0);
     runtime_config.topic = topic;
     runtime_config.producer = Some(producer.producer_id);

@@ -13,10 +13,8 @@
 
 use {
     crate::support::{
-        client::create_topic,
-        discovery::named_topic_metadata,
-        fetch::single_partition_fetch,
-        produce::{SinglePartitionProduceSetup, single_partition_produce},
+        client::create_topic, discovery::named_topic_metadata, fetch::single_partition_fetch,
+        produce::single_partition_produce,
     },
     assert2::assert,
     rstest::fixture,
@@ -75,12 +73,11 @@ async fn produce_legacy(
     topic_id: Uuid,
     records: Bytes,
 ) -> i16 {
-    let req = single_partition_produce(SinglePartitionProduceSetup {
-        topic: topic.into(),
-        topic_id,
-        records: Some(RecordsPayload::Legacy(records)),
-        ..Default::default()
-    });
+    let req = single_partition_produce()
+        .topic(topic)
+        .topic_id(topic_id)
+        .records(RecordsPayload::Legacy(records))
+        .call();
     let resp = p.client.send(req).await.expect("Produce");
     resp.responses[0].partition_responses[0].error_code
 }

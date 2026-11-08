@@ -41,7 +41,7 @@ mod jvm_acceptance;
 mod support;
 
 use {
-    crate::support::{ContainerInput, jvm_docker_command, topics::CreateTopicSetup},
+    crate::support::{ContainerInput, jvm_docker_command, topics::configured_topic_request},
     assert2::{assert, check},
     jvm_acceptance::{
         KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image, start_host_broker,
@@ -167,11 +167,13 @@ async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
     let client =
         support::client::connect_with_context(bootstrap, None, "client for the host listener")
             .await;
-    support::client::create_configured_topic(&client, CreateTopicSetup {
-        topic,
-        configs: &[("delivery.mode", mode)],
-        ..Default::default()
-    })
+    support::client::create_configured_topic(
+        &client,
+        configured_topic_request()
+            .topic(topic)
+            .configs(&[("delivery.mode", mode)])
+            .call(),
+    )
     .await;
 }
 

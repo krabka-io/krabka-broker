@@ -8,6 +8,12 @@ release that contains `krabka-macros`.
 
 ### Changed (breaking)
 
+- `single_partition_produce_fixture!` no longer generates
+  `SinglePartitionProduceSetup`: the generated function is a `bon` builder
+  over the same fields and defaults, and `.acknowledgements(AllReplicas)`
+  replaces `SinglePartitionProduceSetup::replicated()`.
+- `create_topic_fixture!` no longer generates `CreateTopicSetup` or
+  `configured_topic_request_from`. Call the generated builder.
 - `parsed_cli_entrypoint!` parses with `Cli::try_parse_from`, prints clap's
   message on a parse error, and returns the caller's `EXIT_USAGE`, which must
   be in scope. `--help` and `--version` still return `0`. It used to exit the

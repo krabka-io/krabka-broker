@@ -347,10 +347,7 @@ mod tests {
             handlers::{
                 RequestContext,
                 create_topics::handle as create_topics_handle,
-                test_support::{
-                    self as handler_fixture_support, CreateTopicSetup,
-                    configured_topic_request_from,
-                },
+                test_support::{self as handler_fixture_support, configured_topic_request},
             },
             share_coordinator::{
                 coordinator::ShareStateSummary, handlers::test_support::lead_share_state_partitions,
@@ -370,6 +367,7 @@ mod tests {
                 self, AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
                 AlterShareGroupOffsetsResponseTopic,
             },
+            create_topics_request::CreateTopicsRequest,
             create_topics_response,
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
             share_group_heartbeat_response::ShareGroupHeartbeatResponse,
@@ -463,18 +461,17 @@ mod tests {
     async fn create_topic(
         broker_handle: &BrokerHandle,
         ctx: &RequestContext<'_>,
-        setup: CreateTopicSetup<'_>,
+        request: CreateTopicsRequest,
     ) {
         let broker = broker_handle.broker_arc_for_test();
-        let topic_name = setup.topic;
+        let topic_name = request.topics[0].name.clone();
         let version = create_topics_response::MAX_VERSION;
-        let request = configured_topic_request_from(setup);
         let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topic");
         assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
         broker_handle
-            .wait_until_partition_present(topic_name, 0)
+            .wait_until_partition_present(&topic_name, 0)
             .await;
     }
 
@@ -483,10 +480,11 @@ mod tests {
         context: &RequestContext<'_>,
         topic: &str,
     ) {
-        create_topic(handle, context, CreateTopicSetup {
-            topic,
-            ..Default::default()
-        })
+        create_topic(
+            handle,
+            context,
+            configured_topic_request().topic(topic).call(),
+        )
         .await;
     }
 
@@ -552,10 +550,11 @@ mod tests {
         if exists {
             let broker = started.broker.broker_arc_for_test();
             krabka_macros::request_test_identity! { bind(ctx); user ["alice"]; };
-            create_topic(&started.broker, &ctx, CreateTopicSetup {
-                topic: "acl-topic",
-                ..Default::default()
-            })
+            create_topic(
+                &started.broker,
+                &ctx,
+                configured_topic_request().topic("acl-topic").call(),
+            )
             .await;
             lead_share_state_partitions(&broker).await;
             let topic_id = broker

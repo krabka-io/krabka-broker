@@ -20,7 +20,7 @@ use {
     crate::support::{
         client::connect_client,
         fetch::fetch_topic_row,
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
         shutdown_cluster,
     },
     assert2::assert,
@@ -210,16 +210,16 @@ async fn racks(rack_reads: &mut RackReads) {
 async fn committed(rack_reads: &mut RackReads, records: i32) {
     rack_reads.records = records;
     let producer = connect_client(rack_reads.cluster[0].1.listen_addr.to_string(), None).await;
-    let response = send_batch(
-        &producer,
-        record_batch().records(records).call(),
-        SinglePartitionProduceSetup {
-            topic: "t".into(),
-            topic_id: rack_reads.topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
-    .await;
+    let response = producer
+        .send_produce_request(
+            single_partition_produce()
+                .records(record_batch().records(records).call())
+                .topic("t")
+                .topic_id(rack_reads.topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
+        .await;
     assert!(response.responses[0].partition_responses[0].error_code == 0);
     rack_reads.cluster[1]
         .0

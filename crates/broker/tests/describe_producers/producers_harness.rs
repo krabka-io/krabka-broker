@@ -11,7 +11,7 @@ use {
         self,
         client::create_topic_named,
         discovery::coordinator_lookup_request,
-        topics::CreateTopicSetup,
+        topics::configured_topic_request,
         transactions::{ProducerIdentity, claim_idempotent_producer, init_producer_request},
     },
     assert2::assert,
@@ -21,11 +21,7 @@ use {
 };
 
 pub async fn create_topic(client: &krabka_client_core::Client, topic: &str) {
-    create_topic_named(client, CreateTopicSetup {
-        topic,
-        ..Default::default()
-    })
-    .await;
+    create_topic_named(client, configured_topic_request().topic(topic).call()).await;
 }
 
 pub async fn init_producer(p: &support::InProcess) -> (i64, i16) {
@@ -88,7 +84,7 @@ pub fn transactional(batch: RecordBatch) -> RecordBatch {
 use {
     crate::support::{
         admin::describe_producers_request,
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
     },
     krabka_broker::{BrokerConfig, BrokerHandle},
     krabka_client_core::Client,
@@ -181,21 +177,23 @@ async fn producer_snapshot_history(snapshot: &mut ProducerSnapshot, values: Stri
     let topic_id = topic_id_for(snapshot.client(), &topic).await;
     let values: Vec<_> = values.split(',').collect();
     for (pid, epoch) in &snapshot.identities {
-        let response = send_batch(
-            snapshot.client(),
-            batch()
-                .pid(*pid)
-                .epoch(*epoch)
-                .base_seq(0)
-                .values(&values)
-                .call(),
-            SinglePartitionProduceSetup {
-                topic: topic.clone(),
-                topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
-        .await;
+        let response = (snapshot.client())
+            .send_produce_request(
+                single_partition_produce()
+                    .records(
+                        batch()
+                            .pid(*pid)
+                            .epoch(*epoch)
+                            .base_seq(0)
+                            .values(&values)
+                            .call(),
+                    )
+                    .topic(topic.clone())
+                    .topic_id(topic_id)
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
+            .await;
         assert!(response.responses[0].partition_responses[0].error_code == 0);
     }
 }

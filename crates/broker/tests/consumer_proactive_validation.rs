@@ -76,7 +76,7 @@ use {
     crate::support::{
         client::{connect_client, create_topic},
         consumer_groups::routing_consumer,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::single_partition_produce,
         records::value_record,
         standalone_broker,
     },
@@ -110,11 +110,13 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
         let mut produced = false;
         for attempt in 1..=5 {
             let resp = client
-                .send(batch_request(batch.clone(), SinglePartitionProduceSetup {
-                    topic: (topic).into(),
-                    topic_id,
-                    ..Default::default()
-                }))
+                .send(
+                    single_partition_produce()
+                        .records(batch.clone())
+                        .topic(topic)
+                        .topic_id(topic_id)
+                        .call(),
+                )
                 .await
                 .expect("produce");
             let err = resp.responses[0].partition_responses[0].error_code;

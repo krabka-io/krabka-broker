@@ -5,7 +5,7 @@ use {
         configs::{ConfigOperation, incremental_config, incremental_request, incremental_resource},
         heartbeat_config,
         records::{batch_from_records, value_record},
-        topics::{CreateTopicSetup, TopicPartitionCount},
+        topics::{TopicPartitionCount, configured_topic_request},
     },
     assert2::assert,
     krabka_broker::{BrokerConfig, NodeId, testing},
@@ -227,16 +227,6 @@ pub struct ShareTopicSetup<'a> {
     pub partitions: TopicPartitionCount,
 }
 
-impl<'a> From<ShareTopicSetup<'a>> for CreateTopicSetup<'a> {
-    fn from(setup: ShareTopicSetup<'a>) -> Self {
-        Self {
-            topic: setup.topic,
-            num_partitions: setup.partitions,
-            ..Default::default()
-        }
-    }
-}
-
 /// A broker, client and materialized data topic, with the directory behind it.
 pub struct TopicFixture {
     pub broker: krabka_broker::BrokerHandle,
@@ -314,7 +304,14 @@ pub async fn create_topic(
     #[builder(default)] partitions: TopicPartitionCount,
 ) {
     let setup = ShareTopicSetup { topic, partitions };
-    create_topic_with(client, setup.into()).await;
+    create_topic_with(
+        client,
+        configured_topic_request()
+            .topic(setup.topic)
+            .num_partitions(setup.partitions)
+            .call(),
+    )
+    .await;
     // Metadata presence precedes installation of the local leader, epoch and
     // ISR that Produce checks. Settle that setup before testing share RPCs.
     for partition in 0..setup.partitions.0 {

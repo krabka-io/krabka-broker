@@ -14,7 +14,7 @@ use {
             self, ClusterNodeSetup, NodeIndex, broker_config,
             client::connect_client,
             controller_voters, init_tracing_with, listeners,
-            produce::{batch_request, replicated_topic_produce_for},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{batch_from_records, value_record},
             shutdown_cluster,
         },
@@ -251,13 +251,14 @@ async fn produce_replicated_sasl_records(replication: &mut SaslReplication) {
     };
     replication.produced = Some(
         producer
-            .send(batch_request(
-                batch,
-                replicated_topic_produce_for(
-                    "sasl-repl",
-                    replication.topic_id.expect("the replicated topic id").0,
-                ),
-            ))
+            .send(
+                single_partition_produce()
+                    .records(batch)
+                    .topic("sasl-repl")
+                    .topic_id(replication.topic_id.expect("the replicated topic id"))
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
             .await
             .unwrap(),
     );

@@ -30,7 +30,7 @@
 use {
     crate::support::{
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, single_partition_produce},
         records::{batch_from_records, value_record},
     },
     assert2::{assert, check},
@@ -363,12 +363,15 @@ async fn produce(
             ..value_record(0, Some(Bytes::from_static(b"frame")))
         }])
     };
-    let response = send_batch(&client, batch, SinglePartitionProduceSetup {
-        topic: topic.to_owned(),
-        topic_id,
-        ..Default::default()
-    })
-    .await;
+    let response = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic.to_owned())
+                .topic_id(topic_id)
+                .call(),
+        )
+        .await;
     response.responses[0].partition_responses[0].clone()
 }
 

@@ -15,7 +15,7 @@
 use {
     crate::support::{
         fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
     },
     assert2::check,
@@ -80,16 +80,16 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> ProtocolRun {
         .expect("CreateTopics");
     let topic_id = support::topic_id_for(client, TOPIC).await;
 
-    let produced = send_batch(
-        &client,
-        batch_of(&["a", "b", "c"]),
-        SinglePartitionProduceSetup {
-            topic: (TOPIC).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
-    .await;
+    let produced = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch_of(&["a", "b", "c"]))
+                .topic(TOPIC)
+                .topic_id(topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
+        .await;
 
     let fetched = client
         .send(

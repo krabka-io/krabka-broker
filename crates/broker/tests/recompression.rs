@@ -21,7 +21,7 @@ use {
     crate::support::{
         discovery::named_topic_metadata,
         fetch::single_partition_fetch,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
         topics,
     },
@@ -115,11 +115,12 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
         attributes: Attributes::default().with_compression(CompressionType::Gzip),
         ..batch_from_records(vec![value_record(0, Some(Bytes::copy_from_slice(value)))])
     };
-    let req = batch_request(batch, SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        ..SinglePartitionProduceSetup::replicated()
-    });
+    let req = single_partition_produce()
+        .records(batch)
+        .topic(topic)
+        .topic_id(topic_id)
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call();
     let version: i16 = 9;
     let (_, r) = kafka_wire::request_once::<_, ProduceResponse>(
         addr,

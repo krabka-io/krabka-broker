@@ -18,8 +18,8 @@ use {
             acl_wire::CLUSTER_RESOURCE_NAME,
             create_topics::handle as create_topics_handle,
             test_support::{
-                self as handler_fixture_support, AclSetup, CreateTopicSetup, acl, cluster_acl,
-                configured_topic_request_from,
+                self as handler_fixture_support, AclSetup, acl, cluster_acl,
+                configured_topic_request,
             },
         },
         metrics::AuthorizationDeniedLabel,
@@ -153,10 +153,11 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> DoomedOutcome {
         user ["admin"];
     };
     let ctx = test_context(&principal, &peer);
-    seed_topic(&broker, &ctx, CreateTopicSetup {
-        topic: DOOMED,
-        ..Default::default()
-    })
+    seed_topic(
+        &broker,
+        &ctx,
+        configured_topic_request().topic(DOOMED).call(),
+    )
     .await;
     let topic_id = WireUuid(
         broker
@@ -348,9 +349,8 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// carries, and asserts the create itself was not refused. Setup for the
 /// cluster-`Delete` shortcut test below, which needs topics that already
 /// exist before it authorizes their deletion.
-async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
-    let name = setup.topic;
-    let req = configured_topic_request_from(setup);
+async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, req: CreateTopicsRequest) {
+    let name = req.topics[0].name.clone();
     let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");
@@ -364,15 +364,15 @@ async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopi
 async fn seeded_topic_id(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    setup: CreateTopicSetup<'_>,
+    request: CreateTopicsRequest,
 ) -> WireUuid {
-    let name = setup.topic;
-    seed_topic(broker, ctx, setup).await;
+    let name = request.topics[0].name.clone();
+    seed_topic(broker, ctx, request).await;
     WireUuid(
         broker
             .controller
             .current_image()
-            .topic(name)
+            .topic(&name)
             .expect("seeded topic")
             .topic_id
             .into_bytes(),
@@ -448,15 +448,12 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
             .await
             .expect("seed create acl");
         let ctx = test_context(&p, &peer);
-        seed_topic(&broker, &ctx, CreateTopicSetup {
-            topic: "a",
-            ..Default::default()
-        })
-        .await;
-        seed_topic(&broker, &ctx, CreateTopicSetup {
-            topic: "app-x",
-            ..Default::default()
-        })
+        seed_topic(&broker, &ctx, configured_topic_request().topic("a").call()).await;
+        seed_topic(
+            &broker,
+            &ctx,
+            configured_topic_request().topic("app-x").call(),
+        )
         .await;
 
         // Grant this case's Delete ACL shape, if any.
@@ -572,12 +569,12 @@ async fn topic_deletion_fixture(topic_deletion_authorization: &mut TopicDeletion
         .await
         .expect("create ACL");
     krabka_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
-    topic_deletion_authorization.topic_id =
-        seeded_topic_id(&broker, &test_context(&p, &peer), CreateTopicSetup {
-            topic: "t",
-            ..Default::default()
-        })
-        .await;
+    topic_deletion_authorization.topic_id = seeded_topic_id(
+        &broker,
+        &test_context(&p, &peer),
+        configured_topic_request().topic("t").call(),
+    )
+    .await;
     topic_deletion_authorization.started = Some(started);
 }
 #[rstest_bdd_macros::given("alice has these exact topic grants for deletion")]
@@ -768,10 +765,11 @@ async fn delete_topic_enable_false_refuses_every_row() {
             user ["admin"];
         };
         let ctx = test_context(&p, &peer);
-        let topic_id = seeded_topic_id(&broker, &ctx, CreateTopicSetup {
-            topic: TOPIC,
-            ..Default::default()
-        })
+        let topic_id = seeded_topic_id(
+            &broker,
+            &ctx,
+            configured_topic_request().topic(TOPIC).call(),
+        )
         .await;
         let req = if version < 6 {
             DeleteTopicsRequest {

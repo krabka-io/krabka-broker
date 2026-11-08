@@ -14,7 +14,7 @@
 use {
     crate::{
         support::{
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             topics::TopicPartitionCount,
             transaction_wire::{
                 add_partition_request, coordinator_loading, initialize_producer, partition_added,
@@ -126,11 +126,12 @@ async fn produce(
     );
     let request = ProduceRequest {
         transactional_id: transaction.map(|transaction| transaction.transactional_id.to_owned()),
-        ..batch_request(batch, SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            topic_id: topic_id(client, topic).await,
-            ..SinglePartitionProduceSetup::replicated()
-        })
+        ..single_partition_produce()
+            .records(batch)
+            .topic(topic)
+            .topic_id(topic_id(client, topic).await)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .call()
     };
     let response = settled_produce(client, request, SETTLE).await;
     let code = response.responses[0].partition_responses[0].error_code;

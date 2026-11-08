@@ -17,7 +17,7 @@ use {
         compaction_cluster::start_broker_with_fast_cleaner,
         compaction_records::{FlatRecord, fetch_all},
         compaction_rpc::{create_topic_with_configs, get_topic_id, produce_record},
-        support::topics::CreateTopicSetup,
+        support::topics::configured_topic_request,
     },
     krabka_broker::metrics::PartitionLabel,
 };
@@ -75,14 +75,16 @@ fn compacted() -> CompactedLog {
 async fn compacted_topic(compacted: &mut CompactedLog, topic: String, segment_bytes: u32) {
     let (handle, directory, addr) = start_broker_with_fast_cleaner().await;
     let size = segment_bytes.to_string();
-    create_topic_with_configs(addr, CreateTopicSetup {
-        topic: &topic,
-        configs: &[
-            ("cleanup.policy", "compact"),
-            ("internal.segment.bytes", &size),
-        ],
-        ..Default::default()
-    })
+    create_topic_with_configs(
+        addr,
+        configured_topic_request()
+            .topic(&topic)
+            .configs(&[
+                ("cleanup.policy", "compact"),
+                ("internal.segment.bytes", &size),
+            ])
+            .call(),
+    )
     .await;
     handle.wait_until_partition_present(&topic, 0).await;
     handle

@@ -27,12 +27,9 @@ pub use topics::creatable_topic as topic;
 use {
     crate::support::{
         admin::{ElectionSetup, election_partition_errors, election_request},
-        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         sasl,
-        topics::{
-            self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
-            configured_topic_request,
-        },
+        topics::{self, AssignedTopicSetup, ConfiguredTopicSetup, assigned_topic},
         wire::{self as frames, ApiRequestSetup},
     },
     assert2::assert,
@@ -42,7 +39,7 @@ use {
         owned::{
             api_versions_request::ApiVersionsRequest,
             api_versions_response::ApiVersionsResponse,
-            create_topics_request::CreatableTopic,
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
             create_topics_response::CreateTopicsResponse,
             elect_leaders_request::ElectLeadersRequest,
             elect_leaders_response::ElectLeadersResponse,
@@ -859,24 +856,21 @@ pub fn produce_records(
         })
         .collect();
 
-    batch_request(
-        RecordBatch {
+    single_partition_produce()
+        .records(RecordBatch {
             last_offset_delta: i32::try_from(setup.count.0 - 1).unwrap(),
             records,
             ..Default::default()
-        },
-        SinglePartitionProduceSetup {
-            topic: setup.topic,
-            timeout: ProduceTimeoutMillis(30_000),
-            ..Default::default()
-        },
-    )
+        })
+        .topic(setup.topic)
+        .timeout(30_000)
+        .call()
 }
 
 /// Build an all-ISR Produce request with one record.
 pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
-    batch_request(
-        RecordBatch {
+    single_partition_produce()
+        .records(RecordBatch {
             last_offset_delta: 0,
             records: vec![Record {
                 offset_delta: 0,
@@ -884,13 +878,11 @@ pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) 
                 ..Default::default()
             }],
             ..Default::default()
-        },
-        SinglePartitionProduceSetup {
-            topic: topic.to_owned(),
-            partition: krabka_ids::PartitionIndex(partition),
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
+        })
+        .topic(topic.to_owned())
+        .partition(krabka_ids::PartitionIndex(partition))
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call()
 }
 
 /// Send the fixture election request and retain its complete response.
@@ -953,19 +945,12 @@ pub async fn create_topic_plaintext(addr: SocketAddr, client_id: &str, topic: Cr
     create_topic_on(&mut stream, client_id, topic).await;
 }
 
-pub async fn create_topic_from_setup(
+pub async fn create_topic_from_request(
     addr: SocketAddr,
     client_id: &str,
-    setup: CreateTopicSetup<'_>,
+    mut request: CreateTopicsRequest,
 ) {
-    let mut req = configured_topic_request()
-        .topic(setup.topic)
-        .configs(setup.configs)
-        .num_partitions(setup.num_partitions)
-        .replication_factor(setup.replication_factor)
-        .timeout(setup.timeout)
-        .call();
-    let topic = req.topics.pop().expect("configured topic");
+    let topic = request.topics.pop().expect("configured topic");
     create_topic_plaintext(addr, client_id, topic).await;
 }
 
