@@ -94,7 +94,7 @@ A tag is an index entry that a reader can understand. Every tag must earn its pl
 | Tag | Meaning |
 | :--- | :--- |
 | `@allow_skipped` | A step may skip the scenario at run time. Without it, a skipped scenario fails. |
-| `@docker` | The scenario needs a container, such as a cp-kafka oracle. The crate's `crate_tests` call runs it under `--config=docker`. |
+| `@docker` | The scenario needs a container, such as a cp-kafka oracle. Generated as `#[ignore = "requires Docker"]`; the crate's `crate_tests` call runs it with `--ignored` under `--config=docker`. |
 | `@formulated` | Reviewed and agreed, automation not started. Generated as an ignored test. |
 | `@inprogress` | Automation or production code is incomplete. The test passes while the scenario fails, and fails once the scenario passes. |
 | `@journey` | An end-to-end flow across many rules. See [Journeys](#journeys). |
@@ -167,11 +167,12 @@ krabka_bdd::scenarios!(
 
 | Argument | Meaning |
 | :--- | :--- |
-| the directory | Every `.feature` file under it, relative to the crate's manifest. Also `dir = ".."` or `path = ".."`. |
+| the directory | Every `.feature` file under it, relative to the crate's manifest, or one `.feature` file. Also `dir = ".."` or `path = ".."`. |
 | `fixtures = [name: Type, ..]` | The `#[rstest::fixture]`s each test takes and hands the steps by name. |
 | `world = name` | The fixture whose `krabka_bdd::World` hooks run before and after each scenario. |
 | `tags = ".."` | A tag expression: only the scenarios it matches are generated. |
 | `runtime = "tokio-current-thread"` | The default. Spawned tasks move only while a step awaits. |
+| `runtime = "tokio-current-thread-paused"` | One thread with the clock paused, as `#[tokio::test(start_paused = true)]`: time moves only when every task waits. |
 | `runtime = "tokio-multi-thread"`, `workers = N` | Worker threads, so a task a `Given` spawns keeps running until the `Then`. |
 
 The macro lints every file first; each error is a compile error of the form `path:line:col: rule-id: message. Fix: hint`, and advisory findings are left to `krabka-bdd lint`. A clean directory expands to one `#[tokio::test]` per scenario and per Examples row, named after the feature, the rule, the outline and the row's `case` cell, such as `log_policy_scenarios::log_policy_feature::rule_a_cleanup_policy_is_a_membership_list_of_compact_and_delete::each_cleanup_policy_reports_its_members_and_its_kafka_text::compact_and_delete`. A feature's Background, then its rule's Background, run before each scenario's steps. A test takes its fixtures from rstest, so the calling crate depends on `rstest`, `rstest-bdd` and `rstest-bdd-macros` as well.
@@ -180,6 +181,7 @@ Lifecycle tags take effect in the generated tests:
 
 - `@formulated` is `#[ignore = "formulated: automation not started"]`.
 - `@manual` is `#[ignore = "manual"]`.
+- `@docker` is `#[ignore = "requires Docker"]`; `bazel test --config=docker` runs it with `--ignored`.
 - `@inprogress` is an expected failure: the test passes while the scenario fails, and fails with "now passes: remove @inprogress" once it passes. This is the BDD loop's "see it fail first", kept in the suite.
 - A skipped scenario fails unless it carries `@allow_skipped`.
 

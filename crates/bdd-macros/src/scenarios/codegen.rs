@@ -18,6 +18,9 @@ use {
 const CURRENT_THREAD: &str = "tokio-current-thread";
 /// The `runtime = ".."` value that selects a multi-thread runtime.
 const MULTI_THREAD: &str = "tokio-multi-thread";
+/// The `runtime = ".."` value that selects a current-thread runtime whose clock
+/// starts paused, as `#[tokio::test(start_paused = true)]` does.
+const PAUSED: &str = "tokio-current-thread-paused";
 
 /// The Tokio runtime each generated test runs on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,6 +28,9 @@ pub enum Runtime {
     /// One thread: spawned tasks move only while a step awaits.
     #[default]
     CurrentThread,
+    /// One thread, with the clock paused: time moves only when every task
+    /// waits, or when a step advances it.
+    Paused,
     /// Worker threads, Tokio's default count unless `workers` is given:
     /// spawned tasks keep running between steps.
     MultiThread {
@@ -41,7 +47,8 @@ impl Runtime {
     ) -> Result<Self, ParseError> {
         match runtime.map(LitStr::value) {
             None | Some(CURRENT_THREAD) if workers.is_none() => Ok(Self::CurrentThread),
-            None | Some(CURRENT_THREAD) => Err(ParseError::new(
+            Some(PAUSED) if workers.is_none() => Ok(Self::Paused),
+            None | Some(CURRENT_THREAD | PAUSED) => Err(ParseError::new(
                 runtime.map_or_else(Span::call_site, LitStr::span),
                 format!("`workers` needs `runtime = \"{MULTI_THREAD}\"`"),
             )),
@@ -49,7 +56,7 @@ impl Runtime {
             Some(other) => Err(ParseError::new(
                 runtime.map_or_else(Span::call_site, LitStr::span),
                 format!(
-                    "unknown runtime `{other}`: expected `{CURRENT_THREAD}` or `{MULTI_THREAD}`"
+                    "unknown runtime `{other}`: expected `{CURRENT_THREAD}`, `{PAUSED}` or `{MULTI_THREAD}`"
                 ),
             )),
         }
@@ -60,6 +67,9 @@ impl Runtime {
         match self {
             Self::CurrentThread => {
                 moxy::template! { ::krabka_bdd::__private::Flavor::CurrentThread }
+            }
+            Self::Paused => {
+                moxy::template! { ::krabka_bdd::__private::Flavor::Paused }
             }
             Self::MultiThread { workers: None } => moxy::template! {
                 ::krabka_bdd::__private::Flavor::MultiThread { workers: ::core::option::Option::None }
@@ -315,6 +325,9 @@ pub fn ignore_reason(tags: &[String]) -> Option<&'static str> {
         Some("formulated: automation not started")
     } else if tags.iter().any(|tag| tag == "manual") {
         Some("manual")
+    } else if tags.iter().any(|tag| tag == "docker") {
+        // `bazel test --config=docker` runs these with `--ignored`.
+        Some("requires Docker")
     } else {
         None
     }
@@ -440,7 +453,7 @@ mod tests {
     };
 
     #[rstest]
-    #[case(&["docker"], None)]
+    #[case(&["docker"], Some("requires Docker"))]
     #[case(&["formulated"], Some("formulated: automation not started"))]
     #[case(&["manual", "docker"], Some("manual"))]
     #[case(&["inprogress"], None)]
@@ -457,6 +470,8 @@ mod tests {
     #[case(Some("tokio-current-thread"), None, Some(Runtime::CurrentThread))]
     #[case(Some("tokio-multi-thread"), None, Some(Runtime::MultiThread { workers: None }))]
     #[case(Some("tokio-multi-thread"), Some(4), Some(Runtime::MultiThread { workers: Some(4) }))]
+    #[case(Some("tokio-current-thread-paused"), None, Some(Runtime::Paused))]
+    #[case(Some("tokio-current-thread-paused"), Some(2), None)]
     #[case(None, Some(4), None)]
     #[case(Some("async-std"), None, None)]
     fn runtime_arguments_select_the_runtime(

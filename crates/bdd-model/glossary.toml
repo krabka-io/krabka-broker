@@ -9,7 +9,7 @@
 # steps use that are not defined here, and terms no step uses any more.
 
 [tags.docker]
-meaning = "The scenario needs a container, such as a cp-kafka oracle. The crate's `crate_tests` call runs it under `--config=docker`."
+meaning = "The scenario needs a container, such as a cp-kafka oracle. Generated as `#[ignore = \"requires Docker\"]`; the crate's `crate_tests` call runs it with `--ignored` under `--config=docker`."
 
 [tags.journey]
 meaning = "An end-to-end flow across many rules. See [Journeys](#journeys)."

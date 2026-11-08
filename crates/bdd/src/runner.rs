@@ -29,6 +29,9 @@ use {
 pub enum Flavor {
     /// One thread: a task a step spawns moves only while a step awaits.
     CurrentThread,
+    /// One thread with the clock paused, as `#[tokio::test(start_paused =
+    /// true)]` builds it: time moves only when every task waits.
+    Paused,
     /// Worker threads, so a task a step spawns keeps running between steps.
     MultiThread {
         /// The number of worker threads; `None` takes Tokio's default.
@@ -46,6 +49,11 @@ impl Flavor {
     pub fn build(self) -> Runtime {
         let mut builder = match self {
             Self::CurrentThread => Builder::new_current_thread(),
+            Self::Paused => {
+                let mut builder = Builder::new_current_thread();
+                builder.start_paused(true);
+                builder
+            }
             Self::MultiThread { workers } => {
                 let mut builder = Builder::new_multi_thread();
                 if let Some(workers) = workers {

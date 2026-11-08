@@ -25,6 +25,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka_bdd::scenarios!` binds one `.feature` file as well as a directory, runs `runtime = "tokio-current-thread-paused"` on a paused clock, and generates an `@docker` scenario as `#[ignore = "requires Docker"]` for `--config=docker` to run with `--ignored`.
 - `krabka-bdd-cli` builds `krabka-bdd`: `lint` with a ratchet baseline, `map` (example maps with readiness notes), `docs` (a living-documentation index), `glossary` and `tags-table`. `aspect check-gherkin` runs the lint over every feature against `crates/bdd-cli/gherkin-baseline.tsv` and keeps the style guide's tag table equal to the glossary, and CI runs it. The KIP matrix reads `Rule:` blocks and `krabka_bdd::scenarios!` bindings.
 
 - krabka-bdd data and layering helpers: `#[derive(TableRow)]` and `assert_table!` for strict data tables, `#[derive(Overrides)]` for validation tests, `#[derive(ScenarioContext)]`, `Ref<T>` for introduce-and-refer and entity selectors, `Driver`/`Action` with `act` and `attempt` inside tracing spans, `StubClock` over the `qubit-clock` seam, and `scenarios!(.., driver = .., drivers = [..])` to run every scenario once per driver.

@@ -349,8 +349,12 @@ fn tag_expression(expression: Option<&LitStr>) -> Result<Option<TagOperation>, P
         .transpose()
 }
 
-/// Every `.feature` file under `dir`, in path order.
+/// Every `.feature` file under `dir`, in path order, or `dir` itself when it
+/// is one `.feature` file.
 fn feature_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    if dir.is_file() && is_feature_file(dir) {
+        return Ok(vec![dir.to_path_buf()]);
+    }
     let mut files = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(next) = pending.pop() {
@@ -358,10 +362,7 @@ fn feature_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
             let path = entry?.path();
             if path.is_dir() {
                 pending.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("feature"))
-            {
+            } else if is_feature_file(&path) {
                 files.push(path);
             }
         }
@@ -395,10 +396,20 @@ fn compile_errors(findings: &[Finding]) -> TokenStream {
 
 /// The directory's last component as an identifier.
 fn module_base(dir: &str) -> String {
-    let base = Path::new(dir)
-        .file_name()
-        .map_or_else(|| "features".into(), |name| name.to_string_lossy());
+    let path = Path::new(dir);
+    let name = if is_feature_file(path) {
+        path.file_stem()
+    } else {
+        path.file_name()
+    };
+    let base = name.map_or_else(|| "features".into(), |name| name.to_string_lossy());
     plan::ident(&base)
+}
+
+/// Whether `path` names a `.feature` file rather than a directory.
+fn is_feature_file(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("feature"))
 }
 
 #[cfg(test)]
@@ -414,6 +425,7 @@ mod tests {
     #[case("tests/features/log_policy", "log_policy")]
     #[case("tests/features/Multi-Thread", "multi_thread")]
     #[case("tests/features/3x", "_3x")]
+    #[case("tests/features/migrated/src/event_queue.feature", "event_queue")]
     fn module_base_is_an_identifier(#[case] dir: &str, #[case] expected: &str) {
         assert!(module_base(dir) == expected);
     }
