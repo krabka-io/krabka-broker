@@ -216,6 +216,24 @@ mod tests {
         ])
     }
 
+    /// A leader whose controller endpoint is named in lower case, after an
+    /// endpoint with another name.
+    fn lowercase_controller_quorum() -> krabka_raft::QuorumState {
+        quorum(Some(1), &[Voter {
+            id: 1,
+            endpoints: &[
+                Endpoint {
+                    name: "REPLICATION",
+                    port: 9101,
+                },
+                Endpoint {
+                    name: "controller",
+                    port: 9201,
+                },
+            ],
+        }])
+    }
+
     fn leader_without_controller_quorum() -> krabka_raft::QuorumState {
         quorum(Some(1), &[Voter {
             id: 1,
@@ -319,6 +337,12 @@ mod tests {
             0,
             ("127.0.0.1:9002", false),
         },
+        leader_with_lower_case_controller_endpoint = {
+            "the leader names its controller endpoint in lower case",
+            lowercase_controller_quorum(),
+            0,
+            ("127.0.0.1:9201", false),
+        },
         leader_without_controller_endpoint = {
             "the leader has no CONTROLLER endpoint",
             leader_without_controller_quorum(),
@@ -353,6 +377,13 @@ mod tests {
             (target.server.as_str(), target.from_bootstrap) == expected,
             "{case}"
         );
+    }
+
+    /// With no leader known and no bootstrap server there is nowhere to send
+    /// the request.
+    #[test]
+    fn no_target_without_a_leader_or_a_bootstrap_server() {
+        assert!(join_target(&two_voter_quorum(None), &[], 0).is_none());
     }
 
     #[test]
