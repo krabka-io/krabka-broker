@@ -28,8 +28,6 @@ struct GroupConsumption {
 }
 #[fixture]
 fn consumption() -> GroupConsumption {
-    // Start this scenario with fresh inputs and observations.
-
     GroupConsumption {
         broker: None,
         directory: None,

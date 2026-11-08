@@ -10,6 +10,7 @@ use {
     sim_harness::{cluster::Sim, sim_log::SimLog},
 };
 
+#[derive(Default)]
 struct ConsensusScenario {
     sim: Option<Sim<SimLog>>,
     leader: Option<NodeId>,
@@ -23,13 +24,8 @@ impl ConsensusScenario {
 
 #[fixture]
 fn consensus() -> ConsensusScenario {
-    // Start this scenario with fresh inputs and observations.
-
     ConsensusScenario {
-        sim: None,
-        leader: None,
-        replacements: Vec::new(),
-        target: None,
+        ..ConsensusScenario::default()
     }
 }
 

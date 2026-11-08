@@ -7,7 +7,7 @@ use {
             self, InProcess,
             fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
             offsets::{list_offset_partition, single_partition_list_offsets},
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::single_partition_produce,
             records::empty_record_batch,
         },
     },
@@ -68,11 +68,11 @@ async fn record_topic(records: &mut RecordRoundTrip, topic: String) {
 
 #[when("the client produces {count} records to the topic")]
 async fn append_records(records: &mut RecordRoundTrip, count: i32) {
-    let request = batch_request(empty_record_batch(count), SinglePartitionProduceSetup {
-        topic: records.topic.clone(),
-        topic_id: records.topic_id,
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .records(empty_record_batch(count))
+        .topic(records.topic.clone())
+        .topic_id(records.topic_id)
+        .call();
     let response = records
         .broker()
         .client
@@ -84,10 +84,10 @@ async fn append_records(records: &mut RecordRoundTrip, count: i32) {
 
 #[when("the client produces without a topic id")]
 async fn produce_missing_topic_id(records: &mut RecordRoundTrip) {
-    let request = batch_request(empty_record_batch(1), SinglePartitionProduceSetup {
-        topic: "nope".into(),
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .records(empty_record_batch(1))
+        .topic("nope")
+        .call();
     let response = records
         .broker()
         .client

@@ -75,11 +75,13 @@ const API_VERSIONS_VERSION: i16 = 3;
 
 /// Open the fixture's Alice session without charging a second handshake.
 async fn alice_quota_connection(addr: SocketAddr, context: &str) -> TcpStream {
-    kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        password: b"alice-secret".to_vec(),
-        ..Default::default()
-    })
+    kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .password(b"alice-secret")
+            .build(),
+    )
     .await
     .expect(context)
 }
@@ -120,11 +122,14 @@ async fn produce_when_acl_applied(
 ) -> ProduceResponse {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let r = drive_produce_sasl(addr, records.clone(), &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            password: (b"alice-secret").to_vec(),
-            ..Default::default()
-        })
+        let r = drive_produce_sasl(
+            addr,
+            records.clone(),
+            &PlainAuthenticationSetup::builder()
+                .client_id(CLIENT_ID)
+                .password(b"alice-secret")
+                .build(),
+        )
         .await;
         let code = r
             .responses
@@ -193,13 +198,6 @@ fn check_successful_produce(response: &ProduceResponse) {
     );
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct QuotaSettingSetup<'a> {
-    #[default("producer_byte_rate")]
-    key: &'a str,
-    value: QuotaValue,
-}
-
 #[bon::builder]
 async fn set_alice_quota(
     broker: &krabka_broker::BrokerHandle,
@@ -207,18 +205,18 @@ async fn set_alice_quota(
     #[builder(default = "producer_byte_rate")] key: &'_ str,
     #[builder(into, default)] value: QuotaValue,
 ) {
-    let setup = QuotaSettingSetup { key, value };
     kafka_wire::quotas::set_user_quota()
         .broker(broker)
         .addr(addr)
         .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
-        .key(setup.key)
-        .value(setup.value)
+        .key(key)
+        .value(value)
         .call()
         .await;
 }
 
 use {crate::support::client::metric_value, krabka_metadata::AclOperation};
+#[derive(Default)]
 struct QuotaEnforcement {
     broker: Option<QuotaFixture>,
     topic: String,
@@ -243,18 +241,8 @@ impl QuotaEnforcement {
 }
 #[rstest::fixture]
 fn quota() -> QuotaEnforcement {
-    // Start this scenario with fresh inputs and observations.
-
     QuotaEnforcement {
-        broker: None,
-        topic: String::new(),
-        produced: None,
-        fetched: None,
-        stream: None,
-        offsets_baseline: None,
-        offsets_throttled: None,
-        versions_baseline: None,
-        versions_throttled: None,
+        ..QuotaEnforcement::default()
     }
 }
 #[rstest_bdd_macros::given("a SASL quota broker has super user admin and ordinary user alice")]
@@ -361,11 +349,11 @@ async fn quota_fetch_records(quota: &mut QuotaEnforcement) {
             count: ProduceRecordCount(8),
             ..Default::default()
         },
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user: "admin",
-            password: (b"admin-secret").to_vec(),
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user("admin")
+            .password(b"admin-secret")
+            .build(),
     )
     .await;
     let part = &produce_resp.responses[0].partition_responses[0];

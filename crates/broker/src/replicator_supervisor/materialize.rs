@@ -169,9 +169,7 @@ mod tests {
         crate::{
             log_dir::partition_dir,
             partition::{Partition, test_support::install_three_replica_isr},
-            replicator_supervisor::test_support::{
-                MaterializeFixture, MaterializeSetup, materialized_partition,
-            },
+            replicator_supervisor::test_support::{MaterializeFixture, materialized_partition},
         },
         assert2::assert,
         krabka_log::topic_name,
@@ -196,12 +194,12 @@ mod tests {
         log_dir: &Path,
         topic: &str,
     ) {
-        MaterializeFixture::default().materialize(partitions, MaterializeSetup {
-            topic,
-            log_dirs: &[log_dir.to_path_buf()],
-            context: "materialize partition",
-            ..Default::default()
-        });
+        MaterializeFixture::default()
+            .materialize(partitions)
+            .topic(topic)
+            .log_dirs(&[log_dir.to_path_buf()])
+            .context("materialize partition")
+            .call();
     }
 
     fn append_one(partition: &Partition) -> krabka_log::Offset {
@@ -242,14 +240,13 @@ mod tests {
         let absolute = format!("{}/abs", root.path().display());
         for topic in [escaping.as_str(), absolute.as_str(), "..", ""] {
             let partitions = Arc::new(PartitionRegistry::new());
-            let result = materialize_partition(MaterializeFixture::default().config(
-                &partitions,
-                MaterializeSetup {
-                    topic,
-                    log_dirs: slice::from_ref(&log_dir),
-                    ..Default::default()
-                },
-            ));
+            let result = materialize_partition(
+                MaterializeFixture::default()
+                    .config(&partitions)
+                    .topic(topic)
+                    .log_dirs(slice::from_ref(&log_dir))
+                    .call(),
+            );
             assert!(
                 result
                     == Err(topic_name::validate_topic_name(topic)
@@ -287,10 +284,10 @@ mod tests {
 
         materialize_partition(MaterializePartitionConfig {
             topic_id: Some(topic_id),
-            ..MaterializeFixture::default().config(&partitions, MaterializeSetup {
-                log_dirs: &[first.path().to_path_buf(), preferred.path().to_path_buf()],
-                ..Default::default()
-            })
+            ..MaterializeFixture::default()
+                .config(&partitions)
+                .log_dirs(&[first.path().to_path_buf(), preferred.path().to_path_buf()])
+                .call()
         })
         .expect("materialize");
 
@@ -378,11 +375,11 @@ mod tests {
                 true,
                 (Some(hot_tail), Some(Arc::clone(&wal_shards)), None),
             ),
-            ..MaterializeFixture::default().config(&partitions, MaterializeSetup {
-                topic: "diskless",
-                log_dirs: &[dir.path().to_path_buf()],
-                ..Default::default()
-            })
+            ..MaterializeFixture::default()
+                .config(&partitions)
+                .topic("diskless")
+                .log_dirs(&[dir.path().to_path_buf()])
+                .call()
         })
         .expect("materialize");
 

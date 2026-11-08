@@ -178,8 +178,6 @@ struct EligibleLeaderReport {
 
 #[fixture]
 fn elr() -> EligibleLeaderReport {
-    // Start this scenario with fresh inputs and observations.
-
     EligibleLeaderReport {
         broker: None,
         directory: None,

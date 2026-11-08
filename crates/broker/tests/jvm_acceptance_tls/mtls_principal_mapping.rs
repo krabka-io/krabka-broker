@@ -163,6 +163,7 @@ use {
     std::process::Output,
 };
 const TOPIC: &str = "krabka-mtls-mapping-itest";
+#[derive(Default)]
 struct MappedCertificate {
     broker: Option<StartedBroker>,
     properties: Option<ClientPropsFile>,
@@ -173,15 +174,8 @@ struct MappedCertificate {
 }
 #[fixture]
 fn certificate() -> MappedCertificate {
-    // Start this scenario with fresh inputs and observations.
-
     MappedCertificate {
-        broker: None,
-        properties: None,
-        mounts: Vec::new(),
-        created: None,
-        produced: None,
-        consumed: None,
+        ..MappedCertificate::default()
     }
 }
 #[given(

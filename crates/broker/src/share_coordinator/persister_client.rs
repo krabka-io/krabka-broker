@@ -176,7 +176,7 @@ impl SharePersister {
                 .map_err(|error| refuse_local(ShareStateOp::Initialize, partition, error));
         }
 
-        let req = krabka_macros::share_state_request! {
+        let req = krabka_broker_macros::share_state_request! {
             InitializeShareGroupStateRequest, InitializeStateData, InitPartitionData;
             group [group];
             topic [topic_id];
@@ -214,7 +214,7 @@ impl SharePersister {
                 .await
                 .map_err(|error| refuse_local(ShareStateOp::Delete, partition, error))
         } else {
-            let req = krabka_macros::share_state_request! {
+            let req = krabka_broker_macros::share_state_request! {
                 DeleteShareGroupStateRequest, DeleteStateData, DeletePartitionData;
                 group [group];
                 topic [topic_id];
@@ -380,7 +380,7 @@ impl SharePersister {
                 .map_err(|error| refuse_local(ShareStateOp::Read, partition, error));
         }
 
-        let req = krabka_macros::share_state_request! {
+        let req = krabka_broker_macros::share_state_request! {
             ReadShareGroupStateRequest, ReadStateData, ReadPartitionData;
             group [group];
             topic [topic_id];
@@ -444,7 +444,7 @@ impl SharePersister {
                 .map_err(|error| refuse_local(ShareStateOp::ReadSummary, partition, error));
         }
 
-        let req = krabka_macros::share_state_request! {
+        let req = krabka_broker_macros::share_state_request! {
             ReadShareGroupStateSummaryRequest, ReadStateSummaryData, ReadSummaryPartitionData;
             group [group];
             topic [topic_id];
@@ -512,7 +512,7 @@ impl SharePersister {
                 .map_err(|error| refuse_local(ShareStateOp::Write, partition, error));
         }
 
-        let req = krabka_macros::share_state_request! {
+        let req = krabka_broker_macros::share_state_request! {
             WriteShareGroupStateRequest, WriteStateData, WritePartitionData;
             group [group];
             topic [topic_id];
@@ -649,7 +649,7 @@ trait PartitionResults {
     fn partition_results(self) -> Vec<PartitionRow>;
 }
 
-krabka_macros::share_partition_results!(
+krabka_broker_macros::share_partition_results!(
     InitializeShareGroupStateResponse,
     WriteShareGroupStateResponse,
     DeleteShareGroupStateResponse,

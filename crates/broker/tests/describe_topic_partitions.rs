@@ -59,6 +59,7 @@ use {
     krabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
     rstest_bdd::datatable::Rows, rstest_bdd_macros::DataTableRow,
 };
+#[derive(Default)]
 struct TopicPartitions {
     broker: Option<support::InProcess>,
     response: Option<DescribeTopicPartitionsResponse>,
@@ -67,13 +68,8 @@ struct TopicPartitions {
 }
 #[rstest::fixture]
 fn partitions() -> TopicPartitions {
-    // Start this scenario with fresh inputs and observations.
-
     TopicPartitions {
-        broker: None,
-        response: None,
-        resumed: None,
-        downgrade: None,
+        ..TopicPartitions::default()
     }
 }
 #[derive(DataTableRow)]

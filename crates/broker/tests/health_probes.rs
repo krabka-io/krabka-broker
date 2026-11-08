@@ -70,6 +70,7 @@ fn loopback_config(log_dir: &Path) -> BrokerConfig {
 }
 
 /// Each scenario owns its probe server and, when started, its broker.
+#[derive(Default)]
 struct ProbeScenario {
     state: Option<HealthState>,
     address: Option<SocketAddr>,
@@ -81,15 +82,8 @@ struct ProbeScenario {
 
 #[fixture]
 fn probes() -> ProbeScenario {
-    // Start this scenario with fresh inputs and observations.
-
     ProbeScenario {
-        state: None,
-        address: None,
-        directory: None,
-        broker: None,
-        readiness: Vec::new(),
-        liveness: None,
+        ..ProbeScenario::default()
     }
 }
 

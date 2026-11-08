@@ -230,9 +230,9 @@ struct ClassicLoad {
 }
 #[rstest::fixture]
 fn classic_load() -> ClassicLoad {
-    // Start this scenario with fresh inputs and observations.
-
-    ClassicLoad::default()
+    ClassicLoad {
+        ..ClassicLoad::default()
+    }
 }
 #[given(
     "a persisted classic consumer member has instance {instance} rebalance timeout {rebalance} and session timeout {session} milliseconds"

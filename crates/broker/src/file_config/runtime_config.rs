@@ -14,8 +14,8 @@ use {
 };
 
 /// Validated operational policy loaded from `[runtime]`.
-#[krabka_macros::runtime_policy_fields(toml)]
-#[krabka_macros::human_units]
+#[krabka_broker_macros::runtime_policy_fields(toml)]
+#[krabka_broker_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeFileConfig {

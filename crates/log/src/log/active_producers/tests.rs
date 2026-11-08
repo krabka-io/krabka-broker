@@ -168,57 +168,16 @@ fn producer_history(history: ProducerHistory) -> Vec<RecordBatch> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ActiveProducerSetup {
-    producer_id: ProducerId,
-    producer_epoch: BatchProducerEpoch,
-    last_sequence: BatchSequence,
-    last_timestamp: BatchTimestamp,
-    coordinator_epoch: MarkerCoordinatorEpoch,
-    current_txn_start_offset: Option<Offset>,
-}
-
-impl Default for ActiveProducerSetup {
-    fn default() -> Self {
-        Self {
-            producer_id: ProducerId(7),
-            producer_epoch: BatchProducerEpoch(0),
-            last_sequence: BatchSequence(0),
-            last_timestamp: BatchTimestamp(1_000),
-            coordinator_epoch: MarkerCoordinatorEpoch(-1),
-            current_txn_start_offset: None,
-        }
-    }
-}
-
 #[bon::builder]
 fn active(
-    #[builder(into, default = ActiveProducerSetup::default().producer_id)] producer_id: ProducerId,
-    #[builder(into, default = ActiveProducerSetup::default().producer_epoch)]
-    producer_epoch: BatchProducerEpoch,
-    #[builder(into, default = ActiveProducerSetup::default().last_sequence)]
-    last_sequence: BatchSequence,
-    #[builder(into, default = ActiveProducerSetup::default().last_timestamp)]
-    last_timestamp: BatchTimestamp,
-    #[builder(into, default = ActiveProducerSetup::default().coordinator_epoch)] coordinator_epoch: MarkerCoordinatorEpoch,
+    #[builder(into, default = ProducerId(7))] producer_id: ProducerId,
+    #[builder(into, default = BatchProducerEpoch(0))] producer_epoch: BatchProducerEpoch,
+    #[builder(into, default = BatchSequence(0))] last_sequence: BatchSequence,
+    #[builder(into, default = BatchTimestamp(1_000))] last_timestamp: BatchTimestamp,
+    #[builder(into, default = MarkerCoordinatorEpoch(-1))]
+    coordinator_epoch: MarkerCoordinatorEpoch,
     #[builder(into)] current_txn_start_offset: Option<Offset>,
 ) -> ActiveProducer {
-    let setup = ActiveProducerSetup {
-        producer_id,
-        producer_epoch,
-        last_sequence,
-        last_timestamp,
-        coordinator_epoch,
-        current_txn_start_offset,
-    };
-    let ActiveProducerSetup {
-        producer_id,
-        producer_epoch,
-        last_sequence,
-        last_timestamp,
-        coordinator_epoch,
-        current_txn_start_offset,
-    } = setup;
     ActiveProducer {
         producer_id,
         producer_epoch: producer_epoch.0,

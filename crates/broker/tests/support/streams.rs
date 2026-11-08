@@ -59,17 +59,6 @@ pub fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct StreamsMemberEpoch(pub i32);
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct StreamsFollowUpSetup<'a> {
-    #[default("g")]
-    pub group: &'a str,
-    #[default("m")]
-    pub member_id: &'a str,
-    #[default(StreamsMemberEpoch(1))]
-    pub epoch: StreamsMemberEpoch,
-    pub active: Option<Vec<ReqTaskIds>>,
-}
-
 #[bon::builder]
 pub fn follow_up(
     #[builder(default = "g")] group: &'_ str,
@@ -77,19 +66,13 @@ pub fn follow_up(
     #[builder(into, default = StreamsMemberEpoch (1))] epoch: StreamsMemberEpoch,
     active: Option<Vec<ReqTaskIds>>,
 ) -> StreamsGroupHeartbeatRequest {
-    let setup = StreamsFollowUpSetup {
-        group,
-        member_id,
-        epoch,
-        active,
-    };
     StreamsGroupHeartbeatRequest {
-        group_id: setup.group.into(),
-        member_id: setup.member_id.into(),
-        member_epoch: setup.epoch.0,
-        standby_tasks: setup.active.as_ref().map(|_| Vec::new()),
-        warmup_tasks: setup.active.as_ref().map(|_| Vec::new()),
-        active_tasks: setup.active,
+        group_id: group.into(),
+        member_id: member_id.into(),
+        member_epoch: epoch.0,
+        standby_tasks: active.as_ref().map(|_| Vec::new()),
+        warmup_tasks: active.as_ref().map(|_| Vec::new()),
+        active_tasks: active,
         ..Default::default()
     }
 }

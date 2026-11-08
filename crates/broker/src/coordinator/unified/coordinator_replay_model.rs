@@ -305,8 +305,9 @@ struct ReplayExploration {
 }
 #[rstest::fixture]
 fn replay_exploration() -> ReplayExploration {
-    // Start this scenario with fresh inputs and observations.
-    ReplayExploration::default()
+    ReplayExploration {
+        ..ReplayExploration::default()
+    }
 }
 #[given("a consumer group replay model includes child records tombstones and Kafka deletion order")]
 fn coordinator_replay_model(replay_exploration: &mut ReplayExploration) {

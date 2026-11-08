@@ -117,6 +117,7 @@ use {
     rstest_bdd_macros::{given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct TokenExpiration {
     deadlines: Option<(i64, i64)>,
     outcome: Option<TokenExpireDecision>,
@@ -124,11 +125,8 @@ struct TokenExpiration {
 
 #[fixture]
 fn expiration() -> TokenExpiration {
-    // Start this scenario with fresh inputs and observations.
-
     TokenExpiration {
-        deadlines: None,
-        outcome: None,
+        ..TokenExpiration::default()
     }
 }
 

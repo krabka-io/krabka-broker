@@ -1,0 +1,410 @@
+//! Decoding keeps version, request ownership and the native operation's control flow.
+#![cfg(test)]
+
+use {assert2::assert, std::cell::Cell, tokio::task, tracing::subscriber};
+
+type ApiVersion = i16;
+type DispatchResult = Result<Vec<u8>, &'static str>;
+
+struct Broker {
+    operations: Cell<usize>,
+}
+
+struct RequestContext<'a> {
+    principal: &'a str,
+    correlation_id: u8,
+}
+
+struct Request {
+    value: u8,
+}
+
+trait Decode: Sized {
+    fn decode(bytes: &[u8], version: ApiVersion) -> Result<Self, &'static str>;
+}
+
+impl Decode for Request {
+    fn decode(bytes: &[u8], version: ApiVersion) -> Result<Self, &'static str> {
+        if version != 2 {
+            return Err("unsupported version");
+        }
+        let &value = bytes.first().ok_or("truncated request")?;
+        if value == 0xff {
+            return Err("invalid request");
+        }
+        Ok(Self { value })
+    }
+}
+
+mod handlers {
+    use super::{ApiVersion, Decode};
+
+    pub fn decode_request<R: Decode>(bytes: &[u8], version: ApiVersion) -> Result<R, &'static str> {
+        R::decode(bytes, version)
+    }
+}
+
+mod immutable {
+    use super::{ApiVersion, Broker, DispatchResult, Request, RequestContext};
+
+    /// Native documentation and tracing remain attached to the entry point.
+    #[krabka_broker_macros::decode_dispatch(request = Request, binding(req))]
+    #[tracing::instrument(skip_all)]
+    pub async fn dispatch(
+        broker: &Broker,
+        version: ApiVersion,
+        req_bytes: &[u8],
+        ctx: &RequestContext<'_>,
+    ) -> DispatchResult {
+        broker.operations.set(broker.operations.get() + 1);
+        if ctx.principal != "admin" {
+            return Err("operation denied");
+        }
+        Ok(vec![req.value, req_bytes[0], ctx.correlation_id])
+    }
+}
+
+#[tokio::test]
+async fn successful_decode_preserves_context_raw_bytes_and_early_answers() {
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    for AccessCase {
+        principal,
+        expected,
+    } in [
+        AccessCase {
+            principal: "admin",
+            expected: Ok(vec![7, 7, 42]),
+        },
+        AccessCase {
+            principal: "guest",
+            expected: Err("operation denied"),
+        },
+    ] {
+        let ctx = RequestContext {
+            principal,
+            correlation_id: 42,
+        };
+        assert!(immutable::dispatch(&broker, 2, &[7, 99], &ctx).await == expected);
+    }
+    assert!(broker.operations.get() == 2);
+}
+
+#[tokio::test]
+async fn failed_decoding_never_enters_the_original_body() {
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    let ctx = RequestContext {
+        principal: "admin",
+        correlation_id: 1,
+    };
+    for DecodeCase {
+        version,
+        bytes,
+        error,
+    } in [
+        DecodeCase {
+            version: 1,
+            bytes: &b"\x07"[..],
+            error: "unsupported version",
+        },
+        DecodeCase {
+            version: 2,
+            bytes: &b""[..],
+            error: "truncated request",
+        },
+        DecodeCase {
+            version: 2,
+            bytes: &b"\xff"[..],
+            error: "invalid request",
+        },
+    ] {
+        assert!(immutable::dispatch(&broker, version, bytes, &ctx).await == Err(error));
+    }
+    assert!(broker.operations.get() == 0);
+}
+
+#[tokio::test]
+async fn mutable_request_binding_remains_an_owned_local() {
+    krabka_broker_macros::decoded_dispatch! {
+        async fn dispatch(
+            source: &Broker,
+            negotiated: ApiVersion,
+            body: &[u8],
+            caller: &RequestContext<'_>,
+        )
+        [request = Request, binding(mut req)] -> DispatchResult
+        {
+            task::yield_now().await;
+            req.value += u8::try_from(negotiated).unwrap();
+            source.operations.set(usize::from(req.value));
+            Ok(vec![req.value, caller.correlation_id])
+        }
+    }
+
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    let ctx = RequestContext {
+        principal: "admin",
+        correlation_id: 42,
+    };
+    assert!(dispatch(&broker, 2, &[7], &ctx).await == Ok(vec![9, 42]));
+    assert!(broker.operations.get() == 9);
+}
+
+#[test]
+fn synchronous_handle_preserves_its_correlation_parameter() {
+    #[krabka_broker_macros::decode_dispatch(request = Request, binding(req))]
+    fn handle(
+        broker: &Broker,
+        version: ApiVersion,
+        correlation: u8,
+        req_bytes: &[u8],
+        ctx: &RequestContext<'_>,
+    ) -> DispatchResult {
+        broker.operations.set(usize::from(req.value));
+        Ok(vec![req.value, correlation, ctx.correlation_id])
+    }
+
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    let ctx = RequestContext {
+        principal: "admin",
+        correlation_id: 42,
+    };
+    assert!(handle(&broker, 2, 99, &[7], &ctx) == Ok(vec![7, 99, 42]));
+    assert!(handle(&broker, 2, 99, &[], &ctx) == Err("truncated request"));
+    assert!(broker.operations.get() == 7);
+}
+
+mod extension_handlers {
+    use super::{ApiVersion, Broker, Decode, DispatchResult, Request, RequestContext};
+
+    struct MarkerRequest {
+        request: Request,
+    }
+
+    impl Decode for MarkerRequest {
+        fn decode(bytes: &[u8], version: ApiVersion) -> Result<Self, &'static str> {
+            Request::decode(bytes, version).map(|request| Self { request })
+        }
+    }
+
+    pub mod control {
+        use {
+            super::{ApiVersion, Broker, DispatchResult, Request, RequestContext},
+            tokio::task,
+        };
+
+        #[krabka_broker_macros::extension_wire(
+            name = "handle_extension_control",
+            api = "ExtensionControl",
+            level = "info"
+        )]
+        pub async fn handle(
+            broker: &Broker,
+            req: Request,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> DispatchResult {
+            broker.operations.set(broker.operations.get() + 1);
+            task::yield_now().await;
+            if ctx.principal == "guest" {
+                Err("control refused")
+            } else {
+                Ok(vec![req.value, ctx.correlation_id])
+            }
+        }
+    }
+
+    pub mod marker {
+        use super::{ApiVersion, Broker, DispatchResult, MarkerRequest, RequestContext};
+
+        #[krabka_broker_macros::extension_wire(
+            name = "handle_extension_marker",
+            api = "ExtensionMarker",
+            level = "debug"
+        )]
+        pub async fn handle(
+            broker: &Broker,
+            req: MarkerRequest,
+            version: ApiVersion,
+            _ctx: &RequestContext<'_>,
+        ) -> DispatchResult {
+            if req.request.value == 0 {
+                return Err("marker refused");
+            }
+            broker.operations.set(broker.operations.get() + 1);
+            Ok(vec![req.request.value])
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extension_spans_wrap_decoding_and_native_operations_at_their_original_levels() {
+    use {
+        extension_handlers::{control, marker},
+        std::sync::Mutex,
+        tracing_subscriber::fmt::{format::FmtSpan, writer::MakeWriter as _},
+    };
+
+    static OUTPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_span_events(FmtSpan::NEW)
+        .with_writer(|| OUTPUT.make_writer())
+        .finish();
+    let _tracing = subscriber::set_default(subscriber);
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    let mut ctx = RequestContext {
+        principal: "admin",
+        correlation_id: 42,
+    };
+
+    // Trailing bytes remain ignored and the legacy correlation slot remains unused.
+    assert!(control::handle(&broker, 2, 99, &[7, 88], &ctx).await == Ok(vec![7, 42]));
+    assert!(control::handle(&broker, 2, 99, &[], &ctx).await == Err("truncated request"));
+    assert!(broker.operations.get() == 1);
+    ctx.principal = "guest";
+    assert!(control::handle(&broker, 2, 99, &[7], &ctx).await == Err("control refused"));
+
+    assert!(marker::handle(&broker, 2, 99, &[8, 88], &ctx).await == Ok(vec![8]));
+    assert!(marker::handle(&broker, 2, 99, &[0xff], &ctx).await == Err("invalid request"));
+    assert!(marker::handle(&broker, 2, 99, &[0], &ctx).await == Err("marker refused"));
+    assert!(broker.operations.get() == 3);
+
+    let output = String::from_utf8(OUTPUT.lock().unwrap().clone()).unwrap();
+    let lines: Vec<_> = output.lines().collect();
+    assert!(lines.len() == 10);
+    for SpanCase {
+        line,
+        level,
+        operation,
+        api,
+    } in [
+        SpanCase {
+            line: lines[0],
+            level: "INFO",
+            operation: "handle_extension_control",
+            api: "ExtensionControl",
+        },
+        SpanCase {
+            line: lines[1],
+            level: "INFO",
+            operation: "handle_extension_control",
+            api: "ExtensionControl",
+        },
+        SpanCase {
+            line: lines[2],
+            level: "ERROR",
+            operation: "handle_extension_control",
+            api: "ExtensionControl",
+        },
+        SpanCase {
+            line: lines[3],
+            level: "INFO",
+            operation: "handle_extension_control",
+            api: "ExtensionControl",
+        },
+        SpanCase {
+            line: lines[4],
+            level: "ERROR",
+            operation: "handle_extension_control",
+            api: "ExtensionControl",
+        },
+        SpanCase {
+            line: lines[5],
+            level: "DEBUG",
+            operation: "handle_extension_marker",
+            api: "ExtensionMarker",
+        },
+        SpanCase {
+            line: lines[6],
+            level: "DEBUG",
+            operation: "handle_extension_marker",
+            api: "ExtensionMarker",
+        },
+        SpanCase {
+            line: lines[7],
+            level: "ERROR",
+            operation: "handle_extension_marker",
+            api: "ExtensionMarker",
+        },
+        SpanCase {
+            line: lines[8],
+            level: "DEBUG",
+            operation: "handle_extension_marker",
+            api: "ExtensionMarker",
+        },
+        SpanCase {
+            line: lines[9],
+            level: "ERROR",
+            operation: "handle_extension_marker",
+            api: "ExtensionMarker",
+        },
+    ] {
+        assert!(line.contains(level));
+        assert!(line.contains(operation));
+        assert!(line.contains(&format!("api=\"{api}\"")));
+    }
+    for DiagnosticCase { line, error } in [
+        DiagnosticCase {
+            line: lines[2],
+            error: "truncated request",
+        },
+        DiagnosticCase {
+            line: lines[4],
+            error: "control refused",
+        },
+        DiagnosticCase {
+            line: lines[7],
+            error: "invalid request",
+        },
+        DiagnosticCase {
+            line: lines[9],
+            error: "marker refused",
+        },
+    ] {
+        assert!(line.contains(error));
+    }
+    for skipped in [
+        "principal=",
+        "req_bytes=",
+        "version=",
+        "correlation_id=",
+        "broker=",
+    ] {
+        assert!(!output.contains(skipped));
+    }
+}
+
+struct AccessCase {
+    principal: &'static str,
+    expected: DispatchResult,
+}
+
+struct DecodeCase {
+    version: ApiVersion,
+    bytes: &'static [u8],
+    error: &'static str,
+}
+
+struct SpanCase<'a> {
+    line: &'a str,
+    level: &'static str,
+    operation: &'static str,
+    api: &'static str,
+}
+
+struct DiagnosticCase<'a> {
+    line: &'a str,
+    error: &'static str,
+}

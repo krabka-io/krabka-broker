@@ -86,8 +86,6 @@ struct RestoredTransactions {
 
 #[fixture]
 fn index() -> RestoredTransactions {
-    // Start this scenario with fresh inputs and observations.
-
     RestoredTransactions {
         segment: SEGMENT,
         entries: Vec::new(),

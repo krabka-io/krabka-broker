@@ -97,7 +97,7 @@ mod tests {
         crate::{
             api_catalog::UnstableApiVersions,
             replicator_supervisor::test_support::{
-                MaterializeSetup, await_until, materialized_partition_with_config,
+                await_until, default_log_config, materialized_partition_with_config,
                 single_partition_image,
             },
         },
@@ -109,41 +109,14 @@ mod tests {
         uuid::Uuid,
     };
 
-    #[derive(Clone, Copy)]
-    struct PushedConfigSetup<'a> {
-        base: &'a LogConfig,
-        unstable: UnstableApiVersions,
-        what: &'a str,
-    }
-
-    impl Default for PushedConfigSetup<'_> {
-        fn default() -> Self {
-            Self {
-                base: MaterializeSetup::default().log_config,
-                unstable: UnstableApiVersions::Disabled,
-                what: "log config updated",
-            }
-        }
-    }
-
     #[bon::builder]
     async fn pushed_config(
         image: &MetadataImage,
-        #[builder(default = PushedConfigSetup::default().base)] base: &'_ LogConfig,
-        #[builder(default = PushedConfigSetup::default().unstable)] unstable: UnstableApiVersions,
-        #[builder(default = PushedConfigSetup::default().what)] what: &'_ str,
+        #[builder(default = default_log_config())] base: &'_ LogConfig,
+        #[builder(default = UnstableApiVersions::Disabled)] unstable: UnstableApiVersions,
+        #[builder(default = "log config updated")] what: &'_ str,
         ready: impl Fn(&LogConfig) -> bool,
     ) -> LogConfig {
-        let setup = PushedConfigSetup {
-            base,
-            unstable,
-            what,
-        };
-        let PushedConfigSetup {
-            base,
-            unstable,
-            what,
-        } = setup;
         let (_dir, partitions) = materialized_partition_with_config(base);
         let desired = HashSet::from([("t".to_owned(), 0)]);
         push_topic_configs(

@@ -99,7 +99,7 @@ pub fn handle(
             topics_out.push(refused_topic(
                 topic_req,
                 codes::TOPIC_AUTHORIZATION_FAILED,
-                "Topic authorization failed.",
+                codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED),
             ));
             continue;
         }
@@ -120,7 +120,7 @@ pub fn handle(
                 let error_message = image
                     .topic(topic_req.name.as_str())
                     .is_none()
-                    .then(|| "This server does not host this topic-partition.".to_owned());
+                    .then(|| codes::default_message(codes::UNKNOWN_TOPIC_OR_PARTITION).to_owned());
                 parts_out.push(PartitionResponse {
                     partition_index: idx,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
@@ -256,7 +256,7 @@ mod tests {
 
     const VERSION: i16 = 0;
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -355,7 +355,7 @@ mod tests {
             expected_message,
         } in cases
         {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, p, peer);
                 boot [start_broker(authorizer)];
                 user ["alice"];
@@ -375,15 +375,6 @@ mod tests {
         }
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct EmptyProducerResponseSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        partition: krabka_ids::PartitionIndex,
-        error_code: KafkaErrorCode,
-        message: Option<String>,
-    }
-
     /// Independent wire oracle for a partition that exposes no producer state.
     #[bon::builder]
     fn empty_producer_response(
@@ -392,19 +383,13 @@ mod tests {
         #[builder(into, default)] error_code: KafkaErrorCode,
         message: Option<String>,
     ) -> DescribeProducersResponse {
-        let setup = EmptyProducerResponseSetup {
-            topic,
-            partition,
-            error_code,
-            message,
-        };
         DescribeProducersResponse {
             topics: vec![TopicResponse {
-                name: setup.topic.to_owned(),
+                name: topic.to_owned(),
                 partitions: vec![PartitionResponse {
-                    partition_index: setup.partition.0,
-                    error_code: setup.error_code.0,
-                    error_message: setup.message,
+                    partition_index: partition.0,
+                    error_code: error_code.0,
+                    error_message: message,
                     active_producers: Vec::new(),
                     ..Default::default()
                 }],
@@ -420,7 +405,7 @@ mod tests {
     /// with no message.
     #[tokio::test]
     async fn handle_gives_the_message_only_for_a_topic_the_image_lacks() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -444,7 +429,7 @@ mod tests {
             ])
             .await
             .expect("seed the known topic");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -474,7 +459,7 @@ mod tests {
     /// partition, not only the first.
     #[tokio::test]
     async fn handle_invalid_topic_name_marks_every_requested_partition() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, p, peer);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
             user ["alice"];
@@ -509,16 +494,6 @@ mod tests {
     /// Put `topic` with one partition on `replicas`, led by `leader`, in the
     /// metadata image. Return the partition once this broker hosts it in its
     /// role, or `None` when this broker is not a replica.
-    #[derive(krabka_macros::FieldDefaults)]
-    struct HostedProducerPartitionSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(krabka_metadata::NodeId(1))]
-        leader: krabka_metadata::NodeId,
-        #[default(vec![krabka_metadata::NodeId(1)])]
-        replicas: Vec<NodeId>,
-    }
-
     #[bon::builder]
     async fn seed_partition(
         broker: &Broker,
@@ -526,16 +501,6 @@ mod tests {
         #[builder(into, default = krabka_metadata :: NodeId (1))] leader: krabka_metadata::NodeId,
         #[builder(default = vec ! [krabka_metadata :: NodeId (1)])] replicas: Vec<NodeId>,
     ) -> Option<Arc<Partition>> {
-        let setup = HostedProducerPartitionSetup {
-            topic,
-            leader,
-            replicas,
-        };
-        let HostedProducerPartitionSetup {
-            topic,
-            leader,
-            replicas,
-        } = setup;
         let hosted = replicas.contains(&broker.config.node_id);
         broker
             .controller
@@ -590,20 +555,6 @@ mod tests {
     #[krabka_macros::test_scalar]
     struct ProducerCoordinatorEpoch(i32);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ExpectedProducerSetup {
-        #[default(krabka_ids::ProducerId(7))]
-        producer_id: krabka_ids::ProducerId,
-        producer_epoch: ReportedProducerEpoch,
-        last_sequence: BatchSequence,
-        #[default(BatchTimestamp(1_000))]
-        last_timestamp: BatchTimestamp,
-        #[default(ProducerCoordinatorEpoch(-1))]
-        coordinator_epoch: ProducerCoordinatorEpoch,
-        #[default(krabka_log::Offset(-1))]
-        current_txn_start_offset: krabka_log::Offset,
-    }
-
     #[bon::builder]
     fn producer_row(
         #[builder(into, default = krabka_ids :: ProducerId (7))]
@@ -616,22 +567,6 @@ mod tests {
         #[builder(into, default = krabka_log :: Offset (- 1))]
         current_txn_start_offset: krabka_log::Offset,
     ) -> ProducerState {
-        let setup = ExpectedProducerSetup {
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_timestamp,
-            coordinator_epoch,
-            current_txn_start_offset,
-        };
-        let ExpectedProducerSetup {
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_timestamp,
-            coordinator_epoch,
-            current_txn_start_offset,
-        } = setup;
         ProducerState {
             producer_id: producer_id.0,
             producer_epoch: producer_epoch.0,
@@ -678,7 +613,7 @@ mod tests {
     /// `KAFKA_STORAGE_ERROR`.
     #[tokio::test]
     async fn handle_answers_from_the_log_of_every_hosted_replica() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -759,7 +694,7 @@ mod tests {
             .await
             .expect("replicate an open transaction");
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -838,7 +773,7 @@ mod tests {
     /// is gone does, and the rest of the request is still answered.
     #[tokio::test]
     async fn a_poisoned_log_refuses_only_its_own_row() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(AllowAllAuthorizer))];
         };
@@ -859,7 +794,7 @@ mod tests {
             .expect("hosted partition");
         poison_log(&poisoned);
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };

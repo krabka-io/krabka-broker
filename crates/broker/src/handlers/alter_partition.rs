@@ -74,7 +74,7 @@ pub async fn handle(
 }
 
 fn refusal(error_code: i16) -> AlterPartitionResponse {
-    krabka_macros::unthrottled_wire!(AlterPartitionResponse {
+    krabka_broker_macros::unthrottled_wire!(AlterPartitionResponse {
         error_code,
         topics: Vec::new()
     })
@@ -104,10 +104,12 @@ async fn alter_partition_once(
         Some(codes::NOT_CONTROLLER)
     };
     if let Some(error_code) = refusal {
-        return Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
-            error_code,
-            topics: Vec::new(),
-        }));
+        return Ok(krabka_broker_macros::unthrottled_wire!(
+            AlterPartitionResponse {
+                error_code,
+                topics: Vec::new(),
+            }
+        ));
     }
 
     // Kafka's `ReplicationControlManager.alterPartition` starts with
@@ -118,10 +120,12 @@ async fn alter_partition_once(
         .ok()
         .and_then(|id| image.broker_epoch(NodeId(id)));
     if sender_epoch != Some(req.broker_epoch) {
-        return Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
-            error_code: codes::STALE_BROKER_EPOCH,
-            topics: Vec::new(),
-        }));
+        return Ok(krabka_broker_macros::unthrottled_wire!(
+            AlterPartitionResponse {
+                error_code: codes::STALE_BROKER_EPOCH,
+                topics: Vec::new(),
+            }
+        ));
     }
     // One snapshot of the brokers that may sit in an ISR: alive, unfenced
     // and not in controlled shutdown. The registry is seeded for this term
@@ -170,7 +174,7 @@ async fn alter_partition_once(
             })
             .collect();
 
-        resp_topics.push(krabka_macros::tagged_wire!(RespTopicData {
+        resp_topics.push(krabka_broker_macros::tagged_wire!(RespTopicData {
             topic_id: req_topic.topic_id,
             partitions: resp_partitions,
         }));
@@ -187,8 +191,10 @@ async fn alter_partition_once(
         return Err(e);
     }
 
-    Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
-        error_code: codes::NONE,
-        topics: resp_topics,
-    }))
+    Ok(krabka_broker_macros::unthrottled_wire!(
+        AlterPartitionResponse {
+            error_code: codes::NONE,
+            topics: resp_topics,
+        }
+    ))
 }

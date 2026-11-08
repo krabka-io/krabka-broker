@@ -65,6 +65,7 @@ async fn run_krabka_format(log_dir: &Path, add_scram: &str) {
 }
 
 use krabka_broker::{BrokerError, BrokerHandle};
+#[derive(Default)]
 struct BootstrapConsumption {
     directory: Option<tempfile::TempDir>,
     config: Option<BrokerConfig>,
@@ -73,13 +74,8 @@ struct BootstrapConsumption {
 }
 #[rstest::fixture]
 fn bootstrap() -> BootstrapConsumption {
-    // Start this scenario with fresh inputs and observations.
-
     BootstrapConsumption {
-        directory: None,
-        config: None,
-        started: None,
-        authenticated: None,
+        ..BootstrapConsumption::default()
     }
 }
 #[rstest_bdd_macros::given(

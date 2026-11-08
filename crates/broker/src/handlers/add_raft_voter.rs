@@ -38,7 +38,7 @@ use {
     krabka_raft::{reconfig::AddVoter, voter_requests},
 };
 
-#[krabka_macros::voter_admission(
+#[krabka_broker_macros::voter_admission(
     request = AddRaftVoterRequest,
     api = 80,
     gate = cluster_alter_denied,
@@ -187,8 +187,8 @@ mod tests {
         add_voter_request().voter_id(voter_id).call()
     }
 
-    krabka_macros::wire_codec_helpers! { test_context ["admin-client"]; }
-    krabka_macros::wire_test_driver! {
+    krabka_broker_macros::wire_codec_helpers! { test_context ["admin-client"]; }
+    krabka_broker_macros::wire_test_driver! {
         broker answer { request: AddRaftVoterRequest, response: AddRaftVoterResponse, api: 80 }
     }
     use {

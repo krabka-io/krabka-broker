@@ -186,15 +186,6 @@ mod tests {
     #[derive(Clone, Copy)]
     struct HttpStatusCode(u16);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct HttpsResponseSetup {
-        #[default("{}")]
-        introspect_body: &'static str,
-        #[default(HttpStatusCode(200))]
-        introspect_status: HttpStatusCode,
-        userinfo_body: Option<&'static str>,
-    }
-
     /// A running HTTPS server, its trust bundle and the requests it saw.
     struct HttpsServer {
         addr: SocketAddr,
@@ -209,16 +200,6 @@ mod tests {
         #[builder(into, default = HttpStatusCode (200))] introspect_status: HttpStatusCode,
         userinfo_body: Option<&'static str>,
     ) -> HttpsServer {
-        let setup = HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        };
-        let HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        } = setup;
         let introspect_status = introspect_status.0;
         let observed = Arc::new(ObservedRequests::default());
         let observed_in_task = sync::Arc::clone(&observed);
@@ -347,20 +328,15 @@ mod tests {
         userinfo_body: Option<&'static str>,
         client: HttpsClientSetup<'_>,
     ) -> HttpsFixture {
-        let response = HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        };
         let HttpsServer {
             addr,
             shutdown,
             ca_path,
             observed,
         } = serve_https()
-            .introspect_body(response.introspect_body)
-            .introspect_status(response.introspect_status)
-            .maybe_userinfo_body(response.userinfo_body)
+            .introspect_body(introspect_body)
+            .introspect_status(introspect_status)
+            .maybe_userinfo_body(userinfo_body)
             .call()
             .await;
         HttpsFixture {

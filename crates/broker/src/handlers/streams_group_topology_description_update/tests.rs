@@ -19,7 +19,7 @@ use {
     std::sync::Arc,
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["streams-client"];
 }
 
@@ -113,7 +113,7 @@ async fn handle_answers_as_a_trunk_broker_without_a_plugin() {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         set_streams_version(&broker, streams_version).await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user [grants];
         };
@@ -150,7 +150,7 @@ async fn handle_refuses_what_a_trunk_broker_with_a_plugin_refuses() {
     let _classic = broker
         .group_coordinator
         .get_or_create_classic("classic-app");
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["Group:Read"];
     };

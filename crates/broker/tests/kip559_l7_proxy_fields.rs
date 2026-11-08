@@ -50,6 +50,7 @@ fn join_setup() -> ClassicJoinSetup {
     }
 }
 
+#[derive(Default)]
 struct ProtocolDiscovery {
     broker: Option<InProcess>,
     bootstrap: Option<JoinGroupResponse>,
@@ -59,13 +60,8 @@ struct ProtocolDiscovery {
 
 #[fixture]
 fn protocol() -> ProtocolDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     ProtocolDiscovery {
-        broker: None,
-        bootstrap: None,
-        joined: None,
-        synchronized: None,
+        ..ProtocolDiscovery::default()
     }
 }
 

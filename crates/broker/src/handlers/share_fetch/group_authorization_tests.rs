@@ -93,7 +93,7 @@ impl Grants {
 #[derive(Debug)]
 struct GrantsByName;
 
-krabka_macros::test_authorizer!(GrantsByName, request; {
+krabka_broker_macros::test_authorizer!(GrantsByName, request; {
     let Some(grants) = Grants::ALL
         .into_iter()
         .find(|grants| grants.principal_name() == request.principal.name)
@@ -225,7 +225,7 @@ async fn share_fetch_checks_group_read_before_topic_read() {
                 }
             } else {
                 // `ShareFetchResponse.of(error, throttleTimeMs, empty, List.of(), 0)`.
-                krabka_macros::share_group_denial!(ShareFetchResponse)
+                krabka_broker_macros::share_group_denial!(ShareFetchResponse)
             };
             expected.push(Outcome {
                 version,
@@ -323,7 +323,7 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
             } else {
                 // `ShareAcknowledgeRequest.getErrorResponse` sets the throttle
                 // time and the error code, and nothing else.
-                krabka_macros::share_group_denial!(ShareAcknowledgeResponse)
+                krabka_broker_macros::share_group_denial!(ShareAcknowledgeResponse)
             };
             expected.push(Outcome {
                 version,

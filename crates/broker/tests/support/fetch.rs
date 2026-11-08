@@ -63,43 +63,18 @@ impl FetchLimits {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct FetchPartitionSetup {
-    pub partition: PartitionIndex,
-    pub offset: Offset,
-    #[default(FetchByteLimit(1 << 20))]
-    pub maximum: FetchByteLimit,
-}
-
 #[bon::builder]
 pub fn fetch_partition(
     #[builder(into, default)] partition: PartitionIndex,
     #[builder(into, default)] offset: Offset,
     #[builder(into, default = FetchByteLimit (1 << 20))] maximum: FetchByteLimit,
 ) -> FetchPartition {
-    let setup = FetchPartitionSetup {
-        partition,
-        offset,
-        maximum,
-    };
     FetchPartition {
-        partition: setup.partition.0,
-        fetch_offset: setup.offset.0,
-        partition_max_bytes: setup.maximum.0,
+        partition: partition.0,
+        fetch_offset: offset.0,
+        partition_max_bytes: maximum.0,
         ..Default::default()
     }
-}
-
-#[derive(krabka_macros::FieldDefaults)]
-pub struct SinglePartitionFetchSetup {
-    #[default("orders".into())]
-    pub topic: String,
-    #[default(Uuid::ZERO)]
-    pub topic_id: Uuid,
-    #[default(fetch_partition().call())]
-    pub partition: FetchPartition,
-    #[default(FetchLimits::one_mebibyte(RequestWaitMillis(500)))]
-    pub limits: FetchLimits,
 }
 
 #[bon::builder]
@@ -109,17 +84,9 @@ pub fn single_partition_fetch(
     #[builder(default = fetch_partition().call())] partition: FetchPartition,
     #[builder(default = FetchLimits :: one_mebibyte (RequestWaitMillis (500)))] limits: FetchLimits,
 ) -> FetchRequest {
-    let setup = SinglePartitionFetchSetup {
-        topic,
-        topic_id,
-        partition,
-        limits,
-    };
     fetch_request_for(
-        vec![fetch_topic_row(setup.topic, setup.topic_id, vec![
-            setup.partition,
-        ])],
-        setup.limits,
+        vec![fetch_topic_row(topic, topic_id, vec![partition])],
+        limits,
     )
 }
 

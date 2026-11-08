@@ -198,7 +198,7 @@ fn response_correlation_id(frame: &BytesMut) -> i32 {
     i32::from_be_bytes(frame[..4].try_into().expect("response correlation id"))
 }
 
-krabka_macros::single_partition_produce_fixture!(single_partition_produce);
+krabka_broker_macros::single_partition_produce_fixture!(single_partition_produce);
 
 /// Builds a `Produce` request body for `topic` carrying `count` records of
 /// `record_bytes` each.
@@ -211,20 +211,18 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             ..Default::default()
         })
         .collect();
-    let request = single_partition_produce(SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        records: Some(
-            RecordBatch {
-                last_offset_delta: i32::try_from(count - 1).expect("record count"),
-                records,
-                ..Default::default()
-            }
-            .into(),
-        ),
-        acknowledgements: ProduceAcknowledgements::from_wire(WireAcknowledgements(acks)),
-        timeout: ProduceTimeoutMillis(30_000),
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .topic(topic)
+        .records(RecordBatch {
+            last_offset_delta: i32::try_from(count - 1).expect("record count"),
+            records,
+            ..Default::default()
+        })
+        .acknowledgements(ProduceAcknowledgements::from_wire(WireAcknowledgements(
+            acks,
+        )))
+        .timeout(30_000)
+        .call();
     let mut body = BytesMut::new();
     request
         .encode(&mut body, PRODUCE_VERSION)
@@ -836,8 +834,8 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
     handle.shutdown().await;
 }
 
-krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
-krabka_macros::create_topic_fixture!(configured_topic_request);
+krabka_broker_macros::consumer_fetch_fixture!(consumer_fetch_request);
+krabka_broker_macros::create_topic_fixture!(configured_topic_request);
 
 async fn broker_with_throttle(throttle_max: Time) -> StartedBroker {
     start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await

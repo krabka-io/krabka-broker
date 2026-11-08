@@ -78,7 +78,7 @@ mod tests {
         crate::{
             barrier::test_support::open_partition,
             coordinator::unified::persistence::MAX_STRING_BYTES,
-            partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
+            partition_registry::PartitionRegistry,
         },
         krabka_ids::PartitionIndex,
         std::{path::Path, sync::Arc},
@@ -86,10 +86,7 @@ mod tests {
 
     async fn leader_partition(dir: &Path) -> Arc<Partition> {
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir, StandalonePartitionSetup {
-            topic: "test-barrier",
-            ..Default::default()
-        });
+        open_partition(&registry, dir).topic("test-barrier").call();
         let partition = registry.get("test-barrier", PartitionIndex(0)).unwrap();
         partition.install_leader_change(1, 5).await;
         partition

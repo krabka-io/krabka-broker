@@ -17,7 +17,7 @@ use {
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
-        test_support::{FakeMetadataSource, StandalonePartitionSetup},
+        test_support::FakeMetadataSource,
     },
     krabka_metadata::{MetadataRecord, NodeId},
     krabka_units::{Time, millis},
@@ -41,30 +41,16 @@ fn config() -> BarrierConfig {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct RetainedCutCount(pub i32);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct GroupSpecSetup<'a> {
-    #[default(&["orders"])]
-    pub(crate) topics: &'a [&'a str],
-    pub(crate) interval: Option<Time>,
-    #[default(RetainedCutCount(4))]
-    pub(crate) retained_cuts: RetainedCutCount,
-}
-
 #[bon::builder]
 pub fn spec(
     #[builder(default = & ["orders"])] topics: &'_ [&'_ str],
     interval: Option<Time>,
     #[builder(into, default = RetainedCutCount (4))] retained_cuts: RetainedCutCount,
 ) -> GroupSpec {
-    let setup = GroupSpecSetup {
-        topics,
-        interval,
-        retained_cuts,
-    };
     GroupSpec {
-        topics: setup.topics.iter().map(|t| (*t).to_owned()).collect(),
-        interval: setup.interval,
-        retained_cuts: setup.retained_cuts.0,
+        topics: topics.iter().map(|t| (*t).to_owned()).collect(),
+        interval,
+        retained_cuts: retained_cuts.0,
     }
 }
 
@@ -112,19 +98,17 @@ impl Fixture {
         let dir = tempdir().expect("tempdir");
         let registry = Arc::new(PartitionRegistry::new());
         for p in 0..4 {
-            open_partition(&registry, dir.path(), StandalonePartitionSetup {
-                topic: STATE_TOPIC,
-                partition: krabka_ids::PartitionIndex(p),
-                ..Default::default()
-            });
+            open_partition(&registry, dir.path())
+                .topic(STATE_TOPIC)
+                .partition(krabka_ids::PartitionIndex(p))
+                .call();
         }
         for DataTopic { name, partitions } in data {
             for p in 0..*partitions {
-                open_partition(&registry, dir.path(), StandalonePartitionSetup {
-                    topic: name,
-                    partition: krabka_ids::PartitionIndex(p),
-                    ..Default::default()
-                });
+                open_partition(&registry, dir.path())
+                    .topic(name)
+                    .partition(krabka_ids::PartitionIndex(p))
+                    .call();
             }
         }
         Self {

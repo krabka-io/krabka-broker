@@ -25,16 +25,6 @@ pub struct TopicAclSetup<'a> {
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ClusterAclSetup<'a> {
-    #[default("User:alice")]
-    pub principal: &'a str,
-    #[default("*")]
-    pub host: &'a str,
-    #[default(AclOperation::ClusterAction)]
-    pub operation: AclOperation,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub struct AllowAclSetup<'a> {
     #[default(ResourceType::Topic)]
     pub resource_type: ResourceType,
@@ -100,17 +90,12 @@ pub fn cluster_acl_record(
     #[builder(default = "*")] host: &'_ str,
     #[builder(default = AclOperation :: ClusterAction)] operation: AclOperation,
 ) -> MetadataRecord {
-    let setup = ClusterAclSetup {
-        principal,
-        host,
-        operation,
-    };
     literal_allow_acl()
         .resource_type(ResourceType::Cluster)
         .resource_name("kafka-cluster")
-        .principal(setup.principal)
-        .host(setup.host)
-        .operation(setup.operation)
+        .principal(principal)
+        .host(host)
+        .operation(operation)
         .call()
 }
 

@@ -36,7 +36,7 @@ pub struct ShareGroupMetadataValue {
     pub metadata_hash: i64,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupMetadataValue")]
 impl ShareGroupMetadataValue {
     fn encode_fields(self, buf: &mut BytesMut) {
         buf.put_i32(self.epoch);
@@ -53,7 +53,7 @@ impl ShareGroupMetadataValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "ShareGroupTargetAssignmentMetadataValue")]
 pub struct ShareGroupTargetAssignmentMetadataValue {
     pub assignment_epoch: i32,
@@ -144,8 +144,9 @@ mod tests {
     type ShareEpochCompatibility = KafkaRecordRoundTrip<ShareEpochRecord>;
     #[rstest::fixture]
     fn epochs() -> ShareEpochCompatibility {
-        // Start this scenario with fresh inputs and observations.
-        ShareEpochCompatibility::default()
+        ShareEpochCompatibility {
+            ..ShareEpochCompatibility::default()
+        }
     }
     #[given("the Share group epoch is {epoch} with metadata hash {hash}")]
     fn group_epoch_input(epochs: &mut ShareEpochCompatibility, epoch: i32, hash: i64) {

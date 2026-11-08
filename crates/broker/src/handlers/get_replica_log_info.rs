@@ -185,7 +185,7 @@ mod tests {
         };
 
         let topic_uuid = uuid::Uuid::from_u128(0xABCD);
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [broker_fixture_support::start_broker_with_authorizer_no_audit(Arc::new(
                         fixture_authorizers::AllowAllAuthorizer
@@ -235,7 +235,7 @@ mod tests {
         };
         let req_buf = encode_request(&req, version);
 
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer, ctx);
             user ["admin"];
             client ["inter-broker"];

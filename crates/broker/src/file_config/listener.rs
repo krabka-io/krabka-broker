@@ -14,7 +14,7 @@ use {
     std::{net::SocketAddr, path::PathBuf},
 };
 
-#[krabka_macros::config_table(open)]
+#[krabka_broker_macros::config_table(open)]
 #[derive(Eq)]
 pub struct FileTlsConfig {
     /// PEM file holding this listener's server certificate chain.
@@ -73,7 +73,7 @@ pub enum FileClientAuthMode {
     Required,
 }
 
-#[krabka_macros::config_table(open)]
+#[krabka_broker_macros::config_table(open)]
 #[derive(Eq)]
 pub struct FileListenerSaslConfig {
     /// SASL mechanisms this listener accepts, Kafka's
@@ -102,7 +102,7 @@ where
         .collect()
 }
 
-#[krabka_macros::human_units]
+#[krabka_broker_macros::human_units]
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 pub struct FileListener {
     /// Listener name, for example `"PLAINTEXT"` or `"SASL_SSL"`. It is the

@@ -235,16 +235,6 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct DescribedNodeSetup<'a> {
-        #[default("node")]
-        name: &'a str,
-        kind: DescribedNodeKind,
-        source_topics: &'a [&'a str],
-        sink_topic: Option<&'a str>,
-        stores: &'a [&'a str],
-    }
-
     #[bon::builder]
     fn describe_node(
         #[builder(default = "node")] name: &'_ str,
@@ -253,20 +243,6 @@ mod tests {
         sink_topic: Option<&'_ str>,
         #[builder(default)] stores: &'_ [&'_ str],
     ) -> describe::topology_description_node::TopologyDescriptionNode {
-        let setup = DescribedNodeSetup {
-            name,
-            kind,
-            source_topics,
-            sink_topic,
-            stores,
-        };
-        let DescribedNodeSetup {
-            name,
-            kind,
-            source_topics,
-            sink_topic,
-            stores,
-        } = setup;
         describe::topology_description_node::TopologyDescriptionNode {
             name: name.into(),
             node_type: kind.wire_code(),
@@ -295,8 +271,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn topology_push() -> TopologyPush {
-        // Start this scenario with fresh inputs and observations.
-        TopologyPush::default()
+        TopologyPush {
+            ..TopologyPush::default()
+        }
     }
     #[given(
         "a topology push has source processor and sink nodes plus a source-processor global store"

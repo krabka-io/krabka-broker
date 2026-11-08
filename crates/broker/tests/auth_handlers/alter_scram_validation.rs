@@ -38,6 +38,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct ScramChange {
     directory: Option<TempDir>,
     broker: Option<BrokerHandle>,
@@ -48,14 +49,8 @@ struct ScramChange {
 
 #[fixture]
 fn credentials() -> ScramChange {
-    // Start this scenario with fresh inputs and observations.
-
     ScramChange {
-        directory: None,
-        broker: None,
-        password: None,
-        request: None,
-        response: None,
+        ..ScramChange::default()
     }
 }
 

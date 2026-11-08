@@ -36,7 +36,7 @@ use {
         controller_voters,
         discovery::named_topic_metadata,
         listeners,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
         shutdown_cluster,
         topics::{creatable_topic, create_topic_request},
@@ -801,11 +801,12 @@ async fn remote_secured_produces(
         };
         let request = ProduceRequest {
             transactional_id: Some(case.name.into()),
-            ..batch_request(batch, SinglePartitionProduceSetup {
-                topic: (case.name).into(),
-                partition: krabka_ids::PartitionIndex(partition),
-                ..SinglePartitionProduceSetup::replicated()
-            })
+            ..single_partition_produce()
+                .records(batch)
+                .topic(case.name)
+                .partition(krabka_ids::PartitionIndex(partition))
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call()
         };
         let produced = if case.produce_version < 12 {
             to_leader.send(At::<_, 11>(request)).await

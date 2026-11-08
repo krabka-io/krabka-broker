@@ -19,20 +19,16 @@ use {
 
 /// Kafka's `Errors.message()` for the codes `FindCoordinator` answers.
 pub(super) fn error_message(error_code: i16) -> Option<String> {
-    let message = match error_code {
-        codes::NONE => "NONE",
-        codes::COORDINATOR_NOT_AVAILABLE => "The coordinator is not available.",
-        codes::GROUP_AUTHORIZATION_FAILED => "Group authorization failed.",
-        codes::CLUSTER_AUTHORIZATION_FAILED => "Cluster authorization failed.",
-        codes::INVALID_REQUEST => {
-            "This most likely occurs because of a request being malformed by the client library \
-             or the message was sent to an incompatible broker. See the broker logs for more \
-             details."
-        }
-        codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED => "Transactional Id authorization failed.",
-        _ => return None,
-    };
-    Some(message.to_owned())
+    matches!(
+        error_code,
+        codes::NONE
+            | codes::COORDINATOR_NOT_AVAILABLE
+            | codes::GROUP_AUTHORIZATION_FAILED
+            | codes::CLUSTER_AUTHORIZATION_FAILED
+            | codes::INVALID_REQUEST
+            | codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED
+    )
+    .then(|| codes::default_message(error_code).to_owned())
 }
 
 /// A row with `Node.noNode()` in place of the coordinator.

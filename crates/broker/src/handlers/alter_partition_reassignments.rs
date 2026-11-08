@@ -153,12 +153,12 @@ pub async fn handle(
     let responses: Vec<ReassignableTopicResponse> = by_topic
         .into_iter()
         .map(|(name, partitions)| {
-            krabka_macros::tagged_wire!(ReassignableTopicResponse { name, partitions })
+            krabka_broker_macros::tagged_wire!(ReassignableTopicResponse { name, partitions })
         })
         .collect();
     // Kafka's `ReplicationControlManager.alterPartitionReassignments` sets the
     // top-level `ErrorMessage` to null explicitly.
-    Ok(krabka_macros::unthrottled_wire!(
+    Ok(krabka_broker_macros::unthrottled_wire!(
         AlterPartitionReassignmentsResponse {
             allow_replication_factor_change: req.allow_replication_factor_change,
             error_code: 0,

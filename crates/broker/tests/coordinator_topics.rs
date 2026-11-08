@@ -106,6 +106,7 @@ async fn start_three(configure: impl Fn(&mut BrokerConfig)) -> Cluster {
     cluster
 }
 
+#[derive(Default)]
 struct CoordinatorTopics {
     cluster: Cluster,
     first: Option<FindCoordinatorResponse>,
@@ -121,17 +122,8 @@ impl CoordinatorTopics {
 }
 #[rstest::fixture]
 fn coordinators() -> CoordinatorTopics {
-    // Start this scenario with fresh inputs and observations.
-
     CoordinatorTopics {
-        cluster: Vec::new(),
-        first: None,
-        coordinator: None,
-        successor: None,
-        transaction_lookups: Vec::new(),
-        victim: None,
-        stopped_id: None,
-        stopped_directory: None,
+        ..CoordinatorTopics::default()
     }
 }
 #[rstest_bdd_macros::given(

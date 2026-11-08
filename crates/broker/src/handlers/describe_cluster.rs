@@ -205,7 +205,7 @@ mod tests {
 
     const VERSION: i16 = 2;
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -257,7 +257,7 @@ mod tests {
 
     macro_rules! admin_request_identity {
         ($context:ident) => {
-            krabka_macros::request_test_identity! {
+            krabka_broker_macros::request_test_identity! {
                 bind($context);
                 user ["admin"];
             };
@@ -276,7 +276,7 @@ mod tests {
         } = start_broker(Arc::new(ControllerPeerAllowed(DenyAll))).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -361,7 +361,7 @@ mod tests {
             .broker
             .broker_arc_for_test();
         let principal = describe_cluster.principal.as_str();
-        krabka_macros::request_test_identity! {bind(ctx);user [principal];}
+        krabka_broker_macros::request_test_identity! {bind(ctx);user [principal];}
         let req = DescribeClusterRequest {
             endpoint_type: describe_cluster.endpoint_type,
             ..Default::default()
@@ -382,7 +382,7 @@ mod tests {
     ) {
         assert!(
             describe_cluster.response.as_ref().unwrap()
-                == &krabka_macros::unthrottled_wire!(DescribeClusterResponse {
+                == &krabka_broker_macros::unthrottled_wire!(DescribeClusterResponse {
                     error_code: code,
                     error_message: Some(message),
                     endpoint_type: 1,
@@ -450,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
         let authorizer = Arc::new(AllowAllAuthorizer);
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker(Arc::<AllowAllAuthorizer>::clone(&authorizer))];
             user ["admin"];
@@ -497,7 +497,7 @@ mod tests {
             .await
             .expect("seed ACL");
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -579,7 +579,7 @@ mod tests {
         }
 
         let broker_row = |node_id: i32, listener: &str, port: i32| {
-            krabka_macros::tagged_wire!(DescribeClusterBroker {
+            krabka_broker_macros::tagged_wire!(DescribeClusterBroker {
                 broker_id: node_id,
                 host: format!("{}-{node_id}", listener.to_lowercase()),
                 port,
@@ -622,7 +622,7 @@ mod tests {
             .await
             .expect("seed broker registrations");
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["admin"];
         };
@@ -685,7 +685,7 @@ mod tests {
             .iter()
             .find(|b| b.broker_id == 42)
             .expect("seeded broker row");
-        let expected_seeded_row = krabka_macros::tagged_wire!(DescribeClusterBroker {
+        let expected_seeded_row = krabka_broker_macros::tagged_wire!(DescribeClusterBroker {
             broker_id: 42,
             host: "broker-a".into(),
             port: 29092,

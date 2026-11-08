@@ -187,8 +187,6 @@ impl RecordTrimming {
 
 #[fixture]
 fn trimming() -> RecordTrimming {
-    // Start this scenario with fresh inputs and observations.
-
     RecordTrimming {
         broker: None,
         client: None,

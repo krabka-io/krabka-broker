@@ -59,8 +59,6 @@ struct MetadataById {
 
 #[fixture]
 fn metadata() -> MetadataById {
-    // Start this scenario with fresh inputs and observations.
-
     MetadataById {
         broker: None,
         requested_id: WireUuid::ZERO,

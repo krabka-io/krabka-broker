@@ -1,0 +1,167 @@
+//! The generated timing methods preserve borrowing, bounds and unrelated fields.
+#![cfg(test)]
+
+use std::{borrow::Cow, collections::BTreeMap, ptr, time::Duration};
+
+mod coordinator {
+    pub mod unified {
+        pub mod config {
+            use std::{collections::BTreeMap, time::Duration};
+
+            pub const MIN_ASSIGNMENT_INTERVAL: Duration = Duration::ZERO;
+            pub const MAX_ASSIGNMENT_INTERVAL: Duration = Duration::from_secs(15);
+
+            pub fn group_millis(
+                overrides: Option<&BTreeMap<String, String>>,
+                key: &str,
+                min: Duration,
+                max: Duration,
+            ) -> Option<Duration> {
+                overrides
+                    .and_then(|values| values.get(key))
+                    .and_then(|text| text.trim().parse::<i32>().ok())
+                    .map(|millis| Duration::from_millis(u64::try_from(millis).unwrap_or(0)))
+                    .map(|duration| duration.clamp(min, max))
+            }
+        }
+    }
+}
+
+const SESSION: &str = "consumer.session.timeout.ms";
+const HEARTBEAT: &str = "consumer.heartbeat.interval.ms";
+const ASSIGNMENT: &str = "consumer.assignment.interval.ms";
+
+#[krabka_broker_macros::membership_defaults]
+#[derive(
+    Debug, Clone, PartialEq, krabka_macros::FieldDefaults, krabka_broker_macros::GroupTimingConfig,
+)]
+#[group_timing(session = SESSION, heartbeat = HEARTBEAT, assignment = ASSIGNMENT)]
+struct Config {
+    session_timeout: Duration,
+    heartbeat_interval: Duration,
+    #[default(Duration::from_secs(1))]
+    assignment_interval: Duration,
+    min_session_timeout: Duration,
+    max_session_timeout: Duration,
+    min_heartbeat_interval: Duration,
+    max_heartbeat_interval: Duration,
+    #[default(77)]
+    unrelated: u32,
+}
+
+struct Override<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+
+fn overrides(entries: &[Override<'_>]) -> BTreeMap<String, String> {
+    entries
+        .iter()
+        .map(|entry| (entry.key.into(), entry.value.into()))
+        .collect()
+}
+
+#[yare::parameterized(absent = { "absent" }, empty = { "empty" }, ignored = { "ignored" })]
+fn absent_invalid_and_other_protocol_timings_borrow_the_original(kind: &str) {
+    let config = Config::default();
+    let ignored = overrides(&[
+        Override {
+            key: "share.session.timeout.ms",
+            value: "50000",
+        },
+        Override {
+            key: HEARTBEAT,
+            value: "invalid",
+        },
+    ]);
+    let empty = BTreeMap::new();
+    let values = match kind {
+        "absent" => None,
+        "empty" => Some(&empty),
+        "ignored" => Some(&ignored),
+        _ => unreachable!(),
+    };
+    let Cow::Borrowed(actual) = config.for_group(values) else {
+        panic!("no valid timing overrides must borrow the broker defaults")
+    };
+    assert2::assert!(ptr::eq(actual, &raw const config));
+}
+
+#[yare::parameterized(
+    session_45 = { vec![Override { key: SESSION, value: "45000" }], 45, 5, 1 },
+    session_50 = { vec![Override { key: SESSION, value: "50000" }], 50, 5, 1 },
+    heartbeat = { vec![Override { key: HEARTBEAT, value: "7000" }], 45, 7, 1 },
+    assignment = { vec![Override { key: ASSIGNMENT, value: "0" }], 45, 5, 0 },
+    multiple_clamped = {
+        vec![
+            Override {
+                key: SESSION,
+                value: "0",
+            },
+            Override {
+                key: HEARTBEAT,
+                value: "20000",
+            },
+            Override {
+                key: ASSIGNMENT,
+                value: "20000",
+            },
+        ],
+        45,
+        15,
+        15,
+    },
+)]
+fn applies_each_timing_and_keeps_unrelated_configuration(
+    entries: Vec<Override<'static>>,
+    session: u64,
+    heartbeat: u64,
+    assignment: u64,
+) {
+    let config = Config::default();
+    let values = overrides(&entries);
+    let Cow::Owned(actual) = config.for_group(Some(&values)) else {
+        panic!("a valid override must create a configuration")
+    };
+    assert2::assert!(
+        actual
+            == Config {
+                session_timeout: Duration::from_secs(session),
+                heartbeat_interval: Duration::from_secs(heartbeat),
+                assignment_interval: Duration::from_secs(assignment),
+                ..config
+            }
+    );
+    assert2::assert!(config == Config::default());
+    assert2::assert!(
+        Config::assigning_at_once()
+            == Config {
+                assignment_interval: Duration::ZERO,
+                ..config
+            }
+    );
+}
+
+/// The broker layer: an interval other than the current one sets only the
+/// assignment interval, and the current one borrows the original.
+#[yare::parameterized(
+    same = { 1_000, None },
+    longer = { 9_000, Some(9_000) },
+    zero = { 0, Some(0) },
+)]
+fn with_assignment_interval_replaces_only_the_assignment_interval(millis: u64, owned: Option<u64>) {
+    let config = Config::default();
+    let actual = config.with_assignment_interval(Duration::from_millis(millis));
+    match owned {
+        None => assert2::assert!(
+            matches!(actual, Cow::Borrowed(borrowed) if ptr::eq(borrowed, &raw const config))
+        ),
+        Some(want) => assert2::assert!(
+            actual.into_owned()
+                == Config {
+                    assignment_interval: Duration::from_millis(want),
+                    ..Config::default()
+                }
+        ),
+    }
+}

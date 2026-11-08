@@ -13,12 +13,10 @@ use {
     crate::support::{
         client::connect_client,
         offsets::{delete_records_partition, delete_records_request, delete_records_topic},
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::batch_from_records,
         registered_cluster, shutdown_cluster,
-        topics::{
-            CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor, create_topic_request,
-        },
+        topics::{configured_topic_request, create_topic_request},
     },
     assert2::assert,
     krabka_broker::{BrokerConfig, BrokerHandle},
@@ -97,12 +95,14 @@ async fn metrics_cluster(topic: &str) -> MetricsCluster {
     .expect("3-broker cluster");
     support::wait_for_all_brokers_registered(&cluster, 3).await;
     let admin = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
-    support::client::create_topic_with(&admin, CreateTopicSetup {
-        topic,
-        num_partitions: TopicPartitionCount(12),
-        replication_factor: TopicReplicationFactor(3),
-        ..Default::default()
-    })
+    support::client::create_topic_with(
+        &admin,
+        configured_topic_request()
+            .topic(topic)
+            .num_partitions(12)
+            .replication_factor(3)
+            .call(),
+    )
     .await;
     for (handle, _, _) in &cluster {
         for partition in 0..12 {
@@ -145,11 +145,14 @@ async fn produce_replicated(
     batch: RecordBatch,
 ) {
     let response = client
-        .send(batch_request(batch, SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated()
-        }))
+        .send(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic)
+                .topic_id(topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
         .await
         .unwrap();
     assert!(response.responses[0].partition_responses[0].error_code == 0);

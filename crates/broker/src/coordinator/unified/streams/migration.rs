@@ -211,8 +211,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn deletion() -> StreamsDeletion {
-        // Start this scenario with fresh inputs and observations.
-        StreamsDeletion::default()
+        StreamsDeletion {
+            ..StreamsDeletion::default()
+        }
     }
     #[given("Streams group g has member identifiers {members}")]
     fn streams_group_members(deletion: &mut StreamsDeletion, members: String) {

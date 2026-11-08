@@ -1065,7 +1065,7 @@ async fn archived_prefix_fixture() -> ArchivedPrefix {
 /// outcome lives in the metadata alone.
 struct AcceptingRsm;
 
-#[krabka_macros::missing_remote_reads(delete_ok)]
+#[krabka_broker_macros::missing_remote_reads(delete_ok)]
 impl RemoteStorageManager for AcceptingRsm {
     fn copy_log_segment_data(
         &self,

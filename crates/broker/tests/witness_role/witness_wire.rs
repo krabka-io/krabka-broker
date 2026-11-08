@@ -14,7 +14,7 @@ use {
             client::{create_replicated_topic, value_batch},
             discovery::{metadata_first_partition, named_topic_metadata},
             fetch::fetch_topic_row,
-            produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
         },
     },
     krabka_client_core::Client,
@@ -35,15 +35,13 @@ pub async fn create_topic(client: &Client) -> WireUuid {
 }
 
 fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
-    batch_request(
-        value_batch().records(n).call(),
-        SinglePartitionProduceSetup {
-            topic: (TOPIC).into(),
-            topic_id,
-            timeout: ProduceTimeoutMillis(10_000),
-            ..SinglePartitionProduceSetup::replicated()
-        },
-    )
+    single_partition_produce()
+        .records(value_batch().records(n).call())
+        .topic(TOPIC)
+        .topic_id(topic_id)
+        .timeout(10_000)
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call()
 }
 
 /// The whole response to an `acks=all` produce of `n` records. The KIP-951

@@ -31,6 +31,7 @@ fn acls(side: &Side<'_>, props: Option<&str>, args: &[&str]) -> CliRun {
     side.run_with_files("kafka-acls", &full, &files, None)
 }
 
+#[derive(Default)]
 struct Provision {
     broker: Option<(BrokerHandle, TempDir)>,
     props: Option<ClientPropsFile>,
@@ -39,13 +40,8 @@ struct Provision {
 }
 #[rstest::fixture]
 fn provision() -> Provision {
-    // Start this scenario with fresh inputs and observations.
-
     Provision {
-        broker: None,
-        props: None,
-        output: None,
-        listed: None,
+        ..Provision::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -123,6 +119,7 @@ struct ExpandedAcl {
     added: CliRun,
     listed: CliRun,
 }
+#[derive(Default)]
 struct Shorthands {
     oracle: Option<Oracle>,
     broker: Option<(BrokerHandle, TempDir)>,
@@ -131,13 +128,8 @@ struct Shorthands {
 }
 #[rstest::fixture]
 fn shorthands() -> Shorthands {
-    // Start this scenario with fresh inputs and observations.
-
     Shorthands {
-        oracle: None,
-        broker: None,
-        expansions: Vec::new(),
-        removals: Vec::new(),
+        ..Shorthands::default()
     }
 }
 #[rstest_bdd_macros::given(

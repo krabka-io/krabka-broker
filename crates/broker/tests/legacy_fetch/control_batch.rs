@@ -22,6 +22,7 @@ use {
     support::InProcess,
 };
 
+#[derive(Default)]
 struct LegacyMarker {
     broker: Option<InProcess>,
     producer: Option<Producer>,
@@ -30,12 +31,8 @@ struct LegacyMarker {
 
 #[fixture]
 fn marker() -> LegacyMarker {
-    // Start this scenario with fresh inputs and observations.
-
     LegacyMarker {
-        broker: None,
-        producer: None,
-        response: None,
+        ..LegacyMarker::default()
     }
 }
 

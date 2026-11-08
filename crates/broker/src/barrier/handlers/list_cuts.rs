@@ -34,7 +34,7 @@ use {
     },
 };
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_list_barrier_cuts",
     api = "ListBarrierCuts",
     level = "info"

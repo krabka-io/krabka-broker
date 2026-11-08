@@ -33,7 +33,7 @@ use {
 // `KRABKA_PRIVATE_API_KEY_FLOOR` for why.
 // `flexible_min` comes from the codec of each message, so the framing the
 // registry reports and the framing the codec writes cannot drift apart.
-krabka_macros::private_dispatch_table! { register register_krabka_private_context_dispatches;
+krabka_broker_macros::private_dispatch_table! { register register_krabka_private_context_dispatches;
     alter_barrier_groups_adapter { api = private_apis::ALTER_BARRIER_GROUPS_API_KEY, flexible = barrier_wire::alter_barrier_groups::FLEXIBLE_MIN, handler = barrier_handlers::alter_groups::handle }
     describe_barrier_groups_adapter { api = private_apis::DESCRIBE_BARRIER_GROUPS_API_KEY, flexible = barrier_wire::describe_barrier_groups::FLEXIBLE_MIN, handler = barrier_handlers::describe_groups::handle }
     trigger_barrier_adapter { api = private_apis::TRIGGER_BARRIER_API_KEY, flexible = barrier_wire::trigger_barrier::FLEXIBLE_MIN, handler = barrier_handlers::trigger::handle }

@@ -35,11 +35,12 @@ pub async fn await_authorized_produce(
     loop {
         let response = kafka_wire::produce_sasl_with_ids()
             .addr(addr)
-            .authentication(PlainAuthenticationSetup {
-                client_id: CLIENT_ID,
-                password: (password).to_vec(),
-                ..Default::default()
-            })
+            .authentication(
+                PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .password(password)
+                    .build(),
+            )
             .produce_client_id(client_id)
             .records(ZeroFilledRecordsSetup {
                 topic: ("tuple-quota-topic").to_owned(),

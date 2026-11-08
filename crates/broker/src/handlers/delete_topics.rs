@@ -85,7 +85,7 @@ use self::{
     },
 };
 
-krabka_macros::decoded_dispatch! {
+krabka_broker_macros::decoded_dispatch! {
     /// Resolve topic identifiers and per-topic authorization on the active controller.
     pub async fn dispatch(
         broker: &Broker,

@@ -97,31 +97,12 @@ pub(super) fn req(
     }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ForgottenTopicSetup {
-    #[default("t".into())]
-    pub topic: String,
-    pub topic_id: WireUuid,
-    #[default(vec![PartitionIndex(0)])]
-    pub partitions: Vec<PartitionIndex>,
-}
-
 #[bon::builder]
 pub(super) fn forgotten_topic(
     #[builder(default = "t" . into ())] topic: String,
     #[builder(default)] topic_id: WireUuid,
     #[builder(default = vec ! [PartitionIndex (0)])] partitions: Vec<PartitionIndex>,
 ) -> ForgottenTopic {
-    let setup = ForgottenTopicSetup {
-        topic,
-        topic_id,
-        partitions,
-    };
-    let ForgottenTopicSetup {
-        topic,
-        topic_id,
-        partitions,
-    } = setup;
     ForgottenTopic {
         topic,
         topic_id,
@@ -251,28 +232,15 @@ pub(super) struct AllocatedCache {
     pub(super) id: FetchSessionId,
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct SessionKeySetup {
-    #[default("t".into())]
-    pub topic: String,
-    pub topic_id: WireUuid,
-    pub partition: PartitionIndex,
-}
-
 #[bon::builder]
 pub(super) fn session_key(
     #[builder(default = "t" . into ())] topic: String,
     #[builder(default)] topic_id: WireUuid,
     #[builder(into, default)] partition: PartitionIndex,
 ) -> FetchSessionKey {
-    let setup = SessionKeySetup {
-        topic,
-        topic_id,
-        partition,
-    };
     FetchSessionKey {
-        topic_name: setup.topic,
-        topic_id: setup.topic_id,
-        partition: setup.partition.0,
+        topic_name: topic,
+        topic_id,
+        partition: partition.0,
     }
 }

@@ -80,7 +80,7 @@ pub struct ShareGroupStatePartitionMetadataValue {
     pub deleting: Vec<DeletingTopic>,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupStatePartitionMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupStatePartitionMetadataValue")]
 impl ShareGroupStatePartitionMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         for topics in [&self.initializing, &self.initialized] {
@@ -237,8 +237,9 @@ mod tests {
             KafkaDecodedRecord<ShareGroupStatePartitionMetadataValue, BrokerError>;
         #[rstest::fixture]
         fn record() -> RecordCompatibility {
-            // Start this scenario with fresh inputs and observations.
-            RecordCompatibility::default()
+            RecordCompatibility {
+                ..RecordCompatibility::default()
+            }
         }
         #[given("a Share group has initialized orders partition 0 and is deleting carts")]
         fn native_record(record: &mut RecordCompatibility) {

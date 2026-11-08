@@ -728,8 +728,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn configured_topics() -> ConfiguredTopics {
-        // Start this scenario with fresh inputs and observations.
-        ConfiguredTopics::default()
+        ConfiguredTopics {
+            ..ConfiguredTopics::default()
+        }
     }
 
     #[derive(Deserialize)]

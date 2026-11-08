@@ -123,15 +123,6 @@ pub(super) fn superseded_records() -> Vec<Record> {
     ]
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct TransactionalRecordSetup<'a> {
-    pub offset: Offset,
-    #[default(ProducerId(1000))]
-    pub producer: ProducerId,
-    #[default(KeyValue { key: b"k", value: b"v" })]
-    pub payload: KeyValue<'a>,
-}
-
 /// One transactional keyed record, retaining the protocol's epoch/sequence defaults.
 #[bon::builder]
 pub(super) fn transactional_record(
@@ -139,16 +130,7 @@ pub(super) fn transactional_record(
     #[builder(into, default = ProducerId (1000))] producer: ProducerId,
     #[builder(default = KeyValue { key: b"k", value: b"v" })] payload: KeyValue<'_>,
 ) -> RecordBatch {
-    let setup = TransactionalRecordSetup {
-        offset,
-        producer,
-        payload,
-    };
-    let TransactionalRecordSetup {
-        offset,
-        producer,
-        payload: KeyValue { key, value },
-    } = setup;
+    let KeyValue { key, value } = payload;
     RecordBatch {
         base_offset: offset.0,
         last_offset_delta: 0,

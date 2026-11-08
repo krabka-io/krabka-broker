@@ -57,6 +57,7 @@ use {
     rstest_bdd_macros::{given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct TokenDeadlinesScenario {
     creation_policy: Option<(i64, i64)>,
     renewal_context: Option<(i64, i64, i64)>,
@@ -66,13 +67,8 @@ struct TokenDeadlinesScenario {
 
 #[fixture]
 fn token() -> TokenDeadlinesScenario {
-    // Start this scenario with fresh inputs and observations.
-
     TokenDeadlinesScenario {
-        creation_policy: None,
-        renewal_context: None,
-        creation: None,
-        renewal: None,
+        ..TokenDeadlinesScenario::default()
     }
 }
 

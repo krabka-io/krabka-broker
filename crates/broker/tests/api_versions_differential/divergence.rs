@@ -161,14 +161,6 @@ pub struct DivergenceReport {
     pub(crate) apis: Vec<ApiRow>,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DivergenceSetup<'a> {
-    #[default(RECORDED)]
-    intents: Intents<'a>,
-    #[default("mirror.gcr.io/apache/kafka:4.4.0")]
-    oracle_image: &'a str,
-}
-
 #[bon::bon]
 impl DivergenceReport {
     /// Join krabka's advertised table against the oracle's.
@@ -188,14 +180,6 @@ impl DivergenceReport {
         #[builder(default = RECORDED)] intents: Intents<'_>,
         #[builder(default = "mirror.gcr.io/apache/kafka:4.4.0")] oracle_image: &'_ str,
     ) -> Self {
-        let setup = DivergenceSetup {
-            intents,
-            oracle_image,
-        };
-        let DivergenceSetup {
-            intents,
-            oracle_image,
-        } = setup;
         let mut keys: Vec<i16> = krabka
             .iter()
             .chain(kafka)
@@ -328,6 +312,7 @@ mod tests {
         }],
     };
 
+    #[derive(Default)]
     struct ReportScenario {
         oracle: String,
         krabka: Vec<ApiVersion>,
@@ -354,20 +339,8 @@ mod tests {
 
     #[fixture]
     fn report() -> ReportScenario {
-        // Start this scenario with fresh inputs and observations.
-
         ReportScenario {
-            oracle: String::new(),
-            krabka: Vec::new(),
-            kafka: Vec::new(),
-            intents: None,
-            listed_intents: Vec::new(),
-            outcome: None,
-            directory: None,
-            checked_in: None,
-            stored: None,
-            reloaded: None,
-            rebuilt: None,
+            ..ReportScenario::default()
         }
     }
 

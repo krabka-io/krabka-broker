@@ -8,7 +8,7 @@ use {
 
 // Build request headers independently of the parser under test. Arbitrary
 // tagged bytes let malformed-header cases exercise the same path.
-krabka_macros::request_frame_fixture!(request_frame);
+krabka_broker_macros::request_frame_fixture!(request_frame);
 
 pub fn raw_request_frame(api_key: i16, version: i16, correlation_id: i32, body: &[u8]) -> BytesMut {
     let mut frame = BytesMut::new();

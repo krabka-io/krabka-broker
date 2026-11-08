@@ -40,7 +40,7 @@ use {
 /// `org.apache.kafka.coordinator.group.modern.MemberState.STABLE`.
 const MEMBER_STATE_STABLE: i8 = 0;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_macros::FlexibleArrayValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_broker_macros::FlexibleArrayValue)]
 #[array_value(
     record = "ShareGroupTargetAssignmentMemberValue",
     encode = encode_topic_partitions,
@@ -57,7 +57,7 @@ pub struct ShareGroupCurrentMemberAssignmentValue {
     pub assigned_partitions: Vec<(Uuid, Vec<i32>)>,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupCurrentMemberAssignmentValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupCurrentMemberAssignmentValue")]
 impl ShareGroupCurrentMemberAssignmentValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.member_epoch);
@@ -158,8 +158,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupTargetAssignmentMemberValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share target assignment assigns partition 3 of the all-one topic UUID")]
         fn prepared_value(stored_value: &mut EncodedValue) {
@@ -204,8 +205,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupCurrentMemberAssignmentValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share current assignment at epochs 5 and 4 has no assigned partitions")]
         fn prepared_value(stored_value: &mut EncodedValue) {

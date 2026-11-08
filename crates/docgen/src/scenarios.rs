@@ -137,6 +137,7 @@ mod tests {
         check!(md.contains("split-brain") || md.contains("Split-brain"));
     }
 
+    #[derive(Default)]
     struct DiagramScenario {
         traces: Vec<ScenarioTrace>,
         markdown: String,
@@ -144,11 +145,8 @@ mod tests {
 
     #[rstest::fixture]
     fn diagrams() -> DiagramScenario {
-        // Start this scenario with fresh inputs and observations.
-
         DiagramScenario {
-            traces: Vec::new(),
-            markdown: String::new(),
+            ..DiagramScenario::default()
         }
     }
 

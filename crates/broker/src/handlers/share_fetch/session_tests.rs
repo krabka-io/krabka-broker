@@ -657,7 +657,7 @@ async fn fetch_with_limits(
         ..Default::default()
     };
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["share-consumer"];
         client ["share-client"];

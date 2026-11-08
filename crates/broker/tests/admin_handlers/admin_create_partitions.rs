@@ -38,6 +38,7 @@ fn create_partitions_request(
     }
 }
 
+#[derive(Default)]
 struct PartitionGrowth {
     name: String,
     fenced: Option<NodeId>,
@@ -47,13 +48,8 @@ struct PartitionGrowth {
 
 #[fixture]
 fn growth() -> PartitionGrowth {
-    // Start this scenario with fresh inputs and observations.
-
     PartitionGrowth {
-        name: String::new(),
-        fenced: None,
-        created: None,
-        expanded: None,
+        ..PartitionGrowth::default()
     }
 }
 

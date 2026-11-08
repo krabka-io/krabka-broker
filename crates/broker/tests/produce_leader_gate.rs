@@ -32,7 +32,7 @@
 use {
     crate::support::{
         client::connect_client,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::single_partition_produce,
         records::{batch_from_records, value_record},
         registered_cluster, shutdown_cluster,
         topics::creatable_topic,
@@ -97,15 +97,14 @@ async fn produce_one(
     value: &str,
 ) -> ProduceAnswer {
     let resp = client
-        .send(batch_request(
-            one_record_batch(value),
-            SinglePartitionProduceSetup {
-                topic: (topic).into(),
-                topic_id,
-                partition: krabka_ids::PartitionIndex(partition),
-                ..Default::default()
-            },
-        ))
+        .send(
+            single_partition_produce()
+                .records(one_record_batch(value))
+                .topic(topic)
+                .topic_id(topic_id)
+                .partition(krabka_ids::PartitionIndex(partition))
+                .call(),
+        )
         .await
         .expect("produce round-trip");
     let pr = &resp.responses[0].partition_responses[0];

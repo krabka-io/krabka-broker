@@ -83,52 +83,21 @@ pub fn batch_at(activation_ms: i64) -> RecordBatch {
 /// `policy` decides whether the topic schedules delivery. The partition's
 /// [`DeliveryHandles`] read `clock`, so an append and the scheduler agree on
 /// one timeline.
-#[derive(Clone)]
-pub struct ScheduleSetup<'a> {
-    pub topic: &'a str,
-    pub policy: DeliveryPolicy,
-    pub activations: Vec<UnixMillis>,
-    pub leader: krabka_ids::NodeId,
-}
-
-impl Default for ScheduleSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "scheduled",
-            policy: DeliveryPolicy::Scheduled,
-            activations: vec![],
-            leader: krabka_ids::NodeId(7),
-        }
-    }
-}
-
 #[bon::builder]
 pub fn scheduled_partition(
     dir: &tempfile::TempDir,
     clock: &Arc<dyn WallClock>,
-    #[builder(default = ScheduleSetup::default().topic)] topic: &'_ str,
-    #[builder(default = ScheduleSetup::default().policy)] policy: DeliveryPolicy,
-    #[builder(default = ScheduleSetup::default().activations)] activations: Vec<UnixMillis>,
-    #[builder(into, default = ScheduleSetup::default().leader)] leader: krabka_ids::NodeId,
+    #[builder(default = "scheduled")] topic: &'_ str,
+    #[builder(default = DeliveryPolicy::Scheduled)] policy: DeliveryPolicy,
+    #[builder(default = vec![])] activations: Vec<UnixMillis>,
+    #[builder(into, default = krabka_ids::NodeId(7))] leader: krabka_ids::NodeId,
 ) -> Arc<Partition> {
-    let setup = ScheduleSetup {
-        topic,
-        policy,
-        activations,
-        leader,
-    };
-    let ScheduleSetup {
-        topic,
-        policy,
-        activations,
-        leader,
-    } = setup;
     let config = LogConfig {
         delivery_policy: policy,
         ..LogConfig::default()
     };
     let batches = activations
-        .iter()
+        .into_iter()
         .map(|activation_ms| batch_at(activation_ms.0));
     partition_with_batches()
         .dir(dir)
@@ -143,45 +112,15 @@ pub fn scheduled_partition(
 /// A partition over a log with `config` that holds `batches`, registered
 /// under `topic` with this broker as its leader. The high watermark is the
 /// log end offset.
-pub struct DeliveryPartitionSetup<'a> {
-    pub topic: &'a str,
-    pub config: LogConfig,
-    pub batches: Vec<RecordBatch>,
-    pub leader: krabka_ids::NodeId,
-}
-
-impl Default for DeliveryPartitionSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "orders",
-            config: LogConfig::default(),
-            batches: vec![],
-            leader: krabka_ids::NodeId(7),
-        }
-    }
-}
-
 #[bon::builder]
 pub fn partition_with_batches(
     dir: &tempfile::TempDir,
     clock: &Arc<dyn WallClock>,
-    #[builder(default = DeliveryPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(default = DeliveryPartitionSetup::default().config)] config: LogConfig,
-    #[builder(default = DeliveryPartitionSetup::default().batches)] batches: Vec<RecordBatch>,
-    #[builder(into, default = DeliveryPartitionSetup::default().leader)] leader: krabka_ids::NodeId,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = LogConfig::default())] config: LogConfig,
+    #[builder(default = vec![])] batches: Vec<RecordBatch>,
+    #[builder(into, default = krabka_ids::NodeId(7))] leader: krabka_ids::NodeId,
 ) -> Arc<Partition> {
-    let setup = DeliveryPartitionSetup {
-        topic,
-        config,
-        batches,
-        leader,
-    };
-    let DeliveryPartitionSetup {
-        topic,
-        config,
-        batches,
-        leader,
-    } = setup;
     let partition_dir = partition_dir(dir.path(), topic, 0);
     create_dir_all(&partition_dir).expect("create the partition directory");
     let mut log = Log::open(&partition_dir, config).expect("open the log");

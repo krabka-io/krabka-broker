@@ -21,7 +21,7 @@ use {
     crate::support::{
         client::{connect_client, create_topic_with},
         discovery::coordinator_lookup_request,
-        topics::CreateTopicSetup,
+        topics::configured_topic_request,
     },
     assert2::{assert, check},
     krabka_broker::{BootstrapMode, Broker, BrokerConfig},
@@ -73,11 +73,7 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
 /// coordinator refuses a read or a write of a topic partition that the
 /// metadata image does not hold.
 async fn create_topic(client: &Client, name: &str) -> uuid::Uuid {
-    let id = create_topic_with(client, CreateTopicSetup {
-        topic: name,
-        ..Default::default()
-    })
-    .await;
+    let id = create_topic_with(client, configured_topic_request().topic(name).call()).await;
     uuid::Uuid::from_bytes(id.0)
 }
 

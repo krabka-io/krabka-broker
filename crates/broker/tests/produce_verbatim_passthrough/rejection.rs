@@ -40,8 +40,6 @@ struct RejectedBatch {
 
 #[fixture]
 fn rejection() -> RejectedBatch {
-    // Start this scenario with fresh inputs and observations.
-
     RejectedBatch {
         broker: None,
         directory: None,

@@ -166,7 +166,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -181,7 +181,7 @@ mod tests {
             .call()
             .await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -219,7 +219,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         broker.group_coordinator.mark_share("g1");
         let _actor = broker.group_coordinator.get_or_create_share("g1");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -370,7 +370,7 @@ mod tests {
             .expect("started broker")
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
+        krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
         let req = ShareGroupDescribeRequest {
             group_ids: groups.split(',').map(str::to_owned).collect(),
             include_authorized_operations: true,
@@ -469,12 +469,12 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_empty_and_foreign_group_ids() {
         let version = share_group_describe_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_share_allow_all()];
         };
         let _classic = broker.group_coordinator.get_or_create_classic("classic");
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };

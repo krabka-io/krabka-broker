@@ -160,14 +160,6 @@ fn seed_group_with_member(broker: &Broker) {
 /// committed offsets are back, its members are not, and `empty_since_ms` holds
 /// whatever moment the group's k2 snapshot carried — `None` for a group that
 /// never wrote one.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ReplayedGroupSetup<'a> {
-    protocol_type: Option<&'a str>,
-    empty_since_ms: Option<UnixMillis>,
-    #[default(UnixMillis(0))]
-    commit_timestamp_ms: UnixMillis,
-}
-
 #[bon::builder]
 fn seed_replayed_group(
     broker: &Broker,
@@ -175,13 +167,8 @@ fn seed_replayed_group(
     #[builder(into)] empty_since_ms: Option<UnixMillis>,
     #[builder(into, default = UnixMillis (0))] commit_timestamp_ms: UnixMillis,
 ) {
-    let setup = ReplayedGroupSetup {
-        protocol_type,
-        empty_since_ms,
-        commit_timestamp_ms,
-    };
     let mut state = ClassicGroup::new(GROUP);
-    state.protocol_type = setup.protocol_type.map(str::to_owned);
+    state.protocol_type = protocol_type.map(str::to_owned);
     let mut group = CoordinatorGroup::seeded(
         GROUP,
         GroupKind::Classic(state),
@@ -189,13 +176,13 @@ fn seed_replayed_group(
             offset: krabka_log::Offset(42),
             leader_epoch: -1,
             metadata: String::new(),
-            commit_timestamp_ms: setup.commit_timestamp_ms.0,
+            commit_timestamp_ms: commit_timestamp_ms.0,
             expire_timestamp_ms: None,
             topic_id: None,
         })]
         .into(),
     );
-    group.empty_since_ms = setup.empty_since_ms.map(|at| at.0);
+    group.empty_since_ms = empty_since_ms.map(|at| at.0);
     broker
         .group_coordinator
         .seed_classic(GROUP, Box::new(group));

@@ -17,7 +17,7 @@ use {
         cluster_lock,
         support::{
             client::{connect_with_context, raw_connection},
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             shutdown_cluster,
             topics::CreateTopicRequestSetup,
             transactions::{self, ProducerEpoch, ProducerIdentity, TransactionOutcome},
@@ -134,11 +134,13 @@ fn produce_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: transactional_id.map(Into::into),
-        ..batch_request(batch, SinglePartitionProduceSetup {
-            topic: (TOPIC).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
-        })
+        ..single_partition_produce()
+            .records(batch)
+            .topic(TOPIC)
+            .topic_id(topic_id)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .timeout(30_000)
+            .call()
     }
 }
 

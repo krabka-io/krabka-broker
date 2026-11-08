@@ -45,6 +45,7 @@ use {
     rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct DisklessRetention {
     policy: Option<DisklessRetentionPolicy>,
     timestamps: Vec<i64>,
@@ -55,14 +56,8 @@ struct DisklessRetention {
 
 #[fixture]
 fn retention() -> DisklessRetention {
-    // Start this scenario with fresh inputs and observations.
-
     DisklessRetention {
-        policy: None,
-        timestamps: Vec::new(),
-        byte_lengths: Vec::new(),
-        last_offsets: Vec::new(),
-        prefix: None,
+        ..DisklessRetention::default()
     }
 }
 

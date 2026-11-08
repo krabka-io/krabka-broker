@@ -299,7 +299,7 @@ fn parse_signed(text: &str) -> Option<i128> {
 ///
 /// Static broker values provide defaults; GROUP resources can override the
 /// supported `streams.*` keys for one group through `IncrementalAlterConfigs`.
-#[krabka_macros::membership_defaults]
+#[krabka_broker_macros::membership_defaults]
 #[derive(Debug, Clone, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct StreamsGroupConfig {
     /// Config-level kill switch. The real gate is the `streams.version`
@@ -914,8 +914,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn streams_configuration() -> StreamsConfiguration {
-        // Start this scenario with fresh inputs and observations.
-        StreamsConfiguration::default()
+        StreamsConfiguration {
+            ..StreamsConfiguration::default()
+        }
     }
     #[given("no Streams group configuration values are overridden")]
     fn default_streams_overrides(streams_configuration: &mut StreamsConfiguration) {

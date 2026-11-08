@@ -46,7 +46,7 @@ use {
     krabka_raft::{reconfig::UpdateVoter, voter_requests},
 };
 
-#[krabka_macros::voter_admission(
+#[krabka_broker_macros::voter_admission(
     request = UpdateRaftVoterRequest,
     api = 82,
     gate = cluster_action_denied,
@@ -167,13 +167,13 @@ mod tests {
         request
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         encode_request(UpdateRaftVoterRequest);
         decode_response(UpdateRaftVoterResponse);
     }
 
-    krabka_macros::wire_codec_helpers! { test_context ["admin-client"]; }
-    krabka_macros::wire_test_driver! {
+    krabka_broker_macros::wire_codec_helpers! { test_context ["admin-client"]; }
+    krabka_broker_macros::wire_test_driver! {
         broker answer { request: UpdateRaftVoterRequest, response: UpdateRaftVoterResponse, api: 82 }
     }
     use {
@@ -291,7 +291,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["admin"];};
         voter_update.response =
             Some(answer(&broker, 0, voter_update.request.as_ref().unwrap(), &ctx).await);
     }
@@ -376,7 +376,7 @@ mod tests {
         #[derive(Debug)]
         struct GrantOnly(AclOperation);
 
-        krabka_macros::test_authorizer!(GrantOnly, req; {
+        krabka_broker_macros::test_authorizer!(GrantOnly, req; {
             if req.operation == self.0 {
                 AuthorizationResult::Allow
             } else {
@@ -440,7 +440,7 @@ mod tests {
             want_cluster_authorization_failed,
         } in cases
         {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, ctx);
                 boot [start_broker(Arc::new(GrantOnly(grant)))];
                 user ["alice"];

@@ -20,7 +20,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     WriteShareGroupStateRequest,
     WriteShareGroupStateResponse,
     WriteStateResult,
@@ -43,8 +43,10 @@ async fn write_state(
     {
         return WriteShareGroupStateResponse::default();
     }
-    let results =
-        krabka_macros::share_state_results!(req, WriteStateResult, |group_id, topic_id, pd| {
+    let results = krabka_broker_macros::share_state_results!(
+        req,
+        WriteStateResult,
+        |group_id, topic_id, pd| {
             let request = ShareWrite {
                 state_epoch: pd.state_epoch,
                 leader_epoch: pd.leader_epoch,
@@ -66,7 +68,8 @@ async fn write_state(
                 error_message: verdict.message,
                 ..Default::default()
             }
-        });
+        }
+    );
 
     WriteShareGroupStateResponse {
         results,

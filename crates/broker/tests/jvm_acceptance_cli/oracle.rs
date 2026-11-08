@@ -84,15 +84,6 @@ pub struct CliRun {
     pub(crate) stderr: String,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct CliRunSetup<'a> {
-    #[default("krabka")]
-    side: &'a str,
-    #[default("kafka-topics")]
-    tool: &'a str,
-    args: &'a [&'a str],
-}
-
 #[bon::bon]
 impl CliRun {
     #[builder]
@@ -102,8 +93,6 @@ impl CliRun {
         #[builder(default = "kafka-topics")] tool: &'_ str,
         #[builder(default)] args: &'_ [&'_ str],
     ) -> Self {
-        let setup = CliRunSetup { side, tool, args };
-        let CliRunSetup { side, tool, args } = setup;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         eprintln!(

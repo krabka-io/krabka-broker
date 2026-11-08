@@ -166,8 +166,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn partition_metadata() -> PartitionMetadataCodec {
-        // Start this scenario with fresh inputs and observations.
-        PartitionMetadataCodec::default()
+        PartitionMetadataCodec {
+            ..PartitionMetadataCodec::default()
+        }
     }
     #[given(
         "consumer partition metadata contains the Kafka golden topic and partition rack assignments"

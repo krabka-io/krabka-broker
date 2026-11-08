@@ -186,15 +186,6 @@ struct NodeAddrs {
 /// One broker's config: the two listeners, the static-voter bootstrap, the
 /// distinct rack the WAL placement policy requires, the shared object store,
 /// and the topic-backed metadata log the flush index rides on.
-#[derive(krabka_macros::FieldDefaults)]
-struct DisklessNodeSetup<'a> {
-    index: NodeIndex,
-    addrs: NodeAddrs,
-    #[default("127.0.0.1:0")]
-    rlmm_bootstrap: &'a str,
-    voters: Vec<(NodeId, String)>,
-}
-
 #[bon::builder]
 fn broker_config(
     log_dir: &Path,
@@ -204,18 +195,6 @@ fn broker_config(
     #[builder(default = "127.0.0.1:0")] rlmm_bootstrap: &'_ str,
     #[builder(default)] voters: Vec<(NodeId, String)>,
 ) -> BrokerConfig {
-    let setup = DisklessNodeSetup {
-        index,
-        addrs,
-        rlmm_bootstrap,
-        voters,
-    };
-    let DisklessNodeSetup {
-        index,
-        addrs,
-        rlmm_bootstrap,
-        voters,
-    } = setup;
     let node = NodeId(u64::try_from(index.0 + 1).expect("small cluster"));
     let mut config = support::addressed_node_config()
         .log_dir(log_dir)
@@ -239,7 +218,7 @@ fn broker_config(
         ListenerSpec {
             name: CLIENT_LISTENER.to_owned(),
             bind_addr: addrs.client,
-            advertised: addrs.client_advertised.clone(),
+            advertised: addrs.client_advertised,
             protocol: ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,

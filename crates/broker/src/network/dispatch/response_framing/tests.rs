@@ -91,7 +91,7 @@ const CASES: [Case; 5] = [
 
 // A response body of `len` bytes, in a non-uniform pattern so nothing
 // downstream can shortcut it and a truncation cannot land on a repeat.
-krabka_macros::patterned_bytes_fixture!(body);
+krabka_broker_macros::patterned_bytes_fixture!(body);
 
 /// The response header Kafka puts in front of a body, restated here rather
 /// than read back out of the broker: the correlation id, followed by an empty
@@ -128,7 +128,7 @@ async fn wire_bytes(response: Bytes, codec: KafkaCodec) -> Vec<u8> {
     wire
 }
 
-krabka_macros::frame_prefix_fixture!(wire_frame_prefix);
+krabka_broker_macros::frame_prefix_fixture!(wire_frame_prefix);
 
 /// The chained-`Buf` prototype's wire image, assembled out of the two header
 /// helpers the way `benches/perf_deferrals.rs` assembles it: the codec's

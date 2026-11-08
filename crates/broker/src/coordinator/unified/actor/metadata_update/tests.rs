@@ -373,8 +373,9 @@ struct WrittenMetadataHash {
 }
 #[rstest::fixture]
 fn written_hash() -> WrittenMetadataHash {
-    // Start this scenario with fresh inputs and observations.
-    WrittenMetadataHash::default()
+    WrittenMetadataHash {
+        ..WrittenMetadataHash::default()
+    }
 }
 #[given("metadata contains the two-partition orders topic {topic_exists}")]
 fn hash_metadata_image(written_hash: &mut WrittenMetadataHash, topic_exists: bool) {

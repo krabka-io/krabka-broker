@@ -7,7 +7,7 @@ use {
         N_RECORDS, NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
         support::{
             client::{connect_owned, create_replicated_topic, value_batch},
-            produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
         },
         view::wait_for_leader_and_isr,
         within,
@@ -31,15 +31,15 @@ pub async fn create_topic(client: &Client) -> WireUuid {
 /// The partition-level error code of one `acks=all` produce.
 pub async fn produce_once(client: &Client, topic_id: WireUuid, timeout_ms: i32) -> i16 {
     let resp = client
-        .send(batch_request(
-            value_batch().records(N_RECORDS).call(),
-            SinglePartitionProduceSetup {
-                topic: (TOPIC).into(),
-                topic_id,
-                timeout: ProduceTimeoutMillis(timeout_ms),
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        ))
+        .send(
+            single_partition_produce()
+                .records(value_batch().records(N_RECORDS).call())
+                .topic(TOPIC)
+                .topic_id(topic_id)
+                .timeout(timeout_ms)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call(),
+        )
         .await
         .expect("Produce round-trip");
     resp.responses[0].partition_responses[0].error_code

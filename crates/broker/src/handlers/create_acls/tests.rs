@@ -35,24 +35,34 @@ use {
         create_acls_request::CreateAclsRequest,
         create_acls_response::{AclCreationResult, CreateAclsResponse},
     },
-    std::{
-        cmp::Reverse,
-        time::{Duration, Instant},
-    },
+    rustix::time::{ClockId, clock_gettime},
+    std::{cmp::Reverse, time::Duration},
 };
+
+/// The CPU time this thread has used so far.
+///
+/// A bound on CPU time, unlike one on wall-clock time, does not move when a
+/// loaded runner deschedules the thread.
+fn thread_cpu_time() -> Duration {
+    let now = clock_gettime(ClockId::ThreadCPUTime);
+    Duration::new(
+        u64::try_from(now.tv_sec).expect("a thread's CPU time is not negative"),
+        u32::try_from(now.tv_nsec).expect("tv_nsec is below one second"),
+    )
+}
 
 /// The row Kafka's `AclApis.handleCreateAcls` sends for a committed
 /// creation: a bare `AclCreationResult`, whose generated `ErrorMessage`
 /// default is the empty string.
 fn committed() -> AclCreationResult {
-    krabka_macros::tagged_wire!(AclCreationResult {
+    krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::NONE,
         error_message: Some(String::new()),
     })
 }
 
 fn response(results: Vec<AclCreationResult>) -> CreateAclsResponse {
-    krabka_macros::unthrottled_wire!(CreateAclsResponse { results })
+    krabka_broker_macros::unthrottled_wire!(CreateAclsResponse { results })
 }
 
 async fn check_no_acls_created(
@@ -69,7 +79,7 @@ async fn check_no_acls_created(
 /// binding far past any fixed ceiling is accepted and stored as sent.
 #[tokio::test]
 async fn handle_stores_long_resource_names_and_principals() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker(configured_authorizer())];
         user ["admin"];
@@ -99,7 +109,7 @@ async fn handle_stores_long_resource_names_and_principals() {
 
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_creation() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -111,7 +121,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let denied = krabka_macros::tagged_wire!(AclCreationResult {
+    let denied = krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("create-acls denied".into()),
     });
@@ -121,7 +131,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 
 #[tokio::test]
 async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker(configured_authorizer())];
         user ["admin"];
@@ -137,7 +147,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
 
     let expected = response(vec![
         committed(),
-        krabka_macros::tagged_wire!(AclCreationResult {
+        krabka_broker_macros::tagged_wire!(AclCreationResult {
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Invalid empty resource name".into()),
         }),
@@ -164,7 +174,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let disabled = krabka_macros::tagged_wire!(AclCreationResult {
+    let disabled = krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::SECURITY_DISABLED,
         error_message: Some("No Authorizer is configured.".into()),
     });
@@ -197,7 +207,7 @@ struct TrunkBroker {
 /// `validateHostPattern` (KIP-1276) would refuse both.
 #[tokio::test]
 async fn handle_stores_any_host_by_default() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker(configured_authorizer())];
         user ["admin"];
@@ -305,7 +315,7 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
 /// `UNKNOWN_SERVER_ERROR` with no message, and nothing is stored.
 #[tokio::test]
 async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker(configured_authorizer())];
         user ["admin"];
@@ -319,7 +329,7 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let failed = krabka_macros::tagged_wire!(AclCreationResult {
+    let failed = krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::UNKNOWN_SERVER_ERROR,
         error_message: None,
     });
@@ -334,7 +344,7 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
 /// closes it here, and it comes before authorization, as a parse does.
 #[tokio::test]
 async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -354,7 +364,7 @@ async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
 /// with Kafka's message, and a non-`User` principal type is stored.
 #[tokio::test]
 async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker(configured_authorizer())];
         user ["admin"];
@@ -369,7 +379,7 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
     let expected = response(vec![
-        krabka_macros::tagged_wire!(AclCreationResult {
+        krabka_broker_macros::tagged_wire!(AclCreationResult {
             error_code: codes::INVALID_REQUEST,
             error_message: Some(
                 "The only valid name for the CLUSTER resource is kafka-cluster".into(),
@@ -399,11 +409,11 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
             .map(|n| creation(&format!("topic-{n}"), "User:alice", OPERATION_READ))
             .collect::<Vec<_>>()
     };
-    let violation = krabka_macros::tagged_wire!(AclCreationResult {
+    let violation = krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::POLICY_VIOLATION,
         error_message: Some("Unable to perform excessively large batch operation.".into()),
     });
-    let empty_name = krabka_macros::tagged_wire!(AclCreationResult {
+    let empty_name = krabka_broker_macros::tagged_wire!(AclCreationResult {
         error_code: codes::INVALID_REQUEST,
         error_message: Some("Invalid empty resource name".into()),
     });
@@ -442,7 +452,7 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
         ),
     ];
     for (label, creations, results, stored) in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker(configured_authorizer())];
             user ["admin"];
@@ -480,6 +490,10 @@ async fn handle_accepts_cidr_host_on_a_freshly_bootstrapped_cluster() {
 /// repeat 12,000 ACLs, 2,000 of which the image holds, takes hash probes, not
 /// a scan of the request and of the image for every binding: a scan makes it
 /// tens of billions of comparisons on an async worker.
+///
+/// The bound is on the CPU time of the counting thread, so a loaded CI runner
+/// that deschedules the thread cannot fail it. The count itself takes well
+/// under a second, and a scan takes many times the bound.
 #[test]
 fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
     let acl = |n: usize| allow_acl().resource_name(&format!("topic-{n}")).call();
@@ -494,16 +508,16 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
         })
         .collect();
 
-    let started = Instant::now();
+    let started = thread_cpu_time();
     let counted = super::count_new_acls(&image, &to_submit);
-    let elapsed = started.elapsed();
+    let used = thread_cpu_time().saturating_sub(started);
 
     check!(counted == 10_000);
-    check!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    check!(used < Duration::from_secs(5), "{used:?} of CPU time");
 }
 
 async fn drive_cidr_request(broker: &Broker) -> CreateAclsResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(ctx);
         user ["admin"];
     };
@@ -516,12 +530,14 @@ async fn check_cidr_refusal(broker_handle: &BrokerHandle) {
     let broker = broker_handle.broker_arc_for_test();
     let resp = drive_cidr_request(&broker).await;
 
-    let expected = response(vec![krabka_macros::tagged_wire!(AclCreationResult {
-        error_code: codes::UNSUPPORTED_VERSION,
-        error_message: Some(
-            "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
-        ),
-    })]);
+    let expected = response(vec![krabka_broker_macros::tagged_wire!(
+        AclCreationResult {
+            error_code: codes::UNSUPPORTED_VERSION,
+            error_message: Some(
+                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
+            ),
+        }
+    )]);
     assert!(resp == expected);
     assert!(all_acls(broker_handle).is_empty());
 }

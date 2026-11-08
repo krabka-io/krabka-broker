@@ -51,8 +51,6 @@ struct IntrospectionBootstrap {
 
 #[fixture]
 fn introspection() -> IntrospectionBootstrap {
-    // Start this scenario with fresh inputs and observations.
-
     IntrospectionBootstrap {
         directory: None,
         file: None,

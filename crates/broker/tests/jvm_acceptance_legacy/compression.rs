@@ -20,6 +20,7 @@ use {
     std::process::Output,
     tempfile::TempDir,
 };
+#[derive(Default)]
 struct CompressedExchange {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -29,14 +30,8 @@ struct CompressedExchange {
 }
 #[fixture]
 fn compressed() -> CompressedExchange {
-    // Start this scenario with fresh inputs and observations.
-
     CompressedExchange {
-        broker: None,
-        directory: None,
-        topic: String::new(),
-        produced: None,
-        consumed: None,
+        ..CompressedExchange::default()
     }
 }
 #[given("a legacy compatible broker hosts compression topic {topic}")]

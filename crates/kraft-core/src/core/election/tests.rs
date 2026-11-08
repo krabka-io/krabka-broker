@@ -61,17 +61,6 @@ enum VoteRetention {
     Cleared,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct VoteResponseSetup {
-    #[default(NodeId(2))]
-    from: NodeId,
-    #[default(VoteEpoch(0))]
-    epoch: VoteEpoch,
-    decision: VoteDecision,
-    #[default(SimInstant(2001))]
-    now: SimInstant,
-}
-
 #[bon::builder]
 fn vote_response(
     m: &mut QuorumStateMachine,
@@ -81,20 +70,14 @@ fn vote_response(
     #[builder(default)] decision: VoteDecision,
     #[builder(into, default = SimInstant (2001))] now: SimInstant,
 ) -> Vec<Action> {
-    let setup = VoteResponseSetup {
-        from,
-        epoch,
-        decision,
-        now,
-    };
     m.on_event(
         Event::ReceiveVoteResponse {
-            from: setup.from,
-            epoch: setup.epoch.0,
-            vote_granted: matches!(setup.decision, VoteDecision::Granted),
+            from,
+            epoch: epoch.0,
+            vote_granted: matches!(decision, VoteDecision::Granted),
         },
         log,
-        setup.now,
+        now,
     )
 }
 
@@ -433,8 +416,6 @@ struct ElectionDraws {
 
 #[rstest::fixture]
 fn draws() -> ElectionDraws {
-    // Start this scenario with fresh inputs and observations.
-
     ElectionDraws {
         voters: Vec::new(),
         log: None,

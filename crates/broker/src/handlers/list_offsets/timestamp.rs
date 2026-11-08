@@ -437,18 +437,6 @@ mod tests {
         tokio::sync::Notify,
     };
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct TimestampSegmentSetup {
-        #[default(TopicIdPartition::new(uuid::Uuid::from_u128(1), "orders", 0))]
-        topic_partition: TopicIdPartition,
-        #[default(Offset(0)..=Offset(6))]
-        bounds: RangeInclusive<Offset>,
-        #[default(bytes(64))]
-        size: ByteSize,
-        #[default(UnixMillis(2_400))]
-        event: UnixMillis,
-    }
-
     #[bon::builder]
     fn copy_timestamp_segment(
         reader: &RemoteReader,
@@ -463,18 +451,6 @@ mod tests {
         #[builder(default = 2_400)]
         max_timestamp: i64,
     ) -> RemoteLogSegmentId {
-        let setup = TimestampSegmentSetup {
-            topic_partition,
-            bounds,
-            size,
-            event,
-        };
-        let TimestampSegmentSetup {
-            topic_partition,
-            bounds,
-            size,
-            event,
-        } = setup;
         let id = RemoteLogSegmentId::new(topic_partition, uuid::Uuid::new_v4());
         let metadata = RemoteLogSegmentMetadata::new(
             id.clone(),

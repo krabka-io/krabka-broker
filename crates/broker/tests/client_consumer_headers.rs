@@ -11,6 +11,7 @@ use {
     krabka_client_producer::{Header, ProducerRecord},
 };
 
+#[derive(Default)]
 struct HeaderDelivery {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -21,15 +22,8 @@ struct HeaderDelivery {
 }
 #[rstest::fixture]
 fn delivery() -> HeaderDelivery {
-    // Start this scenario with fresh inputs and observations.
-
     HeaderDelivery {
-        directory: None,
-        broker: None,
-        bootstrap: String::new(),
-        record: None,
-        headers: None,
-        consumer: None,
+        ..HeaderDelivery::default()
     }
 }
 #[rstest_bdd_macros::given("topic h and a record with value v and header trace equal to abc")]

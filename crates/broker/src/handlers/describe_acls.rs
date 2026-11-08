@@ -214,7 +214,7 @@ mod tests {
         )
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
-        let req = krabka_macros::empty_match_acl_filter!(DescribeAclsRequest);
+        let req = krabka_broker_macros::empty_match_acl_filter!(DescribeAclsRequest);
 
         let built = build_filter(&req).expect("filter");
 
@@ -272,7 +272,7 @@ mod tests {
             codes::SECURITY_DISABLED,
             Some(NO_AUTHORIZER_MESSAGE.into()),
         );
-        let expected_err = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+        let expected_err = krabka_broker_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::SECURITY_DISABLED,
             error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
@@ -280,7 +280,7 @@ mod tests {
         assert!(err == expected_err);
 
         let desc = acl_description(&acl().call());
-        let expected_desc = krabka_macros::tagged_wire!(AclDescription {
+        let expected_desc = krabka_broker_macros::tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
             operation: OPERATION_READ,
@@ -294,7 +294,7 @@ mod tests {
             PATTERN_TYPE_LITERAL,
             vec![desc.clone()],
         );
-        let expected_resource = krabka_macros::tagged_wire!(DescribeAclsResource {
+        let expected_resource = krabka_broker_macros::tagged_wire!(DescribeAclsResource {
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "orders".into(),
             pattern_type: PATTERN_TYPE_LITERAL,
@@ -303,7 +303,7 @@ mod tests {
         assert!(resource == expected_resource);
 
         let resp = describe_acls_response(vec![resource.clone()]);
-        let expected_resp = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+        let expected_resp = krabka_broker_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: vec![resource],
@@ -323,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_denies_cluster_describe() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] deny_all;
             user ["alice"];
@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_answers_security_disabled_when_no_authorizer_is_configured() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [acl_fixtures::start_security_disabled_acls()];
         user ["admin"];
@@ -362,7 +362,7 @@ mod tests {
     /// principal that would be denied gets the same close.
     #[tokio::test]
     async fn handle_closes_the_connection_on_an_unknown_element() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] deny_all;
             user ["alice"];
@@ -386,7 +386,7 @@ mod tests {
     /// operations are valid, and no stored binding carries them.
     #[tokio::test]
     async fn handle_answers_an_empty_listing_for_values_no_binding_carries() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [acl_fixtures::start_orders_acl()];
         user ["admin"];
@@ -431,7 +431,7 @@ mod tests {
                 edit: |r| r.operation = 14,
             },
         ];
-        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: Vec::new(),
@@ -531,7 +531,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["admin"];};
         let mut response = handle(
             &broker,
             acl_pattern_listing.request.as_ref().unwrap(),
@@ -556,11 +556,11 @@ mod tests {
                 .split(';')
                 .map(|row| {
                     let (pattern, name) = row.split_once(':').unwrap();
-                    krabka_macros::tagged_wire!(DescribeAclsResource {
+                    krabka_broker_macros::tagged_wire!(DescribeAclsResource {
                         resource_type: RESOURCE_TYPE_TOPIC,
                         resource_name: name.into(),
                         pattern_type: described_acl_pattern_code(pattern),
-                        acls: vec![krabka_macros::tagged_wire!(AclDescription {
+                        acls: vec![krabka_broker_macros::tagged_wire!(AclDescription {
                             principal: "User:alice".into(),
                             host: "*".into(),
                             operation: OPERATION_READ,
@@ -570,7 +570,7 @@ mod tests {
                 })
                 .collect()
         };
-        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources
@@ -602,7 +602,7 @@ mod tests {
     /// only an empty field.
     #[tokio::test]
     async fn handle_takes_only_null_principal_and_host_as_any() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [acl_fixtures::start_orders_acl()];
         user ["admin"];
@@ -657,7 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_only_matching_acl_fields() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [acl_fixtures::start_orders_payments_acls()];
         user ["admin"];
@@ -665,14 +665,14 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
-            resources: vec![krabka_macros::tagged_wire!(DescribeAclsResource {
+            resources: vec![krabka_broker_macros::tagged_wire!(DescribeAclsResource {
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".into(),
                 pattern_type: PATTERN_TYPE_LITERAL,
-                acls: vec![krabka_macros::tagged_wire!(AclDescription {
+                acls: vec![krabka_broker_macros::tagged_wire!(AclDescription {
                     principal: "User:alice".into(),
                     host: "*".into(),
                     operation: OPERATION_READ,

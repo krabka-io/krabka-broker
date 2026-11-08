@@ -87,8 +87,6 @@ mod tests {
 
     #[fixture]
     fn output() -> ConfigOutput {
-        // Start this scenario with fresh inputs and observations.
-
         ConfigOutput {
             stdout: String::new(),
             configs: Slot::new(),

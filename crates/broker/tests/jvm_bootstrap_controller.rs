@@ -162,6 +162,7 @@ use {
 };
 const THROTTLE: &str = "leader.replication.throttled.rate=1048576";
 const ACL_TOPIC: &str = "controller-acl-topic";
+#[derive(Default)]
 struct ControllerAdministration {
     broker: Option<StartedBroker>,
     commands: Vec<Output>,
@@ -170,13 +171,8 @@ struct ControllerAdministration {
 }
 #[fixture]
 fn admin() -> ControllerAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerAdministration {
-        broker: None,
-        commands: Vec::new(),
-        capability: None,
-        image: None,
+        ..ControllerAdministration::default()
     }
 }
 #[given("a broker exposes its live controller administration listener")]

@@ -77,6 +77,7 @@ mod tests {
         rstest_bdd_macros::{given, scenarios, then, when},
     };
 
+    #[derive(Default)]
     struct NodeTimers {
         id: Option<NodeId>,
         election_millis: Option<u64>,
@@ -85,12 +86,8 @@ mod tests {
 
     #[fixture]
     fn timers() -> NodeTimers {
-        // Start this scenario with fresh inputs and observations.
-
         NodeTimers {
-            id: None,
-            election_millis: None,
-            heartbeat_millis: None,
+            ..NodeTimers::default()
         }
     }
 

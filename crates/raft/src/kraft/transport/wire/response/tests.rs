@@ -356,6 +356,7 @@ use {
     rstest_bdd_macros::{given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct RefusedFetch {
     leader: Option<QuorumLeader>,
     encoded: Option<Bytes>,
@@ -363,11 +364,8 @@ struct RefusedFetch {
 
 #[fixture]
 fn fetch_refusal() -> RefusedFetch {
-    // Start this scenario with fresh inputs and observations.
-
     RefusedFetch {
-        leader: None,
-        encoded: None,
+        ..RefusedFetch::default()
     }
 }
 

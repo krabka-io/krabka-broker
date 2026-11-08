@@ -349,7 +349,7 @@ async fn unknown_partition_answers_on_its_own_row() {
         start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_known_topic(&broker).await;
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["consumer"];
         client ["consumer-client"];

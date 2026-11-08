@@ -6,7 +6,7 @@ use {
 };
 
 pub(super) fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
-    krabka_macros::tagged_wire!(DescribeConfigsSynonym {
+    krabka_broker_macros::tagged_wire!(DescribeConfigsSynonym {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         source,

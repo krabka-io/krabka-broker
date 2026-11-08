@@ -525,7 +525,7 @@ mod tests {
     fn each_distinct_match_is_authorized_once() {
         #[derive(Debug, Default)]
         struct Counting(AtomicUsize);
-        krabka_macros::test_authorizer! { Counting, _req; {
+        krabka_broker_macros::test_authorizer! { Counting, _req; {
             self.0.fetch_add(1, Ordering::SeqCst);
             AuthorizationResult::Allow
         }}

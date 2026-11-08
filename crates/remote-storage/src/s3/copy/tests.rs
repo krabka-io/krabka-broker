@@ -172,16 +172,6 @@ fn read_manifest(store: &S3RemoteStorage, md: &RemoteLogSegmentMetadata) -> Segm
 }
 
 /// The manifest entry a copy must record for an object holding `body`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ExpectedEntrySetup<'a> {
-    #[default(".log")]
-    suffix: &'a str,
-    #[default(b"0123456789")]
-    body: &'a [u8],
-    #[default("\"0\"")]
-    e_tag: &'a str,
-}
-
 #[bon::builder]
 fn expected_entry(
     key: &ObjectPath,
@@ -189,16 +179,6 @@ fn expected_entry(
     #[builder(default = b"0123456789")] body: &'_ [u8],
     #[builder(default = "\"0\"")] e_tag: &'_ str,
 ) -> ObjectEntry {
-    let setup = ExpectedEntrySetup {
-        suffix,
-        body,
-        e_tag,
-    };
-    let ExpectedEntrySetup {
-        suffix,
-        body,
-        e_tag,
-    } = setup;
     ObjectEntry {
         suffix: suffix.to_owned(),
         key: key.to_string(),

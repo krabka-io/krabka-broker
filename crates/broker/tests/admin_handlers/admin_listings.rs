@@ -26,11 +26,8 @@ struct AdminListings {
 
 #[fixture]
 fn listing() -> AdminListings {
-    // Start this scenario with fresh inputs and observations.
-
     AdminListings {
-        resources: None,
-        groups: None,
+        ..AdminListings::default()
     }
 }
 

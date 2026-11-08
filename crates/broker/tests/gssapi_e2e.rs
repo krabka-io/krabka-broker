@@ -196,12 +196,8 @@ struct KerberosRoundTrip {
 
 #[fixture]
 fn kerberos() -> KerberosRoundTrip {
-    // Start this scenario with fresh inputs and observations.
-
     KerberosRoundTrip {
-        broker: None,
-        topic: String::new(),
-        tool: None,
+        ..KerberosRoundTrip::default()
     }
 }
 

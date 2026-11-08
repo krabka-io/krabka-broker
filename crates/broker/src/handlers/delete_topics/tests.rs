@@ -18,8 +18,8 @@ use {
             acl_wire::CLUSTER_RESOURCE_NAME,
             create_topics::handle as create_topics_handle,
             test_support::{
-                self as handler_fixture_support, AclSetup, CreateTopicSetup, acl, cluster_acl,
-                configured_topic_request_from,
+                self as handler_fixture_support, AclSetup, acl, cluster_acl,
+                configured_topic_request,
             },
         },
         metrics::AuthorizationDeniedLabel,
@@ -47,7 +47,7 @@ const CREATE_VERSION: i16 = 7;
 
 const VERSION: i16 = 6;
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -78,12 +78,12 @@ fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopi
 }
 
 fn response(rows: Vec<DeletableTopicResult>) -> DeleteTopicsResponse {
-    krabka_macros::unthrottled_wire!(DeleteTopicsResponse { responses: rows })
+    krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse { responses: rows })
 }
 
 #[tokio::test]
 async fn handle_denied_topic_returns_authorization_failure() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, p, peer);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -148,15 +148,16 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> DoomedOutcome {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer);
         user ["admin"];
     };
     let ctx = test_context(&principal, &peer);
-    seed_topic(&broker, &ctx, CreateTopicSetup {
-        topic: DOOMED,
-        ..Default::default()
-    })
+    seed_topic(
+        &broker,
+        &ctx,
+        configured_topic_request().topic(DOOMED).call(),
+    )
     .await;
     let topic_id = WireUuid(
         broker
@@ -193,7 +194,7 @@ async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
         exists,
     } = delete_doomed(gated_config()).await;
 
-    let expected = krabka_macros::tagged_wire!(DeletableTopicResult {
+    let expected = krabka_broker_macros::tagged_wire!(DeletableTopicResult {
         name: Some(DOOMED.to_owned()),
         topic_id,
         error_code: codes::POLICY_VIOLATION,
@@ -268,13 +269,13 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
             .into_bytes(),
     );
     let broker = broker_handle.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
     };
 
     let invalid = |name: Option<&str>, id, message: &str| {
-        krabka_macros::tagged_wire!(DeletableTopicResult {
+        krabka_broker_macros::tagged_wire!(DeletableTopicResult {
             name: name.map(str::to_owned),
             topic_id: id,
             error_code: codes::INVALID_REQUEST,
@@ -334,7 +335,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
         actual.push((label, resp, still_there));
         expected.push((
             label,
-            krabka_macros::unthrottled_wire!(DeleteTopicsResponse { responses }),
+            krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse { responses }),
             true,
         ));
     }
@@ -348,9 +349,8 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// carries, and asserts the create itself was not refused. Setup for the
 /// cluster-`Delete` shortcut test below, which needs topics that already
 /// exist before it authorizes their deletion.
-async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
-    let name = setup.topic;
-    let req = configured_topic_request_from(setup);
+async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, req: CreateTopicsRequest) {
+    let name = req.topics[0].name.clone();
     let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");
@@ -364,15 +364,15 @@ async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopi
 async fn seeded_topic_id(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    setup: CreateTopicSetup<'_>,
+    request: CreateTopicsRequest,
 ) -> WireUuid {
-    let name = setup.topic;
-    seed_topic(broker, ctx, setup).await;
+    let name = request.topics[0].name.clone();
+    seed_topic(broker, ctx, request).await;
     WireUuid(
         broker
             .controller
             .current_image()
-            .topic(name)
+            .topic(&name)
             .expect("seeded topic")
             .topic_id
             .into_bytes(),
@@ -431,7 +431,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
     ];
 
     for (label, case) in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, p, peer);
             boot [start_broker] controller_peer;
             user ["alice"];
@@ -448,15 +448,12 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
             .await
             .expect("seed create acl");
         let ctx = test_context(&p, &peer);
-        seed_topic(&broker, &ctx, CreateTopicSetup {
-            topic: "a",
-            ..Default::default()
-        })
-        .await;
-        seed_topic(&broker, &ctx, CreateTopicSetup {
-            topic: "app-x",
-            ..Default::default()
-        })
+        seed_topic(&broker, &ctx, configured_topic_request().topic("a").call()).await;
+        seed_topic(
+            &broker,
+            &ctx,
+            configured_topic_request().topic("app-x").call(),
+        )
         .await;
 
         // Grant this case's Delete ACL shape, if any.
@@ -500,7 +497,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
                 )
             }
         };
-        let expected = krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse {
             responses: vec![expected_row("a"), expected_row("app-x")],
         });
         check!(resp == expected, "case: {label}");
@@ -571,13 +568,13 @@ async fn topic_deletion_fixture(topic_deletion_authorization: &mut TopicDeletion
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(create)])
         .await
         .expect("create ACL");
-    krabka_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
-    topic_deletion_authorization.topic_id =
-        seeded_topic_id(&broker, &test_context(&p, &peer), CreateTopicSetup {
-            topic: "t",
-            ..Default::default()
-        })
-        .await;
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
+    topic_deletion_authorization.topic_id = seeded_topic_id(
+        &broker,
+        &test_context(&p, &peer),
+        configured_topic_request().topic("t").call(),
+    )
+    .await;
     topic_deletion_authorization.started = Some(started);
 }
 #[rstest_bdd_macros::given("alice has these exact topic grants for deletion")]
@@ -625,7 +622,7 @@ async fn authorized_topic_deletion(
         .expect("topic fixture")
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["alice"]; };
     topic_deletion_authorization.response =
         Some(drive(&broker, &request(rows), &test_context(&p, &peer)).await);
 }
@@ -763,15 +760,16 @@ async fn delete_topic_enable_false_refuses_every_row() {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["admin"];
         };
         let ctx = test_context(&p, &peer);
-        let topic_id = seeded_topic_id(&broker, &ctx, CreateTopicSetup {
-            topic: TOPIC,
-            ..Default::default()
-        })
+        let topic_id = seeded_topic_id(
+            &broker,
+            &ctx,
+            configured_topic_request().topic(TOPIC).call(),
+        )
         .await;
         let req = if version < 6 {
             DeleteTopicsRequest {
@@ -789,7 +787,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
 
         // A deleted topic's v6 row carries its id; a refused row carries the
         // zero id the name row was sent with, and v2 carries no id at all.
-        let row = krabka_macros::tagged_wire!(DeletableTopicResult {
+        let row = krabka_broker_macros::tagged_wire!(DeletableTopicResult {
             name: Some(TOPIC.into()),
             topic_id: if error_code == codes::NONE {
                 topic_id
@@ -801,7 +799,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
         });
         expected.push((
             (enabled, version),
-            krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
+            krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse {
                 responses: vec![row],
             }),
             exists,

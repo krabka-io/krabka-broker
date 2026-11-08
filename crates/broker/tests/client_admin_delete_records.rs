@@ -11,6 +11,7 @@ use {
     tokio::net,
 };
 
+#[derive(Default)]
 struct ClientRecordDeletion {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -21,15 +22,8 @@ struct ClientRecordDeletion {
 }
 #[rstest::fixture]
 fn deletion() -> ClientRecordDeletion {
-    // Start this scenario with fresh inputs and observations.
-
     ClientRecordDeletion {
-        directory: None,
-        broker: None,
-        bootstrap: String::new(),
-        admin: None,
-        outcomes: None,
-        fetch: None,
+        ..ClientRecordDeletion::default()
     }
 }
 #[rstest_bdd_macros::given("wal partition 0 contains 100 flushed records on a standalone broker")]

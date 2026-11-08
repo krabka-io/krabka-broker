@@ -61,7 +61,7 @@ struct RowCodes {
 #[derive(Debug)]
 struct DenyOnePrincipal;
 
-krabka_macros::test_authorizer!(DenyOnePrincipal, request; {
+krabka_broker_macros::test_authorizer!(DenyOnePrincipal, request; {
     if request.principal.name == DENIED
         && request.resource_type == ResourceType::Topic
         && request.operation == AclOperation::Read
@@ -159,7 +159,7 @@ async fn share_fetch(
                 .into_iter()
                 .map(|row| FetchPartition {
                     partition_index: row.index.0,
-                    acknowledgement_batches: krabka_macros::acknowledgement_batches!(FetchAcknowledgeBatch; [row.batches]),
+                    acknowledgement_batches: krabka_broker_macros::acknowledgement_batches!(FetchAcknowledgeBatch; [row.batches]),
                     ..Default::default()
                 })
                 .collect(),
@@ -176,16 +176,6 @@ async fn share_fetch(
         .await
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ValidationAcknowledgeSetup<'a> {
-    #[default(READER)]
-    user: &'a str,
-    #[default("ack-order")]
-    group: &'a str,
-    topic_id: WireUuid,
-    partition: AcknowledgementPartitionSetup,
-}
-
 #[bon::builder]
 async fn share_acknowledge(
     broker: &BrokerHandle,
@@ -194,22 +184,16 @@ async fn share_acknowledge(
     #[builder(default)] topic_id: WireUuid,
     #[builder(default)] partition: AcknowledgementPartitionSetup,
 ) -> ShareAcknowledgeResponse {
-    let setup = ValidationAcknowledgeSetup {
-        user,
-        group,
-        topic_id,
-        partition,
-    };
     let request = acknowledge_batches_request()
-        .group(setup.group)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition)
+        .group(group)
+        .topic_id(topic_id)
+        .partition(partition)
         .call();
     share_acknowledge_wire()
         .broker(broker)
         .request(&request)
         .version(VERSION)
-        .user(setup.user)
+        .user(user)
         .call()
         .await
 }

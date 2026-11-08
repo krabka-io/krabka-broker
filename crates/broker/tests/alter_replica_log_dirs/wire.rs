@@ -34,7 +34,7 @@ const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 = 4;
 
 // Flexible headers and correlation ID 1 for every request in this suite.
-krabka_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
+krabka_broker_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
 
 async fn flexible_exchange<Q: Encode, R: for<'de> Decode<'de>>(
     stream: &mut TcpStream,

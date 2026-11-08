@@ -11,8 +11,14 @@ use {
     std::slice,
 };
 
-krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
-krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, unwrap, bound_config);
+krabka_broker_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
+krabka_broker_macros::bound_start_fixture!(
+    start,
+    start_bound,
+    ::krabka_broker,
+    unwrap,
+    bound_config
+);
 
 /// A running broker and the directory that backs it.
 struct StartedBroker {
@@ -36,6 +42,7 @@ async fn describe_topic(
 }
 
 use krabka_client_admin::DescribeConfigsResults;
+#[derive(Default)]
 struct ControllerAdminRouting {
     broker: Option<StartedBroker>,
     admin: Option<AdminClient>,
@@ -47,16 +54,8 @@ struct ControllerAdminRouting {
 }
 #[rstest::fixture]
 fn routing() -> ControllerAdminRouting {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerAdminRouting {
-        broker: None,
-        admin: None,
-        configs: None,
-        reconciliation: None,
-        quotas: None,
-        connection: None,
-        creations: None,
+        ..ControllerAdminRouting::default()
     }
 }
 #[rstest_bdd_macros::given("a broker serves separate data and controller endpoints")]

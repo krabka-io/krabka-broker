@@ -21,7 +21,7 @@ mod authorization_tests;
 
 use crate::{
     broker::Broker,
-    codes::NONE,
+    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, default_message},
     handlers::{RequestContext, cluster_action_denied as request_cluster_action_denied},
     share_coordinator::coordinator::{ShareStateError, ShareStateOp},
 };
@@ -60,7 +60,7 @@ fn operation_result(result: Result<(), ShareStateError>, op: ShareStateOp) -> Op
 
 /// Kafka's message for `CLUSTER_AUTHORIZATION_FAILED`, which
 /// `toGlobalErrorResponse` puts on every partition row.
-const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed.";
+const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = default_message(CLUSTER_AUTHORIZATION_FAILED);
 
 /// Whether the authorizer denies `ClusterAction` on the cluster to the
 /// principal of `ctx`.
@@ -167,17 +167,6 @@ pub mod test_support {
 
     use crate::test_support::PartitionCount;
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    pub struct StateFixtureSetup {
-        #[default(uuid::Uuid::from_bytes([33; 16]))]
-        pub topic: uuid::Uuid,
-        #[default(PartitionCount(1))]
-        pub partitions: PartitionCount,
-        pub partition: PartitionIndex,
-        #[default(false)]
-        pub stored_data: bool,
-    }
-
     /// A coordinator and the metadata image it runs over.
     pub struct StateFixture {
         pub coordinator: Arc<ShareCoordinator>,
@@ -193,29 +182,23 @@ pub mod test_support {
         #[builder(into, default)] partition: PartitionIndex,
         #[builder(default)] stored_data: bool,
     ) -> StateFixture {
-        let setup = StateFixtureSetup {
-            topic,
-            partitions,
-            partition,
-            stored_data,
-        };
         let coordinator = coordinator(log_dir);
-        let image = image_with_topic(setup.topic, setup.partitions.0);
+        let image = image_with_topic(topic, partitions.0);
         coordinator.lead_all_partitions_for_test().await;
         coordinator
             .initialize(
                 &image,
-                ShareKeyRef::new("share-group", setup.topic, setup.partition.0),
+                ShareKeyRef::new("share-group", topic, partition.0),
                 17,
                 Offset(90),
             )
             .await
             .expect("initialize state");
-        if setup.stored_data {
+        if stored_data {
             coordinator
                 .read(
                     &image,
-                    ShareKeyRef::new("share-group", setup.topic, setup.partition.0),
+                    ShareKeyRef::new("share-group", topic, partition.0),
                     3,
                 )
                 .await
@@ -223,7 +206,7 @@ pub mod test_support {
             coordinator
                 .write(
                     &image,
-                    ShareKeyRef::new("share-group", setup.topic, setup.partition.0),
+                    ShareKeyRef::new("share-group", topic, partition.0),
                     share_write((17, 3), (101, 9), vec![batch(Offset(101)..=Offset(105))]),
                 )
                 .await
@@ -251,7 +234,7 @@ pub mod test_support {
         fn error_row(partition: i32, code: i16, message: Option<&str>) -> Self::Partition;
     }
 
-    krabka_macros::share_fixture_schemas! {
+    krabka_broker_macros::share_fixture_schemas! {
         initialize_share_group_state_response::InitializeShareGroupStateResponse => initialize_share_group_state_response::InitializeStateResult, initialize_share_group_state_response::PartitionResult;
         write_share_group_state_response::WriteShareGroupStateResponse => write_share_group_state_response::WriteStateResult, write_share_group_state_response::PartitionResult;
         delete_share_group_state_response::DeleteShareGroupStateResponse => delete_share_group_state_response::DeleteStateResult, delete_share_group_state_response::PartitionResult;

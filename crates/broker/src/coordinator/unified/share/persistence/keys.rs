@@ -36,7 +36,7 @@ pub const KEY_SHARE_TARGET_ASSIGNMENT_MEMBER: i16 = 13;
 pub const KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT: i16 = 14;
 pub const KEY_SHARE_GROUP_STATE_PARTITION_METADATA: i16 = 15;
 
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::GroupRecordKey)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::GroupRecordKey)]
 #[group_key(invalid = "unknown share-group key version")]
 pub enum ShareGroupKey {
     #[group_key(version = KEY_SHARE_GROUP_METADATA)]
@@ -85,8 +85,9 @@ mod tests {
     type ShareMetadataKeyScenario = KafkaMetadataKey;
     #[rstest::fixture]
     fn input() -> ShareMetadataKeyScenario {
-        // Start this scenario with fresh inputs and observations.
-        ShareMetadataKeyScenario::default()
+        ShareMetadataKeyScenario {
+            ..ShareMetadataKeyScenario::default()
+        }
     }
     #[given("the Share compacted log record kind is {kind}")]
     fn metadata_record_kind(input: &mut ShareMetadataKeyScenario, kind: String) {

@@ -621,8 +621,6 @@ struct ControllerAuthorization {
 
 #[fixture]
 fn authorization() -> ControllerAuthorization {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerAuthorization {
         api: None,
         required: Slot::default(),

@@ -9,9 +9,7 @@ use {
         coordinator::unified::streams::config::StreamsAssignorKind,
         file_config::RuntimeFileConfig,
     },
-    krabka_client_core::{
-        ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
-    },
+    krabka_client_core::DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
     krabka_units::{ByteSize, Ratio, Time, parse},
 };
 
@@ -23,10 +21,11 @@ fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
 /// A field without an `#[arg(...)]` gets `--field-name`, `KRABKA_FIELD_NAME`
 /// and the value parser of its type from `#[krabka_env]`, and every field not
 /// marked `skip` is copied onto the same-named `RuntimeFileConfig` field by
-/// `copy_into`. The `krabka-macros` crate documentation lists both.
-#[krabka_macros::runtime_policy_fields(cli)]
+/// `copy_into`. The `krabka-macros` and `krabka-broker-macros` crate
+/// documentation describe them.
+#[krabka_broker_macros::runtime_policy_fields(cli)]
 #[krabka_macros::krabka_env]
-#[derive(Debug, clap::Args, krabka_macros::RuntimeOverlay)]
+#[derive(Debug, clap::Args, krabka_broker_macros::RuntimeOverlay)]
 #[overlay(target = RuntimeFileConfig)]
 pub struct RuntimeArgs {
     #[arg(
@@ -187,10 +186,7 @@ pub struct RuntimeArgs {
     pub streams_group_assignor: Option<StreamsAssignorKind>,
 }
 
-fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
-    let value = value.parse::<usize>().map_err(|error| error.to_string())?;
-    ConnectionDispatchQueueCapacity::new(value).map(ConnectionDispatchQueueCapacity::get)
-}
+krabka_macros::dispatch_capacity_parser!(parse_client_dispatch_queue_capacity);
 
 /// Parse a byte count in the domain Kafka gives an `INT` config with
 /// `atLeast(0)`, which is what `message.max.bytes` is.
@@ -470,8 +466,6 @@ mod tests {
 
     #[rstest::fixture]
     fn message_limit_command() -> MessageLimitCommand {
-        // Start this scenario with fresh inputs and observations.
-
         MessageLimitCommand {
             _environment: env_guard(),
             value: String::new(),

@@ -23,7 +23,7 @@ use {
         fetch::{
             FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
         },
-        produce::{SinglePartitionProduceSetup, send_batch},
+        produce::{BatchSender as _, single_partition_produce},
         records::value_record,
     },
     assert2::assert,
@@ -131,8 +131,6 @@ struct LargeFetch {
 
 #[rstest::fixture]
 fn large_fetch() -> LargeFetch {
-    // Start this scenario with fresh inputs and observations.
-
     LargeFetch {
         broker: None,
         topic: String::new(),
@@ -163,16 +161,16 @@ async fn large_payload(large_fetch: &mut LargeFetch, topic: String, count: i32, 
 async fn fetch_large(large_fetch: &mut LargeFetch, budget: i32, wait: i32) {
     let p = large_fetch.broker.as_ref().unwrap();
     let tid = topic_id_for(&p.client, &large_fetch.topic).await;
-    let prod = send_batch(
-        &p.client,
-        large_fetch.batch.take().unwrap(),
-        SinglePartitionProduceSetup {
-            topic: large_fetch.topic.clone(),
-            topic_id: tid,
-            ..Default::default()
-        },
-    )
-    .await;
+    let prod = p
+        .client
+        .send_produce_request(
+            single_partition_produce()
+                .records(large_fetch.batch.take().unwrap())
+                .topic(large_fetch.topic.clone())
+                .topic_id(tid)
+                .call(),
+        )
+        .await;
     large_fetch.produced = Some(prod.responses[0].partition_responses[0].error_code);
     large_fetch.before = drain_counts(p.broker.metrics());
     large_fetch.response = Some(

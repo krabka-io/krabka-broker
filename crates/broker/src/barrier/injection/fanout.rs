@@ -209,7 +209,6 @@ mod tests {
             metadata_source::MetadataSource,
             metrics::BrokerMetrics,
             partition_registry::PartitionRegistry,
-            test_support::StandalonePartitionSetup,
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
@@ -349,10 +348,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
         for p in 0..2 {
-            open_partition(&registry, dir.path(), StandalonePartitionSetup {
-                partition: krabka_ids::PartitionIndex(p),
-                ..Default::default()
-            });
+            open_partition(&registry, dir.path())
+                .partition(krabka_ids::PartitionIndex(p))
+                .call();
             registry
                 .get("orders", PartitionIndex(p))
                 .expect("the partition is open")
@@ -382,7 +380,7 @@ mod tests {
     async fn a_partition_that_is_not_open_locally_stays_unmarked() {
         let dir = tempdir().expect("tempdir");
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir.path(), StandalonePartitionSetup::default());
+        open_partition(&registry, dir.path()).call();
         registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open")

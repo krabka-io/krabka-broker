@@ -122,8 +122,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn feature_support() -> SupportedFeatures {
-        // Start this scenario with fresh inputs and observations.
-        SupportedFeatures::default()
+        SupportedFeatures {
+            ..SupportedFeatures::default()
+        }
     }
     #[given("unstable feature versions are {enabled}")]
     fn unstable_features(feature_support: &mut SupportedFeatures, enabled: bool) {

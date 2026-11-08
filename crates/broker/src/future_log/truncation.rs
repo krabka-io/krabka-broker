@@ -324,14 +324,6 @@ mod tests {
 
     fn leo(log: &Mutex<Log>) -> Offset { log.lock().unwrap().log_end_offset() }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct TruncationLogsSetup<'a> {
-        #[default(&[])]
-        future: &'a [LeaderEpoch],
-        #[default(&[LeaderEpoch(1), LeaderEpoch(1)])]
-        current: &'a [LeaderEpoch],
-    }
-
     struct TruncationLogsFixture {
         current: Mutex<Log>,
         future: Mutex<Log>,
@@ -350,10 +342,9 @@ mod tests {
         #[builder(default = & [])] future: &'_ [LeaderEpoch],
         #[builder(default = & [LeaderEpoch (1) , LeaderEpoch (1)])] current: &'_ [LeaderEpoch],
     ) -> TruncationLogsFixture {
-        let setup = TruncationLogsSetup { future, current };
         let directory = tempdir().unwrap();
-        let future = log_with_epochs(directory.path(), "future", setup.future);
-        let current = log_with_epochs(directory.path(), "current", setup.current);
+        let future = log_with_epochs(directory.path(), "future", future);
+        let current = log_with_epochs(directory.path(), "current", current);
         TruncationLogsFixture {
             current,
             future,

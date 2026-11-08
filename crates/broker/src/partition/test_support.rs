@@ -16,7 +16,7 @@ use {
         },
         partition_writer::{WriterServices, run},
         replica_state::ReplicaState,
-        test_support::{PartitionRecordsSetup, partition_records_batch},
+        test_support::{RecordCount, partition_records_batch},
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
@@ -33,7 +33,7 @@ use {
 };
 
 // Fails leader-epoch checkpoint writes as a full disk would.
-krabka_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
+krabka_broker_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
 
 pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
@@ -79,29 +79,19 @@ pub enum CommitFixtureLeader {
     BrokerOneAtEpochZero,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct CommitPartitionSetup {
-    pub high_watermark: krabka_log::Offset,
-    pub leader: CommitFixtureLeader,
-}
-
 /// A real temporary partition with the requested commit frontier and its own notifier.
 #[bon::builder]
 pub async fn commit_partition(
     #[builder(into, default)] high_watermark: krabka_log::Offset,
     #[builder(default)] leader: CommitFixtureLeader,
 ) -> (Arc<Partition>, tempfile::TempDir, Arc<Notify>) {
-    let setup = CommitPartitionSetup {
-        high_watermark,
-        leader,
-    };
     let notify = Arc::new(Notify::new());
     let (partition, directory) = test_partition(Arc::clone(&notify));
     let partition = Arc::new(partition);
-    if matches!(setup.leader, CommitFixtureLeader::BrokerOneAtEpochZero) {
+    if matches!(leader, CommitFixtureLeader::BrokerOneAtEpochZero) {
         partition.install_leader_change(1, 0).await;
     }
-    partition.replica_state.lock().await.hw = setup.high_watermark;
+    partition.replica_state.lock().await.hw = high_watermark;
     (partition, directory, notify)
 }
 
@@ -144,11 +134,13 @@ pub async fn install_three_replica_isr(partition: &Partition) {
         .await;
 }
 
-pub(super) fn append_records(p: &Partition, setup: PartitionRecordsSetup) {
-    let mut batch = partition_records_batch()
-        .count(setup.count)
-        .timestamp(setup.timestamp)
-        .call();
+/// Append `count` records, stamped with the batch fixture's default timestamp.
+#[bon::builder]
+pub(super) fn append_records(
+    #[builder(start_fn)] p: &Partition,
+    #[builder(into, default)] count: RecordCount,
+) {
+    let mut batch = partition_records_batch().count(count).call();
     p.log
         .lock()
         .expect("log mutex")

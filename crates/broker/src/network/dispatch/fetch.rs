@@ -170,7 +170,7 @@ async fn handle_fetch_frame_from_parsed(
     // else (TLS, Windows) use the portable vectored resolver. `do_read` only
     // ever emits `FileRegions` when `sendfile_capable`, so the resolver choice
     // and the payload kind stay in lock-step.
-    krabka_macros::sendfile_platform! {
+    krabka_broker_macros::sendfile_platform! {
         {
             if sendfile_capable && parsed.api_version >= 4 {
                 return build_fetch_plan(

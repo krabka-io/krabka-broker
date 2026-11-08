@@ -45,7 +45,7 @@ const MAX_IO_SLICES: usize = 64;
 
 /// The inline bytes of an op. File regions are excluded by the vectored-path selector and contribute no inline bytes.
 fn inline_bytes(op: &WriteOp) -> &[u8] {
-    krabka_macros::sendfile_match! { match op {
+    krabka_broker_macros::sendfile_match! { match op {
         WriteOp::Inline(bytes) => bytes.as_ref(),
         WriteOp::File(_) => &[],
     }}
@@ -147,7 +147,7 @@ where
     // fetch response cost four sends and as many wakeups at the reader.
     let mut coalesced = Vec::new();
     for op in iter::once(first).chain(ops) {
-        krabka_macros::sendfile_match! { match op {
+        krabka_broker_macros::sendfile_match! { match op {
             WriteOp::Inline(b) => {
                 if b.len() < COALESCE_BELOW {
                     coalesced.extend_from_slice(&b);
@@ -466,7 +466,7 @@ mod tests {
         }
 
         impl AsyncWrite for NoSendfileStream {
-            krabka_macros::async_write_delegate!(tuple);
+            krabka_broker_macros::async_write_delegate!(tuple);
 
             fn poll_write(
                 mut self: Pin<&mut Self>,

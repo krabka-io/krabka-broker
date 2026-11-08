@@ -127,45 +127,13 @@ struct RecordTimestamp(i64);
 )]
 struct RecordCount(i32);
 
-#[derive(Clone, Copy)]
-struct BatchSetup {
-    base_offset: krabka_ids::Offset,
-    base_timestamp: RecordTimestamp,
-    max_timestamp: RecordTimestamp,
-    record_count: RecordCount,
-}
-
-impl Default for BatchSetup {
-    fn default() -> Self {
-        Self {
-            base_offset: krabka_ids::Offset(100),
-            base_timestamp: RecordTimestamp(1_000),
-            max_timestamp: RecordTimestamp(1_020),
-            record_count: RecordCount(3),
-        }
-    }
-}
-
 #[bon::builder]
 fn batch(
-    #[builder(into, default = BatchSetup::default().base_offset)] base_offset: krabka_ids::Offset,
-    #[builder(into, default = BatchSetup::default().base_timestamp)]
-    base_timestamp: RecordTimestamp,
-    #[builder(into, default = BatchSetup::default().max_timestamp)] max_timestamp: RecordTimestamp,
-    #[builder(into, default = BatchSetup::default().record_count)] record_count: RecordCount,
+    #[builder(into, default = krabka_ids::Offset(100))] base_offset: krabka_ids::Offset,
+    #[builder(into, default = RecordTimestamp(1_000))] base_timestamp: RecordTimestamp,
+    #[builder(into, default = RecordTimestamp(1_020))] max_timestamp: RecordTimestamp,
+    #[builder(into, default = RecordCount(3))] record_count: RecordCount,
 ) -> RecordBatch {
-    let setup = BatchSetup {
-        base_offset,
-        base_timestamp,
-        max_timestamp,
-        record_count,
-    };
-    let BatchSetup {
-        base_offset,
-        base_timestamp,
-        max_timestamp,
-        record_count,
-    } = setup;
     RecordBatch {
         base_offset: base_offset.0,
         last_offset_delta: record_count.0 - 1,
@@ -178,28 +146,16 @@ fn batch(
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct SingleRecordSetup {
-    #[default(krabka_ids::Offset(100))]
-    base_offset: krabka_ids::Offset,
-    #[default(RecordTimestamp(1_000))]
-    timestamp: RecordTimestamp,
-}
-
 /// A framed one-record batch for segment-boundary verification cases.
 #[bon::builder]
 fn single_record_bytes(
     #[builder(into, default = krabka_ids :: Offset (100))] base_offset: krabka_ids::Offset,
     #[builder(into, default = RecordTimestamp (1_000))] timestamp: RecordTimestamp,
 ) -> Bytes {
-    let setup = SingleRecordSetup {
-        base_offset,
-        timestamp,
-    };
     encode_all(&[batch()
-        .base_offset(setup.base_offset)
-        .base_timestamp(setup.timestamp)
-        .max_timestamp(setup.timestamp)
+        .base_offset(base_offset)
+        .base_timestamp(timestamp)
+        .max_timestamp(timestamp)
         .record_count(1)
         .call()])
 }

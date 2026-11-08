@@ -5,6 +5,7 @@ use {
     std::vec,
 };
 
+#[derive(Default)]
 struct FollowerIsr {
     current_end: i64,
     previous_end: i64,
@@ -15,14 +16,8 @@ struct FollowerIsr {
 
 #[fixture]
 fn follower() -> FollowerIsr {
-    // Start this scenario with fresh inputs and observations.
-
     FollowerIsr {
-        current_end: 0,
-        previous_end: 0,
-        member: None,
-        credit: None,
-        selected: None,
+        ..FollowerIsr::default()
     }
 }
 

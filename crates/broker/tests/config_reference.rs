@@ -73,14 +73,8 @@ struct ConfigurationReference {
 
 #[fixture]
 fn reference() -> ConfigurationReference {
-    // Start this scenario with fresh inputs and observations.
-
     ConfigurationReference {
-        checked_in: None,
-        generated: None,
-        page: None,
-        executable: None,
-        output: None,
+        ..ConfigurationReference::default()
     }
 }
 

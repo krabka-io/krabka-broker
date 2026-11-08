@@ -21,8 +21,6 @@ pub struct RecordExchange {
 }
 #[fixture]
 pub fn exchange() -> RecordExchange {
-    // Start this scenario with fresh inputs and observations.
-
     RecordExchange {
         broker: None,
         directory: None,

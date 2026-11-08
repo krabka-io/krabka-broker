@@ -8,6 +8,7 @@ use {
     std::net::SocketAddr,
     tempfile::TempDir,
 };
+#[derive(Default)]
 struct TopicVisibility {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -17,14 +18,8 @@ struct TopicVisibility {
 }
 #[rstest::fixture]
 fn visibility() -> TopicVisibility {
-    // Start this scenario with fresh inputs and observations.
-
     TopicVisibility {
-        broker: None,
-        directory: None,
-        address: None,
-        grant: None,
-        metadata: None,
+        ..TopicVisibility::default()
     }
 }
 #[rstest_bdd_macros::given("alice has only a topic {operation} grant for foo")]

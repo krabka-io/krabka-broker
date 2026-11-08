@@ -406,8 +406,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn upgrade() -> OnlineUpgrade {
-        // Start this scenario with fresh inputs and observations.
-        OnlineUpgrade::default()
+        OnlineUpgrade {
+            ..OnlineUpgrade::default()
+        }
     }
     #[given("classic consumer group g has these persisted member subscriptions and assignments")]
     fn upgrade_members(upgrade: &mut OnlineUpgrade, #[datatable] rows: Rows<UpgradeMember>) {

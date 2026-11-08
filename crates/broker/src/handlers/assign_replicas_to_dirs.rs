@@ -258,15 +258,15 @@ mod tests {
                 let [topic, partition, code] = row.as_slice() else {
                     panic!("topic UUID partition error code required")
                 };
-                krabka_macros::unthrottled_wire!(AssignReplicasToDirsResponse {
+                krabka_broker_macros::unthrottled_wire!(AssignReplicasToDirsResponse {
                     error_code: codes::NONE,
-                    directories: vec![krabka_macros::tagged_wire!(RespDirData {
+                    directories: vec![krabka_broker_macros::tagged_wire!(RespDirData {
                         id: ProtocolUuid(fixture.dir_uuid.into_bytes()),
-                        topics: vec![krabka_macros::tagged_wire!(RespTopicData {
+                        topics: vec![krabka_broker_macros::tagged_wire!(RespTopicData {
                             topic_id: ProtocolUuid(
                                 uuid::Uuid::from_u128(topic.parse().unwrap()).into_bytes()
                             ),
-                            partitions: vec![krabka_macros::tagged_wire!(RespPartData {
+                            partitions: vec![krabka_broker_macros::tagged_wire!(RespPartData {
                                 partition_index: partition.parse().unwrap(),
                                 error_code: code.parse().unwrap()
                             })]
@@ -322,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_leader_commits_known_directory_assignment() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|_| {})];
             ready controller_leader;
@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_directory_assignment_below_kip_858_metadata_version() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|_| {})];
             ready controller_leader;
@@ -518,7 +518,7 @@ mod tests {
             AssignReplicasToDirsRequest, DirectoryData as ReqDirData,
         };
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|_| {})];
             ready controller_leader;

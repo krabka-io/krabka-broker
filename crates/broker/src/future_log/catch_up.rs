@@ -133,7 +133,6 @@ mod tests {
             future_log::test_support::{
                 OpenedFutureLog, append_records, fixture_partition, open_future_log, source_fixture,
             },
-            test_support::PartitionRecordsSetup,
             throttle::ReplicationQuota,
         },
         assert2::assert,
@@ -160,10 +159,7 @@ mod tests {
     /// A source partition of two one-record batches, at offsets 0 and 1.
     fn two_batch_fixture() -> (Arc<Partition>, tempfile::TempDir, tempfile::TempDir) {
         let fixture = source_fixture().count(1).call();
-        append_records(&fixture.partition, PartitionRecordsSetup {
-            count: 1.into(),
-            ..Default::default()
-        });
+        append_records(&fixture.partition).count(1).call();
         (fixture.partition, fixture.primary, fixture.target)
     }
 
@@ -296,10 +292,7 @@ mod tests {
         let first = catch_up(&part, &future, mebibytes(1), &throttle).expect("first pass");
         let after_first = future_leo(&future);
         // Give the second pass something to copy, so only the quota can stop it.
-        append_records(&part, PartitionRecordsSetup {
-            count: 1.into(),
-            ..Default::default()
-        });
+        append_records(&part).count(1).call();
         let second = catch_up(&part, &future, mebibytes(1), &throttle).expect("second pass");
 
         assert!(

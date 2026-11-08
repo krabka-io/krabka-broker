@@ -40,7 +40,7 @@ use {
 /// Kafka's `transaction.abort.timed.out.transaction.cleanup.interval.ms` and
 /// defaults to 10s. The broker spawns this task only when that interval is
 /// non-zero.
-#[krabka_macros::reaper_task(shutdown_message = "txn idle-transaction reaper shutting down")]
+#[krabka_broker_macros::reaper_task(shutdown_message = "txn idle-transaction reaper shutting down")]
 pub async fn run(
     coord: Arc<TxnCoordinator>,
     controller: Arc<dyn MetadataSource>,

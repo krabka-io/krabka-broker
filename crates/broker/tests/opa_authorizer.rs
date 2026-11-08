@@ -183,11 +183,11 @@ async fn produce_when_partition_ready(
     drive_produce_as_plain(
         addr,
         single_record_produce_request(topic, 0, b"hello"),
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (password).to_vec(),
-        },
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(password)
+            .build(),
     )
     .await
 }
@@ -200,6 +200,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ExternalPolicy {
     server: Option<OpaFixture>,
     topic: String,
@@ -207,12 +208,8 @@ struct ExternalPolicy {
 }
 #[fixture]
 fn policy() -> ExternalPolicy {
-    // Start this scenario with fresh inputs and observations.
-
     ExternalPolicy {
-        server: None,
-        topic: String::new(),
-        response: None,
+        ..ExternalPolicy::default()
     }
 }
 #[given("OPA returns {decision} while the administrator creates topic {topic}")]

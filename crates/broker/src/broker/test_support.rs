@@ -98,56 +98,15 @@ pub(super) fn metadata_topic_record(
     krabka_metadata::MetadataRecord::V1Topic(single_partition_topic(topic, topic_id))
 }
 
-#[derive(Clone)]
-pub(super) struct MetadataPartitionSetup<'a> {
-    pub topic: &'a str,
-    pub partition: PartitionIndex,
-    pub leader: NodeId,
-    pub replicas: Vec<NodeId>,
-    pub isr: Vec<NodeId>,
-    pub leader_epoch: LeaderEpoch,
-}
-
-impl Default for MetadataPartitionSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "orders",
-            partition: PartitionIndex::default(),
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(3),
-        }
-    }
-}
-
 #[bon::builder]
 pub(super) fn metadata_partition_record(
-    #[builder(default = MetadataPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = MetadataPartitionSetup::default().partition)]
-    partition: PartitionIndex,
-    #[builder(into, default = MetadataPartitionSetup::default().leader)] leader: NodeId,
-    #[builder(default = MetadataPartitionSetup::default().replicas)] replicas: Vec<NodeId>,
-    #[builder(default = MetadataPartitionSetup::default().isr)] isr: Vec<NodeId>,
-    #[builder(into, default = MetadataPartitionSetup::default().leader_epoch)]
-    leader_epoch: LeaderEpoch,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default = PartitionIndex::default())] partition: PartitionIndex,
+    #[builder(into, default = NodeId(1))] leader: NodeId,
+    #[builder(default = vec![NodeId(1)])] replicas: Vec<NodeId>,
+    #[builder(default = vec![NodeId(1)])] isr: Vec<NodeId>,
+    #[builder(into, default = LeaderEpoch(3))] leader_epoch: LeaderEpoch,
 ) -> krabka_metadata::PartitionRecord {
-    let setup = MetadataPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        isr,
-        leader_epoch,
-    };
-    let MetadataPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-        isr,
-        leader_epoch,
-    } = setup;
     let directories = vec![uuid::Uuid::nil(); replicas.len()];
     krabka_metadata::PartitionRecord {
         topic: topic.to_owned(),

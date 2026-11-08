@@ -204,7 +204,7 @@ mod tests {
         tokio::{net, task::JoinHandle, time},
     };
 
-    krabka_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
+    krabka_broker_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
 
     /// A live meter of either kind, read back as the rate it runs at.
     enum Meter {

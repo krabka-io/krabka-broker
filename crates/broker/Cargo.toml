@@ -48,9 +48,11 @@ krabka-raft = { version = "1.1.5", path = "../raft" }
 krabka-kraft-core = { version = "1.1.5", path = "../kraft-core" }
 krabka-verified = { version = "1.1.5", path = "../verified" }
 krabka-java-regex = { version = "1.1.5", path = "../java-regex" }
-# `#[derive(RegisterMetrics)]`: `BrokerMetrics` names, helps and constructs each
-# metric once, on its field.
+# The macros other krabka crates share, such as `FieldDefaults` and `test_scalar`.
 krabka-macros = { version = "1.1.5", path = "../macros" }
+# The macros whose expansions name this crate's modules, such as
+# `dispatch_table!` and `#[derive(RegisterMetrics)]` on `BrokerMetrics`.
+krabka-broker-macros = { version = "1.1.5", path = "../broker-macros" }
 # Kafka's `meta.properties` is read and written with the formatter's own
 # `MetaProperties`, so the file has one parser and one writer. Tests such as `bootstrap_consumption`,
 # `cli_smoke` and `format_features` also call `krabka_format::run_from_args` to
@@ -192,6 +194,8 @@ rcgen = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
+# `time` for the thread CPU clock that a test bounds instead of wall-clock time.
+rustix = { workspace = true, features = ["time"] }
 # No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
 krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }

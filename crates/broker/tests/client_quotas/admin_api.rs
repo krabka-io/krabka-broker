@@ -19,6 +19,7 @@ use {
     assert2::assert,
 };
 type QuotaValues = Vec<(String, f64)>;
+#[derive(Default)]
 struct ClientQuotaAdmin {
     broker: Option<krabka_broker::BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -27,13 +28,8 @@ struct ClientQuotaAdmin {
 }
 #[rstest::fixture]
 fn quota_admin() -> ClientQuotaAdmin {
-    // Start this scenario with fresh inputs and observations.
-
     ClientQuotaAdmin {
-        broker: None,
-        directory: None,
-        altered: None,
-        described: None,
+        ..ClientQuotaAdmin::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -146,10 +142,10 @@ async fn quota_alice_unauthorized_alter(quota_admin: &mut ClientQuotaAdmin) {
                     false,
                 )])],
                 &QuotaAlterSetup {
-                    authentication: PlainAuthenticationSetup::with_password(
-                        CLIENT_ID,
-                        b"alice-secret",
-                    ),
+                    authentication: PlainAuthenticationSetup::builder()
+                        .client_id(CLIENT_ID)
+                        .password(b"alice-secret")
+                        .build(),
                     ..Default::default()
                 },
             )

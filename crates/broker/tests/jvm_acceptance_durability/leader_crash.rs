@@ -23,6 +23,7 @@ use {
 };
 const TOPIC: &str = "krabka-acks-all-crash-itest";
 const CLIENT_PORTS: [u16; 3] = [10392, 10492, 10592];
+#[derive(Default)]
 struct CrashedLeader {
     cluster: Vec<(BrokerHandle, TempDir)>,
     bootstrap: String,
@@ -31,13 +32,8 @@ struct CrashedLeader {
 }
 #[rstest::fixture]
 fn crash() -> CrashedLeader {
-    // Start this scenario with fresh inputs and observations.
-
     CrashedLeader {
-        cluster: Vec::new(),
-        bootstrap: String::new(),
-        leader_index: 0,
-        consumed: None,
+        ..CrashedLeader::default()
     }
 }
 #[rstest_bdd_macros::given(

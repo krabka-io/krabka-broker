@@ -32,7 +32,7 @@ pub struct ShareGroupMemberMetadataValue {
     pub subscribed_topic_names: Vec<String>,
 }
 
-#[krabka_macros::flexible_value(record = "ShareGroupMemberMetadataValue")]
+#[krabka_broker_macros::flexible_value(record = "ShareGroupMemberMetadataValue")]
 impl ShareGroupMemberMetadataValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         put_member_client(
@@ -118,8 +118,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupMemberMetadataValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share member c at host h in rack r subscribes to topic a")]
         fn prepared_value(stored_value: &mut EncodedValue) {

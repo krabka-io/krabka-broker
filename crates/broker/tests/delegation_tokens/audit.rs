@@ -18,7 +18,7 @@
 use {
     crate::{
         cluster::{TokenWorkflow, tokens},
-        rpc::send_renew_delegation_token,
+        rpc::send_delegation_token_rpc,
         support,
     },
     assert2::check,
@@ -63,7 +63,7 @@ fn secret_spellings(hmac: &[u8]) -> Vec<String> {
 #[rstest_bdd_macros::when("alice renews an unknown HMAC of 32 bytes 0x5a for 3600000 milliseconds")]
 async fn renew_missing_token(tokens: &mut TokenWorkflow) {
     tokens.renewed = Some(
-        send_renew_delegation_token(
+        send_delegation_token_rpc(
             tokens
                 .sessions
                 .get_mut("alice")

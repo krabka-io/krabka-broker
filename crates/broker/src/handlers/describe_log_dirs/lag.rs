@@ -96,15 +96,6 @@ mod tests {
     /// The function uses the real `spawn_partition` path and mirrors the
     /// `future_log` and registry test fixtures. It appends `count` records, so
     /// the LEO of the partition advances to `count`.
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct PartitionLogSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        partition: krabka_ids::PartitionIndex,
-        #[default(RecordCount(0))]
-        count: RecordCount,
-    }
-
     #[bon::builder]
     fn partition_with_leo(
         log_dir: &Path,
@@ -112,16 +103,6 @@ mod tests {
         #[builder(into, default)] partition: krabka_ids::PartitionIndex,
         #[builder(into, default = RecordCount (0))] count: RecordCount,
     ) -> Arc<Partition> {
-        let setup = PartitionLogSetup {
-            topic,
-            partition,
-            count,
-        };
-        let PartitionLogSetup {
-            topic,
-            partition,
-            count,
-        } = setup;
         let part = open_partition()
             .log_dir(log_dir)
             .topic(topic)

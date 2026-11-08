@@ -20,7 +20,7 @@ use {
         support::{
             self,
             client::{connect_with_context, raw_connection},
-            produce::{SinglePartitionProduceSetup, send_batch},
+            produce::{BatchSender as _, ProduceAcknowledgements, single_partition_produce},
             records::batch_from_records,
             registered_cluster, shutdown_cluster,
             topics::CreateTopicRequestSetup,
@@ -108,12 +108,17 @@ fn record(
 /// Send `batch` to the leader with `acks=-1`, and return the error code of
 /// the partition row.
 async fn produce(leader: &Connection, topic_id: WireUuid, batch: RecordBatch) -> i16 {
-    let response = send_batch(&leader, batch, SinglePartitionProduceSetup {
-        topic: (TOPIC).into(),
-        topic_id,
-        ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
-    })
-    .await;
+    let response = leader
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(TOPIC)
+                .topic_id(topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .timeout(30_000)
+                .call(),
+        )
+        .await;
     response.responses[0].partition_responses[0].error_code
 }
 

@@ -448,7 +448,7 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
 
     assert!(
         result
-            == krabka_macros::tagged_wire!(DescribeConfigsResult {
+            == krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: NONE,
                 error_message: None,
                 resource_type: ConfigResourceType::Topic.to_wire(),
@@ -1123,7 +1123,7 @@ fn a_broker_resource_that_names_another_node_is_refused() {
 
     assert!(
         result
-            == krabka_macros::tagged_wire!(DescribeConfigsResult {
+            == krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: INVALID_REQUEST,
                 error_message: Some(
                     "Unexpected broker id, expected 1 or empty string, but received 2".to_owned()
@@ -1330,7 +1330,7 @@ fn check_described_resource_refusal(
     };
     check!(
         config_description.results
-            == vec![krabka_macros::tagged_wire!(DescribeConfigsResult {
+            == vec![krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: code,
                 error_message,
                 resource_type: config_description.kind,
@@ -1813,7 +1813,7 @@ fn an_unhandled_resource_type_is_refused() {
 
     assert!(
         result
-            == krabka_macros::tagged_wire!(DescribeConfigsResult {
+            == krabka_broker_macros::tagged_wire!(DescribeConfigsResult {
                 error_code: INVALID_REQUEST,
                 error_message: Some("Unsupported resource type: 99".to_owned()),
                 resource_type: 99,
@@ -3013,21 +3013,6 @@ pub(super) enum ConfigMutability {
     ReadOnly,
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ExpectedConfigSetup<'a> {
-    #[default("retention.ms")]
-    pub name: &'a str,
-    #[default(Some("604800000"))]
-    pub value: Option<&'a str>,
-    pub mutability: ConfigMutability,
-    #[default(ConfigSourceCode(CONFIG_SOURCE_DEFAULT))]
-    pub source: ConfigSourceCode,
-    pub synonyms: Vec<DescribeConfigsSynonym>,
-    #[default(ConfigTypeCode(ConfigType::Long.wire()))]
-    pub config_type: ConfigTypeCode,
-    pub documentation: Option<String>,
-}
-
 #[bon::builder]
 pub(super) fn expected_config_entry(
     #[builder(default = "retention.ms")] name: &'_ str,
@@ -3039,25 +3024,7 @@ pub(super) fn expected_config_entry(
     config_type: ConfigTypeCode,
     documentation: Option<String>,
 ) -> DescribeConfigsResourceResult {
-    let setup = ExpectedConfigSetup {
-        name,
-        value,
-        mutability,
-        source,
-        synonyms,
-        config_type,
-        documentation,
-    };
-    let ExpectedConfigSetup {
-        name,
-        value,
-        mutability,
-        source,
-        synonyms,
-        config_type,
-        documentation,
-    } = setup;
-    krabka_macros::tagged_wire!(DescribeConfigsResourceResult {
+    krabka_broker_macros::tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: value.map(str::to_owned),
         read_only: mutability == ConfigMutability::ReadOnly,

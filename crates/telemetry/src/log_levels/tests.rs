@@ -52,6 +52,7 @@ enum LevelNameObservation {
     Rejected,
 }
 
+#[derive(Default)]
 struct LevelNameScenario {
     level: Option<LogLevel>,
     text: String,
@@ -60,12 +61,8 @@ struct LevelNameScenario {
 
 #[rstest::fixture]
 fn level_name() -> LevelNameScenario {
-    // Start this scenario with fresh inputs and observations.
-
     LevelNameScenario {
-        level: None,
-        text: String::new(),
-        parsed: None,
+        ..LevelNameScenario::default()
     }
 }
 

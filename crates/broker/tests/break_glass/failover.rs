@@ -45,20 +45,8 @@ struct DurableApproval {
 
 #[fixture]
 fn durable() -> DurableApproval {
-    // Start this scenario with fresh inputs and observations.
-
     DurableApproval {
-        cluster: Vec::new(),
-        stopped_directory: None,
-        client: None,
-        after_client: None,
-        old_leader: None,
-        new_leader: None,
-        proposal: None,
-        before: None,
-        after: None,
-        deletion: None,
-        topic: String::new(),
+        ..DurableApproval::default()
     }
 }
 

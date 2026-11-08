@@ -106,7 +106,7 @@ mod tests {
         broker: &Broker,
         request: AllocateProducerIdsRequest,
     ) -> AllocateProducerIdsResponse {
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(user, address, ctx);
             user ["ANONYMOUS"];
             client ["allocate-test"];
@@ -116,7 +116,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocates_consecutive_durable_blocks_and_fences_stale_epochs() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_no_audit()];
         };
@@ -227,7 +227,7 @@ mod tests {
     /// the next block start does not move.
     #[tokio::test]
     async fn allocation_needs_cluster_action() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_with_principal_grants()];
         };

@@ -1,0 +1,18 @@
+load("//bazel:defs.bzl", "crate_proc_macro", "crate_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+# Consumed by `crate.from_cargo` (see //MODULE.bazel).
+exports_files(["Cargo.toml"])
+
+# The syntax helpers that both macro crates use live in krabka-macros, which
+# publishes them; this crate compiles the same files through `#[path]`.
+crate_proc_macro(
+    name = "broker-macros",
+    srcs = glob(["src/**/*.rs"]) + ["//crates/macros:shared_srcs"],
+)
+
+crate_tests(
+    compile_data = ["Cargo.toml"] + glob(["tests/features/**/*.feature"]),
+    lib = "broker-macros",
+)

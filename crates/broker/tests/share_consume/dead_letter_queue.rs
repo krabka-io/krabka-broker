@@ -254,7 +254,7 @@ async fn wait_for_dead_letters(
 }
 
 // A header of `record` as text.
-krabka_macros::record_header_text!(header, lossy);
+krabka_broker_macros::record_header_text!(header, lossy);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct RejectRangesSetup<'a> {
@@ -323,7 +323,7 @@ async fn reject_ranges(
     );
 }
 
-krabka_macros::share_dlq_meters!(
+krabka_broker_macros::share_dlq_meters!(
     /// What the `DeadLetterQueue*` meters of the group count on the broker: the
     /// records written, the attempts to produce, and the writes that failed.
     meters,
@@ -360,15 +360,6 @@ enum DeadLetterShareVersion {
     Two,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DeadLetterQueueSetup<'a> {
-    #[default(ShareRecordCount(3))]
-    records: ShareRecordCount,
-    version: DeadLetterShareVersion,
-    #[default(&[])]
-    topic_configs: &'a [ConfigEntry<'a>],
-}
-
 /// Keep the feature gate and topic/group configuration in their original order.
 async fn configure_dead_letters(
     client: &Client,
@@ -391,12 +382,6 @@ async fn configure_dead_letters(
     }
     create_dead_letter_topic_with(broker, client, topic_configs).await;
     point_group_at_dead_letter_topic(client).await;
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct AcquiredRecordsSetup {
-    #[default(ShareRecordCount(3))]
-    records: ShareRecordCount,
 }
 
 /// Required script steps for a custom acquisition, separate from its defaulted record setup.
@@ -461,7 +446,6 @@ where
     C: AsyncFnOnce(&Client, &BrokerHandle),
     P: AsyncFnOnce(&Client, uuid::Uuid),
 {
-    let setup = AcquiredRecordsSetup { records };
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = trunk_config(&dir);
     (hooks.tweak)(&mut config);
@@ -473,7 +457,7 @@ where
     (hooks.configure)(&client, &broker).await;
     (hooks.produce)(&client, tid).await;
     let AcquiredMember { member, row } = join_and_acquire(&broker, &client, tid).await;
-    assert!(acquired_count(&row) == setup.records.0, "{row:?}");
+    assert!(acquired_count(&row) == records.0, "{row:?}");
     Cluster {
         broker,
         client,
@@ -572,13 +556,8 @@ async fn acquired_dead_letters(
     #[builder(default)] version: DeadLetterShareVersion,
     #[builder(default = & [])] topic_configs: &'_ [ConfigEntry<'_>],
 ) -> Cluster {
-    let setup = DeadLetterQueueSetup {
-        records,
-        version,
-        topic_configs,
-    };
-    acquired_records(setup.records, customize, async |client, broker| {
-        configure_dead_letters(client, broker, setup.version, setup.topic_configs).await;
+    acquired_records(records, customize, async |client, broker| {
+        configure_dead_letters(client, broker, version, topic_configs).await;
     })
     .await
 }

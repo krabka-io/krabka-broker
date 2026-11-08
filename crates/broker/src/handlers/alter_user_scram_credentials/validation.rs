@@ -249,6 +249,7 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    #[derive(Default)]
     struct ScramIterationContract {
         upsertion: Option<ScramCredentialUpsertion>,
         authorized: bool,
@@ -258,13 +259,8 @@ mod tests {
 
     #[rstest::fixture]
     fn scram_iterations() -> ScramIterationContract {
-        // Start this scenario with fresh inputs and observations.
-
         ScramIterationContract {
-            upsertion: None,
-            authorized: false,
-            records: Vec::new(),
-            result: None,
+            ..ScramIterationContract::default()
         }
     }
 
@@ -456,7 +452,7 @@ mod tests {
     }
 
     async fn check_empty_username(req: AlterUserScramCredentialsRequest) {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] allow_all;
             ready controller_leader;

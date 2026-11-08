@@ -297,32 +297,12 @@ mod tests {
         .expect("the dead-letter write finished")
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct ExpectedDlqRequestSetup {
-        #[default(Offset(0)..=Offset(1))]
-        bounds: RangeInclusive<Offset>,
-        #[default(DeliveryCount(1))]
-        delivery_count: DeliveryCount,
-        #[default(DlqCause::ClientReject)]
-        cause: DlqCause,
-    }
-
     #[bon::builder]
     fn request(
         #[builder(default = Offset (0) ..= Offset (1))] bounds: RangeInclusive<Offset>,
         #[builder(into, default = DeliveryCount (1))] delivery_count: DeliveryCount,
         #[builder(default = DlqCause :: ClientReject)] cause: DlqCause,
     ) -> DlqRequest {
-        let setup = ExpectedDlqRequestSetup {
-            bounds,
-            delivery_count,
-            cause,
-        };
-        let ExpectedDlqRequestSetup {
-            bounds,
-            delivery_count,
-            cause,
-        } = setup;
         let (first, last) = bounds.into_inner();
         DlqRequest {
             group: "g1".into(),

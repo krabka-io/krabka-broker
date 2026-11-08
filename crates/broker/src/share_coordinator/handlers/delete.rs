@@ -17,7 +17,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     DeleteShareGroupStateRequest,
     DeleteShareGroupStateResponse,
     DeleteStateResult,
@@ -40,8 +40,10 @@ async fn delete_state(
     {
         return DeleteShareGroupStateResponse::default();
     }
-    let results =
-        krabka_macros::share_state_results!(req, DeleteStateResult, |group_id, topic_id, pd| {
+    let results = krabka_broker_macros::share_state_results!(
+        req,
+        DeleteStateResult,
+        |group_id, topic_id, pd| {
             let result = coordinator
                 .delete(image, ShareKeyRef::new(group_id, topic_id, pd.partition))
                 .await;
@@ -52,7 +54,8 @@ async fn delete_state(
                 error_message: verdict.message,
                 ..Default::default()
             }
-        });
+        }
+    );
 
     DeleteShareGroupStateResponse {
         results,
@@ -87,7 +90,7 @@ mod tests {
         topic_id: uuid::Uuid,
         partitions: &[i32],
     ) -> DeleteShareGroupStateRequest {
-        krabka_macros::share_state_request! {
+        krabka_broker_macros::share_state_request! {
             DeleteShareGroupStateRequest, DeleteStateData;
             group [group_id];
             topic [ProtoUuid(*topic_id.as_bytes())];

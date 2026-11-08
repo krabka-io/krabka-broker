@@ -293,7 +293,7 @@ mod tests {
         payments_describe: bool,
     }
 
-    krabka_macros::test_authorizer!(TestAuthorizer, req; {
+    krabka_broker_macros::test_authorizer!(TestAuthorizer, req; {
         let allow = match (req.resource_type, req.operation) {
             (ResourceType::Cluster, AclOperation::ClusterAction) => self.cluster_action,
             (ResourceType::Topic, AclOperation::Describe) if req.resource_name == "orders" => true,
@@ -419,7 +419,7 @@ mod tests {
                 cluster_action,
                 payments_describe,
             });
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, p, peer, ctx);
                 boot [start_broker_with_authorizer_no_audit(authorizer)];
                 user ["follower"];
@@ -497,18 +497,6 @@ mod tests {
         tokio::time,
     };
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct SeededEpochTopicSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(uuid::Uuid::from_u128(1))]
-        topic_id: uuid::Uuid,
-        #[default(NodeId(1))]
-        leader: NodeId,
-        #[default(LeaderEpoch(0))]
-        leader_epoch: LeaderEpoch,
-    }
-
     #[bon::builder]
     async fn seeded_topic(
         broker_handle: &BrokerHandle,
@@ -517,18 +505,6 @@ mod tests {
         #[builder(into, default = NodeId (1))] leader: NodeId,
         #[builder(into, default = LeaderEpoch (0))] leader_epoch: LeaderEpoch,
     ) -> Arc<Partition> {
-        let setup = SeededEpochTopicSetup {
-            topic,
-            topic_id,
-            leader,
-            leader_epoch,
-        };
-        let SeededEpochTopicSetup {
-            topic,
-            topic_id,
-            leader,
-            leader_epoch,
-        } = setup;
         seed_partition_replicas()
             .broker(broker_handle)
             .topic(topic)
@@ -595,7 +571,7 @@ mod tests {
         request: &OffsetForLeaderEpochRequest,
     ) -> EpochEndOffset {
         let shared = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(user, address, ctx);
             user ["client"];
             client ["ofle-client"];
@@ -781,7 +757,7 @@ mod tests {
     /// first.
     #[tokio::test]
     async fn hosting_outcomes_are_decided_before_the_epoch_fence() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker, _dir, shared);
             boot [broker_fixture_support::start_broker_no_audit()];
         };

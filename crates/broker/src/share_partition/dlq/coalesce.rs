@@ -547,20 +547,6 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct MessageByteLimit(i32);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct RoundSetup<'a> {
-        #[default(FixtureTopicId(1))]
-        id: FixtureTopicId,
-        #[default(PartitionIndex(0))]
-        partition: PartitionIndex,
-        #[default(UnixMillis(1_000))]
-        timestamp: UnixMillis,
-        #[default(&["a0"])]
-        values: &'a [&'a str],
-        #[default(MessageByteLimit(ROOMY))]
-        limit: MessageByteLimit,
-    }
-
     #[bon::builder]
     fn round(
         #[builder(into, default = FixtureTopicId (1))] id: FixtureTopicId,
@@ -569,20 +555,6 @@ mod tests {
         #[builder(default = & ["a0"])] values: &'_ [&'_ str],
         #[builder(into, default = MessageByteLimit (ROOMY))] limit: MessageByteLimit,
     ) -> Produce {
-        let setup = RoundSetup {
-            id,
-            partition,
-            timestamp,
-            values,
-            limit,
-        };
-        let RoundSetup {
-            id,
-            partition,
-            timestamp,
-            values,
-            limit,
-        } = setup;
         let id = id.0;
         let records: Vec<TimedValue<'_>> = values.iter().map(|value| rec(0, value)).collect();
         Produce {

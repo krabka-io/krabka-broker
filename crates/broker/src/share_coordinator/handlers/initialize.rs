@@ -18,7 +18,7 @@ use {
     },
 };
 
-krabka_macros::share_state_handler!(
+krabka_broker_macros::share_state_handler!(
     InitializeShareGroupStateRequest,
     InitializeShareGroupStateResponse,
     InitializeStateResult,
@@ -38,7 +38,7 @@ async fn initialize_state(
     if req.group_id.is_empty() || req.topics.is_empty() {
         return InitializeShareGroupStateResponse::default();
     }
-    let results = krabka_macros::share_state_results!(
+    let results = krabka_broker_macros::share_state_results!(
         req,
         InitializeStateResult,
         |group_id, topic_id, pd| {

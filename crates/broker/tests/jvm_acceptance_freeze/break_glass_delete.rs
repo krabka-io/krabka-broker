@@ -8,6 +8,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ProtectedDeletion {
     broker: Option<JvmBroker>,
     topic: String,
@@ -17,14 +18,8 @@ struct ProtectedDeletion {
 }
 #[fixture]
 fn deletion() -> ProtectedDeletion {
-    // Start this scenario with fresh inputs and observations.
-
     ProtectedDeletion {
-        broker: None,
-        topic: String::new(),
-        created: None,
-        deleted: None,
-        listed: None,
+        ..ProtectedDeletion::default()
     }
 }
 #[given(

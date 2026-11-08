@@ -102,16 +102,8 @@ struct SnapshotFetch {
 
 #[fixture]
 fn snapshot_fetch() -> SnapshotFetch {
-    // Start this scenario with fresh inputs and observations.
-
     SnapshotFetch {
-        broker: None,
-        client: None,
-        directory: None,
-        snapshot: None,
-        leader_epoch: None,
-        size: None,
-        response: None,
+        ..SnapshotFetch::default()
     }
 }
 

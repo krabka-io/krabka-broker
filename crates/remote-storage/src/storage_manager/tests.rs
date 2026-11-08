@@ -17,20 +17,6 @@ use {
     proptest::prelude::*,
 };
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct StorageMetadataSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    #[default(PartitionIndex(0))]
-    partition: PartitionIndex,
-    #[default(Uuid::from_u128(1))]
-    topic_id: Uuid,
-    #[default(Uuid::from_u128(30))]
-    segment_id: Uuid,
-    #[default(Offset(0))]
-    base_offset: Offset,
-}
-
 #[bon::builder]
 fn metadata(
     #[builder(default = "orders")] topic: &'_ str,
@@ -39,20 +25,6 @@ fn metadata(
     #[builder(default = Uuid :: from_u128 (30))] segment_id: Uuid,
     #[builder(into, default = Offset (0))] base_offset: Offset,
 ) -> RemoteLogSegmentMetadata {
-    let setup = StorageMetadataSetup {
-        topic,
-        partition,
-        topic_id,
-        segment_id,
-        base_offset,
-    };
-    let StorageMetadataSetup {
-        topic,
-        partition,
-        topic_id,
-        segment_id,
-        base_offset,
-    } = setup;
     let base_offset = base_offset.0;
     RemoteLogSegmentMetadata::new(
         RemoteLogSegmentId::new(
@@ -79,6 +51,7 @@ enum KafkaUuidObservation {
     Malformed,
 }
 
+#[derive(Default)]
 struct RemoteNameScenario {
     metadata: Option<RemoteLogSegmentMetadata>,
     kind: Option<IndexType>,
@@ -95,20 +68,8 @@ struct RemoteNameScenario {
 
 #[rstest::fixture]
 fn remote_names() -> RemoteNameScenario {
-    // Start this scenario with fresh inputs and observations.
-
     RemoteNameScenario {
-        metadata: None,
-        kind: None,
-        suffix: String::new(),
-        rendered_suffix: String::new(),
-        parsed_kind: None,
-        partition_name: String::new(),
-        segment_name: String::new(),
-        parsed_partition: None,
-        parsed_segment: None,
-        uuid_input: String::new(),
-        decoded_uuid: None,
+        ..RemoteNameScenario::default()
     }
 }
 

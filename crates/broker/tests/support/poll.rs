@@ -9,14 +9,6 @@ use {
     tokio::time,
 };
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct RetrySetup {
-    #[default(Duration::from_secs(10))]
-    pub timeout: Duration,
-    #[default(Duration::from_millis(50))]
-    pub backoff: Duration,
-}
-
 /// Return the first accepted response. The response predicate runs before the
 /// timeout test, and request failures propagate.
 ///
@@ -38,8 +30,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<R, E>>,
 {
-    let setup = RetrySetup { timeout, backoff };
-    let deadline = Instant::now() + setup.timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         let response = request().await?;
         if ready(&response) {
@@ -48,12 +39,9 @@ where
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| {
-                panic!(
-                    "response did not reach its expected state within {:?}: {response:?}",
-                    setup.timeout
-                )
+                panic!("response did not reach its expected state within {timeout:?}: {response:?}")
             });
-        time::sleep(setup.backoff.min(remaining)).await;
+        time::sleep(backoff.min(remaining)).await;
     }
 }
 

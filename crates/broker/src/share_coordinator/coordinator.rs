@@ -114,6 +114,8 @@ pub struct ShareStateSummary {
 /// Kafka's messages for the share-state error rows: the `Errors` default
 /// messages and the validation messages of `ShareCoordinatorShard`.
 pub mod message {
+    use crate::codes::{self, default_message};
+
     pub const NEGATIVE_PARTITION_ID: &str = "The partition id cannot be a negative number.";
     pub const NEGATIVE_LEADER_EPOCH: &str = "The leader epoch cannot be a negative number.";
     pub const NEGATIVE_STATE_EPOCH: &str = "The state epoch cannot be a negative number.";
@@ -121,16 +123,17 @@ pub mod message {
         "Write operation on uninitialized share partition not allowed.";
     pub const READ_UNINITIALIZED_SHARE_PARTITION: &str =
         "Read operation on uninitialized share partition not allowed.";
-    pub const UNKNOWN_SERVER_ERROR: &str =
-        "The server experienced an unexpected error when processing the request.";
-    pub const UNKNOWN_TOPIC_OR_PARTITION: &str = "This server does not host this topic-partition.";
+    pub const UNKNOWN_SERVER_ERROR: &str = default_message(codes::UNKNOWN_SERVER_ERROR);
+    pub const UNKNOWN_TOPIC_OR_PARTITION: &str = default_message(codes::UNKNOWN_TOPIC_OR_PARTITION);
     pub const COORDINATOR_LOAD_IN_PROGRESS: &str =
-        "The coordinator is loading and hence can't process requests.";
-    pub const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
-    pub const REQUEST_TIMED_OUT: &str = "The request timed out.";
-    pub const KAFKA_STORAGE_ERROR: &str = "Disk error when trying to access log file on the disk.";
-    pub const FENCED_LEADER_EPOCH: &str =
-        "The leader epoch in the request is older than the epoch on the broker.";
+        default_message(codes::COORDINATOR_LOAD_IN_PROGRESS);
+    pub const NOT_COORDINATOR: &str = default_message(codes::NOT_COORDINATOR);
+    pub const REQUEST_TIMED_OUT: &str = default_message(codes::REQUEST_TIMED_OUT);
+    pub const KAFKA_STORAGE_ERROR: &str = default_message(codes::KAFKA_STORAGE_ERROR);
+    pub const FENCED_LEADER_EPOCH: &str = default_message(codes::FENCED_LEADER_EPOCH);
+    /// Not Kafka's `Errors.FENCED_STATE_EPOCH.message()`, which reads "The
+    /// share coordinator rejected the request because the share-group state
+    /// epoch did not match."; this row has always sent the text below.
     pub const FENCED_STATE_EPOCH: &str =
         "The coordinator rejected the request because the state epoch did not match.";
 }
@@ -292,7 +295,7 @@ pub(super) struct Active<'a> {
 /// call started.
 ///
 /// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default, krabka_macros::ScheduledLoads)]
+#[derive(Debug, Default, krabka_broker_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__share_group_state load task failed")]
 pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,

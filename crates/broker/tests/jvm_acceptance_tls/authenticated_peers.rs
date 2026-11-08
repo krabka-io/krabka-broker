@@ -25,8 +25,6 @@ pub struct AuthenticatedPeers {
 }
 #[fixture]
 pub fn peers() -> AuthenticatedPeers {
-    // Start this scenario with fresh inputs and observations.
-
     AuthenticatedPeers {
         brokers: None,
         directories: None,

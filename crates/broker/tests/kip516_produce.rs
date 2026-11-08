@@ -23,6 +23,7 @@ use krabka_protocol::owned::{
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
+#[derive(Default)]
 struct ProduceIdentity {
     broker: Option<InProcess>,
     ids: Vec<WireUuid>,
@@ -31,12 +32,8 @@ struct ProduceIdentity {
 
 #[fixture]
 fn producing() -> ProduceIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     ProduceIdentity {
-        broker: None,
-        ids: Vec::new(),
-        actual: Vec::new(),
+        ..ProduceIdentity::default()
     }
 }
 

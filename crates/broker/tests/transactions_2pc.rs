@@ -76,12 +76,6 @@ fn two_phase_init(
     })
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct InitializedProducerSetup<'a> {
-    #[default("tid-keep")]
-    transactional_id: &'a str,
-}
-
 /// Bootstrap the coordinator before initializing a transactional producer.
 #[bon::builder]
 async fn initialized_producer(
@@ -89,11 +83,10 @@ async fn initialized_producer(
     bootstrap: &str,
     #[builder(default = "tid-keep")] transactional_id: &'_ str,
 ) -> Producer {
-    let setup = InitializedProducerSetup { transactional_id };
     broker.wait_until_transaction_coordinator_ready().await;
     let producer = Producer::builder()
         .bootstrap(bootstrap.to_owned())
-        .transactional_id(setup.transactional_id)
+        .transactional_id(transactional_id)
         .build()
         .await
         .unwrap();

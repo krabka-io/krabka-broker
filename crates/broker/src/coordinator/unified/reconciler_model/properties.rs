@@ -26,20 +26,20 @@ impl Model for ReconModel {
     type Action = ReconAction;
     type State = ReconState;
 
-    krabka_macros::reconciliation_next_state! {
+    krabka_broker_macros::reconciliation_next_state! {
         fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State>
         [action = ReconAction, lookup = member, rebuild = rebuild_group, check = assert_epoch_monotonic, project = project]
         { setup {} actions {} project {  } }
     }
 
-    krabka_macros::reconciliation_actions! {
+    krabka_broker_macros::reconciliation_actions! {
         fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>)
         [action = ReconAction, lookup = member, member = m]
         {}
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { ReconState;
+        krabka_broker_macros::model_properties! { ReconState;
         // HEADLINE: no two members ever simultaneously own the same partition.
         always "no_double_ownership" => |s| {
             exclusive_ownership(&s.client_owned)

@@ -17,7 +17,7 @@ use {
 
 /// TOML shape of `[sasl_plain]`. Maps to
 /// [`crate::BrokerConfig::plain_credentials`].
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::config_table(strict)]
 #[derive(Eq)]
 pub struct FileSaslPlainConfig {
     /// Filesystem path to the SASL/PLAIN credential file: one

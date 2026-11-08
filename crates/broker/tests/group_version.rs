@@ -33,6 +33,7 @@ fn heartbeat(group: &str) -> ConsumerGroupHeartbeatRequest {
     }
 }
 
+#[derive(Default)]
 struct GroupFeatureGate {
     broker: Option<support::InProcess>,
     downgrade: Option<UpdateFeaturesResponse>,
@@ -40,12 +41,8 @@ struct GroupFeatureGate {
 }
 #[rstest::fixture]
 fn gate() -> GroupFeatureGate {
-    // Start this scenario with fresh inputs and observations.
-
     GroupFeatureGate {
-        broker: None,
-        downgrade: None,
-        heartbeat: None,
+        ..GroupFeatureGate::default()
     }
 }
 #[rstest_bdd_macros::given("a freshly bootstrapped broker finalizing group version 1")]

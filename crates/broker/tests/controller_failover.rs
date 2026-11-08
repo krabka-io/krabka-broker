@@ -21,10 +21,7 @@ use {
         client::{connect_client, send_topic_creation},
         poll::within,
         shutdown_cluster, start_n_node_customized_with_retry,
-        topics::{
-            CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor,
-            configured_topic_request_from,
-        },
+        topics::configured_topic_request,
         wait_for_all_brokers_registered,
     },
     assert2::assert,
@@ -147,12 +144,11 @@ async fn gracefully_replace_controller(
                 loop {
                     let response = send_topic_creation(
                         &client,
-                        configured_topic_request_from(CreateTopicSetup {
-                            topic: &topic,
-                            num_partitions: TopicPartitionCount(1),
-                            replication_factor: TopicReplicationFactor(2),
-                            ..Default::default()
-                        }),
+                        configured_topic_request()
+                            .topic(&topic)
+                            .num_partitions(1)
+                            .replication_factor(2)
+                            .call(),
                     )
                     .await;
                     if response.topics[0].error_code == 0 {

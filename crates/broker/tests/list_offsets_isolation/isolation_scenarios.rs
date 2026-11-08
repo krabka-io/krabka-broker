@@ -14,6 +14,7 @@ use {
     rstest_bdd_macros::{given, then, when},
     std::sync::Arc,
 };
+#[derive(Default)]
 pub struct Isolation {
     process: Option<support::InProcess>,
     topic: String,
@@ -26,17 +27,8 @@ pub struct Isolation {
 }
 #[fixture]
 pub fn isolation() -> Isolation {
-    // Start this scenario with fresh inputs and observations.
-
     Isolation {
-        process: None,
-        topic: String::new(),
-        plain: None,
-        producer: None,
-        transaction: None,
-        current: None,
-        hold_returns: Vec::new(),
-        resolved_queries: Vec::new(),
+        ..Isolation::default()
     }
 }
 #[given("a standalone broker is running for isolation bound queries")]

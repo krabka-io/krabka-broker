@@ -778,8 +778,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn refresh() -> SubscriptionRefresh {
-        // Start this scenario with fresh inputs and observations.
-        SubscriptionRefresh::default()
+        SubscriptionRefresh {
+            ..SubscriptionRefresh::default()
+        }
     }
     #[given(
         "member m1 subscribes to t whose recorded partition count is {recorded} and current partition count is {current}"

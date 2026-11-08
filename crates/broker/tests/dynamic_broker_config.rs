@@ -293,8 +293,6 @@ impl DynamicBroker {
 }
 #[rstest::fixture]
 fn dynamic() -> DynamicBroker {
-    // Start this scenario with fresh inputs and observations.
-
     DynamicBroker {
         broker: None,
         directory: None,

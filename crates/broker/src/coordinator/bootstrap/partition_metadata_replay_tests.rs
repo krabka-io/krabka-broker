@@ -74,9 +74,9 @@ struct PartitionMetadataLoad {
 }
 #[rstest::fixture]
 fn metadata_load() -> PartitionMetadataLoad {
-    // Start this scenario with fresh inputs and observations.
-
-    PartitionMetadataLoad::default()
+    PartitionMetadataLoad {
+        ..PartitionMetadataLoad::default()
+    }
 }
 #[given("the persisted consumer partition metadata log contains {records}")]
 fn persisted_partition_metadata(metadata_load: &mut PartitionMetadataLoad, records: String) {

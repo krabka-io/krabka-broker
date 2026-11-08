@@ -52,6 +52,7 @@ async fn run_krabka_format_with_features(
     assert!(code == 0, "krabka-format exited {code}");
 }
 
+#[derive(Default)]
 struct FormattedFeatures {
     directory: Option<tempfile::TempDir>,
     config: Option<BrokerConfig>,
@@ -62,15 +63,8 @@ struct FormattedFeatures {
 }
 #[rstest::fixture]
 fn formatted() -> FormattedFeatures {
-    // Start this scenario with fresh inputs and observations.
-
     FormattedFeatures {
-        directory: None,
-        config: None,
-        data_listeners: Vec::new(),
-        controller_listeners: Vec::new(),
-        broker: None,
-        response: None,
+        ..FormattedFeatures::default()
     }
 }
 #[rstest_bdd_macros::given(

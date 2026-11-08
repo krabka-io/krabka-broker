@@ -71,16 +71,6 @@ pub(super) struct SeededCopySetup {
     pub(super) transaction_index: TransactionIndex,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct StampedMetadataSetup {
-    #[default(Uuid::from_u128(52))]
-    pub(super) segment_id: Uuid,
-    #[default(ManifestSeq(0))]
-    pub(super) sequence: ManifestSeq,
-    #[default(ChainHead::GENESIS)]
-    pub(super) previous_head: ChainHead,
-}
-
 impl SeededCopySetup {
     pub(super) fn without_transaction_index() -> Self {
         Self {
@@ -168,16 +158,6 @@ pub(super) fn stamped_metadata(
     #[builder(into, default = ManifestSeq (0))] sequence: ManifestSeq,
     #[builder(into, default = ChainHead :: GENESIS)] previous_head: ChainHead,
 ) -> RemoteLogSegmentMetadata {
-    let setup = StampedMetadataSetup {
-        segment_id,
-        sequence,
-        previous_head,
-    };
-    let StampedMetadataSetup {
-        segment_id,
-        sequence,
-        previous_head,
-    } = setup;
     sample_metadata(segment_id).with_custom_metadata(
         WormChainRecord::request(ChainStamp {
             epoch_id: worm_epoch(),

@@ -66,7 +66,7 @@ use {
 /// The `offset` of a partition row that placed no marker.
 const NO_OFFSET: i64 = -1;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_write_barrier_markers",
     api = "WriteBarrierMarkers",
     level = "debug"
@@ -275,7 +275,6 @@ mod tests {
             codes,
             coordinator::unified::persistence::MAX_STRING_BYTES,
             partition_registry::PartitionRegistry,
-            test_support::StandalonePartitionSetup,
         },
     };
 
@@ -310,7 +309,7 @@ mod tests {
         leader_epoch: i32,
     ) -> PartitionRegistry {
         let registry = PartitionRegistry::new();
-        open_partition(&registry, dir, StandalonePartitionSetup::default());
+        open_partition(&registry, dir).call();
         let partition = registry
             .get("orders", PartitionIndex(0))
             .expect("the partition is open");

@@ -106,7 +106,7 @@ const KIP_1251_TOPIC_PARTITIONS: i32 = 3;
 async fn create_topic(broker: &Broker) { create_topic_with_partitions(broker, 1).await; }
 
 async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(admin, address, ctx);
         user ["admin"];
         client ["group-validation-admin"];
@@ -355,7 +355,7 @@ struct DenyOneTopic;
 
 const DENIED_TOPIC: &str = "denied-topic";
 
-krabka_macros::test_authorizer!(DenyOneTopic, req; {
+krabka_broker_macros::test_authorizer!(DenyOneTopic, req; {
     if req.resource_type == ResourceType::Topic && req.resource_name == DENIED_TOPIC {
         AuthorizationResult::Deny
     } else {

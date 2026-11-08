@@ -10,7 +10,7 @@ use {
         support::{
             configs::{legacy_config, legacy_request, legacy_resource},
             discovery::named_topic_metadata,
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{batch_from_records, value_record},
         },
     },
@@ -27,6 +27,7 @@ use {
     tokio::task,
 };
 
+#[derive(Default)]
 struct TopicSettings {
     name: String,
     altered: Option<AlterConfigsResponse>,
@@ -38,15 +39,8 @@ struct TopicSettings {
 
 #[fixture]
 fn settings() -> TopicSettings {
-    // Start this scenario with fresh inputs and observations.
-
     TopicSettings {
-        name: String::new(),
-        altered: None,
-        topic_id: None,
-        batch: None,
-        produced: None,
-        acknowledgements: String::new(),
+        ..TopicSettings::default()
     }
 }
 
@@ -160,20 +154,23 @@ async fn produce_under_minimum_isr(
     settings: &mut TopicSettings,
     mode: String,
 ) {
-    let setup = match mode.as_str() {
-        "all" => SinglePartitionProduceSetup::replicated(),
-        "leader" => SinglePartitionProduceSetup::default(),
+    let acknowledgements = match mode.as_str() {
+        "all" => ProduceAcknowledgements::AllReplicas,
+        "leader" => ProduceAcknowledgements::Leader,
         other => panic!("unknown acknowledgement mode {other}"),
     };
     let batch = settings.batch.as_ref().expect("a prepared record").clone();
     settings.produced = Some(
         admin
             .client()
-            .send(batch_request(batch, SinglePartitionProduceSetup {
-                topic: settings.name.clone(),
-                topic_id: settings.topic_id.expect("the topic id was resolved"),
-                ..setup
-            }))
+            .send(
+                single_partition_produce()
+                    .records(batch)
+                    .topic(settings.name.clone())
+                    .topic_id(settings.topic_id.expect("the topic id was resolved"))
+                    .acknowledgements(acknowledgements)
+                    .call(),
+            )
             .await
             .expect("Produce with min.insync.replicas"),
     );

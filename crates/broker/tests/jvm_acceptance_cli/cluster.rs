@@ -13,6 +13,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct ClusterDiscovery {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -22,13 +23,8 @@ struct ClusterDiscovery {
 
 #[fixture]
 fn cluster() -> ClusterDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     ClusterDiscovery {
-        broker: None,
-        directory: None,
-        expected_id: String::new(),
-        stdout: String::new(),
+        ..ClusterDiscovery::default()
     }
 }
 

@@ -103,27 +103,6 @@ fn expected_metadata() -> serde_json::Value {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct EventTimeMillis(i64);
 
-#[derive(krabka_macros::FieldDefaults)]
-struct UnsignedPrivilegeSetup<'a> {
-    #[default(AuditOutcome::Success)]
-    outcome: AuditOutcome,
-    #[default(PrivilegedPhase::Consumed)]
-    phase: PrivilegedPhase,
-    #[default("unclean_elect_leaders")]
-    action: &'a str,
-    #[default("orders-3")]
-    target: &'a str,
-    #[default("bg-7")]
-    proposal_id: &'a str,
-    #[default(AuditPrincipal { name: "User:alice".into(), auth_method: "MTls".into() })]
-    principal: AuditPrincipal,
-    counterparties: Vec<AuditPrincipal>,
-    #[default(AuditEndpoint { ip: "10.0.0.4".into(), port: 9092 })]
-    source: AuditEndpoint,
-    reason: &'a str,
-    time_ms: EventTimeMillis,
-}
-
 #[bon::builder]
 fn unsigned_privilege(
     #[builder(default = AuditOutcome :: Success)] outcome: AuditOutcome,
@@ -139,30 +118,6 @@ fn unsigned_privilege(
     #[builder(default)] reason: &'_ str,
     #[builder(into, default)] time_ms: EventTimeMillis,
 ) -> AuditEvent {
-    let setup = UnsignedPrivilegeSetup {
-        outcome,
-        phase,
-        action,
-        target,
-        proposal_id,
-        principal,
-        counterparties,
-        source,
-        reason,
-        time_ms,
-    };
-    let UnsignedPrivilegeSetup {
-        outcome,
-        phase,
-        action,
-        target,
-        proposal_id,
-        principal,
-        counterparties,
-        source,
-        reason,
-        time_ms,
-    } = setup;
     AuditEvent::PrivilegedAction {
         outcome,
         phase,

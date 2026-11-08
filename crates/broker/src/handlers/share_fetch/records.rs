@@ -738,7 +738,7 @@ mod tests {
             },
             metrics::BrokerMetrics,
             remote_reader::test_support::{copy_log_to_reader, tp},
-            test_support::{KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch},
+            test_support::{UnixMillis, keyed_records_batch},
         },
         assert2::assert,
         krabka_log::{DeliveryPolicy, LogConfig},
@@ -1065,10 +1065,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a log root");
         let remote_dir = tempfile::tempdir().expect("a remote root");
         let clock: Arc<dyn WallClock> = Arc::new(FixedWallClock::new(wall_at(NOW_MS)));
-        let batch = keyed_records_batch(KeyedBatchSetup {
-            records: KeyedRecordCount(2),
-            ..Default::default()
-        });
+        let batch = keyed_records_batch().records(2).call();
         let partition = partition_with_batches()
             .dir(&dir)
             .clock(&clock)

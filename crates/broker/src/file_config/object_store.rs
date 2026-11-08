@@ -31,7 +31,7 @@ use {krabka_units::Time, schemars::JsonSchema, serde::Deserialize};
 /// three `AWS_*` key variables, so half a key in the table is refused rather
 /// than completed from the environment. The shared `~/.aws` config and
 /// credentials files are not read.
-#[krabka_macros::human_units]
+#[krabka_broker_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageS3Config {
@@ -116,7 +116,7 @@ pub struct FileRemoteStorageS3Config {
 /// Workload Identity / Application Default Credentials (keyless) — the
 /// primary production path.
 #[krabka_macros::gcs_fields(file)]
-#[krabka_macros::human_units]
+#[krabka_broker_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageGcsConfig {

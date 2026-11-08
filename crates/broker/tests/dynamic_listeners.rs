@@ -217,18 +217,8 @@ struct ListenerChange {
 
 #[fixture]
 fn listeners() -> ListenerChange {
-    // Start this scenario with fresh inputs and observations.
-
     ListenerChange {
-        broker: None,
-        directory: None,
-        restarted: None,
-        reservation: None,
-        added_address: None,
-        held: None,
-        alteration: None,
-        handshake: None,
-        remaining_names: String::new(),
+        ..ListenerChange::default()
     }
 }
 

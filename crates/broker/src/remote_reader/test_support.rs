@@ -40,7 +40,7 @@ pub fn tp() -> TopicIdPartition { TopicIdPartition::new(Uuid::from_u128(1), "ord
 use crate::{
     remote_log_manager::{ProducerSnapshotExport, export_epoch_map, export_segment_data},
     remote_reader::{ReaderPool, RemoteReaderLimits},
-    test_support::{KeyedBatchSetup, KeyedRecordCount, keyed_records_batch as batch_of},
+    test_support::keyed_records_batch as batch_of,
 };
 
 krabka_macros::timestamped_batch!(timestamped_batch_at);
@@ -608,10 +608,7 @@ fn populated_log(log_dir: &Path, segment_bytes: u32) -> Log {
     })
     .unwrap();
     for _ in 0..12 {
-        let mut b = batch_of(KeyedBatchSetup {
-            records: KeyedRecordCount(2),
-            ..Default::default()
-        });
+        let mut b = batch_of().records(2).call();
         log.append(&mut b).unwrap();
     }
     log.sync().unwrap();

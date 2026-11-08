@@ -276,6 +276,7 @@ enum StreamsRuntime {
     Classic,
     Streams,
 }
+#[derive(Default)]
 struct StreamsApplication {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -291,20 +292,8 @@ struct StreamsApplication {
 }
 #[fixture]
 fn application() -> StreamsApplication {
-    // Start this scenario with fresh inputs and observations.
-
     StreamsApplication {
-        broker: None,
-        directory: None,
-        classes: None,
-        runtime: None,
-        input: String::new(),
-        output: String::new(),
-        application_id: String::new(),
-        run: None,
-        sink: None,
-        topics: Vec::new(),
-        configs: BTreeMap::new(),
+        ..StreamsApplication::default()
     }
 }
 #[given("a broker is ready for the compiled windowed count Streams application")]

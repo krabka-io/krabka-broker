@@ -25,8 +25,6 @@ struct CoordinatorDecisions {
 
 #[fixture]
 fn coordinator() -> CoordinatorDecisions {
-    // Start this scenario with fresh inputs and observations.
-
     CoordinatorDecisions {
         idle: None,
         ..CoordinatorDecisions::default()

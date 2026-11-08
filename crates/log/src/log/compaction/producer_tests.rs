@@ -17,7 +17,8 @@ use {
             set_segment_size, tiny_segments,
         },
     },
-    krabka_protocol::records::RecordBatch,
+    bytes::Bytes,
+    krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::prelude::{Time, mebibytes},
     std::{iter, ops::Range},
     tempfile::tempdir,
@@ -25,7 +26,30 @@ use {
 
 krabka_macros::compacted_batch!(Kept);
 
-krabka_macros::compaction_record_fixture!(record);
+/// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
+/// base_sequence)`, or `None` for a client with no idempotence.
+fn record(
+    producer: Option<(i64, i16, i32)>,
+    transactional: bool,
+    (key, value): (&str, &str),
+    timestamp: i64,
+) -> RecordBatch {
+    let (producer_id, producer_epoch, base_sequence) = producer.unwrap_or((-1, -1, -1));
+    RecordBatch {
+        attributes: Attributes::default().with_transactional(transactional),
+        base_timestamp: timestamp,
+        max_timestamp: timestamp,
+        producer_id,
+        producer_epoch,
+        base_sequence,
+        records: vec![Record {
+            key: Some(Bytes::copy_from_slice(key.as_bytes())),
+            value: Some(Bytes::copy_from_slice(value.as_bytes())),
+            ..Default::default()
+        }],
+        ..RecordBatch::default()
+    }
+}
 
 /// Two producer writes, then three ordinary writes that supersede their keys.
 fn overwritten_producer_records(epoch: i16, sequence: i32) -> Vec<RecordBatch> {
