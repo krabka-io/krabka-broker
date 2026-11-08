@@ -294,21 +294,34 @@ async fn serve_on_a_taken_port_names_the_health_listener() {
 }
 
 // The `broker_state` gauge exports Kafka's `BrokerState` ordinal, which an
-// operator's dashboards and alerts read, so each startup phase pins its number.
+// operator's dashboards and alerts read, so each startup phase pins its state
+// and that state's number.
 #[rstest::rstest]
-#[case::recovering(Phase::Nothing, false, 2)]
-#[case::starting(Phase::LogDirsRecovered, false, 1)]
-#[case::running(Phase::ListenersBound, false, 3)]
-#[case::shutting_down_while_running(Phase::ListenersBound, true, 6)]
-#[case::shutting_down_while_recovering(Phase::Nothing, true, 6)]
+#[case::recovering(Phase::Nothing, false, BrokerState::Recovery, 2)]
+#[case::starting(Phase::LogDirsRecovered, false, BrokerState::Starting, 1)]
+#[case::running(Phase::ListenersBound, false, BrokerState::Running, 3)]
+#[case::shutting_down_while_running(
+    Phase::ListenersBound,
+    true,
+    BrokerState::PendingControlledShutdown,
+    6
+)]
+#[case::shutting_down_while_recovering(
+    Phase::Nothing,
+    true,
+    BrokerState::PendingControlledShutdown,
+    6
+)]
 fn broker_state_is_kafkas_ordinal_for_the_phase(
     #[case] phase: Phase,
     #[case] shutting_down: bool,
+    #[case] expected: BrokerState,
     #[case] ordinal: i64,
 ) {
     let state = state_at(phase, 100);
     if shutting_down {
         state.mark_shutting_down();
     }
-    assert!(state.broker_state() == ordinal);
+    assert!(state.broker_state() == expected);
+    assert!(expected.ordinal() == ordinal);
 }

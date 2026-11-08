@@ -318,6 +318,6 @@ pub use network::dispatch::response_framing;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use replicator::hot_path as replicate_hot_path;
 pub use {
-    health::{HealthState, NotReady},
+    health::{BrokerState, HealthState, NotReady},
     krabka_raft::NodeId,
 };

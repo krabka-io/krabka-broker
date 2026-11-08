@@ -486,7 +486,7 @@ pub(super) fn spawn_broker_gauge_updater(
 
             // Broker lifecycle state (#390)
             if let Some(h) = &health {
-                metrics.broker_state.set(h.broker_state());
+                metrics.broker_state.set(h.broker_state().ordinal());
             }
 
             let ignored_static_voters =
