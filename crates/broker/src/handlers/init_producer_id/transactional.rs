@@ -13,6 +13,7 @@ use {
     crate::{
         codes,
         error::BrokerError,
+        time_util,
         txn::{
             coordinator::{
                 TxnCoordinator,
@@ -24,7 +25,6 @@ use {
             },
             marker::MarkerType,
             state::{TxnEntry, TxnState},
-            util::now_millis,
             version::TxnVersion,
         },
     },
@@ -79,7 +79,7 @@ pub(super) async fn handle_transactional(
     coord: &Arc<TxnCoordinator>,
     init: TransactionalInit<'_>,
 ) -> Result<InitProducerIdResponse, BrokerError> {
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let Some(existing) = coord.get(init.tid) else {
         return allocate_fresh(coord, &init, now_ms).await;
     };
@@ -343,7 +343,7 @@ async fn complete_fenced_abort(
         TxnState::CompleteAbort,
         identity,
         request_pid,
-        now_millis(),
+        time_util::now_ms(),
     );
     // The entry stays locked until the completion is written.
     let written = coord
@@ -1979,7 +1979,7 @@ mod tests {
             &mut completed,
             TxnState::CompleteAbort,
             identity,
-            now_millis(),
+            time_util::now_ms(),
         );
         seed(&coordinator, completed).await;
 

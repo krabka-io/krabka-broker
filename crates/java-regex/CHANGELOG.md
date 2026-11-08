@@ -6,6 +6,15 @@ release that contains `krabka-java-regex`.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `JavaPattern::replace(input, replacement, all)` is split into
+  `replace_all(input, replacement)`, Java's `String.replaceAll`, and
+  `replace_first(input, replacement)`, Java's `String.replaceFirst`. Each
+  returns what `replace` returned with `all` set to `true` or `false`.
+  `replace` is removed, which breaks the crate's API, so the release that
+  carries it is at least a minor version, 1.2.0.
+
 ### Fixed
 
 - A backreference to a group the pattern does not have, such as `(a)\2`,

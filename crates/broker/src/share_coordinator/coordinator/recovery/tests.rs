@@ -19,6 +19,7 @@ use {
                     share_write,
                 },
             },
+            key::ShareKeyRef,
             partitioner::partition_for_share_key,
             persistence::{StateBatch, encode_state_key},
         },
@@ -62,7 +63,12 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         lead_all(&coordinator).await;
         let topic_id = uuid::Uuid::from_bytes([7; 16]);
         let image = image_with_topic(topic_id, 1);
-        let mut higher = Box::pin(coordinator.initialize(&image, "g", topic_id, 0, 2, Offset(10)));
+        let mut higher = Box::pin(coordinator.initialize(
+            &image,
+            ShareKeyRef::new("g", topic_id, 0),
+            2,
+            Offset(10),
+        ));
         tokio::select! {
             biased;
             result = &mut higher => panic!("paused writer completed initialize: {result:?}"),
@@ -109,13 +115,13 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         assert!(part.writer_tx.capacity() == accepted_commands);
         assert!(
             coordinator
-                .initialize(&image, "g", topic_id, 0, 1, Offset(20))
+                .initialize(&image, ShareKeyRef::new("g", topic_id, 0), 1, Offset(20))
                 .await
                 == unavailable
         );
         assert!(
             coordinator
-                .read_summary_checked(&image, "g", topic_id, 0)
+                .read_summary_checked(&image, ShareKeyRef::new("g", topic_id, 0))
                 .await
                 .err()
                 == unavailable.err()
@@ -129,7 +135,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         assert!(coordinator.load_status(PartitionIndex(0)).await == Some(LoadStatus::Pending));
         assert!(
             coordinator
-                .initialize(&image, "g", topic_id, 0, 1, Offset(20))
+                .initialize(&image, ShareKeyRef::new("g", topic_id, 0), 1, Offset(20))
                 .await
                 == unavailable
         );
@@ -146,7 +152,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         coordinator.reload_all_partitions_for_test().await;
         assert!(
             coordinator
-                .read_summary_checked(&image, "g", topic_id, 0)
+                .read_summary_checked(&image, ShareKeyRef::new("g", topic_id, 0))
                 .await
                 == Ok(Some(ShareStateSummary {
                     state_epoch: 2,
@@ -262,7 +268,7 @@ async fn recover_honors_nondefault_read_bound() {
     let topic_image = image_with_topic(topic_id, 1);
     assert!(
         bounded
-            .read_summary_checked(&topic_image, "bounded", topic_id, 0)
+            .read_summary_checked(&topic_image, ShareKeyRef::new("bounded", topic_id, 0))
             .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 3,
@@ -283,7 +289,7 @@ async fn recover_honors_nondefault_read_bound() {
     unbounded.recover(&image).await.unwrap();
     assert!(
         unbounded
-            .read_summary_checked(&topic_image, "bounded", topic_id, 0)
+            .read_summary_checked(&topic_image, ShareKeyRef::new("bounded", topic_id, 0))
             .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 3,
@@ -310,19 +316,22 @@ async fn write_persists_and_recovers() {
         );
         lead_all(&coord).await;
         coord
-            .initialize(&image_with_topic(tid, 1), "g", tid, 0, 2, Offset(0))
+            .initialize(
+                &image_with_topic(tid, 1),
+                ShareKeyRef::new("g", tid, 0),
+                2,
+                Offset(0),
+            )
             .await
             .unwrap();
         coord
-            .read(&image_with_topic(tid, 1), "g", tid, 0, 3)
+            .read(&image_with_topic(tid, 1), ShareKeyRef::new("g", tid, 0), 3)
             .await
             .unwrap();
         coord
             .write(
                 &image_with_topic(tid, 1),
-                "g",
-                tid,
-                0,
+                ShareKeyRef::new("g", tid, 0),
                 share_write((2, 3), (20, 4), vec![batch(Offset(20)..=Offset(29))]),
             )
             .await
@@ -341,7 +350,7 @@ async fn write_persists_and_recovers() {
     recovered.reload_all_partitions_for_test().await;
 
     let st = recovered
-        .state_for_test("g", tid, 0)
+        .state_for_test(ShareKeyRef::new("g", tid, 0))
         .await
         .expect("recovered");
     check!(st.state_epoch == 2);
@@ -381,11 +390,18 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
             ShareCoordinator::new(krabka_audit::NodeId(1), Arc::clone(&reg), config.clone());
         lead_all(&coord).await;
         coord
-            .initialize(&image_with_topic(tid, 1), "g", tid, 0, 2, Offset(7))
+            .initialize(
+                &image_with_topic(tid, 1),
+                ShareKeyRef::new("g", tid, 0),
+                2,
+                Offset(7),
+            )
             .await
             .unwrap();
 
-        let state_partition = coord.state_partition_for("g", &tid, 0).unwrap();
+        let state_partition = coord
+            .state_partition_for(ShareKeyRef::new("g", tid, 0))
+            .unwrap();
         let stored: Vec<CompressionType> = reg
             .get(bootstrap::TOPIC, state_partition)
             .expect("state partition open")
@@ -399,7 +415,7 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
         let recovered = ShareCoordinator::new(krabka_audit::NodeId(1), reg, config);
         recovered.reload_all_partitions_for_test().await;
         let summary = recovered
-            .read_summary_checked(&image_with_topic(tid, 1), "g", tid, 0)
+            .read_summary_checked(&image_with_topic(tid, 1), ShareKeyRef::new("g", tid, 0))
             .await;
 
         actual.push((codec, stored, summary));
@@ -437,7 +453,9 @@ async fn led_state_partition(log_dir: &Path, topic_id: uuid::Uuid) -> LedStatePa
         registry: reg,
     } = coordinator(log_dir);
     lead_all(&coord).await;
-    let state_partition = coord.state_partition_for("g", &topic_id, 0).unwrap();
+    let state_partition = coord
+        .state_partition_for(ShareKeyRef::new("g", topic_id, 0))
+        .unwrap();
     let part = reg
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
@@ -486,7 +504,10 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
 
     coord.reload_all_partitions_for_test().await;
 
-    let st = coord.state_for_test("g", tid, 0).await.expect("recovered");
+    let st = coord
+        .state_for_test(ShareKeyRef::new("g", tid, 0))
+        .await
+        .expect("recovered");
     // Batch B is the final snapshot — proves the inter-batch cursor advanced
     // past batch A (base_offset + last_offset_delta + 1 == 2).
     check!(st.leader_epoch == 9);
@@ -516,7 +537,7 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
     coord.reload_all_partitions_for_test().await;
 
     let st = coord
-        .state_for_test("g", topic_id, 0)
+        .state_for_test(ShareKeyRef::new("g", topic_id, 0))
         .await
         .expect("recovered");
     check!(st.leader_epoch == 3);
@@ -634,7 +655,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         ShareCoordinatorConfig::default(),
     ));
     let state_partition = coordinator_a
-        .state_partition_for("g", &topic_id, 0)
+        .state_partition_for(ShareKeyRef::new("g", topic_id, 0))
         .unwrap();
     open_state_partition(&registry, dir.path(), state_partition.get());
     let data_image = image_with_topic(topic_id, 1);
@@ -646,7 +667,12 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         .finished()
         .await;
     coordinator_a
-        .initialize(&data_image, "g", topic_id, 0, 1, Offset(10))
+        .initialize(
+            &data_image,
+            ShareKeyRef::new("g", topic_id, 0),
+            1,
+            Offset(10),
+        )
         .await
         .unwrap();
 
@@ -783,9 +809,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
                 let written = on(broker)
                     .write(
                         &data_image,
-                        "g",
-                        topic_id,
-                        0,
+                        ShareKeyRef::new("g", topic_id, 0),
                         share_write((1, 0), (start, 0), vec![batch(
                             Offset(start)..=Offset(start + 9),
                         )]),
@@ -799,7 +823,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
                 expected,
             } => {
                 let read = on(broker)
-                    .read(&data_image, "g", topic_id, 0, 0)
+                    .read(&data_image, ShareKeyRef::new("g", topic_id, 0), 0)
                     .await
                     .map(|st| {
                         Some(ReadState {
@@ -829,7 +853,9 @@ fn coordinator_for_topic(
         Arc::clone(registry),
         ShareCoordinatorConfig::default(),
     ));
-    let state_partition = coordinator.state_partition_for("g", &topic_id, 0).unwrap();
+    let state_partition = coordinator
+        .state_partition_for(ShareKeyRef::new("g", topic_id, 0))
+        .unwrap();
     CoordinatorForTopic {
         coordinator,
         state_partition,
@@ -846,7 +872,10 @@ async fn check_empty_active_partition(
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
     check!(
         coordinator
-            .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+            .read_summary_checked(
+                &image_with_topic(topic_id, 1),
+                ShareKeyRef::new("g", topic_id, 0)
+            )
             .await
             == Ok(None)
     );
@@ -894,7 +923,10 @@ async fn led_partition_stays_pending_until_its_log_serves_the_image_term() {
         );
         check!(
             coordinator
-                .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+                .read_summary_checked(
+                    &image_with_topic(topic_id, 1),
+                    ShareKeyRef::new("g", topic_id, 0)
+                )
                 .await
                 == Err(ShareStateError::Operation {
                     code: codes::COORDINATOR_LOAD_IN_PROGRESS,
@@ -949,7 +981,10 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
     check!(
         coordinator
-            .read_summary_checked(&image_with_topic(topic_id, 1), "g", topic_id, 0)
+            .read_summary_checked(
+                &image_with_topic(topic_id, 1),
+                ShareKeyRef::new("g", topic_id, 0)
+            )
             .await
             == Err(ShareStateError::Operation {
                 code: codes::NOT_COORDINATOR,

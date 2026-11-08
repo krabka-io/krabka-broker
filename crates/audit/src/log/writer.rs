@@ -20,9 +20,10 @@ use {
         spool::{PendingLosses, Spool},
         stats::AuditStats,
     },
+    krabka_log::epoch_ms,
     krabka_units::prelude::{Time, TimeExt as _},
     qubit_clock::Timer,
-    std::sync::Arc,
+    std::{sync::Arc, time::SystemTime},
     tracing::field::Empty,
 };
 
@@ -309,7 +310,12 @@ impl AuditWriter {
         let seq_high = Seq(self.chain.next_seq().saturating_sub(1));
         tracing::Span::current().record("seq_high", seq_high.0);
         let head = self.chain.head();
-        let cp = Checkpoint::signed(signer.as_ref(), seq_high, &head, EpochMs(now_ms()));
+        let cp = Checkpoint::signed(
+            signer.as_ref(),
+            seq_high,
+            &head,
+            EpochMs(epoch_ms(SystemTime::now())),
+        );
         let record = cp.to_record();
         match self.write_or_spool(&record, false).await {
             Ok(()) => self.since_checkpoint = 0,
@@ -359,14 +365,6 @@ krabka_macros::timer_hooks! {
     /// writer must stop for the same reason [`arm`] returning `None` makes it stop.
     fired("the armed audit timer failed; stopping the writer");
 }
-
-krabka_macros::epoch_millis_fn!(
-/// Epoch-millisecond clock for the checkpoint timestamps.
-// cargo-mutants: wall-clock read; no deterministic assertion.
-#[cfg_attr(test, mutants::skip)]
-fn now_ms,
-i64::MAX
-);
 
 #[cfg(test)]
 mod tests {

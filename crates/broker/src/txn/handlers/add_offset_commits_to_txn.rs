@@ -15,10 +15,11 @@ use {
         coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
         error::BrokerError,
         handlers::{ErrorCodeResponse as _, RequestContext, acl_denied, group_read_denied},
+        time_util,
         txn::{
             coordinator::TxnCoordinator,
             state::{TopicPartition, TxnEntry, TxnState},
-            util::{ProducerIdentity, now_millis, producer_fenced_wire_code},
+            util::{ProducerIdentity, producer_fenced_wire_code},
             version::{TxnVersion, resolve_txn_version},
         },
     },
@@ -196,7 +197,7 @@ async fn add_offsets_partition(
     // Stage on a clone. Until the record is durable, every other caller must
     // still see the entry as it was.
     let mut staged = entry.clone();
-    add_partition(&mut staged, offsets_partition, now_millis());
+    add_partition(&mut staged, offsets_partition, time_util::now_ms());
     // Kafka's `handleAddOffsetsToTxnRequest` passes `TV_0` whatever the
     // cluster's level: the request always comes from a client that does not
     // use `TV_2`.

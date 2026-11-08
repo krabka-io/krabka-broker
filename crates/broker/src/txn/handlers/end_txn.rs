@@ -30,10 +30,11 @@ use {
         broker::Broker,
         error::BrokerError,
         handlers::RequestContext,
+        time_util,
         txn::{
             coordinator::completion::apply_completion,
             decision::{CompletionDecision, CompletionExpectation, decide_end_txn_completion},
-            util::{ProducerIdentity, now_millis},
+            util::ProducerIdentity,
             version::{TxnVersion, resolve_txn_version},
         },
     },
@@ -236,7 +237,12 @@ pub async fn handle(
             // id is the entry's own, as in Kafka's `prepareComplete`, not the
             // staged identity the request names.
             let mut staged = entry.clone();
-            apply_completion(&mut staged, next_state, (new_pid, new_epoch), now_millis());
+            apply_completion(
+                &mut staged,
+                next_state,
+                (new_pid, new_epoch),
+                time_util::now_ms(),
+            );
             (staged, new_pid, new_epoch)
         }
         CompletionDecision::AlreadyComplete {

@@ -181,6 +181,18 @@ mod tests {
         tempfile::tempdir,
     };
 
+    #[yare::parameterized(
+        epoch = { UNIX_EPOCH, 0 },
+        millisecond_precision = {
+            UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+            1_700_000_000_123,
+        },
+        before_epoch_saturates_to_zero = { UNIX_EPOCH - Duration::from_millis(1), 0 },
+    )]
+    fn now_ms_reads_an_instant(instant: SystemTime, want: i64) {
+        check!(now_ms(instant) == want, "{instant:?}");
+    }
+
     /// A temporary directory and the segment files written into it.
     struct SegmentFiles {
         dir: tempfile::TempDir,

@@ -37,9 +37,9 @@ use {
             decode_response, dispatch_context, encode_request, peer, principal, request_context,
             start_broker_no_audit_with, start_transaction_grant_broker,
         },
+        time_util,
         txn::{
             state::{TopicPartition, TxnEntry, TxnState},
-            util::now_millis,
             version::resolve_txn_version,
         },
     },
@@ -117,7 +117,7 @@ pub(super) async fn seed_transaction(
     group_id: Option<&'_ str>,
 ) {
     let image = broker.controller.current_image();
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let mut entry = TxnEntry::new_empty(
         transactional_id.to_owned(),
         producer.id,

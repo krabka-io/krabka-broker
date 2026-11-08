@@ -29,6 +29,7 @@ use {
             },
         },
         error::BrokerError,
+        share_coordinator::key::ShareKeyRef,
     },
     krabka_protocol::records::RecordBatch,
 };
@@ -136,7 +137,7 @@ async fn delete_share_state(
         let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
         for partition in partitions {
             if let Err(error) = persister
-                .delete(&state.group_id, topic_uuid, partition)
+                .delete(ShareKeyRef::new(&state.group_id, topic_uuid, partition))
                 .await
             {
                 tracing::warn!(

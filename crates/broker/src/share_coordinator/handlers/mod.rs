@@ -88,6 +88,7 @@ pub mod test_support {
                         open_state_partition, share_write, state_batch,
                     },
                 },
+                key::ShareKeyRef,
                 persistence::StateBatch,
             },
             topic_creator::TopicCreator,
@@ -185,20 +186,27 @@ pub mod test_support {
         let image = image_with_topic(topic, partitions.0);
         coordinator.lead_all_partitions_for_test().await;
         coordinator
-            .initialize(&image, "share-group", topic, partition.0, 17, Offset(90))
+            .initialize(
+                &image,
+                ShareKeyRef::new("share-group", topic, partition.0),
+                17,
+                Offset(90),
+            )
             .await
             .expect("initialize state");
         if stored_data {
             coordinator
-                .read(&image, "share-group", topic, partition.0, 3)
+                .read(
+                    &image,
+                    ShareKeyRef::new("share-group", topic, partition.0),
+                    3,
+                )
                 .await
                 .expect("raise the stored leader epoch");
             coordinator
                 .write(
                     &image,
-                    "share-group",
-                    topic,
-                    partition.0,
+                    ShareKeyRef::new("share-group", topic, partition.0),
                     share_write((17, 3), (101, 9), vec![batch(Offset(101)..=Offset(105))]),
                 )
                 .await

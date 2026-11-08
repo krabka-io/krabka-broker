@@ -18,23 +18,21 @@ fn boundaries(meta: &TokenStream, signature: &Signature) -> Result<Boundaries, P
     let active: Ident = moxy::parse!({ meta })?;
     let parameters = &signature.params.inner.inputs;
     if !is_plain_async(signature)
-        || parameters.len() < 5
+        || parameters.len() < 3
         || !matches!(parameters.first(), Some(FnParam::Receiver(receiver)) if receiver.reference.is_some() && receiver.mutability.is_none())
     {
         return Err(ParseError::new(
             signature.span(),
-            "expected an async share-state method with a borrowed self receiver and four key parameters",
+            "expected an async share-state method with a borrowed self receiver, a metadata image and a share key",
         ));
     }
     parameter_ident(&parameters[1], "expected named metadata image")?;
-    let group = parameter_ident(&parameters[2], "expected named group id")?;
-    let topic = parameter_ident(&parameters[3], "expected named topic id")?;
-    let partition = parameter_ident(&parameters[4], "expected named partition id")?;
+    let key = parameter_ident(&parameters[2], "expected named share key")?;
     let result = Ident::new("result").with_span(Span::mixed_site());
     Ok(Boundaries {
         admission: moxy::template! {
             let {{ active }} = self
-                .active_for_key({{ group }}, &{{ topic }}, {{ partition }})
+                .active_for_key({{ key }})
                 .await
                 .map_err(ShareStateError::inactive)?;
             let {{ result }} =
@@ -69,37 +67,26 @@ mod tests {
 
     #[test]
     fn admission_precedes_the_native_operation_and_answer_follows_it() {
-        let signature = function_signature(&"pub(crate) async fn read(&self, image: &Image, group: &str, topic_id: Uuid, partition: i32) -> Result<Value, Error> {}".parse().unwrap()).unwrap();
+        let signature = function_signature(&"pub(crate) async fn read(&self, image: &Image, key: ShareKeyRef<'_>) -> Result<Value, Error> {}".parse().unwrap()).unwrap();
         let boundary = boundaries(&"active".parse().unwrap(), &signature).unwrap();
         assert!(
             compact(&boundary.admission)
-                .contains("self.active_for_key(group,&topic_id,partition).await.map_err(ShareStateError::inactive)?")
+                .contains("self.active_for_key(key).await.map_err(ShareStateError::inactive)?")
         );
         assert!(compact(&boundary.answer).contains("self.answer(active,result).await"));
         assert!(boundaries(&"active extra".parse().unwrap(), &signature).is_err());
     }
 
     #[yare::parameterized(
-        sync = { "fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        owned_receiver = {
-            "async fn read(self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
+        sync = { "fn read(&self, image: &Image, key: Key) {}" },
+        owned_receiver = { "async fn read(self, image: &Image, key: Key) {}" },
         missing_arguments = { "async fn read(&self, image: &Image) {}" },
-        unsafe_signature = {
-            "async unsafe fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
-        extern_signature = {
-            "async extern \"C\" fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
-        generic = {
-            "async fn read<T>(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
-        mutable_receiver = {
-            "async fn read(&mut self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
-        missing_image_binding = {
-            "async fn read(&self, _: &Image, group: &str, topic: Uuid, partition: i32) {}",
-        },
+        unsafe_signature = { "async unsafe fn read(&self, image: &Image, key: Key) {}" },
+        extern_signature = { "async extern \"C\" fn read(&self, image: &Image, key: Key) {}" },
+        generic = { "async fn read<T>(&self, image: &Image, key: Key) {}" },
+        mutable_receiver = { "async fn read(&mut self, image: &Image, key: Key) {}" },
+        missing_image_binding = { "async fn read(&self, _: &Image, key: Key) {}" },
+        missing_key_binding = { "async fn read(&self, image: &Image, _: Key) {}" },
     )]
     fn rejects_unsupported_operation_signatures(source: &str) {
         let signature = function_signature(&source.parse().unwrap()).unwrap();
@@ -108,10 +95,10 @@ mod tests {
 
     #[test]
     fn uses_caller_key_and_guard_names_without_exposing_private_result_bindings() {
-        let signature = function_signature(&"async fn erase(&self, view: &Image, group_key: &str, topic_key: Uuid, row: i32, extra: i16) -> Result<(), Error> {}".parse().unwrap()).unwrap();
+        let signature = function_signature(&"async fn erase(&self, view: &Image, row_key: Key, extra: i16) -> Result<(), Error> {}".parse().unwrap()).unwrap();
         let boundary = boundaries(&"term_guard".parse().unwrap(), &signature).unwrap();
         let admission = compact(&boundary.admission);
-        assert!(admission.contains("active_for_key(group_key,&topic_key,row)"));
+        assert!(admission.contains("active_for_key(row_key)"));
         assert!(admission.contains("letterm_guard="));
         assert!(compact(&boundary.answer).contains("self.answer(term_guard,result).await"));
     }

@@ -348,18 +348,6 @@ pub fn java_string_producer(input: TokenStream) -> Result<TokenStream, ParseErro
     })
 }
 
-/// Define an epoch-millisecond reader with the caller's attributes and overflow fallback.
-pub fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [signature, overflow]: [TokenStream; 2] = argument_array(input)?;
-    Ok(moxy::template! {
-        {{ signature }}() -> i64 {
-            use ::std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now().duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or({{ overflow }}))
-        }
-    })
-}
-
 /// Literal bytes captured from Kafka 4.3.1's principal serializer.
 /// Keep this oracle independent of the broker's principal encoder.
 pub fn jvm_principal_golden(input: TokenStream) -> Result<TokenStream, ParseError> {

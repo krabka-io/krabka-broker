@@ -20,10 +20,7 @@
 //! a duplicate or late sweep on a moved partition is safe.
 
 use {
-    crate::{
-        metadata_source::MetadataSource,
-        txn::{coordinator::TxnCoordinator, util::now_millis},
-    },
+    crate::{metadata_source::MetadataSource, time_util, txn::coordinator::TxnCoordinator},
     krabka_units::{Time, convert::TimeExt as _},
     std::sync::Arc,
     tokio_util::sync::CancellationToken,
@@ -67,7 +64,7 @@ pub(in crate::txn) async fn sweep_once(
         .await
         .finished()
         .await;
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let expired = coord
         .expire_transactional_ids(now_ms, expiration.millis_i64())
         .await;

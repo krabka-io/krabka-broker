@@ -22,6 +22,7 @@ use {
             bootstrap,
             config::ShareCoordinatorConfig,
             coordinator::{ShareStateError, ShareStateSummary, message::FENCED_STATE_EPOCH},
+            key::ShareKeyRef,
             persistence::{
                 KEY_SHARE_SNAPSHOT, ShareSnapshotValue, ShareUpdateValue, StateBatch,
                 parse_state_key,
@@ -93,7 +94,7 @@ pub async fn assert_recovered_epoch_is_fenced(
 ) {
     assert!(
         coordinator
-            .read_summary_checked(topic_image, "g", topic_id, 0)
+            .read_summary_checked(topic_image, ShareKeyRef::new("g", topic_id, 0))
             .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 2,
@@ -104,7 +105,12 @@ pub async fn assert_recovered_epoch_is_fenced(
     );
     assert!(
         coordinator
-            .initialize(topic_image, "g", topic_id, 0, 1, Offset(20))
+            .initialize(
+                topic_image,
+                ShareKeyRef::new("g", topic_id, 0),
+                1,
+                Offset(20)
+            )
             .await
             == Err(ShareStateError::Refused {
                 code: codes::FENCED_STATE_EPOCH,
@@ -196,7 +202,12 @@ pub(super) async fn initialize_led_group(
     lead_all(coordinator).await;
     let image = image_with_topic(topic, 1);
     coordinator
-        .initialize(&image, "g", topic, 0, epoch.0, offset)
+        .initialize(
+            &image,
+            ShareKeyRef::new("g", topic, 0),
+            epoch.0,
+            offset,
+        )
         .await
         .unwrap();
     image

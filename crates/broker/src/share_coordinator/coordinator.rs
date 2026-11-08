@@ -47,7 +47,7 @@
 use {
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    krabka_log::Offset,
+    krabka_log::{Offset, epoch_ms},
     krabka_metadata::MetadataImage,
     qubit_clock::WallClock,
     std::{
@@ -75,10 +75,13 @@ use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
-        bootstrap, config::ShareCoordinatorConfig, key::ShareKey,
-        partitioner::partition_for_share_key, persistence::StateBatch, state::SharePartitionState,
+        bootstrap,
+        config::ShareCoordinatorConfig,
+        key::{ShareKey, ShareKeyRef},
+        partitioner::partition_for_share_key,
+        persistence::StateBatch,
+        state::SharePartitionState,
     },
-    time_util::epoch_millis,
 };
 
 /// KIP-932 share-group state epoch.
@@ -370,7 +373,7 @@ impl ShareCoordinator {
     }
 
     /// The current time in milliseconds since the epoch.
-    fn now_ms(&self) -> i64 { epoch_millis(self.wall_clock.now()) }
+    fn now_ms(&self) -> i64 { epoch_ms(self.wall_clock.now()) }
 
     fn state_key_revision(&self, partition: PartitionIndex) -> u64 {
         self.key_revisions
@@ -523,10 +526,8 @@ impl ShareCoordinator {
 
     /// Removes every in-memory key that maps to `state_partition`.
     fn drop_partition_state(&self, state_partition: PartitionIndex) {
-        self.state.retain(|key, _| {
-            self.state_partition_for(&key.group, &key.topic_id, key.partition)
-                != Some(state_partition)
-        });
+        self.state
+            .retain(|key, _| self.state_partition_for(key.as_key_ref()) != Some(state_partition));
     }
 
     /// The load status of `state_partition`, or `None` when this broker does
@@ -557,12 +558,10 @@ impl ShareCoordinator {
     /// the errors of [`Self::active`].
     pub(super) async fn active_for_key(
         &self,
-        group: &str,
-        topic_id: &uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
     ) -> Result<Active<'_>, ShareErrorCode> {
         let state_partition = self
-            .state_partition_for(group, topic_id, partition)
+            .state_partition_for(key)
             .ok_or(COORDINATOR_NOT_AVAILABLE)?;
         self.active(state_partition).await
     }
@@ -690,16 +689,11 @@ impl ShareCoordinator {
     /// share key `(group, topic_id, partition)`, or `None` when the configured
     /// partition count is not positive.
     #[must_use]
-    pub(crate) fn state_partition_for(
-        &self,
-        group: &str,
-        topic_id: &uuid::Uuid,
-        partition: i32,
-    ) -> Option<PartitionIndex> {
+    pub(crate) fn state_partition_for(&self, key: ShareKeyRef<'_>) -> Option<PartitionIndex> {
         partition_for_share_key(
-            group,
-            topic_id,
-            partition,
+            key.group,
+            &key.topic_id,
+            key.partition,
             self.config.state_topic_num_partitions,
         )
         .map(PartitionIndex)

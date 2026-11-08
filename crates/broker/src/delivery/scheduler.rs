@@ -24,6 +24,7 @@ use {
         time_util,
     },
     krabka_ids::PartitionIndex,
+    krabka_log::epoch_ms,
     krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt as _},
     std::{
@@ -157,7 +158,7 @@ pub async fn run(
                 node_id,
             },
             SweepClock {
-                now_ms: time_util::epoch_millis(config.clock.now()),
+                now_ms: epoch_ms(config.clock.now()),
                 advance_all,
             },
             &mut heap,
@@ -168,7 +169,7 @@ pub async fn run(
         );
         advance_all = false;
 
-        let now_ms = time_util::epoch_millis(config.clock.now());
+        let now_ms = epoch_ms(config.clock.now());
         let wait = sleep_for(heap.earliest(), now_ms, &config);
         // Publish the wake instant before the sleep is armed. A produce that
         // pokes in between compares against the value that is about to hold,
