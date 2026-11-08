@@ -7,6 +7,7 @@ load(
     "bdd_directory_bindings",
     "bdd_directory_features",
     "bdd_feature_scenarios",
+    "bdd_generated_test_names",
     "bdd_scenario_bindings",
     "bdd_step_matches",
     "bdd_test_name",
@@ -40,6 +41,7 @@ load(
     "link_citations",
     "lock_for",
     "log_contract_rows",
+    "macro_argument_words",
     "parse_annotations",
     "parse_divergences",
     "parse_inventory",
@@ -949,6 +951,32 @@ def _test_bdd_directory_bindings(_ctx):
         ["tests/features/clients/b.feature", "tests/features/clients/nested/a.feature"],
     )
 
+def _test_macro_argument_words(_ctx):
+    check_eq(
+        "the call's words outside strings, stopping at its closing parenthesis",
+        macro_argument_words('"tests/features/tags = x", tags = "@a", fixtures = [c: C(1)]);\nfn tags() {}'),
+        ["tags", "fixtures", "c", "C", "1"],
+    )
+    check_eq(
+        "no tags argument",
+        "tags" in macro_argument_words('"tests/features/clients", runtime = "tokio-multi-thread");'),
+        False,
+    )
+
+def _test_bdd_generated_test_names(_ctx):
+    suite = 'krabka_bdd::scenarios!("tests/features/clients", fixtures = [clients: Clients]);'
+    features = {"tests/features/clients/pinned.feature": _BDD_FEATURE}
+    check_eq(
+        "one name per scenario, as scenarios! names its tests",
+        sorted(bdd_generated_test_names(suite, features)),
+        sorted([bdd_test_name(title) for title in bdd_feature_scenarios(_BDD_FEATURE)]),
+    )
+    check_eq(
+        "the modern consumer scenario is among them",
+        "modern_consumer" in bdd_generated_test_names(suite, features),
+        True,
+    )
+
 def _test_bdd_test_name(_ctx):
     for title, want in [
         ("modern consumer", "modern_consumer"),
@@ -1264,6 +1292,8 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_bdd_feature_outline,
     _test_bdd_feature_rules,
     _test_bdd_directory_bindings,
+    _test_macro_argument_words,
+    _test_bdd_generated_test_names,
     _test_bdd_test_name,
     _test_bdd_directory_client_evidence,
     _test_bdd_client_evidence,

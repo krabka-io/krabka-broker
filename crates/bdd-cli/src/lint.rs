@@ -45,7 +45,8 @@ pub fn findings(
         let source = filesystem.read(&file.absolute)?;
         let file_exists = |path: &str| {
             let target = fs::absolute(&file.manifest_dir, path);
-            filesystem.kind(&target).is_some()
+            // A file, as `scenarios!` checks: a directory is not a feature.
+            filesystem.kind(&target) == Some(EntryKind::File)
         };
         let context = LintContext {
             glossary,
@@ -292,6 +293,28 @@ Feature: Fetches stop at the high watermark
                 == "dependency `Missing` at `../gone/gone.feature` does not exist, as \
                     `tests/features/gone/gone.feature`"
         );
+    }
+
+    #[test]
+    fn a_dependency_that_names_a_directory_does_not_exist() {
+        let filesystem = MemoryFs::new(vec![
+            ("/repo/Cargo.toml", "[workspace]"),
+            ("/repo/crates/log/Cargo.toml", "[package]"),
+            ("/repo/crates/log/tests/features/roll/roll.feature", CLEAN),
+            (
+                "/repo/crates/log/tests/features/compact/compact.feature",
+                "Feature: Compaction keeps the last value\n  Depends on: Segments roll - ../roll\n\n  \
+                 Scenario: An older value is removed\n    Given a key has been written twice\n    \
+                 When the cleaner runs\n    Then only the newer value remains\n",
+            ),
+        ]);
+        let files = discover::discover(&filesystem, "/repo", &["crates".to_owned()]).unwrap();
+        let found: Vec<LintRule> = findings(&filesystem, &glossary(), &files)
+            .unwrap()
+            .iter()
+            .map(|finding| finding.rule)
+            .collect();
+        assert!(found == vec![LintRule::DependsOn]);
     }
 
     #[rstest]

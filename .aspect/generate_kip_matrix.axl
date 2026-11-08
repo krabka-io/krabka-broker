@@ -936,8 +936,59 @@ def bdd_directory_bindings(suite, source = _LIBRDKAFKA):
         directory = _quoted(rest, at)
         if directory == None or not directory.value.rstrip("/"):
             fail("unreadable krabka_bdd::scenarios! directory in %s" % source)
+        if "tags" in macro_argument_words(rest):
+            fail(
+                "krabka_bdd::scenarios!(\"%s\", tags = ..) in %s: the KIP matrix " % (directory.value, source) +
+                "cannot apply a tag filter, so it would read scenarios the suite leaves out",
+            )
         found.append(directory.value.rstrip("/"))
     return found
+
+def macro_argument_words(rest):
+    """The words of a macro call's arguments outside string literals.
+
+    `rest` starts just past the call's opening parenthesis; the scan stops at
+    the parenthesis that closes it.
+    """
+    words = []
+    word = ""
+    depth = 1
+    quoted = False
+    for character in rest.elems():
+        if quoted:
+            quoted = character != '"'
+            continue
+        if character == '"':
+            quoted = True
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+            if depth == 0:
+                break
+        if character in _ASCII_ALPHANUMERIC or character == "_":
+            word += character
+            continue
+        if word:
+            words.append(word)
+        word = ""
+    if word:
+        words.append(word)
+    return words
+
+def bdd_generated_test_names(suite, features, source = _LIBRDKAFKA):
+    """The test names `krabka_bdd::scenarios!` generates in `suite`.
+
+    `features` maps each bound `.feature` path, relative to the crate
+    manifest, to its text. A KIP catalog entry may cite one of these names
+    although no `fn` in the source declares it.
+    """
+    names = {}
+    for directory in bdd_directory_bindings(suite, source):
+        for path in bdd_directory_features(directory, features, source):
+            for title in bdd_feature_scenarios(features[path], path):
+                names[bdd_test_name(title)] = True
+    return names
 
 def bdd_directory_features(directory, features, source = _LIBRDKAFKA):
     """The `.feature` paths of `features` under `directory`, sorted."""
@@ -1760,9 +1811,29 @@ def _check_test(fs, root, key, test):
     function = test.partition("::")[2]
     if not is_file(fs, root + "/" + path):
         fail("%s names a test file that does not exist: %s" % (key, path))
-    if function and not declares_fn(_read(fs, root, path), function):
+    if function and not _defines_test(fs, root, path, function):
         fail("%s names a test that %s does not define: %s" % (key, path, function))
     return path
+
+def _defines_test(fs, root, path, function):
+    """Whether the Rust file `path` declares `function`, or generates it
+    through `krabka_bdd::scenarios!`."""
+    text = _read(fs, root, path)
+    if declares_fn(text, function):
+        return True
+    if _BDD_DIRECTORY_MACRO not in text:
+        return False
+    manifest = path
+    for marker in ("/tests/", "/src/"):
+        if marker in path:
+            manifest = path.split(marker)[0]
+            break
+    features = {}
+    for directory in bdd_directory_bindings(text, path):
+        base = manifest + "/" + directory
+        for relative in walk_suffix(fs, root + "/" + base, ".feature"):
+            features[directory + "/" + relative] = _read(fs, root, base + "/" + relative)
+    return function.rsplit("::", 1)[-1] in bdd_generated_test_names(text, features, path)
 
 def _note_line_counts(fs, root, note, counts):
     """Extend `counts` with the length of every file the note cites."""
