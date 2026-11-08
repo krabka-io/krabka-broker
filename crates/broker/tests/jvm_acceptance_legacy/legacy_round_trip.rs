@@ -12,7 +12,6 @@ use {
     tempfile::TempDir,
 };
 
-#[derive(Default)]
 pub struct RecordExchange {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -23,7 +22,11 @@ pub struct RecordExchange {
 #[fixture]
 pub fn exchange() -> RecordExchange {
     RecordExchange {
-        ..RecordExchange::default()
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        produced: None,
+        consumed: None,
     }
 }
 #[given("a conversion capable broker hosts topic {topic}")]

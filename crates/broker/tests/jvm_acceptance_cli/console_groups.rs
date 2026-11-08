@@ -19,7 +19,6 @@ use {
     tempfile::TempDir,
 };
 
-#[derive(Default)]
 struct GroupConsumption {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -30,7 +29,11 @@ struct GroupConsumption {
 #[fixture]
 fn consumption() -> GroupConsumption {
     GroupConsumption {
-        ..GroupConsumption::default()
+        broker: None,
+        directory: None,
+        topic: String::new(),
+        consumed: None,
+        described: None,
     }
 }
 

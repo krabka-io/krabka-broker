@@ -944,7 +944,7 @@ mod tests {
         },
         assert2::assert,
         bytes::{Bytes, BytesMut},
-        krabka_ids::Offset,
+        krabka_ids::{Offset, PartitionIndex},
         krabka_log::{Log, LogConfig},
         krabka_protocol::{
             owned::fetch_response::{AbortedTransaction, EpochEndOffset, FetchableTopicResponse},
@@ -1150,7 +1150,7 @@ mod tests {
         #[builder(start_fn)] dir: &FsPath,
         #[builder(start_fn)] log: Log,
         #[builder(default = STANDALONE_TOPIC)] topic: &str,
-        #[builder(into, default)] partition: krabka_ids::PartitionIndex,
+        #[builder(into, default)] partition: PartitionIndex,
         #[builder(default)] storage: StorageMode,
     ) -> Arc<Partition> {
         spawn_partition(

@@ -13,7 +13,6 @@ use {
     std::process::Output,
     tokio::sync::MutexGuard,
 };
-#[derive(Default)]
 struct QuotaAdministration {
     port_ownership: Option<MutexGuard<'static, ()>>,
     cluster: Option<SaslCluster>,
@@ -29,7 +28,16 @@ struct QuotaAdministration {
 #[fixture]
 fn quota() -> QuotaAdministration {
     QuotaAdministration {
-        ..QuotaAdministration::default()
+        port_ownership: None,
+        cluster: None,
+        admin: None,
+        entity: String::new(),
+        name: String::new(),
+        metadata_entity: String::new(),
+        quota: String::new(),
+        altered: None,
+        described: None,
+        deleted: None,
     }
 }
 #[given("three registered SASL brokers accept the administrator and these extra PLAIN users")]

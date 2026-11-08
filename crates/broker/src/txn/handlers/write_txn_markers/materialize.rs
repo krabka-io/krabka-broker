@@ -298,6 +298,7 @@ mod tests {
         assert2::assert,
         bytes::Bytes,
         krabka_ids::PartitionIndex,
+        krabka_protocol::records::Record,
         tokio::sync::{mpsc, oneshot},
     };
 
@@ -357,8 +358,6 @@ mod tests {
 
     #[tokio::test]
     async fn internal_marker_path_records_supplied_commit_stamp() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
@@ -408,8 +407,6 @@ mod tests {
     /// retry once it is not. Below 2 only a lower epoch is fenced.
     #[tokio::test]
     async fn transaction_version_2_fences_an_equal_marker_epoch() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
@@ -484,8 +481,6 @@ mod tests {
 
     #[tokio::test]
     async fn marker_adapter_fences_generations_and_suppresses_exact_retries() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
