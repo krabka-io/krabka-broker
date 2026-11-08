@@ -5,7 +5,7 @@ Feature: Kafka wire error namespace compatibility
   Scenario: Released errors keep Kafka's wire assignments
     Given the published Kafka release and trunk error namespaces
     When the broker's released and private wire error codes are enumerated
-    Then every released error keeps Kafka's name and numeric wire code
+    Then every released error keeps Kafka's name, numeric wire code and message
 
   Scenario: Private errors cannot collide with Kafka's current or upcoming assignments
     Given the published Kafka release and trunk error namespaces
