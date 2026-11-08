@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `Matcher.matches()`: the whole input, so `OU=OPS-EU` matches.
     if rule.matches("CN=alice,OU=OPS-EU")? {
         // `String.replaceAll`: prints `alice`.
-        println!("{}", rule.replace("CN=alice,OU=OPS-EU", "$1", true)?);
+        println!("{}", rule.replace_all("CN=alice,OU=OPS-EU", "$1")?);
     }
     Ok(())
 }

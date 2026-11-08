@@ -184,9 +184,13 @@ impl Translation {
         let Some(substitution) = &self.substitution else {
             return Ok(Some(base));
         };
-        substitution
-            .from
-            .replace(&base, &substitution.to, substitution.global)
+        let from = &substitution.from;
+        let replaced = if substitution.global {
+            from.replace_all(&base, &substitution.to)
+        } else {
+            from.replace_first(&base, &substitution.to)
+        };
+        replaced
             .map(Some)
             .map_err(|error| KerberosNameError::Format(error.to_string()))
     }
