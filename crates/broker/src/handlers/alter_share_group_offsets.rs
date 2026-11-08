@@ -922,7 +922,9 @@ mod tests {
         let unknown = |partition_index| AlterShareGroupOffsetsResponsePartition {
             partition_index,
             error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            error_message: Some("This server does not host this topic-partition.".to_owned()),
+            error_message: Some(
+                codes::default_message(codes::UNKNOWN_TOPIC_OR_PARTITION).to_owned(),
+            ),
             ..Default::default()
         };
         let expected = AlterShareGroupOffsetsResponse {

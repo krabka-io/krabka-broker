@@ -21,7 +21,7 @@ mod authorization_tests;
 
 use crate::{
     broker::Broker,
-    codes::NONE,
+    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, default_message},
     handlers::{RequestContext, cluster_action_denied as request_cluster_action_denied},
     share_coordinator::coordinator::{ShareStateError, ShareStateOp},
 };
@@ -60,7 +60,7 @@ fn operation_result(result: Result<(), ShareStateError>, op: ShareStateOp) -> Op
 
 /// Kafka's message for `CLUSTER_AUTHORIZATION_FAILED`, which
 /// `toGlobalErrorResponse` puts on every partition row.
-const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed.";
+const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = default_message(CLUSTER_AUTHORIZATION_FAILED);
 
 /// Whether the authorizer denies `ClusterAction` on the cluster to the
 /// principal of `ctx`.

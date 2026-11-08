@@ -18,7 +18,7 @@ use {
         codes::{
             ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, INVALID_REPLICATION_FACTOR,
             INVALID_REQUEST, NO_REASSIGNMENT_IN_PROGRESS, POLICY_VIOLATION,
-            UNKNOWN_TOPIC_OR_PARTITION,
+            UNKNOWN_TOPIC_OR_PARTITION, default_message,
         },
         config_keys::resolve_unclean_leader_election_enabled,
         metadata_epoch::next_partition_change,
@@ -98,7 +98,7 @@ const CANCEL_NEEDS_APPROVAL: &str = "a reassignment cancel needs an approved bre
 
 /// Kafka's text for `NO_REASSIGNMENT_IN_PROGRESS`, which
 /// `cancelPartitionReassignment` uses as its message.
-const NO_REASSIGNMENT_MESSAGE: &str = "No partition reassignment is in progress.";
+const NO_REASSIGNMENT_MESSAGE: &str = default_message(NO_REASSIGNMENT_IN_PROGRESS);
 
 /// Kafka's `alterPartitionReassignment` answer for a row the image does not
 /// hold: one message for an unknown topic, another for an unknown partition.

@@ -113,7 +113,7 @@ pub enum TopicCreatorError {
 /// Kafka's message for an Envelope the controller refused with `code`.
 fn envelope_message(code: i16) -> String {
     if code == codes::CLUSTER_AUTHORIZATION_FAILED {
-        "Cluster authorization failed.".to_owned()
+        codes::default_message(codes::CLUSTER_AUTHORIZATION_FAILED).to_owned()
     } else {
         format!("the controller refused the envelope with error code {code}")
     }

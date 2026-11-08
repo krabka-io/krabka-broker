@@ -37,7 +37,8 @@ use {
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`
 /// (`Errors.TOPIC_AUTHORIZATION_FAILED.message()`).
-const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
+const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str =
+    codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED);
 
 /// Kafka's `PartitionFactory.DEFAULT_LEADER_EPOCH`.
 const DEFAULT_LEADER_EPOCH: i32 = 0;
