@@ -17,7 +17,17 @@ use {
         quota::throttle_time_ms,
     },
     bytes::{BufMut, Bytes, BytesMut},
-    krabka_protocol::api_key::ApiKey,
+    krabka_protocol::{
+        Decode, Encode,
+        api_key::ApiKey,
+        owned::{
+            create_delegation_token_response::CreateDelegationTokenResponse,
+            describe_delegation_token_response::DescribeDelegationTokenResponse,
+            expire_delegation_token_response::ExpireDelegationTokenResponse,
+            offset_delete_response::OffsetDeleteResponse,
+            renew_delegation_token_response::RenewDelegationTokenResponse,
+        },
+    },
     krabka_units::{Time, convert::TimeExt},
     tokio::io::AsyncWrite,
     tokio_util::codec::Framed,
@@ -105,37 +115,81 @@ pub(super) fn patch_response_throttle(
     let delay_ms = throttle_time_ms(delay);
     if throttle_is_leading_field(api_key, shape.version) {
         patch_leading_throttle(response_bytes, api_key, shape.body_flexible, delay_ms)
-    } else if buried_throttle_is_reencoded(api_key) {
-        set_buried_throttle(response_bytes, api_key, shape, delay_ms)
+    } else if let Some(raise_throttle) = buried_throttle_reencoder(api_key) {
+        set_buried_throttle(response_bytes, api_key, shape, delay_ms, raise_throttle)
     } else {
         response_bytes
     }
 }
 
-/// Whether the dispatch loop reports a request-quota delay on `api_key` by
-/// decoding the response, setting its `ThrottleTimeMs`, and encoding it again.
+/// Decodes a response body at a version, raises its buried `ThrottleTimeMs`
+/// to at least the given delay in milliseconds, and encodes it again; `None`
+/// when the body does not decode.
+type BuriedThrottleReencoder = fn(&[u8], ApiVersion, i32) -> Option<BytesMut>;
+
+/// A response type whose `ThrottleTimeMs` is not its first field.
+trait BuriedThrottle: for<'de> Decode<'de> + Encode {
+    fn throttle_time_ms_mut(&mut self) -> &mut i32;
+}
+
+macro_rules! impl_buried_throttle {
+    ($($response:ty),+ $(,)?) => {
+        $(impl BuriedThrottle for $response {
+            fn throttle_time_ms_mut(&mut self) -> &mut i32 { &mut self.throttle_time_ms }
+        })+
+    };
+}
+
+impl_buried_throttle!(
+    CreateDelegationTokenResponse,
+    RenewDelegationTokenResponse,
+    ExpireDelegationTokenResponse,
+    DescribeDelegationTokenResponse,
+    OffsetDeleteResponse,
+);
+
+/// How the dispatch loop reports a request-quota delay on `api_key` by
+/// decoding the response, setting its `ThrottleTimeMs`, and encoding it
+/// again, or `None` for an api it does not do that for.
 ///
 /// These are the apis whose `ThrottleTimeMs` is not the first field, and whose
 /// handler does not set it: the four delegation-token apis carry it last, and
 /// `OffsetDelete` carries it behind `ErrorCode`. Kafka sets the field on the
 /// typed response in `sendResponseMaybeThrottle`, so the client learns the
 /// delay on these apis too.
-pub(super) fn buried_throttle_is_reencoded(api_key: ApiKeyCode) -> bool {
-    matches!(
-        ApiKey::from_i16(api_key),
-        Some(
-            ApiKey::CreateDelegationToken
-                | ApiKey::RenewDelegationToken
-                | ApiKey::ExpireDelegationToken
-                | ApiKey::DescribeDelegationToken
-                | ApiKey::OffsetDelete
-        )
-    )
+pub(super) fn buried_throttle_reencoder(api_key: ApiKeyCode) -> Option<BuriedThrottleReencoder> {
+    match ApiKey::from_i16(api_key)? {
+        ApiKey::CreateDelegationToken => {
+            Some(raise_buried_throttle::<CreateDelegationTokenResponse>)
+        }
+        ApiKey::RenewDelegationToken => Some(raise_buried_throttle::<RenewDelegationTokenResponse>),
+        ApiKey::ExpireDelegationToken => {
+            Some(raise_buried_throttle::<ExpireDelegationTokenResponse>)
+        }
+        ApiKey::DescribeDelegationToken => {
+            Some(raise_buried_throttle::<DescribeDelegationTokenResponse>)
+        }
+        ApiKey::OffsetDelete => Some(raise_buried_throttle::<OffsetDeleteResponse>),
+        _ => None,
+    }
+}
+
+/// The [`BuriedThrottleReencoder`] for response type `R`: it keeps the larger
+/// of the throttle the handler wrote and `delay_ms`.
+fn raise_buried_throttle<R: BuriedThrottle>(
+    body: &[u8],
+    version: ApiVersion,
+    delay_ms: i32,
+) -> Option<BytesMut> {
+    reencode::<R>(body, version, |response| {
+        let throttle_time_ms = response.throttle_time_ms_mut();
+        *throttle_time_ms = (*throttle_time_ms).max(delay_ms);
+    })
 }
 
 /// Raises the buried `ThrottleTimeMs` of an encoded response to
-/// `max(existing, delay_ms)`, for an api that
-/// [`buried_throttle_is_reencoded`] names.
+/// `max(existing, delay_ms)`, with the `raise_throttle` reencoder that
+/// [`buried_throttle_reencoder`] gives for its api.
 ///
 /// A body that does not decode at the response's version is left as it is:
 /// the connection is still muted for the window, and the response the client
@@ -145,47 +199,14 @@ fn set_buried_throttle(
     api_key: ApiKeyCode,
     shape: ResponseShape,
     delay_ms: i32,
+    raise_throttle: BuriedThrottleReencoder,
 ) -> Bytes {
-    use krabka_protocol::owned::{
-        create_delegation_token_response::CreateDelegationTokenResponse,
-        describe_delegation_token_response::DescribeDelegationTokenResponse,
-        expire_delegation_token_response::ExpireDelegationTokenResponse,
-        offset_delete_response::OffsetDeleteResponse,
-        renew_delegation_token_response::RenewDelegationTokenResponse,
-    };
-
     let header_len = response_header_len(api_key, shape.body_flexible);
     let Some((header, body)) = response_bytes.split_at_checked(header_len) else {
         return response_bytes;
     };
     let version = shape.version;
-    let reencoded = match ApiKey::from_i16(api_key) {
-        Some(ApiKey::CreateDelegationToken) => {
-            reencode::<CreateDelegationTokenResponse>(body, version, |response| {
-                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
-            })
-        }
-        Some(ApiKey::RenewDelegationToken) => {
-            reencode::<RenewDelegationTokenResponse>(body, version, |response| {
-                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
-            })
-        }
-        Some(ApiKey::ExpireDelegationToken) => {
-            reencode::<ExpireDelegationTokenResponse>(body, version, |response| {
-                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
-            })
-        }
-        Some(ApiKey::DescribeDelegationToken) => {
-            reencode::<DescribeDelegationTokenResponse>(body, version, |response| {
-                response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
-            })
-        }
-        Some(ApiKey::OffsetDelete) => reencode::<OffsetDeleteResponse>(body, version, |response| {
-            response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
-        }),
-        _ => None,
-    };
-    let Some(reencoded) = reencoded else {
+    let Some(reencoded) = raise_throttle(body, version, delay_ms) else {
         tracing::warn!(
             api_key,
             version,
@@ -202,7 +223,7 @@ fn set_buried_throttle(
 /// Decodes `body` as `R` at `version`, applies `set`, and encodes it again.
 fn reencode<R>(body: &[u8], version: ApiVersion, set: impl FnOnce(&mut R)) -> Option<BytesMut>
 where
-    R: for<'de> krabka_protocol::Decode<'de> + krabka_protocol::Encode,
+    R: for<'de> Decode<'de> + Encode,
 {
     let mut cursor = body;
     let mut response = R::decode(&mut cursor, version).ok()?;
