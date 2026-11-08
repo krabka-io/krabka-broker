@@ -235,14 +235,13 @@ impl ShareCoordinator {
 
     /// The offset after the last record of the state partition of `term`,
     /// Kafka's `lastWrittenOffset`, or `None` when the partition log is not
-    /// open locally.
+    /// open locally or its mutex is poisoned.
     ///
     /// Only the coordinator appends to `__share_group_state`, so this is the
     /// log end offset.
     pub(super) fn last_written(&self, term: Term) -> Option<Offset> {
-        self.partitions
-            .get(bootstrap::TOPIC, term.partition)
-            .map(|part| part.log_end_offset())
+        let part = self.partitions.get(bootstrap::TOPIC, term.partition)?;
+        part.log_end_offset().ok()
     }
 
     /// Whether `part` leads on this broker at the leader epoch of `term`.
@@ -359,7 +358,7 @@ impl ShareCoordinator {
         let Some(part) = self.partitions.get(bootstrap::TOPIC, state_partition) else {
             return;
         };
-        if redundant > part.log_start_offset()
+        if part.log_start_offset().is_ok_and(|start| redundant > start)
             && self.leads(&part, term)
             && let Err(e) = part.trim_to_offset(redundant).await
         {

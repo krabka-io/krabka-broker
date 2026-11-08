@@ -51,7 +51,7 @@ async fn timestamp_lookup_matches_the_first_record_in_the_isolation_prefix() {
     let marker = build_marker_batch(
         krabka_log::ProducerId(77),
         0,
-        partition.log_end_offset(),
+        partition.log_end_offset().unwrap(),
         MarkerType::Commit,
         0,
     );

@@ -133,7 +133,7 @@ async fn set_follower_hw_clamps_advances_and_notifies() {
         count: RecordCount(3),
         ..Default::default()
     });
-    assert!(p.log_end_offset() == 3);
+    assert!(p.log_end_offset().unwrap() == 3);
 
     // reported_hw below log_end: stored verbatim, notify fires.
     // A `Notified` future does not register with the `Notify` until it is

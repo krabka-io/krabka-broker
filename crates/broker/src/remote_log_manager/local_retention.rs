@@ -23,6 +23,7 @@
 //! pass that applies them, because they share one contiguous-prefix rule.
 
 use {
+    super::lock_log_or_skip,
     crate::{api_catalog::UnstableApiVersions, partition::Partition},
     krabka_log::{ActiveSegmentExport, DeliveryPolicy, LogConfig, Offset, SegmentExport},
     krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentState, TopicIdPartition},
@@ -34,7 +35,7 @@ use {
         retention,
         retention::{LocalRetentionSegment, local_retention_prefix, retention_delete_target},
     },
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
     tracing::{debug, info, warn},
 };
 
@@ -324,7 +325,9 @@ pub fn local_retention_pass(
     };
 
     let (decision, deleted, rolled) = {
-        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut log) = lock_log_or_skip(partition) else {
+            return 0;
+        };
         let active = log.active_segment_export().filter(|active| {
             bounds.high_watermark >= log.log_end_offset()
                 && walk_reaches(exports, active, log.local_log_start_offset())

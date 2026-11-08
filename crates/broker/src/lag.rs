@@ -540,7 +540,10 @@ pub async fn replica_lag_samples(
         let Some(record) = image.partition(&partition.topic, index) else {
             continue;
         };
-        let leader_log_end = partition.log_end_offset().0;
+        // A poisoned log has no log end to measure lag against.
+        let Ok(leader_log_end) = partition.log_end_offset().map(|end| end.0) else {
+            continue;
+        };
         let follower_leos: Vec<(NodeId, i64)> = {
             let state = partition.replica_state.lock().await;
             record

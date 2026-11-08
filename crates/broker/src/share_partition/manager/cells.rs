@@ -19,7 +19,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
     krabka_remote_storage::TopicIdPartition,
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
     tokio::{sync::Mutex, time::timeout},
     tracing::warn,
 };
@@ -172,9 +172,8 @@ impl SharePartitionLeaderManager {
             return Ok(Offset(0));
         };
         let config = local
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_log()
+            .map_err(|error| from_broker_error(&error))?
             .config_snapshot();
         let log_start = if local.diskless
             && let Some(reader) = self.diskless_read.get()
@@ -194,13 +193,17 @@ impl SharePartitionLeaderManager {
             .map_err(|_| REQUEST_TIMED_OUT)?
             .map_err(|_| KAFKA_STORAGE_ERROR)?;
             let (log_start, established) = {
-                let log = local.log.lock().unwrap_or_else(PoisonError::into_inner);
+                let log = local
+                    .lock_log()
+                    .map_err(|error| from_broker_error(&error))?;
                 (log.log_start_offset().0, log.established_log_start())
             };
             Offset(remote.map_or(log_start, |remote| remote.min(log_start)))
                 .max(established.unwrap_or(Offset(0)))
         } else {
-            local.log_start_offset()
+            local
+                .log_start_offset()
+                .map_err(|error| from_broker_error(&error))?
         };
         match strategy {
             ShareAutoOffsetReset::Earliest => Ok(log_start),

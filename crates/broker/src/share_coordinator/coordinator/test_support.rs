@@ -339,7 +339,7 @@ pub fn logged_records(
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
     let mut records = Vec::new();
-    let mut offset = part.log_start_offset();
+    let mut offset = part.log_start_offset().unwrap();
     loop {
         let out = part
             .read_log(offset, krabka_units::mebibytes(1))

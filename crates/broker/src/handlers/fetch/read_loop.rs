@@ -514,7 +514,10 @@ async fn first_read_pass(
         // high watermark before it reads. The follower update after the read
         // compares the fetch offset with that log end offset. Only the log end
         // is kept across the read: the follower's position stays on `read`.
-        let leader_log_end = read.follower_position.map(|_| partition.log_end_offset());
+        // A poisoned log records no follower position.
+        let leader_log_end = read
+            .follower_position
+            .and_then(|_| partition.log_end_offset().ok());
         read_and_account(broker, read, &partition, index, state, phases).await;
         // Kafka's `Partition.fetchRecords` records the follower's position
         // only after its read succeeded, so the row this read just filled

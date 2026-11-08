@@ -314,11 +314,19 @@ impl TxnCoordinator {
         // partition can go to a replica that never had it. Publish only once
         // the high watermark covers everything the replay read, so the cache
         // never holds a record the log can take back. This holds the write
-        // lock, so the log end cannot move while it waits.
-        if let Some(part) = self.partitions.get(bootstrap::TOPIC, partition) {
-            self.await_replay_committed(&part, partition, generation, part.log_end_offset())
-                .await;
-        }
+        // lock, so the log end cannot move while it waits. A log whose mutex
+        // is poisoned has no end to wait for, and fails the load.
+        let replay = match self.partitions.get(bootstrap::TOPIC, partition) {
+            Some(part) => match part.log_end_offset() {
+                Ok(end) => {
+                    self.await_replay_committed(&part, partition, generation, end)
+                        .await;
+                    replay
+                }
+                Err(error) => Err(error),
+            },
+            None => replay,
+        };
         let prepared = self.publish_load(partition, generation, replay).await;
         drop(state_partition_write);
         self.load_finished.notify_waiters();

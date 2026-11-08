@@ -229,6 +229,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is registered")
             .log_end_offset()
+            .unwrap()
     };
     check!(
         log_end_offset("frozen") == krabka_log::Offset(1),

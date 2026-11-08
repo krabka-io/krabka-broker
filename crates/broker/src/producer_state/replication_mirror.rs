@@ -39,7 +39,7 @@ async fn a_replicated_marker_bumps_the_tracked_epoch() {
     let marker = build_marker_batch(
         ProducerId(PRODUCER_ID),
         4,
-        partition.log_end_offset(),
+        partition.log_end_offset().unwrap(),
         MarkerType::Commit,
         0,
     );

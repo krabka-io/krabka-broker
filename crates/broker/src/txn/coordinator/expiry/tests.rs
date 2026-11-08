@@ -211,7 +211,7 @@ fn transaction_state_records(coordinator: &TxnCoordinator) -> Vec<StateRecord> {
         .get(bootstrap::TOPIC, PartitionIndex(0))
         .expect("partition is local");
     let mut out = Vec::new();
-    let mut offset = part.log_start_offset();
+    let mut offset = part.log_start_offset().unwrap();
     loop {
         let read = part.read_log(offset, mebibytes(1)).expect("read log");
         if read.batches.is_empty() {
