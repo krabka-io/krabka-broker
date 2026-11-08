@@ -1,4 +1,4 @@
-//! Derive and function macros that more than one krabka crate uses.
+//! Derive and function macros that krabka crates other than the broker use.
 //!
 //! `krabka-macros` turns one annotated declaration into code that a crate
 //! would otherwise write out by hand two or three times. It is built on

@@ -6,14 +6,14 @@ Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of
 
 ## Overview
 
-The crate is a `proc-macro` crate built on [`moxy`](https://crates.io/crates/moxy). It holds the macros that more than one krabka crate invokes, `krabka-log` among them, which is why it is published. A macro whose expansion names modules of `krabka-broker` lives in the unpublished [`krabka-broker-macros`](../broker-macros/README.md) instead. The crate does not implement a Kafka standard of its own.
+The crate is a `proc-macro` crate built on [`moxy`](https://crates.io/crates/moxy). It holds the macros that crates other than the broker invoke, `krabka-log` among them, which is why it is published. A macro whose expansion names modules of `krabka-broker` lives in the unpublished [`krabka-broker-macros`](../broker-macros/README.md) instead. The crate does not implement a Kafka standard of its own.
 
 ## Features
 
 - `#[derive(FieldDefaults)]` — on a struct with named fields, derives a `Default` that fills each field from its `#[default(EXPR)]` attribute, or with `Default::default()`.
 - `#[derive(RefinedNewtype)]`, `#[derive(PrimitiveCmp)]`, `#[derive(EnumStr)]` and `#[derive(KafkaUuid)]` — the constructors, parsing, display, comparisons and serde of newtypes and string-valued enums.
 - `#[krabka_env]` and `cli_main!` — the `KRABKA_*` environment fallbacks of a clap argument struct and the entry point of an operator CLI.
-- `#[derive(SparseIndex)]`, `#[remote_operation]`, `#[model_type]` and `worm_object_set!` — the storage, tracing and proof-model shapes that `krabka-log`, `krabka-remote-storage` and `krabka-verified` share.
+- `#[derive(SparseIndex)]`, `#[remote_operation]`, `#[model_type]` and `worm_object_set!` — the storage, tracing and proof-model shapes of `krabka-log`, `krabka-remote-storage` and `krabka-verified`.
 
 ## Usage
 

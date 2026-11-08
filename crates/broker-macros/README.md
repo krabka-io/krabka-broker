@@ -6,7 +6,7 @@ Part of [Krabka](https://github.com/robot-head/crabka), a Rust implementation of
 
 ## Overview
 
-The crate is a `proc-macro` crate built on [`moxy`](https://crates.io/crates/moxy). Its templates emit paths such as `crate::handlers::...` and `crate::coordinator::...`, which resolve only in `krabka-broker`, its one user. It shares its syntax helpers with [`krabka-macros`](../macros/README.md), which holds the macros that other crates use as well. It is not published.
+The crate is a `proc-macro` crate built on [`moxy`](https://crates.io/crates/moxy). Its templates emit paths such as `crate::handlers::...` and `crate::coordinator::...`, which resolve only in `krabka-broker`, its one user. It shares its syntax helpers with [`krabka-macros`](../macros/README.md), which holds the macros that other crates use. It is not published.
 
 ## Features
 

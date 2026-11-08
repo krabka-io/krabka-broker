@@ -9,6 +9,7 @@ pub fn platform_cfg() -> TokenStream {
             target_os = "tvos", target_os = "watchos", target_os = "freebsd", target_os = "dragonfly"))]
     }
 }
+
 /// Apply the shared file-region platform condition without rebuilding the caller's tokens.
 pub fn sendfile_platform(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut output: proc_macro::TokenStream = platform_cfg().into();
