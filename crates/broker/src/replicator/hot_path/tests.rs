@@ -77,6 +77,7 @@ struct PartitionShape {
     replication_target: ReplicationTarget,
     diskless: bool,
     reported_leader_log_start: i64,
+    log_start_checked_epoch: i64,
     writer_running: bool,
 }
 
@@ -133,6 +134,7 @@ async fn shape(partition: &Partition) -> PartitionShape {
         replication_target,
         diskless,
         reported_leader_log_start,
+        log_start_checked_epoch,
         writer_handle,
     } = partition;
 
@@ -156,6 +158,7 @@ async fn shape(partition: &Partition) -> PartitionShape {
         replication_target: *replication_target.read().await,
         diskless: *diskless,
         reported_leader_log_start: reported_leader_log_start.load(atomic::Ordering::SeqCst),
+        log_start_checked_epoch: log_start_checked_epoch.load(atomic::Ordering::SeqCst),
         writer_running,
     }
 }

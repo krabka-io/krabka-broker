@@ -60,8 +60,8 @@ use {
     futures_util::future::join_all,
     krabka_metadata::NodeId,
     krabka_remote_storage::{
-        RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteStorageError,
-        RemoteStorageManager, TopicIdPartition,
+        RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState,
+        RemoteStorageError, RemoteStorageManager, TopicIdPartition,
     },
     krabka_units::{
         ByteSize, Time, bytes,
@@ -618,6 +618,28 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
                "remote-log-manager: a write freeze holds both retention passes");
         return;
     }
+    // Once per leader epoch, as Kafka's copy task does it once per leadership.
+    // It runs below the freeze, because raising the start lets followers trim
+    // what they still hold under it. The retention passes below measure
+    // against the floors this tick read first, so a raised start reaches them
+    // on the next tick, and a stale lower floor only deletes less.
+    if is_leader {
+        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+        let epoch = i64::from(raw_epoch);
+        if partition.log_start_checked_epoch.load(Ordering::Acquire) != epoch {
+            let fence = LeaderFence {
+                partition: &partition,
+                node_id,
+                leader_epoch: raw_epoch,
+                shutdown,
+            };
+            if raise_start_over_unheld_offsets(&fence, &tp, tier.rlmm).await {
+                partition
+                    .log_start_checked_epoch
+                    .store(epoch, Ordering::Release);
+            }
+        }
+    }
     let Ok(_permit) = permits.expiration().await else {
         return;
     };
@@ -803,18 +825,8 @@ async fn follow_unenforced_floor(
     let Some(floor) = deleted_below.filter(|floor| (0..floor.0).contains(&reported)) else {
         return;
     };
-    let segments = match current_listing(tp, rlmm).await {
-        Ok(Some(segments)) => segments,
-        Ok(None) => {
-            debug!(topic = %partition.topic, partition = tp.partition,
-                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
-            return;
-        }
-        Err(error) => {
-            debug!(topic = %partition.topic, partition = tp.partition, %error,
-                   "remote-log-manager: the archive cannot say whether it enforces the log start yet");
-            return;
-        }
+    let Some(segments) = caught_up_segments(partition, tp, rlmm).await else {
+        return;
     };
     if remote_retention::archive_enforces_floor(&segments, floor) {
         return;
@@ -825,6 +837,119 @@ async fn follow_unenforced_floor(
     if let Err(error) = log.follow_leader_log_start(krabka_log::Offset(reported)) {
         debug!(topic = %partition.topic, partition = tp.partition, %error,
                "remote-log-manager: could not take the leader's log start");
+    }
+}
+
+/// Raise a leader's global log start over offsets that no tier holds:
+/// Kafka's `RLMCopyTask.maybeUpdateLogStartOffsetOnBecomingLeader`.
+///
+/// A tiered `Log::open` takes the checkpointed start with no floor at the
+/// first local segment, as Kafka's `LogLoader.load` does. Local retention
+/// writes the start it moves on a timer, so a broker that crashes after
+/// `remote.storage.enable=true` reached its image but before that write
+/// reopens the log tiered at an older start, or at 0 with no checkpoint at
+/// all. The offsets from there to the local start then read as the remote
+/// tier's band, though the tier never held them, because they were deleted
+/// before the log turned tiered. A consumer sent there gets
+/// `OFFSET_OUT_OF_RANGE`, and `ListOffsets(earliest)` sends it back.
+/// `Partition::apply_log_config_overrides` writes the owed start before it
+/// turns tiering on, and this step closes the crash window it cannot.
+///
+/// The start rises to the lowest offset at or above it that a finished copy
+/// holds ([`archived_start`]), or to the local start when the archive holds
+/// none of the band. Kafka walks the leader-epoch cache from its earliest
+/// epoch instead. This broker rebuilds a follower's cache from the records it
+/// fetches rather than from the archive, so an epoch walk could skip archived
+/// segments of an older epoch, hide them and then let remote retention delete
+/// them. Offsets cannot.
+///
+/// The archive is read only once this broker's RLMM has applied everything
+/// the metadata store had committed ([`current_listing`]). A stale listing
+/// could miss finished segments that still serve the band. Under the second
+/// hold of the log lock the raise goes ahead only while `fence` holds and the
+/// log still reports the start the listing was measured from, so a lost
+/// leadership, a lower start taken from a new leader, a truncation or a
+/// `DeleteRecords` that raced the listing is never overridden.
+///
+/// Returns whether the check is done for `fence`'s leader epoch: the start
+/// was raised or needed no raise. Kafka checks once per leadership, and the
+/// caller records the epoch on `true` so the next tick skips the listing. A
+/// listing the RLMM cannot give yet, a fence that fell, or a start that moved
+/// answers `false`, and a later tick checks again, as does a log whose mutex
+/// a panicked task poisoned ([`lock_log_or_skip`]).
+async fn raise_start_over_unheld_offsets(
+    fence: &LeaderFence<'_>,
+    tp: &TopicIdPartition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> bool {
+    let partition = fence.partition;
+    let (reported, local_start) = {
+        let Some(log) = lock_log_or_skip(partition) else {
+            return false;
+        };
+        (log.reported_log_start(), log.local_log_start_offset())
+    };
+    if reported >= local_start {
+        return true;
+    }
+    let Some(segments) = caught_up_segments(partition, tp, rlmm).await else {
+        return false;
+    };
+    let remote_start = archived_start(&segments, reported).unwrap_or(local_start);
+    let Some(mut log) = lock_log_or_skip(partition) else {
+        return false;
+    };
+    if !fence.holds() {
+        return false;
+    }
+    match log.update_log_start_from_remote_tier(reported, remote_start) {
+        Ok(now) => now >= remote_start.min(local_start),
+        Err(error) => {
+            warn!(topic = %partition.topic, partition = tp.partition, %error,
+                  "remote-log-manager: could not raise the log start to what the tiers hold");
+            false
+        }
+    }
+}
+
+/// The lowest offset at or above `from` that a finished copy in `segments`
+/// holds, or `None` when none holds any. A copy that never finished, and one
+/// being deleted, serves no read.
+fn archived_start(
+    segments: &[RemoteLogSegmentMetadata],
+    from: krabka_log::Offset,
+) -> Option<krabka_log::Offset> {
+    segments
+        .iter()
+        .filter(|segment| {
+            segment.state() == RemoteLogSegmentState::CopySegmentFinished
+                && segment.end_offset() >= from.0
+        })
+        .map(|segment| segment.start_offset().max(from.0))
+        .min()
+        .map(krabka_log::Offset)
+}
+
+/// [`current_listing`] for a step that moves the log start: the segments, or
+/// `None`, logged, while the RLMM is behind the metadata store or cannot list
+/// the partition. The start then stays for the next tick.
+async fn caught_up_segments(
+    partition: &Partition,
+    tp: &TopicIdPartition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> Option<Vec<RemoteLogSegmentMetadata>> {
+    match current_listing(tp, rlmm).await {
+        Ok(Some(segments)) => Some(segments),
+        Ok(None) => {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
+            None
+        }
+        Err(error) => {
+            debug!(topic = %partition.topic, partition = tp.partition, %error,
+                   "remote-log-manager: the archive cannot be listed yet; the log start stays");
+            None
+        }
     }
 }
 
@@ -888,12 +1013,17 @@ mod tests {
         assert2::{assert, check},
         fixtures::{local_backends, partition_log, sweep_counts},
         krabka_ids::PartitionIndex,
-        krabka_log::{LogConfig, Offset},
+        krabka_log::{LogConfig, Offset, name},
         krabka_metadata::{MetadataImage, MetadataRecord},
         krabka_protocol::records::Attributes,
         krabka_remote_storage::RemoteLogSegmentState,
         krabka_units::millis,
-        std::{path::Path, sync::PoisonError, time::Duration},
+        std::{
+            fs,
+            path::Path,
+            sync::PoisonError,
+            time::{Duration, SystemTime},
+        },
         tokio::{task, time},
     };
 
@@ -966,6 +1096,232 @@ mod tests {
         assert2::assert!(
             partition.log_start_offset().unwrap() == Offset(start),
             "{metadata:?}"
+        );
+    }
+
+    /// What the archive holds under a leader whose established start, 10,
+    /// sits below its local segments, and whether that broker still leads.
+    #[derive(Clone, Copy, Debug)]
+    enum Archive {
+        /// Nothing at all.
+        Empty,
+        /// A finished segment from one past the start.
+        FinishedAbove,
+        /// A finished segment over offsets 5 to 14, which holds the start.
+        FinishedCovering,
+        /// A finished segment over offsets 0 to 9, all of it below the start.
+        FinishedBelow,
+        /// A copy from one past the start that never finished.
+        StartedAbove,
+        /// A segment from one past the start that is being deleted.
+        DeletingAbove,
+        /// Its metadata partition has not caught up.
+        NotReady,
+        /// A finished segment from one past the start, from a cache that lags
+        /// the metadata store.
+        Lagging,
+        /// An empty archive, read by a broker that lost the leadership while
+        /// it listed.
+        LeadershipLost,
+    }
+
+    /// Where a leader's global start rests after the step: where it was, one
+    /// past it, or at the local start.
+    #[derive(Debug, PartialEq)]
+    enum Rests {
+        Unmoved,
+        OnePast,
+        AtLocalStart,
+    }
+
+    /// Kafka's `RLMCopyTask.maybeUpdateLogStartOffsetOnBecomingLeader`: a
+    /// leader's start rises to the lowest offset the archive finished copying
+    /// at or above it, or to the local start when the archive holds none of
+    /// the band, and is written down. A finished segment wholly below the
+    /// start, a copy that never finished and one being deleted serve nothing
+    /// in the band. The check is then done for the leader epoch. An RLMM that
+    /// cannot list yet, or one behind the metadata store, leaves the start for
+    /// a later tick, since a stale listing could miss segments that still
+    /// serve the band, and so does a broker that stopped leading.
+    #[yare::parameterized(
+        an_empty_archive_raises_the_start_to_the_local_segments = { Archive::Empty, Rests::AtLocalStart, true },
+        a_finished_segment_above_the_start_raises_it_to_that_segment = { Archive::FinishedAbove, Rests::OnePast, true },
+        a_finished_segment_over_the_start_keeps_it = { Archive::FinishedCovering, Rests::Unmoved, true },
+        a_finished_segment_below_the_start_holds_nothing_of_the_band = { Archive::FinishedBelow, Rests::AtLocalStart, true },
+        an_unfinished_copy_holds_nothing = { Archive::StartedAbove, Rests::AtLocalStart, true },
+        a_segment_being_deleted_holds_nothing = { Archive::DeletingAbove, Rests::AtLocalStart, true },
+        an_rlmm_catching_up_keeps_the_start = { Archive::NotReady, Rests::Unmoved, false },
+        a_lagging_rlmm_keeps_the_start = { Archive::Lagging, Rests::Unmoved, false },
+        a_lost_leadership_keeps_the_start = { Archive::LeadershipLost, Rests::Unmoved, false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_leader_raises_its_start_over_offsets_no_tier_holds(
+        archive: Archive,
+        rests: Rests,
+        checked: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let partition = rolled_tiered_partition(dir.path());
+        let start = Offset(10);
+        let local_start = {
+            let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+            log.set_log_start_offset(start).unwrap();
+            let first_kept = log
+                .tierable_segments()
+                .into_iter()
+                .find(|export| export.base_offset > start + 1)
+                .expect("the fixture rolls segments past offset 11")
+                .base_offset;
+            log.delete_local_segments_through(first_kept).unwrap();
+            log.local_log_start_offset()
+        };
+        assert2::assert!(
+            start + 1 < local_start,
+            "the fixture needs a band between the floors"
+        );
+        let one_past = |rlmm: &Arc<dyn RemoteLogMetadataManager>| {
+            fixtures::finished_segment(rlmm, 0x5000, start.0 + 1);
+        };
+        let inner: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+        let rlmm: Arc<dyn RemoteLogMetadataManager> = match archive {
+            Archive::Empty => inner,
+            Archive::FinishedAbove => {
+                one_past(&inner);
+                inner
+            }
+            Archive::FinishedCovering => {
+                fixtures::finished_segment(&inner, 0x5000, start.0 - 5);
+                inner
+            }
+            Archive::FinishedBelow => {
+                fixtures::finished_segment(&inner, 0x5000, start.0 - 10);
+                inner
+            }
+            Archive::StartedAbove => {
+                fixtures::stuck_started_segment(&inner, 0x5000, start.0 + 1);
+                inner
+            }
+            Archive::DeletingAbove => {
+                one_past(&inner);
+                fixtures::mark_delete_started(&inner, 0x5000);
+                inner
+            }
+            Archive::NotReady => Arc::new(NotReadyRlmm),
+            Archive::Lagging => {
+                one_past(&inner);
+                Arc::new(LaggingRlmm(inner))
+            }
+            Archive::LeadershipLost => {
+                partition.current_leader.store(2, Ordering::Release);
+                inner
+            }
+        };
+        let shutdown = CancellationToken::new();
+        let fence = LeaderFence {
+            partition: &partition,
+            node_id: NodeId(1),
+            leader_epoch: 0,
+            shutdown: &shutdown,
+        };
+
+        let done = raise_start_over_unheld_offsets(&fence, &tp(), &rlmm).await;
+
+        let expected = match rests {
+            Rests::Unmoved => start,
+            Rests::OnePast => start + 1,
+            Rests::AtLocalStart => local_start,
+        };
+        let established = partition
+            .log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .established_log_start();
+        assert2::assert!(
+            (established, done) == (Some(expected), checked),
+            "{archive:?}"
+        );
+    }
+
+    /// FU-C9, the restart #2036 left open. Local retention moved an untiered
+    /// log's start to 6 and owes the checkpoint, which still holds 1, or
+    /// which was never written when nothing had moved the start before. A
+    /// crash once `remote.storage.enable=true` is in the image, before the
+    /// checkpoint is written, reopens the log tiered at 1, or at a reported 0,
+    /// as Kafka's `LogLoader.load` does, and the offsets up to 6 read as the
+    /// remote tier's band though no tier ever held them. The first sweep on
+    /// the leader raises the start to the local segments, writes it down and
+    /// records the leader epoch it checked in. A follower leaves its start to
+    /// the one its leader reports.
+    #[yare::parameterized(
+        the_leader_raises_a_stale_start = { 1, true, Offset(1), Some("0\n6\n"), Offset(6), 0 },
+        a_follower_keeps_a_stale_start = { 2, true, Offset(1), Some("0\n1\n"), Offset(1), -1 },
+        the_leader_raises_a_start_it_never_wrote = { 1, false, Offset(0), Some("0\n6\n"), Offset(6), 0 },
+        a_follower_keeps_a_start_it_never_wrote = { 2, false, Offset(0), None, Offset(0), -1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_restart_over_a_stale_start_checkpoint_serves_nothing_from_an_empty_tier(
+        leader: u64,
+        moved_before: bool,
+        reopened_at: Offset,
+        checkpointed: Option<&str>,
+        reported: Offset,
+        checked_epoch: i64,
+    ) {
+        let TempDirs { local, remote } = fixtures::temporary_dirs();
+        let mut log = partition_log(local.path(), PartitionIndex(0), LogConfig {
+            segment_size: krabka_units::bytes(1),
+            retention_size: Some(krabka_units::bytes(0)),
+            file_delete_delay: millis(0),
+            ..LogConfig::default()
+        });
+        for _ in 0..3 {
+            log.append(&mut fixtures::batch(2)).unwrap();
+        }
+        if moved_before {
+            log.set_log_start_offset(Offset(1)).unwrap();
+        }
+        let log_end = log.log_end_offset();
+        log.tick(SystemTime::now(), log_end).unwrap();
+        let checkpoint = name::log_start_offset_checkpoint_path(log.dir());
+        let on_disk = || fs::read_to_string(&checkpoint).ok();
+        assert2::assert!(
+            (log.log_start_offset(), on_disk())
+                == (Offset(6), moved_before.then(|| "0\n1\n".to_owned())),
+            "retention moved the start and owes the checkpoint"
+        );
+        // The crash: nothing writes the owed checkpoint.
+        drop(log);
+        let log = partition_log(local.path(), PartitionIndex(0), LogConfig {
+            remote_storage_enable: true,
+            ..LogConfig::default()
+        });
+        assert2::assert!(
+            (log.reported_log_start(), log.local_log_start_offset()) == (reopened_at, Offset(6)),
+            "the tiered reopen takes the stale checkpoint"
+        );
+        let partition = test_support::leading_partition_over(PartitionIndex(0), local.path(), log);
+        partition.current_leader.store(leader, Ordering::Relaxed);
+        let registry = PartitionRegistry::new();
+        let fixtures::RegisteredFixture {
+            controller,
+            rsm,
+            rlmm,
+        } = fixtures::register_fixture(&registry, Arc::clone(&partition), remote.path());
+
+        fixtures::sweep_mutable(&registry, &controller, &rsm, &rlmm).await;
+
+        let reported_after = partition
+            .log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reported_log_start();
+        assert2::assert!(
+            (
+                reported_after,
+                on_disk(),
+                partition.log_start_checked_epoch.load(Ordering::Acquire),
+            ) == (reported, checkpointed.map(str::to_owned), checked_epoch)
         );
     }
 

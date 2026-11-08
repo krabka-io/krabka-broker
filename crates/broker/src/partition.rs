@@ -205,6 +205,11 @@ pub struct Partition {
     /// pass lowers the floor to it only when the archive does not enforce the
     /// floor: see `remote_log_manager::follow_unenforced_floor`.
     pub(crate) reported_leader_log_start: Arc<AtomicI64>,
+    /// The leader epoch in which the remote-log manager last checked this
+    /// replica's log start against what the tiers hold, or -1 when it has not
+    /// checked one. Kafka checks once per leadership: see
+    /// `remote_log_manager::raise_start_over_unheld_offsets`.
+    pub(crate) log_start_checked_epoch: Arc<AtomicI64>,
     /// Retained so broker shutdown can abort and await the writer task after
     /// all request handlers have drained.
     pub(crate) writer_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -212,6 +217,9 @@ pub struct Partition {
 
 /// New partitions begin with no leader log start recorded below their floor.
 pub fn unreported_leader_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
+
+/// New partitions begin with their log start unchecked in every leader epoch.
+pub fn unchecked_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
 
 /// New partitions begin with no transaction-marker resolutions owed to group actors.
 pub fn empty_marker_materialization() -> Arc<sync::Mutex<OwedMarkerResolutions>> {
@@ -280,6 +288,7 @@ impl Partition {
             replication_target: initial_replication_target(None),
             diskless: false,
             reported_leader_log_start: unreported_leader_log_start(),
+            log_start_checked_epoch: unchecked_log_start(),
             writer_handle: Arc::new(Mutex::new(Some(writer))),
         }
     }

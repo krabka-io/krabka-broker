@@ -12,7 +12,7 @@ use {
         delivery::DeliveryHandles,
         partition::{
             Partition, WriterGate, WriterMessage, empty_marker_materialization,
-            initial_replication_target, unreported_leader_log_start,
+            initial_replication_target, unchecked_log_start, unreported_leader_log_start,
         },
         partition_writer::{WriterServices, run},
         replica_state::ReplicaState,
@@ -61,6 +61,7 @@ pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::T
         replication_target: initial_replication_target(None),
         diskless: false,
         reported_leader_log_start: unreported_leader_log_start(),
+        log_start_checked_epoch: unchecked_log_start(),
         writer_handle: Arc::new(Mutex::new(Some(writer))),
     };
     (p, dir)
