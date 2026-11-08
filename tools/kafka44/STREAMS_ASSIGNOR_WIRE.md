@@ -82,3 +82,12 @@ remains visible while `sticky` runs after plugin removal, followed by explicit
 override repair (11 matching scenario rows per broker).
 Native actor/model coverage and the released component probe remain separate
 supporting evidence, not substitutes for those executions.
+
+## Unknown-member output follow-up (2026-11-08)
+
+The [invalid-owner characterization](../../qualification/streams-assignor-invalid-20261108/README.md)
+adds an actual malformed-output wire case. Kafka 4.4 accepts a joining member
+when the custom callback returns tasks owned by a nonexistent member; native
+validation rejects that output. This is a retained **divergence**, not an
+invalid-output parity pass. Both modes exercise repair with a healthy callback.
+RF3 movement, combined ACL failures and other invalid-output classes remain open.

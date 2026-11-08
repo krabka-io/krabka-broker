@@ -1,0 +1,48 @@
+{
+  "base_revision": "234dadc776e574fd91b0ec9c4d2d84cfa1a0c33e",
+  "date": "2026-11-08",
+  "parity_pass": false,
+  "characterization_pass": true,
+  "native_binary_sha256": "98586524fd460bfe5d8dbc3f9ccbb3c2397c75b91e4019be02e12dfb29ec2cd7",
+  "oracle_image_id": "sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "checks": {
+    "javac": "pass",
+    "cargo_build_example": "pass",
+    "git_diff_check": "pass"
+  },
+  "runs": {
+    "oracle": {
+      "exit_code": 0,
+      "expected_error": 0,
+      "scenario_rows": [
+        "SCENARIO\ttarget-first-a\tPASS",
+        "SCENARIO\tcooperative-owner-a\tPASS",
+        "SCENARIO\tinvalid-output-error-0\tPASS",
+        "SCENARIO\tinvalid-output-member-accepted\tPASS",
+        "SCENARIO\ttarget-first-a\tPASS",
+        "SCENARIO\tcooperative-owner-a\tPASS",
+        "SCENARIO\tinvalid-output-repair-retry\tPASS"
+      ],
+      "scenario_count": 7
+    },
+    "native": {
+      "exit_code": 0,
+      "expected_error": -1,
+      "scenario_rows": [
+        "SCENARIO\ttarget-first-a\tPASS",
+        "SCENARIO\tcooperative-owner-a\tPASS",
+        "SCENARIO\tinvalid-output-error--1\tPASS",
+        "SCENARIO\tinvalid-output-no-partial-state\tPASS",
+        "SCENARIO\ttarget-first-a\tPASS",
+        "SCENARIO\tcooperative-owner-a\tPASS",
+        "SCENARIO\tinvalid-output-repair-retry\tPASS"
+      ],
+      "scenario_count": 7
+    }
+  },
+  "sources_sha256": {
+    "tools/kafka44/StreamsAssignorInvalid.java": "42d66cf2ab605faa0f709972b289f549b615a31cdd2f0dcf8cb7039aeb9e90a0",
+    "tools/kafka44/AssignorPlugin.java": "21735b3c044ee74bb5bfce2e075202197a3105c0510833a7cabcfdc424b75b31",
+    "crates/broker/examples/fixtures/streams_assignors.rs": "bee1538d7e3196b7686fbaf854c9062c7f7cbf23d6f88291526789c08d991a47"
+  }
+}

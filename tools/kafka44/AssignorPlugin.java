@@ -28,4 +28,14 @@ public class AssignorPlugin implements TaskAssignor {
             throw new TaskAssignorException("injected assignor failure");
         }
     }
+    /** Deliberately invalid output: task owner is not in GroupSpec.memberIds(). */
+    public static class UnknownMember extends AssignorPlugin {
+        public String name() { return "unknown-member"; }
+        public GroupAssignment assign(GroupSpec spec, TopologyDescriber topology) {
+            System.out.println("ASSIGNOR_CALLBACK unknown-member injected-unknown-member");
+            return new GroupAssignment(Map.of("injected-unknown-member",
+                new MemberAssignment(Map.of("0", Set.of(0, 1)), Map.of())));
+        }
+    }
+
 }
