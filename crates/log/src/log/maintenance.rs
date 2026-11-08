@@ -9,6 +9,7 @@ use {
     crate::{
         error::LogError,
         io::LogIo,
+        name::SegmentFile,
         retention::{self, DirSync},
         segment::Segment,
     },
@@ -18,7 +19,7 @@ use {
         collections::hash_map::RandomState,
         hash::BuildHasher,
         mem,
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::{Duration, Instant, SystemTime},
     },
 };
@@ -76,6 +77,12 @@ impl DueDeletions {
         }
         Ok(())
     }
+}
+
+/// `time` as a [`Duration`], whole milliseconds, with a negative `time` read
+/// as zero.
+fn saturating_duration(time: Time) -> Duration {
+    Duration::from_millis(u64::try_from(time.millis_i64_trunc()).unwrap_or(0))
 }
 
 impl Log {
@@ -143,7 +150,7 @@ impl Log {
         now: SystemTime,
         elapsed: Instant,
     ) -> Option<Duration> {
-        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+        let config = self.config();
         let flush = if self.unflushed_messages == 0 {
             None
         } else if config
@@ -153,7 +160,7 @@ impl Log {
             Some(Duration::ZERO)
         } else {
             config.flush_interval.map(|interval| {
-                Duration::from_millis(u64::try_from(interval.millis_i64_trunc()).unwrap_or(0))
+                saturating_duration(interval)
                     .saturating_sub(elapsed.saturating_duration_since(self.last_flush))
             })
         };
@@ -170,9 +177,7 @@ impl Log {
 
     pub(super) fn jittered_roll_interval(&mut self, interval: Time) -> Time {
         let bound = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+            .config()
             .segment_jitter
             .millis_i64_trunc()
             .min(interval.millis_i64_trunc());
@@ -207,11 +212,7 @@ impl Log {
         self.unflushed_messages = self
             .unflushed_messages
             .saturating_add(u64::try_from(delta).unwrap_or(0) + 1);
-        let threshold = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .flush_messages;
+        let threshold = self.config().flush_messages;
         if force {
             // Durable sidecars must not precede records in pending rollover jobs.
             self.rollover_flusher.finish()?;
@@ -243,7 +244,7 @@ impl Log {
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
         let (window, budget) = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             let window = if config.flush_on_append {
                 0
             } else {
@@ -315,11 +316,7 @@ impl Log {
     /// The page-cache budget in bytes, as configured.
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn page_cache_budget(&self) -> Option<u64> {
-        self.config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .page_cache_budget
-            .map(ByteSizeExt::bytes_u64)
+        self.config().page_cache_budget.map(ByteSizeExt::bytes_u64)
     }
 
     /// Start the write-back pacing over for the segment that is active now,
@@ -338,14 +335,14 @@ impl Log {
 
     pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {
         let due = {
-            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+            let config = self.config();
             self.unflushed_messages > 0
                 && (config
                     .flush_messages
                     .is_some_and(|limit| self.unflushed_messages >= limit)
                     || config.flush_interval.is_some_and(|interval| {
-                        now.saturating_duration_since(self.last_flush).as_millis()
-                            >= u128::try_from(interval.millis_i64_trunc()).unwrap_or(0)
+                        now.saturating_duration_since(self.last_flush)
+                            >= saturating_duration(interval)
                     }))
         };
         if due {
@@ -356,49 +353,26 @@ impl Log {
     }
 
     pub(super) fn retire_segment(&mut self, base: Offset, now: SystemTime) -> Result<(), LogError> {
-        if self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .file_delete_delay
-            <= Time::ZERO
-        {
+        if self.config().file_delete_delay <= Time::ZERO {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
-        self.retire_files(
-            base,
-            now,
-            &[
-                "log",
-                "index",
-                "timeindex",
-                "txnindex",
-                "stampindex",
-                "snapshot",
-            ],
-            DirSync::Now,
-        )
+        self.retire_files(base, now, &SegmentFile::RETIRED_WITH_SEGMENT, DirSync::Now)
     }
 
     pub(super) fn retire_files(
         &mut self,
         base: Offset,
         now: SystemTime,
-        extensions: &[&str],
+        files: &[SegmentFile],
         sync: DirSync,
     ) -> Result<(), LogError> {
-        let delay = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .file_delete_delay;
-        let delay = Duration::from_millis(u64::try_from(delay.millis_i64_trunc()).unwrap_or(0));
+        let delay = self.config().file_delete_delay;
+        let delay = saturating_duration(delay);
         let deadline = now
             .checked_add(delay)
             .ok_or_else(|| LogError::InvalidArgument("file deletion deadline overflow".into()))?;
         let mut paths = Vec::new();
-        let result =
-            retention::retire_files(&*self.io, &self.dir, base, extensions, &mut paths, sync);
+        let result = retention::retire_files(&*self.io, &self.dir, base, files, &mut paths, sync);
         if !paths.is_empty() {
             self.pending_deletes.push(PendingDelete { deadline, paths });
         }

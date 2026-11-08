@@ -11,7 +11,6 @@ use {
             newest_metadata_checkpoint,
         },
         cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
-        connection::SecurityArgs,
         diskless::capture_projection,
         error::BackupError,
         manifest::{
@@ -22,6 +21,7 @@ use {
         report::{BackupEvent, OperationReport},
     },
     krabka_audit::FileEd25519Signer,
+    krabka_cli_connection::SecurityArgs,
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, AdminError, ConfigResource, DescribeConfigsOptions,
         TopicMetadata, groups::ListGroupsOptions,
@@ -1083,12 +1083,12 @@ mod tests {
             archive::{Archive, ArchiveArgs},
             capture::capture_key,
             cli::{CaptureSigningArgs, CaptureTrustArgs},
-            connection::SecurityArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
             report::{BackupEvent, OperationReport},
         },
         assert2::{assert, check},
+        krabka_cli_connection::SecurityArgs,
         krabka_ids::PartitionIndex,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
         std::{

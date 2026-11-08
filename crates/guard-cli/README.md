@@ -37,7 +37,20 @@ Cargo working tree to build a subprocess from.
 ## Usage
 
 Every subcommand needs `--bootstrap-server` (`-b`), which also reads the
-`KRABKA_BOOTSTRAP_SERVER` environment variable.
+`KRABKA_BOOTSTRAP_SERVER` environment variable. On a TLS or SASL
+listener, add `--command-config <file>`, a Kafka client properties file like
+the one `kafka-topics --command-config` takes. Both flags go before the
+subcommand. [`krabka-cli-connection`](../cli-connection/README.md) lists the
+properties the file takes:
+
+```sh
+krabka-guard -b broker-1:9093 --command-config ~/.krabka/alice.properties freeze list
+```
+
+The broker authorizes every request as the principal that file logs in as, and
+`--principal` has to name that principal. A SASL login as `alice` is
+`User:alice`. Without `--command-config` the tool connects in PLAINTEXT, where
+the principal is `User:ANONYMOUS`.
 
 The broker's `[[operator_keys]]` table binds a key id to a principal and a
 public key:
@@ -100,8 +113,11 @@ are Kafka's ACL pattern types.
 
 The signing flags are `--sign-with <path>`, `--key-id <id>`, and
 `--principal <name>`, and they travel together. `--principal` is the name the
-broker authenticates on this connection. The signed bytes carry it, and the
-broker checks it against both the connection and the `[[operator_keys]]` entry.
+broker authenticates on this connection, which `--command-config` decides: a
+SASL login as `alice` is `User:alice`. The signed bytes carry it, and the
+broker checks it against both the connection and the `[[operator_keys]]` entry,
+so a signed freeze over a connection that logs in as someone else fails
+verification and exits `5`.
 
 ### `break-glass`
 
@@ -133,7 +149,7 @@ and `krabka-barrier`. Code `3` keeps the meaning `krabka-barrier` gives it.
 | --- | --- |
 | `0` | The broker accepted the request. |
 | `1` | The broker refused the request. The reason is on stderr. |
-| `2` | The broker could not be reached. Nothing is known about the outcome. |
+| `2` | No request completed: the broker could not be reached or refused the login, or `--command-config` could not be read or names conflicting properties. Nothing is known about the outcome. |
 | `3` | The registry names an operator key this machine does not hold, so the tool could not check it. |
 | `4` | The action needs a break-glass approval that does not exist. Go and get a second person. |
 | `5` | A signature did not verify, or the broker needed one and did not get it. |
@@ -141,6 +157,7 @@ and `krabka-barrier`. Code `3` keeps the meaning `krabka-barrier` gives it.
 ## Documentation
 
 - [KFC-9: topic write freeze and break-glass workflows](../../docs/KFCs/KFC-9-topic-write-freeze-and-break-glass-workflows.md)
+- [`krabka-cli-connection`](../cli-connection/README.md), the `--command-config` properties
 - [API documentation](https://krabka-io.github.io/krabka-broker/krabka-guard/)
 
 ## License
