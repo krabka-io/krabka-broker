@@ -14,7 +14,7 @@ Three Apache Kafka configs take a Java regular expression: `ssl.principal.mappin
 ## Features
 
 - `JavaPattern::matches` is `Matcher.matches()`: some way of matching spans the whole input, through backtracking and lazy quantifiers.
-- `JavaPattern::replace` is `replaceAll` or `replaceFirst`. Its matches are `Matcher.find`'s, empty matches and `\G` included, and its replacement syntax is `appendReplacement`'s: `$n`, `${name}` and `\x`.
+- `JavaPattern::replace_all` is `replaceAll` and `JavaPattern::replace_first` is `replaceFirst`. Their matches are `Matcher.find`'s, empty matches and `\G` included, and their replacement syntax is `appendReplacement`'s: `$n`, `${name}` and `\x`.
 - Java's reading of the syntax:
   - the ASCII `\w`, `\d`, `\s`, `\b` and POSIX classes, and their Unicode forms under `(?U)`
   - `.`, `$`, `^` and `\Z` with Java's line terminators, under `(?s)`, `(?m)` and `(?d)`
