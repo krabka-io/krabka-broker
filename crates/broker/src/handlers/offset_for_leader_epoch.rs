@@ -48,6 +48,9 @@
 
 #[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
+// Only the test-only request counter in `handle` orders an atomic here.
+#[cfg(any(test, feature = "test-helpers"))]
+use std::sync::atomic::Ordering;
 use {
     crate::{
         broker::Broker,
@@ -66,7 +69,6 @@ use {
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
     },
-    std::sync::atomic::Ordering,
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
