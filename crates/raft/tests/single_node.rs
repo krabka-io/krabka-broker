@@ -3,6 +3,10 @@
 //! cluster.
 #![cfg(test)]
 
+#[macro_use]
+#[path = "support/controller.rs"]
+mod controller_support;
+
 use {
     krabka_metadata::{MetadataError, MetadataRecord, NodeId},
     krabka_raft::{Controller, ControllerConfig, ControllerHandle, RaftError, SubmitChangeResult},
@@ -142,17 +146,7 @@ fn duplicate_topic(node: &SingleVoterTopic) {
     ));
 }
 
-impl krabka_bdd::World for SingleVoterTopic {
-    async fn after(
-        &mut self,
-        _scenario: &krabka_bdd::ScenarioSpec,
-        _outcome: &krabka_bdd::Outcome,
-    ) {
-        if let Some(controller) = self.controller.take() {
-            controller.shutdown().await;
-        }
-    }
-}
+shuts_down_controller!(SingleVoterTopic);
 
 krabka_bdd::scenarios!(
     "tests/features/migrated/tests/single_node.feature",

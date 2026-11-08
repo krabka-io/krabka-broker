@@ -7,6 +7,10 @@
 //! `4.5-IV0` (level 34), which is unstable in Kafka 4.4.
 #![cfg(test)]
 
+#[macro_use]
+#[path = "support/controller.rs"]
+mod controller_support;
+
 use {
     assert2::{assert, check},
     krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId},
@@ -393,17 +397,7 @@ fn normal_feature_fault(recovery: &FeatureRecovery) {
     check!(recovery.channel_closed == Some(true));
     check!(recovery.fault.is_none());
 }
-impl krabka_bdd::World for FeatureRecovery {
-    async fn after(
-        &mut self,
-        _scenario: &krabka_bdd::ScenarioSpec,
-        _outcome: &krabka_bdd::Outcome,
-    ) {
-        if let Some(controller) = self.controller.take() {
-            controller.shutdown().await;
-        }
-    }
-}
+shuts_down_controller!(FeatureRecovery);
 krabka_bdd::scenarios!(
     "tests/features/migrated/tests/unsupported_feature_level.feature",
     fixtures = [recovery: FeatureRecovery],

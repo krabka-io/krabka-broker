@@ -1,6 +1,4 @@
 # krabka-bdd lint baseline: path<TAB>rule-id<TAB>message<TAB>count
-crates/authz/tests/features/resource_authorization/resource_authorization.feature	case-column	the Examples table starts with column `grant`, not `case`	1
-crates/backup-cli/tests/features/command_config/command_config.feature	case-column	the Examples table starts with column `operation`, not `case`	1
 crates/bdd/tests/features/runner_scenarios/runner_scenarios.feature	one-when	scenario `A scenario in progress` has 0 `When` steps, and exactly one is allowed	1
 crates/bdd/tests/features/runner_scenarios/runner_scenarios.feature	one-when	scenario `A step fails` has 0 `When` steps, and exactly one is allowed	1
 crates/bdd/tests/features/runner_scenarios/runner_scenarios.feature	one-when	scenario `A step matches no definition` has 0 `When` steps, and exactly one is allowed	1
@@ -11,18 +9,6 @@ crates/bdd/tests/features/runner_scenarios/runner_scenarios.feature	scenario-out
 crates/bdd/tests/features/runner_scenarios/runner_scenarios.feature	star-step	step `* the runner counter is doubled after a pause` uses `*` outside a @journey scenario	1
 crates/bdd/tests/features/runner_teardown/runner_teardown.feature	one-when	scenario `The scenario passes` has 0 `When` steps, and exactly one is allowed	1
 crates/bdd/tests/features/runner_teardown/runner_teardown.feature	unknown-tag	tag `@teardown` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	4
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	case-column	the Examples table starts with column `acks`, not `case`	1
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	case-column	the Examples table starts with column `codec`, not `case`	1
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	case-column	the Examples table starts with column `field`, not `case`	1
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	case-column	the Examples table starts with column `rate`, not `case`	1
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	case-column	the Examples table starts with column `stack`, not `case`	1
-crates/bench-driver/tests/features/benchmark_configuration/benchmark_configuration.feature	or-in-step	step `the run has no JVM heap nonheap page-cache or startup measurements` offers alternatives with `or`	1
-crates/bench-driver/tests/features/failover_qualification/failover_qualification.feature	case-column	the Examples table starts with column `dropped`, not `case`	1
-crates/bench-driver/tests/features/failover_qualification/failover_qualification.feature	no-background	the feature has a `Background`	1
-crates/bench-driver/tests/features/producer_ordering/producer_ordering.feature	case-column	the Examples table starts with column `enabled`, not `case`	1
-crates/bench-driver/tests/features/scenario_files/scenario_files.feature	case-column	the Examples table starts with column `filename`, not `case`	1
-crates/bench-driver/tests/features/scenario_files/scenario_files.feature	one-when	scenario `A shipped scenario describes a runnable benchmark` has 2 `When` steps, and exactly one is allowed	1
-crates/bench-driver/tests/features/scenario_files/scenario_files.feature	one-when	scenario `Newly checked in scenarios join the validated corpus automatically` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/controller/admin_surface.feature	max-steps	scenario `The controller listener serves the complete topic lifecycle` has 7 steps, and at most 5 are allowed	1
 crates/broker/tests/features/controller/admin_surface.feature	one-when	scenario `SCRAM credentials written through the controller listener can be described on the same connection` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/controller/admin_surface.feature	one-when	scenario `The controller listener serves the complete topic lifecycle` has 3 `When` steps, and exactly one is allowed	1
@@ -32,7 +18,6 @@ crates/broker/tests/features/controller/controlled_shutdown.feature	first-person
 crates/broker/tests/features/controller/controlled_shutdown.feature	first-person	step `shutdown succeeds and every surviving broker observes zero drain-me partitions led by the stopped broker` uses the first-person word `me`	1
 crates/broker/tests/features/controller/controlled_shutdown.feature	or-in-step	step `an elected controller-only node has no data partitions or broker heartbeat client` offers alternatives with `or`	1
 crates/broker/tests/features/controller/dynamic_voters.feature	case-column	the Examples table starts with column `role`, not `case`	1
-crates/broker/tests/features/controller/failed_quorum_forward.feature	or-in-step	step `the follower returns a typed NOT_LEADER_OR_FOLLOWER response instead of closing the client connection` offers alternatives with `OR`	1
 crates/broker/tests/features/controller/fatal_startup.feature	quote-in-step	step `stderr contains the Kafka fatal fault "Encountered fatal fault: Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=34), but this controller only supports versions 7-33"` quotes a value	1
 crates/broker/tests/features/controller/fatal_startup.feature	quote-in-step	step `stderr contains the Kafka fatal fault "Encountered fatal fault: exception while completing controller activation: metadata: topic 'orders' already exists"` quotes a value	1
 crates/broker/tests/features/controller/listener_authorization.feature	max-steps	scenario `SASL principals receive only the controller operations they hold` has 7 steps, and at most 5 are allowed	1
@@ -681,7 +666,6 @@ crates/broker/tests/features/migrated/tests/admin_handlers/admin_create_topics.f
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_create_topics.feature	one-when	scenario `create topics returns the configs describe configs reports` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_delete_records.feature	max-steps	scenario `a trim inside the active segment survives a restart` has 8 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_delete_records.feature	one-when	scenario `a trim inside the active segment survives a restart` has 4 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/admin_handlers/admin_describe_quorum.feature	or-in-step	step `the unknown quorum partition returns Kafka UNKNOWN_TOPIC_OR_PARTITION and its message` offers alternatives with `OR`	1
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature	case-column	the Examples table starts with column `validate_only`, not `case`	1
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature	max-steps	scenario `a topic the policy allows is created and validate only commits nothing` has 7 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/admin_handlers/admin_topic_policy.feature	max-steps	scenario `altering a topic to a forbidden config is a policy violation` has 6 steps, and at most 5 are allowed	1
@@ -1323,8 +1307,6 @@ crates/broker/tests/features/migrated/tests/process_kill_durability.feature	one-
 crates/broker/tests/features/migrated/tests/process_kill_durability.feature	one-when	scenario `Acknowledged records survive repeated SIGKILL and deterministic torn tail recovery` has 12 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/produce_leader_gate.feature	max-steps	scenario `produce to non leader is rejected` has 9 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/produce_leader_gate.feature	one-when	scenario `produce to non leader is rejected` has 4 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/produce_leader_gate.feature	or-in-step	step `the RF3 follower returns NOT_LEADER_OR_FOLLOWER 6 with the real leader id and its complete PLAINTEXT endpoint, and its local log does not grow` offers alternatives with `OR`	1
-crates/broker/tests/features/migrated/tests/produce_leader_gate.feature	or-in-step	step `the non-replica returns NOT_LEADER_OR_FOLLOWER 6 and hints the actual RF1 leader` offers alternatives with `OR`	1
 crates/broker/tests/features/migrated/tests/produce_legacy_upconvert.feature	one-when	scenario `A v1 message set is stored and fetched as equivalent v2 records` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/produce_log_append_time.feature	max-steps	scenario `Create time rejects an expired producer timestamp` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/produce_log_append_time.feature	one-when	scenario `Create time rejects a future producer timestamp` has 2 `When` steps, and exactly one is allowed	1
@@ -1520,7 +1502,6 @@ crates/broker/tests/features/migrated/tests/stretch_cluster/site_loss.feature	on
 crates/broker/tests/features/migrated/tests/stretch_cluster/site_loss.feature	or-in-step	step `broker 1 reports leader 1, replicas 1,2,3, ISR 1,2,3 and no adding or removing replicas` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/tests/stretch_cluster/site_loss.feature	or-in-step	step `broker 1 reports leader 1, replicas 1,2,3, ISR 1,3 and no adding or removing replicas` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/tests/stretch_cluster/site_loss.feature	or-in-step	step `broker <observer> reports leader <leader>, replicas 1,2,3, ISR <isr> and no adding or removing replicas` offers alternatives with `or`	1
-crates/broker/tests/features/migrated/tests/stretch_cluster/site_loss.feature	or-in-step	step `the write returns NOT_LEADER_OR_FOLLOWER code 6 and the partition view never names witness 3 as leader` offers alternatives with `OR`	1
 crates/broker/tests/features/migrated/tests/stretch_cluster/unreachable_site.feature	max-steps	scenario `an unreachable leader stops acknowledging acks all and recovers on heal` has 14 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/stretch_cluster/unreachable_site.feature	one-when	scenario `an unreachable leader stops acknowledging acks all and recovers on heal` has 6 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/support_relay.feature	max-steps	scenario `cut and heal work through a shared relay` has 7 steps, and at most 5 are allowed	1
@@ -1674,7 +1655,6 @@ crates/broker/tests/features/migrated/tests/unregister_broker.feature	one-when	s
 crates/broker/tests/features/migrated/tests/unregister_controller_forward.feature	max-steps	scenario `a follower forwards unregister controller to the active controller` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/unregister_controller_forward.feature	one-when	scenario `a follower forwards unregister controller to the active controller` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/witness_role/witness_client_traffic.feature	one-when	scenario `witness refuses client traffic while replication advances` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/witness_role/witness_client_traffic.feature	or-in-step	step `both requests return NOT_LEADER_OR_FOLLOWER and the complete leader endpoint, Fetch names the current leader, and ISR remains 1,2,3` offers alternatives with `OR`	1
 crates/broker/tests/features/migrated/tests/witness_role/witness_config_surface.feature	one-when	scenario `witness role is a read only broker config` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/witness_role/witness_config_surface.feature	or-in-step	step `broker 3 describes all of its broker configs without synonyms or documentation` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/tests/witness_role/witness_isr_membership.feature	one-when	scenario `witness is a visible isr member that serves no reads` has 2 `When` steps, and exactly one is allowed	1
@@ -1694,144 +1674,3 @@ crates/broker/tests/features/storage/replica_directory_moves.feature	max-steps	s
 crates/broker/tests/features/storage/replica_directory_moves.feature	one-when	scenario `A physical directory move preserves every stored record` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/storage/replica_directory_moves.feature	one-when	scenario `Moving both partitions empties the source and repeated moves succeed` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/streams/task_assignor_registry.feature	case-column	the Examples table starts with column `selection`, not `case`	1
-crates/docgen/tests/features/failure_diagrams/failure_diagrams.feature	no-background	the feature has a `Background`	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	case-column	the Examples table starts with column `artifact`, not `case`	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	case-column	the Examples table starts with column `input`, not `case`	2
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	case-column	the Examples table starts with column `options`, not `case`	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	max-steps	scenario `A published marker requires explicit skipping when resuming an interrupted run` has 8 steps, and at most 5 are allowed	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	max-steps	scenario `An interruption before marker publication can be resumed` has 6 steps, and at most 5 are allowed	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	max-steps	scenario `Ignoring formatted directories preserves identity and makes reruns idempotent` has 9 steps, and at most 5 are allowed	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	one-when	scenario `A published marker requires explicit skipping when resuming an interrupted run` has 3 `When` steps, and exactly one is allowed	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	one-when	scenario `An interruption before marker publication can be resumed` has 2 `When` steps, and exactly one is allowed	1
-crates/format/tests/features/format_binary_parity/format_binary_parity.feature	one-when	scenario `Ignoring formatted directories preserves identity and makes reruns idempotent` has 4 `When` steps, and exactly one is allowed	1
-crates/format/tests/features/formatter_feature_levels/formatter_feature_levels.feature	case-column	the Examples table starts with column `features`, not `case`	2
-crates/format/tests/features/formatter_feature_levels/formatter_feature_levels.feature	case-column	the Examples table starts with column `release`, not `case`	1
-crates/format/tests/features/formatter_planning/formatter_planning.feature	case-column	the Examples table starts with column `flags`, not `case`	1
-crates/format/tests/features/kafka_uuid_contract/kafka_uuid_contract.feature	case-column	the Examples table starts with column `high`, not `case`	1
-crates/format/tests/features/kafka_uuid_contract/kafka_uuid_contract.feature	case-column	the Examples table starts with column `input`, not `case`	2
-crates/format/tests/features/node_id_arguments/node_id_arguments.feature	case-column	the Examples table starts with column `input`, not `case`	2
-crates/format/tests/features/quorum_format/quorum_format.feature	case-column	the Examples table starts with column `level`, not `case`	1
-crates/format/tests/features/quorum_format/quorum_format.feature	case-column	the Examples table starts with column `mode`, not `case`	1
-crates/kraft-core/tests/features/migrated/src/role.feature	no-background	the feature has a `Background`	1
-crates/kraft-core/tests/features/migrated/src/sim/curated.feature	no-background	the feature has a `Background`	1
-crates/kraft-core/tests/features/migrated/src/sim/node.feature	case-column	the Examples table starts with column `node_id`, not `case`	1
-crates/kraft-core/tests/features/migrated/src/sim/playground.feature	one-when	scenario `Append is routed only to an elected leader` has 2 `When` steps, and exactly one is allowed	1
-crates/log/tests/features/compaction_empty_batches/compaction_empty_batches.feature	no-background	the feature has a `Background`	1
-crates/log/tests/features/control_marker_contract/control_marker_contract.feature	case-column	the Examples table starts with column `key`, not `case`	5
-crates/log/tests/features/control_marker_contract/control_marker_contract.feature	case-column	the Examples table starts with column `value`, not `case`	3
-crates/log/tests/features/control_marker_contract/control_marker_contract.feature	max-steps	scenario `A malformed marker version cannot change the log` has 6 steps, and at most 5 are allowed	1
-crates/log/tests/features/control_marker_contract/control_marker_contract.feature	max-steps	scenario `A missing or short marker cannot change the log` has 6 steps, and at most 5 are allowed	1
-crates/log/tests/features/leader_epoch_lookup/leader_epoch_lookup.feature	case-column	the Examples table starts with column `history`, not `case`	1
-crates/log/tests/features/leader_epoch_mutation/leader_epoch_mutation.feature	case-column	the Examples table starts with column `before`, not `case`	2
-crates/log/tests/features/log_topic_names/log_topic_names.feature	case-column	the Examples table starts with column `fragment`, not `case`	1
-crates/log/tests/features/log_topic_names/log_topic_names.feature	case-column	the Examples table starts with column `kind`, not `case`	1
-crates/log/tests/features/log_topic_names/log_topic_names.feature	case-column	the Examples table starts with column `name`, not `case`	2
-crates/log/tests/features/producer_snapshot_lifecycle/producer_snapshot_lifecycle.feature	case-column	the Examples table starts with column `action`, not `case`	1
-crates/log/tests/features/reopened_log_start/reopened_log_start.feature	case-column	the Examples table starts with column `enabled`, not `case`	1
-crates/log/tests/features/segment_timestamp_limit/segment_timestamp_limit.feature	case-column	the Examples table starts with column `codec`, not `case`	1
-crates/macros/tests/features/epoch_codec/epoch_codec.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
-crates/macros/tests/features/uuid_derive/uuid_derive.feature	case-column	the Examples table starts with column `source`, not `case`	1
-crates/macros/tests/features/uuid_derive/uuid_derive.feature	mechanism-word	step `UUID wrapper source pub struct Id(pub Uuid);` uses the mechanism word `struct`	1
-crates/raft/tests/features/kraft_log_sim.feature	one-when	scenario `A divergent follower truncates and reconverges` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/kraft_sim.feature	max-steps	scenario `A partitioned leader rejoins as a follower` has 6 steps, and at most 5 are allowed	1
-crates/raft/tests/features/kraft_sim.feature	one-when	scenario `A partitioned leader rejoins as a follower` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/src/config/kafka_release.feature	case-column	the Examples table starts with column `key`, not `case`	1
-crates/raft/tests/features/migrated/src/config/metadata_log.feature	no-background	the feature has a `Background`	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is " a.example : 3 , b:4 "` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is ""` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is ",a:1"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "127.0.0.1:2"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "::1:5"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a/b:1"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a:-1"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a:1,"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a:1,a:2"` quotes a value	1
-crates/raft/tests/features/migrated/src/connection_limiter/settings.feature	quote-in-step	step `the per-IP connection override text is "a:x"` quotes a value	1
-crates/raft/tests/features/migrated/src/kraft/controller/graceful_shutdown.feature	case-column	the Examples table starts with column `timeout_ms`, not `case`	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_broker_registration.feature	max-steps	scenario `A broker registers, rejoins service, shuts down, and unregisters` has 11 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_broker_registration.feature	one-when	scenario `A broker registers, rejoins service, shuts down, and unregisters` has 5 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_control_records.feature	case-column	the Examples table starts with column `version`, not `case`	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_fetch.feature	case-column	the Examples table starts with column `leader`, not `case`	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_fetch.feature	max-steps	scenario `An observer keeping pace with appends earns Kafka caught-up credit` has 7 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_fetch.feature	one-when	scenario `An observer keeping pace with appends earns Kafka caught-up credit` has 3 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_fetch.feature	unknown-tag	tag `@observer` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_fetch.feature	unknown-tag	tag `@refetch` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
-crates/raft/tests/features/migrated/src/kraft/controller/tests_quorum_requests.feature	case-column	the Examples table starts with column `request`, not `case`	4
-crates/raft/tests/features/migrated/src/kraft/log.feature	case-column	the Examples table starts with column `boundary`, not `case`	1
-crates/raft/tests/features/migrated/src/kraft/transport/wire/request/tests.feature	one-when	scenario `EndQuorumEpoch preserves the preferred successor across protocol versions` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/src/kraft/transport/wire/response/tests.feature	case-column	the Examples table starts with column `known_leader`, not `case`	1
-crates/raft/tests/features/migrated/src/server/api_versions.feature	case-column	the Examples table starts with column `enabled`, not `case`	1
-crates/raft/tests/features/migrated/src/server/api_versions.feature	case-column	the Examples table starts with column `kraft`, not `case`	2
-crates/raft/tests/features/migrated/src/server/api_versions.feature	case-column	the Examples table starts with column `request`, not `case`	1
-crates/raft/tests/features/migrated/src/server/api_versions.feature	unknown-tag	tag `@features` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	2
-crates/raft/tests/features/migrated/src/server/api_versions.feature	unknown-tag	tag `@request` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
-crates/raft/tests/features/migrated/src/server/api_versions.feature	unknown-tag	tag `@trunk` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
-crates/raft/tests/features/migrated/src/server/api_versions/features.feature	case-column	the Examples table starts with column `unstable`, not `case`	1
-crates/raft/tests/features/migrated/src/server/authorization/tests.feature	case-column	the Examples table starts with column `api`, not `case`	1
-crates/raft/tests/features/migrated/src/snapshot/writer.feature	case-column	the Examples table starts with column `family`, not `case`	1
-crates/raft/tests/features/migrated/src/voter_requests.feature	case-column	the Examples table starts with column `outcome`, not `case`	1
-crates/raft/tests/features/migrated/src/voter_requests.feature	or-in-step	step `UpdateVoter admission returns NOT_LEADER_OR_FOLLOWER` offers alternatives with `OR`	1
-crates/raft/tests/features/migrated/src/voter_requests.feature	or-in-step	step `voter request admission returns NOT_LEADER_OR_FOLLOWER with message absent` offers alternatives with `OR`	3
-crates/raft/tests/features/migrated/src/voter_requests.feature	quote-in-step	step `voter request admission returns INCONSISTENT_CLUSTER_ID with message The given id "cluster-b" doesn't match the cluster id "cluster-a"` quotes a value	2
-crates/raft/tests/features/migrated/tests/kraft_checkpoint_jvm.feature	one-when	scenario `Kafka JVM tools decode and replay the engine checkpoint` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/failover.feature	case-column	the Examples table starts with column `cluster`, not `case`	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/failover.feature	max-steps	scenario `An isolated leader resigns and rejoins after healing` has 6 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/failover.feature	one-when	scenario `A leader crash preserves majority commits` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/failover.feature	one-when	scenario `An isolated leader resigns and rejoins after healing` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/replication.feature	one-when	scenario `A follower hints the leader and the leader replicates the submitted topic` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	max-steps	scenario `A pruned follower redirects Fetch and FetchSnapshot to the leader` has 6 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	max-steps	scenario `A snapshot transfer survives a leader checkpoint roll` has 8 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	one-when	scenario `A pruned follower redirects Fetch and FetchSnapshot to the leader` has 3 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	one-when	scenario `A snapshot transfer survives a leader checkpoint roll` has 4 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	one-when	scenario `An empty voter installs a snapshot and converges` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/kraft_engine_sim/snapshot_catchup.feature	or-in-step	step `the follower retains one or two checkpoints and refuses Fetch with the current leader and its own log start` offers alternatives with `or`	1
-crates/raft/tests/features/migrated/tests/kraft_model.feature	case-column	the Examples table starts with column `configuration`, not `case`	1
-crates/raft/tests/features/migrated/tests/reconfig.feature	case-column	the Examples table starts with column `operation`, not `case`	1
-crates/raft/tests/features/migrated/tests/single_node.feature	no-background	the feature has a `Background`	1
-crates/raft/tests/features/migrated/tests/snapshot.feature	max-steps	scenario `A manual snapshot survives a full controller restart` has 6 steps, and at most 5 are allowed	1
-crates/raft/tests/features/migrated/tests/snapshot.feature	one-when	scenario `A manual snapshot survives a full controller restart` has 2 `When` steps, and exactly one is allowed	1
-crates/raft/tests/features/migrated/tests/snapshot.feature	unknown-tag	tag `@codec` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	2
-crates/raft/tests/features/migrated/tests/snapshot.feature	unknown-tag	tag `@restart` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
-crates/raft/tests/features/migrated/tests/unsupported_feature_level.feature	case-column	the Examples table starts with column `watermark`, not `case`	1
-crates/raft/tests/features/migrated/tests/unsupported_feature_level.feature	one-when	scenario `a log finalized at an unstable level starts only with the flag on` has 2 `When` steps, and exactly one is allowed	1
-crates/remote-storage-topic/tests/features/consumer_lifecycle/lifecycle.feature	case-column	the Examples table starts with column `stage`, not `case`	1
-crates/remote-storage-topic/tests/features/kafka_adapter_network/bootstrap.feature	case-column	the Examples table starts with column `bootstrap`, not `case`	1
-crates/remote-storage-topic/tests/features/kafka_adapter_network/bootstrap.feature	case-column	the Examples table starts with column `mode`, not `case`	1
-crates/remote-storage-topic/tests/features/kafka_adapter_network/bootstrap.feature	quote-in-step	step `bootstrap resolution reports bootstrap " , " resolved to no address` quotes a value	1
-crates/remote-storage-topic/tests/features/kafka_adapter_network/bootstrap.feature	quote-in-step	step `bootstrap resolution reports bootstrap "" resolved to no address` quotes a value	1
-crates/remote-storage-topic/tests/features/kafka_adapter_sync/records.feature	case-column	the Examples table starts with column `partition`, not `case`	1
-crates/remote-storage-topic/tests/features/manager_readiness/readiness.feature	case-column	the Examples table starts with column `state`, not `case`	1
-crates/remote-storage-topic/tests/features/metadata_client_policy/metadata_client_policy.feature	case-column	the Examples table starts with column `capacity`, not `case`	1
-crates/remote-storage-topic/tests/features/metadata_client_policy/metadata_client_policy.feature	case-column	the Examples table starts with column `field`, not `case`	1
-crates/remote-storage-topic/tests/features/metadata_client_policy/metadata_client_policy.feature	case-column	the Examples table starts with column `minimum`, not `case`	1
-crates/remote-storage-topic/tests/features/metadata_client_policy/metadata_client_policy.feature	max-steps	scenario `Operators can choose a valid custom metadata transport policy` has 8 steps, and at most 5 are allowed	1
-crates/remote-storage-topic/tests/features/metadata_topic_creation/metadata_topic_creation.feature	case-column	the Examples table starts with column `compacted`, not `case`	1
-crates/remote-storage-topic/tests/features/range_progress/progress.feature	case-column	the Examples table starts with column `code`, not `case`	1
-crates/remote-storage-topic/tests/features/range_progress/progress.feature	case-column	the Examples table starts with column `failure`, not `case`	1
-crates/remote-storage-topic/tests/features/range_progress/progress.feature	case-column	the Examples table starts with column `next`, not `case`	1
-crates/remote-storage-topic/tests/features/range_reads/reads.feature	case-column	the Examples table starts with column `partition`, not `case`	1
-crates/remote-storage-topic/tests/features/range_reads/reads.feature	first-person	scenario name `An empty range performs no I O` uses the first-person word `I`	1
-crates/remote-storage-topic/tests/features/range_reads/reads.feature	first-person	scenario name `An invalid partition performs no I O` uses the first-person word `I`	1
-crates/remote-storage/tests/features/local_segment_copy/local_segment_copy.feature	case-column	the Examples table starts with column `suffix`, not `case`	1
-crates/remote-storage/tests/features/remote_tier_names/remote_tier_names.feature	case-column	the Examples table starts with column `encoded`, not `case`	1
-crates/remote-storage/tests/features/remote_tier_names/remote_tier_names.feature	case-column	the Examples table starts with column `file`, not `case`	1
-crates/remote-storage/tests/features/remote_tier_names/remote_tier_names.feature	case-column	the Examples table starts with column `kind`, not `case`	1
-crates/remote-storage/tests/features/timestamp_lookup/timestamp_lookup.feature	case-column	the Examples table starts with column `codec`, not `case`	1
-crates/remote-storage/tests/features/timestamp_lookup/timestamp_lookup.feature	case-column	the Examples table starts with column `target`, not `case`	1
-crates/restore/tests/features/restore_arguments/restore_arguments.feature	case-column	the Examples table starts with column `name`, not `case`	2
-crates/restore/tests/features/restore_arguments/restore_arguments.feature	case-column	the Examples table starts with column `text`, not `case`	3
-crates/restore/tests/features/rewrite_timestamps/rewrite_timestamps.feature	case-column	the Examples table starts with column `timestamp_type`, not `case`	1
-crates/restore/tests/features/transaction_marker_order/transaction_marker_order.feature	no-background	the feature has a `Background`	1
-crates/telemetry/tests/features/log_level_names/log_level_names.feature	case-column	the Examples table starts with column `name`, not `case`	2
-crates/verified/tests/features/acl/acl.feature	case-column	the Examples table starts with column `identity`, not `case`	1
-crates/verified/tests/features/acl/acl.feature	case-column	the Examples table starts with column `principal`, not `case`	1
-crates/verified/tests/features/migrated/src/authz/tests/kip368_session_boundaries.feature	case-column	the Examples table starts with column `boundary`, not `case`	1
-crates/verified/tests/features/migrated/src/isr/tests/caught_up_credit_follows_kafkas_fetch_state_update.feature	case-column	the Examples table starts with column `boundary`, not `case`	1
-crates/verified/tests/features/migrated/src/isr/tests/replica_isr_eligibility_follows_kip_841.feature	no-background	the feature has a `Background`	1
-crates/verified/tests/features/migrated/src/producer/tests/sequence_arithmetic_matches_kafka_wraparound.feature	case-column	the Examples table starts with column `sequence`, not `case`	1
-crates/verified/tests/features/migrated/src/producer_snapshot/tests/reload_log_start_follows_kafka_log_loader.feature	case-column	the Examples table starts with column `boundary`, not `case`	3
-crates/verified/tests/features/migrated/src/producer_snapshot/tests/reload_log_start_follows_kafka_log_loader.feature	case-column	the Examples table starts with column `remote`, not `case`	1
-crates/verified/tests/features/migrated/src/producer_snapshot/tests/reload_log_start_follows_kafka_log_loader.feature	or-in-step	step `the loader classifies every snapshot as stray or retained` offers alternatives with `or`	1
-crates/verified/tests/features/migrated/src/retention/tests/barrier_cut_expiry_is_exact_and_fails_closed_at_extremes.feature	case-column	the Examples table starts with column `boundary`, not `case`	1
-crates/verified/tests/features/migrated/src/transaction/tests/idle_transaction_reaper_matches_kafka_timed_out_transactions.feature	case-column	the Examples table starts with column `verified`, not `case`	1

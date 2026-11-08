@@ -11,6 +11,10 @@
 //! over KIP-595 `FetchSnapshot` is covered by the engine simulator.
 #![cfg(test)]
 
+#[macro_use]
+#[path = "support/controller.rs"]
+mod controller_support;
+
 use {
     assert2::check,
     krabka_metadata::{
@@ -318,17 +322,7 @@ fn snapshot_recovered(recovery: &SnapshotRecovery) {
     );
 }
 
-impl krabka_bdd::World for SnapshotRecovery {
-    async fn after(
-        &mut self,
-        _scenario: &krabka_bdd::ScenarioSpec,
-        _outcome: &krabka_bdd::Outcome,
-    ) {
-        if let Some(controller) = self.controller.take() {
-            controller.shutdown().await;
-        }
-    }
-}
+shuts_down_controller!(SnapshotRecovery);
 
 krabka_bdd::scenarios!(
     "tests/features/migrated/tests/snapshot.feature",
