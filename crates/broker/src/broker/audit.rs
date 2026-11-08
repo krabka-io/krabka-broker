@@ -299,28 +299,17 @@ pub(super) fn start_audit_pipeline(
 mod tests {
     use {
         super::*,
-        crate::file_config::{FileConfig, FileConfigError},
-        assert2::assert,
-        krabka_metadata::{
-            FeatureLevelRecord, MetadataRecord, krabka_version::KRABKA_VERSION_FEATURE,
+        crate::{
+            file_config::{FileConfig, FileConfigError},
+            test_support::image_at_krabka_version,
         },
+        assert2::assert,
         krabka_units::minutes,
         ring::{rand::SystemRandom, signature::Ed25519KeyPair},
         std::{fs, path::PathBuf, time::Duration},
         tempfile::TempDir,
         tokio::{task, time},
-        uuid::Uuid,
     };
-
-    /// An image whose finalized `krabka.version` is `level`.
-    fn image_at_krabka_version(level: i16) -> Arc<MetadataImage> {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: KRABKA_VERSION_FEATURE.into(),
-            level,
-        }));
-        Arc::new(image)
-    }
 
     /// Yields until `switch` reads `expected`, or fails after a second.
     async fn await_version(switch: &OcsfVersionSwitch, expected: OcsfVersion) {

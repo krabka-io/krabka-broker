@@ -562,15 +562,24 @@ fn assert_planned<const N: usize>(cases: [PlanCase<'_>; N]) {
     assert!(actual == expected);
 }
 
-/// krabka-io/krabka-broker#1763: `krabka.version` level 2 turns on diskless
-/// WAL object reservations. The controller finalizes it only once every
-/// registered broker advertises it, so no 1.0.0 broker, which writes no
-/// reservations, runs beside it. Lowering it again is an ordinary downgrade:
-/// every broker that supports level 2 reads reservations at every level.
-#[test]
-fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it() {
+/// A `krabka.version` level that introduces a format is finalized only once
+/// every registered broker advertises it, so no broker of the release before,
+/// which writes only the older format, runs beside it. Lowering it again is an
+/// ordinary downgrade: every broker that supports a level reads the formats of
+/// every level up to it.
+///
+/// - Level 2 (krabka-io/krabka-broker#1763) turns on diskless WAL object
+///   reservations, which a 1.0.0 broker (up to level 1) does not write.
+/// - Level 3 turns on the OCSF 1.3.0 activity ids in `__krabka_audit` and the
+///   normalized tiered-storage key prefix, which a 1.1.x broker (up to level
+///   2) does not write.
+#[yare::parameterized(
+    reservations = { krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL },
+    ocsf_ids_and_tiered_prefix = { krabka_version::OCSF_ACTIVITY_IDS_LEVEL },
+)]
+fn krabka_version_format_level_finalizes_only_when_every_broker_supports_it(level: i16) {
     let kv = krabka_version::KRABKA_VERSION_FEATURE;
-    let level = krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
+    let previous = level - 1;
     let mv = FeatureLevel {
         name: "metadata.version",
         level: 30,
@@ -584,70 +593,25 @@ fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it
             .call()
     };
     let at_level = [mv, FeatureLevel { name: kv, level }];
+    let refusal = format!("Broker 2 only supports versions 0-{previous}");
     let cases = [
         (
-            "every broker advertises the reservation level",
+            "every broker advertises the level",
             with_broker(&[mv], (0, level)),
             named_update(kv, level, UPGRADE),
             Ok(plan(vec![feature_record(kv, level)], &[kv])),
         ),
         (
-            "a 1.0.0 broker advertises only level 1",
-            with_broker(&[mv], (0, 1)),
+            "a broker of the release before advertises only the level below",
+            with_broker(&[mv], (0, previous)),
             named_update(kv, level, UPGRADE),
-            Err(invalid(kv, level, "Broker 2 only supports versions 0-1")),
+            Err(invalid(kv, level, &refusal)),
         ),
         (
-            "a safe downgrade below the reservation level",
+            "a safe downgrade below the level",
             with_broker(&at_level, (0, level)),
-            named_update(kv, 1, SAFE),
-            Ok(plan(vec![feature_record(kv, 1)], &[kv])),
-        ),
-    ];
-    assert_planned(cases);
-}
-
-/// `krabka.version` level 3 turns on the OCSF 1.3.0 activity ids in
-/// `__krabka_audit` and the normalized tiered-storage key prefix. The
-/// controller finalizes it only once every registered broker advertises it, so
-/// no 1.1.x broker, which writes the 1.0.0 ids and the as-configured keys, runs
-/// beside it. Lowering it again is an ordinary downgrade: every broker that
-/// supports level 3 reads both id sets and both key forms at every level.
-#[test]
-fn krabka_version_ocsf_and_prefix_level_finalizes_only_when_every_broker_supports_it() {
-    let kv = krabka_version::KRABKA_VERSION_FEATURE;
-    let level = krabka_version::OCSF_ACTIVITY_IDS_LEVEL;
-    let mv = FeatureLevel {
-        name: "metadata.version",
-        level: 30,
-    };
-    let with_broker = |levels: &[FeatureLevel<'_>], range| {
-        let mut features = krabka_metadata::supported_feature_ranges();
-        features.insert(kv.to_owned(), range);
-        remote_feature_image()
-            .image(image(levels))
-            .ranges(features)
-            .call()
-    };
-    let at_level = [mv, FeatureLevel { name: kv, level }];
-    let cases = [
-        (
-            "every broker advertises level 3",
-            with_broker(&[mv], (0, level)),
-            named_update(kv, level, UPGRADE),
-            Ok(plan(vec![feature_record(kv, level)], &[kv])),
-        ),
-        (
-            "a 1.1.x broker advertises only level 2",
-            with_broker(&[mv], (0, 2)),
-            named_update(kv, level, UPGRADE),
-            Err(invalid(kv, level, "Broker 2 only supports versions 0-2")),
-        ),
-        (
-            "a safe downgrade below level 3",
-            with_broker(&at_level, (0, level)),
-            named_update(kv, 2, SAFE),
-            Ok(plan(vec![feature_record(kv, 2)], &[kv])),
+            named_update(kv, previous, SAFE),
+            Ok(plan(vec![feature_record(kv, previous)], &[kv])),
         ),
     ];
     assert_planned(cases);

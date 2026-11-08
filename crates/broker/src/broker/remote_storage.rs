@@ -314,27 +314,15 @@ fn spawn_remote_reader_gauges(
 mod tests {
     use {
         super::{follow_key_prefix_form, key_prefix_form},
+        crate::test_support::image_at_krabka_version,
         assert2::check,
-        krabka_metadata::{
-            FeatureLevelRecord, MetadataImage, MetadataRecord,
-            krabka_version::KRABKA_VERSION_FEATURE,
-        },
+        krabka_metadata::MetadataImage,
         krabka_remote_storage::{KeyPrefixForm, KeyPrefixGate},
         std::sync::Arc,
         tokio::{sync::watch, task},
         tokio_util::sync::CancellationToken,
         uuid::Uuid,
     };
-
-    /// An image whose finalized `krabka.version` is `level`.
-    fn image_at_krabka_version(level: i16) -> Arc<MetadataImage> {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: KRABKA_VERSION_FEATURE.into(),
-            level,
-        }));
-        Arc::new(image)
-    }
 
     #[yare::parameterized(
         never_finalized = { None, KeyPrefixForm::AsConfigured },
