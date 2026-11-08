@@ -67,14 +67,13 @@ use {
         response::build_describe,
     },
     super::{
-        config::StreamsGroupConfig,
+        config::{StreamsGroupConfig, resolve_broker_and_group_config},
         description::{DescriptionEpochs, DescriptionRuntime, TopologyDescription},
         persistence::StreamsGroupTopologyValue,
         state::{self, StreamsGroupState},
     },
     crate::{
         codes,
-        config_keys::parse::java_trim,
         coordinator::{
             DeleteGroupError,
             unified::{
@@ -878,50 +877,6 @@ fn exit_on_write_failure(group_id: &str, error: &BrokerError) -> i16 {
         "streams-group actor exiting after log-write failure",
     );
     write_failure_code(error)
-}
-
-/// The streams config of `group_id` on `node`: the group config overrides in
-/// `image` over the broker `defaults`, whose assignment interval is the
-/// dynamic broker value of `image` when one applies.
-///
-/// Kafka's `GroupMetadataManager` reads
-/// `groupConfig.streamsAssignmentIntervalMs()` over the broker's current
-/// `GroupCoordinatorConfig`, which a dynamic broker config reconfigures.
-pub(crate) fn resolve_broker_and_group_config(
-    defaults: &StreamsGroupConfig,
-    image: &krabka_metadata::MetadataImage,
-    node: Option<NodeId>,
-    group_id: &str,
-) -> StreamsGroupConfig {
-    resolve_group_config_from_image(&defaults.for_broker(image, node), image, group_id)
-}
-
-/// The streams config of `group_id`: the group config overrides in `image`
-/// over the broker `defaults`.
-pub(crate) fn resolve_group_config_from_image(
-    defaults: &StreamsGroupConfig,
-    image: &krabka_metadata::MetadataImage,
-    group_id: &str,
-) -> StreamsGroupConfig {
-    let Some(overrides) = image.group_config(group_id) else {
-        return defaults.clone();
-    };
-    // Kafka 4.4 falls back to the broker default if a persisted selection is
-    // unavailable on this node. Preserve all unrelated group overrides.
-    let mut applicable = overrides.clone();
-    if let Some(name) = applicable.get(super::config::KEY_ASSIGNOR_NAME)
-        && defaults.task_assignors.get(java_trim(name)).is_none()
-        && super::config::StreamsAssignorKind::from_config_name(java_trim(name)).is_none()
-    {
-        applicable.remove(super::config::KEY_ASSIGNOR_NAME);
-    }
-    match defaults.with_group_overrides(&applicable) {
-        Ok(config) => config,
-        Err(error) => {
-            tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
-            defaults.clone()
-        }
-    }
 }
 
 async fn wait_for_metadata_change(

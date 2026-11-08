@@ -21,7 +21,7 @@ use {
             offsets_log::fake::InMemoryOffsetsLog,
             persistence::parse_key,
             streams::{
-                config::KEY_NUM_STANDBY_REPLICAS,
+                config::{KEY_NUM_STANDBY_REPLICAS, resolve_group_config_from_image},
                 persistence::{
                     DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords,
                     StoredSubtopology, StoredTopicInfo, StreamsGroupMetadataValue,
