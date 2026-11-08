@@ -23,7 +23,11 @@
 use {
     krabka_units::prelude::{Time, TimeExt as _},
     num_traits::ToPrimitive as _,
-    std::num::NonZeroU32,
+    qubit_clock::MonotonicClock,
+    std::{
+        num::NonZeroU32,
+        sync::{Mutex, MutexGuard, PoisonError},
+    },
 };
 
 /// Kafka's default sample count: `quota.window.num`,
@@ -81,6 +85,18 @@ impl QuotaWindow {
 
 impl Default for QuotaWindow {
     fn default() -> Self { Self::KAFKA_DEFAULT }
+}
+
+/// The clock reading in whole milliseconds, Kafka's `time.milliseconds()`.
+pub fn now_ms(clock: &dyn MonotonicClock) -> i64 {
+    let millis = clock.now().elapsed_since_origin().as_millis();
+    i64::try_from(millis).unwrap_or(i64::MAX)
+}
+
+/// Locks a quota's state. A poisoned lock is still used: no quota's critical
+/// section leaves its state half updated.
+pub fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// How a [`SampledRate`] sizes a window that has not yet run its full length.

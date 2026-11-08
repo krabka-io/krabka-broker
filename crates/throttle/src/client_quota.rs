@@ -18,18 +18,21 @@
 //! (rate - bound) / bound * window size
 //! ```
 //!
-//! rounded to the millisecond. It is the wait that brings the measured rate
-//! back to the bound if the client sends nothing more.
+//! rounded to the millisecond. Once the window is past its padding, that is
+//! the wait that brings the measured rate back to the bound if the client
+//! sends nothing more. While it is padded, the window stays the same length
+//! as time passes, so a client that waits out its throttle and sends again
+//! can be throttled again, until its burst's sample leaves the window.
 
 use {
     crate::{
         QuotaWindow,
-        sampled_rate::{SampledRate, WindowSize},
+        sampled_rate::{self, SampledRate, WindowSize},
     },
     krabka_units::prelude::{Time, TimeExt},
     num_traits::ToPrimitive as _,
     qubit_clock::{MonotonicClock, StdMonotonicClock},
-    std::sync::{Arc, Mutex, MutexGuard, PoisonError},
+    std::sync::{Arc, Mutex, MutexGuard},
 };
 
 /// What the quota's lock guards: the bound and the measured rate.
@@ -127,17 +130,9 @@ impl ClientQuota {
         self.lock_state().rate.measure(now_ms)
     }
 
-    /// The clock reading in whole milliseconds, Kafka's `time.milliseconds()`.
-    fn now_ms(&self) -> i64 {
-        let millis = self.clock.now().elapsed_since_origin().as_millis();
-        i64::try_from(millis).unwrap_or(i64::MAX)
-    }
+    fn now_ms(&self) -> i64 { sampled_rate::now_ms(&*self.clock) }
 
-    /// Locks the state. A poisoned lock is still used: no critical section
-    /// leaves the state half updated.
-    fn lock_state(&self) -> MutexGuard<'_, QuotaState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
+    fn lock_state(&self) -> MutexGuard<'_, QuotaState> { sampled_rate::lock(&self.state) }
 }
 
 #[cfg(test)]
