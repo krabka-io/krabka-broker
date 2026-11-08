@@ -9,9 +9,7 @@ use {
         coordinator::unified::streams::config::StreamsAssignorKind,
         file_config::RuntimeFileConfig,
     },
-    krabka_client_core::{
-        ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
-    },
+    krabka_client_core::DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
     krabka_units::{ByteSize, Ratio, Time, parse},
 };
 
@@ -187,10 +185,7 @@ pub struct RuntimeArgs {
     pub streams_group_assignor: Option<StreamsAssignorKind>,
 }
 
-fn parse_client_dispatch_queue_capacity(value: &str) -> Result<usize, String> {
-    let value = value.parse::<usize>().map_err(|error| error.to_string())?;
-    ConnectionDispatchQueueCapacity::new(value).map(ConnectionDispatchQueueCapacity::get)
-}
+krabka_macros::dispatch_capacity_parser!(parse_client_dispatch_queue_capacity);
 
 /// Parse a byte count in the domain Kafka gives an `INT` config with
 /// `atLeast(0)`, which is what `message.max.bytes` is.

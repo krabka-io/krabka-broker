@@ -266,15 +266,3 @@ pub fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseErr
         }
     })
 }
-
-pub fn format_directories_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(input)?;
-    Ok(moxy::template! {
-        fn {{ name }}() -> (::tempfile::TempDir, ::std::path::PathBuf, ::std::path::PathBuf) {
-            let dir = ::tempfile::tempdir().expect("tempdir");
-            let metadata = dir.path().join("meta");
-            let data = dir.path().join("data");
-            (dir, metadata, data)
-        }
-    })
-}

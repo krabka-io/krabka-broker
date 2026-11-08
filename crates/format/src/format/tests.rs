@@ -835,4 +835,9 @@ fn fresh_argv(extra: &[&str]) -> FreshArgv {
     FreshArgv { dir, argv }
 }
 
-krabka_macros::format_directories_fixture!(metadata_and_data_directories);
+fn metadata_and_data_directories() -> (tempfile::TempDir, path::PathBuf, path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let metadata = dir.path().join("meta");
+    let data = dir.path().join("data");
+    (dir, metadata, data)
+}

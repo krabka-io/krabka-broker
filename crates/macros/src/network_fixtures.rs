@@ -131,40 +131,6 @@ pub fn file_region(input: TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-/// The keyed fixture's ordinary non-transactional headers and exact offset arithmetic.
-pub fn keyed_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
-    named_items(input, |name| {
-        moxy::template! {
-        #[derive(Clone, Copy)]
-        pub(crate) struct KeyedRecordCount(pub i32);
-        #[derive(Clone, Copy)]
-        pub(crate) struct KeyedValueSize(pub usize);
-        #[derive(Clone, Copy)]
-        pub(crate) struct KeyedBatchSetup {
-            pub records: KeyedRecordCount,
-            pub value_size: KeyedValueSize,
-        }
-        impl Default for KeyedBatchSetup {
-            fn default() -> Self { Self { records: KeyedRecordCount(1), value_size: KeyedValueSize(64) } }
-        }
-        pub(crate) fn {{ name }}(setup: KeyedBatchSetup) -> ::krabka_protocol::records::RecordBatch {
-            let n = setup.records.0;
-            let value_size = setup.value_size.0;
-            let mut batch = ::krabka_protocol::records::RecordBatch { last_offset_delta: n - 1, ..Default::default() };
-            for offset_delta in 0..n {
-                batch.records.push(::krabka_protocol::records::Record {
-                    offset_delta,
-                    key: Some(::bytes::Bytes::from(format!("k{offset_delta}"))),
-                    value: Some(::bytes::Bytes::from(vec![b'x'; value_size])),
-                    ..Default::default()
-                });
-            }
-            batch
-        }
-        }
-    })
-}
-
 /// Export the original paths and snapshot policy before constructing the caller's epoch bytes.
 pub fn export_segment_data(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {

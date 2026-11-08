@@ -3002,7 +3002,27 @@ impl krabka_raft::OutboundDialer for RecordingDialer {
     }
 }
 
-krabka_macros::keyed_record_batch_fixture!(keyed_records_batch);
+/// A batch of `records` records keyed `k0`, `k1`, ..., each with a
+/// `value_size`-byte value, under the protocol's default batch header.
+#[bon::builder]
+pub fn keyed_records_batch(
+    #[builder(default = 1)] records: i32,
+    #[builder(default = 64)] value_size: usize,
+) -> RecordBatch {
+    let mut batch = RecordBatch {
+        last_offset_delta: records - 1,
+        ..Default::default()
+    };
+    for offset_delta in 0..records {
+        batch.records.push(Record {
+            offset_delta,
+            key: Some(Bytes::from(format!("k{offset_delta}"))),
+            value: Some(Bytes::from(vec![b'x'; value_size])),
+            ..Default::default()
+        });
+    }
+    batch
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct EmptyPayloadBatchSetup {

@@ -74,34 +74,6 @@ pub fn record_limit_fixture(input: TokenStream) -> Result<TokenStream, ParseErro
     })
 }
 
-pub fn compaction_record_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = fixture_name(input)?;
-    Ok(moxy::template! {
-        /// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
-        /// base_sequence)`, or `None` for a client with no idempotence.
-        fn {{ name }}(
-            producer: Option<(i64, i16, i32)>,
-            transactional: bool,
-            (key, value): (&str, &str),
-            timestamp: i64,
-        ) -> ::krabka_protocol::records::RecordBatch {
-            let (producer_id, producer_epoch, base_sequence) = producer.unwrap_or((-1, -1, -1));
-            ::krabka_protocol::records::RecordBatch {
-                attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transactional),
-                base_timestamp: timestamp,
-                max_timestamp: timestamp,
-                producer_id, producer_epoch, base_sequence,
-                records: vec![::krabka_protocol::records::Record {
-                    key: Some(::bytes::Bytes::copy_from_slice(key.as_bytes())),
-                    value: Some(::bytes::Bytes::copy_from_slice(value.as_bytes())),
-                    ..Default::default()
-                }],
-                ..::krabka_protocol::records::RecordBatch::default()
-            }
-        }
-    })
-}
-
 pub fn registration_feature_projection(input: TokenStream) -> Result<TokenStream, ParseError> {
     let [name, feature_type]: [TokenStream; 2] = argument_array(input)?;
     let name = fixture_name(name)?;

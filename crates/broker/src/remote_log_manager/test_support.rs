@@ -16,9 +16,7 @@ use {
         remote_log_manager::{
             ArchiveMode, CopiesInFlight, RemoteTier, SweepingBroker, quota::RlmQuotaManager,
         },
-        test_support::{
-            FakeMetadataSource, KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch,
-        },
+        test_support::{FakeMetadataSource, UnixMillis, keyed_records_batch},
         time_util::now_ms,
     },
     krabka_ids::{LeaderEpoch, PartitionIndex},
@@ -351,12 +349,7 @@ pub fn fixed_source(image: MetadataImage) -> FakeMetadataSource {
 
 pub fn tp() -> TopicIdPartition { TopicIdPartition::new(Uuid::from_u128(1), "orders", 0) }
 
-pub fn batch(n: i32) -> RecordBatch {
-    keyed_records_batch(KeyedBatchSetup {
-        records: KeyedRecordCount(n),
-        ..Default::default()
-    })
-}
+pub fn batch(n: i32) -> RecordBatch { keyed_records_batch().records(n).call() }
 
 /// Build a log rolled into several sealed segments under `dir`.
 pub fn rolled_log(dir: &Path) -> Log {
