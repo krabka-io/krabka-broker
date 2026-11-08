@@ -19,8 +19,8 @@ use {
         broker::Broker,
         codes,
         coordinator::unified::{
-            GroupType,
-            share::actor::{DeleteTopicOutcome, ShareGroupActorMessage},
+            GroupCoordinator, GroupType,
+            share::actor::{DeleteTopicOutcome, ShareGroupActorHandle, ShareGroupActorMessage},
         },
         error::BrokerError,
         features::share_groups_enabled,
@@ -40,6 +40,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    std::sync::Arc,
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
@@ -103,15 +104,7 @@ pub async fn handle(
     if let Some(error_code) = group_coordinator_error(broker, &gid) {
         return Ok(top_level(error_code, None));
     }
-    // GroupCoordinatorShard.initiateDeleteShareGroupOffsets looks the group
-    // up through `shareGroup`, which refuses a missing group and a group of
-    // another type. No share actor is created for either.
-    let actor = match coordinator.group_type(&gid) {
-        Some(GroupType::Share) => Some(coordinator.get_or_create_share(&gid)),
-        Some(_) => None,
-        None => coordinator.find_share(&gid),
-    };
-    let Some(actor) = actor else {
+    let Some(actor) = share_actor_for(coordinator, &gid) else {
         return Ok(top_level(
             codes::GROUP_ID_NOT_FOUND,
             Some(share_group_not_found_message(coordinator, &gid)),
@@ -162,6 +155,23 @@ pub async fn handle(
         ..Default::default()
     };
     Ok(resp)
+}
+
+/// The share actor of `gid`, or `None` when the group is missing or of
+/// another type.
+///
+/// GroupCoordinatorShard.initiateDeleteShareGroupOffsets looks the group up
+/// through `shareGroup`, which refuses a missing group and a group of another
+/// type. No share actor is created for either.
+fn share_actor_for(
+    coordinator: &Arc<GroupCoordinator>,
+    gid: &str,
+) -> Option<Arc<ShareGroupActorHandle>> {
+    match coordinator.group_type(gid) {
+        Some(GroupType::Share) => Some(coordinator.get_or_create_share(gid)),
+        Some(_) => None,
+        None => coordinator.find_share(gid),
+    }
 }
 
 /// Drops the cached acquisition-state cell of every partition whose share
