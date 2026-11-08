@@ -139,16 +139,14 @@ pub fn legacy_to_v2_with_policy(
 ) -> Result<RecordBatch, LegacyRecordsError> {
     let mut cur = set_bytes;
     let records = decode_message_set_with_policy(&mut cur, set_bytes.len(), policy)?;
-    if records.is_empty() {
+    let (Some(first), Some(last)) = (records.first(), records.last()) else {
         return Ok(RecordBatch {
             partition_leader_epoch: -1,
             ..RecordBatch::default()
         });
-    }
-    let base_offset = records
-        .first()
-        .ok_or_else(|| LegacyRecordsError::Malformed("legacy record set is empty".into()))?
-        .offset;
+    };
+    let base_offset = first.offset;
+    let last_offset = last.offset;
     let base_timestamp = records
         .iter()
         .filter_map(|r| r.timestamp)
@@ -159,10 +157,6 @@ pub fn legacy_to_v2_with_policy(
         .filter_map(|r| r.timestamp)
         .max()
         .unwrap_or(-1);
-    let last_offset = records
-        .last()
-        .ok_or_else(|| LegacyRecordsError::Malformed("legacy record set is empty".into()))?
-        .offset;
     let last_offset_delta = i32::try_from(i128::from(last_offset.0) - i128::from(base_offset.0))
         .map_err(|_| LegacyRecordsError::Malformed("last offset delta exceeds i32".into()))?;
 

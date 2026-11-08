@@ -235,30 +235,53 @@ impl GroupCoordinator {
         get_or_spawn(
             &self.groups,
             group_id,
-            || {
-                GroupActorHandle::spawn(
-                    group_id.into(),
-                    initial_kind,
-                    Arc::clone(&self.config),
-                    Arc::clone(&self.metadata),
-                    Arc::clone(&self.offsets_log),
-                    Arc::clone(self),
-                )
-            },
-            // Re-hydrate a respawned actor: a classic group from what the
-            // stopped actor left, whatever kind the request asks for, and
-            // otherwise a consumer group from its last-known-good state.
-            || {
-                self.holds_respawn_seed(group_id)
-                    .then_some(GroupActorSeed::Respawn)
-                    .or_else(|| {
-                        (initial_kind == GroupKindTag::Consumer)
-                            .then(|| self.cached_seed(group_id))
-                            .flatten()
-                            .map(|seed| GroupActorSeed::Consumer(Box::new(seed)))
-                    })
-            },
+            || self.spawn_group(group_id, initial_kind),
+            || self.group_seed(group_id, initial_kind),
         )
+    }
+
+    /// Replaces the closed actor `closed` of `group_id` with a fresh one of
+    /// `kind`, seeded from what the stopped actor left, only while the
+    /// registry still holds `closed`. A group removed since answers `None`,
+    /// and an actor that replaced `closed` since is returned as it is.
+    pub(crate) fn respawn_closed_group(
+        self: &Arc<Self>,
+        group_id: &str,
+        kind: GroupKindTag,
+        closed: &Arc<GroupActorHandle>,
+    ) -> Option<Arc<GroupActorHandle>> {
+        respawn_registered(
+            &self.groups,
+            group_id,
+            closed,
+            || self.spawn_group(group_id, kind),
+            || self.group_seed(group_id, kind),
+        )
+    }
+
+    fn spawn_group(self: &Arc<Self>, group_id: &str, kind: GroupKindTag) -> GroupActorHandle {
+        GroupActorHandle::spawn(
+            group_id.into(),
+            kind,
+            Arc::clone(&self.config),
+            Arc::clone(&self.metadata),
+            Arc::clone(&self.offsets_log),
+            Arc::clone(self),
+        )
+    }
+
+    /// What re-hydrates a respawned actor of `group_id`: a group from what
+    /// the stopped actor left, whatever `kind` the request asks for, and
+    /// otherwise a consumer group from its last-known-good state.
+    fn group_seed(&self, group_id: &str, kind: GroupKindTag) -> Option<GroupActorSeed> {
+        self.holds_respawn_seed(group_id)
+            .then_some(GroupActorSeed::Respawn)
+            .or_else(|| {
+                (kind == GroupKindTag::Consumer)
+                    .then(|| self.cached_seed(group_id))
+                    .flatten()
+                    .map(|seed| GroupActorSeed::Consumer(Box::new(seed)))
+            })
     }
 
     /// Get or create a classic-protocol actor.

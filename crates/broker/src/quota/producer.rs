@@ -1,7 +1,7 @@
 //! KIP-13 `producer_byte_rate` enforcement.
 
 use {
-    super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota},
+    super::{QuotaConsumption, QuotaType, buckets::QuotaBuckets, consume_configured_quota},
     krabka_metadata::MetadataImage,
     krabka_units::{Time, convert::TimeExt as _},
 };
@@ -27,7 +27,7 @@ pub fn consume_producer_quota(
             buckets,
             principal,
             client_id,
-            quota_key: "producer_byte_rate",
+            quota_type: QuotaType::Produce,
             amount: bytes,
             max_debt_wait: None,
         },

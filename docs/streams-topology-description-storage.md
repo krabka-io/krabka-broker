@@ -44,7 +44,15 @@ a description and its epoch; golden-byte fixtures cover the initial reader/write
 and unknown versions are rejected. The directory is an explicitly selected
 plugin-private namespace, not an alteration of existing internal-topic or log
 formats. It uses an injective hex encoding of group IDs (no path traversal), and writes via a
-synced staging file and rename. Reopening the same directory retains data.
+synced, exclusively created per-attempt staging file and rename. Independent
+backend instances can concurrently publish identical group/epoch descriptions
+without reusing an open staging inode; a delayed writer cannot alter the bytes
+of an envelope already published by another attempt. This is atomic-publication
+integrity, not coordinator fencing or ordering between different epochs.
+Reopening the same directory retains data. IO failures remove the attempt's
+staging file where possible. Cancellation/process death may leave private
+`.pending-<uuid>` files; these are never read as group data and may be removed
+while no backend operations are running.
 Operators own directory access permissions, disk capacity, and backups. Filename
 length is bounded by the filesystem; long group IDs can fail storage. The format
 is private and not Kafka's JVM serialization format. Process restart is covered;

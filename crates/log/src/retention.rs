@@ -5,7 +5,7 @@ use {
     crate::{
         error::LogError,
         io::{IoTarget, LogIo},
-        name,
+        name::{self, SegmentFile},
     },
     krabka_ids::Offset,
     std::{
@@ -81,14 +81,7 @@ pub fn retire_segment_files(
     base_offset: Offset,
 ) -> Result<Vec<PathBuf>, LogError> {
     let mut tombstones = Vec::with_capacity(6);
-    for path in [
-        name::log_path(dir, base_offset.0),
-        name::index_path(dir, base_offset.0),
-        name::timeindex_path(dir, base_offset.0),
-        name::txnindex_path(dir, base_offset.0),
-        name::stampindex_path(dir, base_offset.0),
-        name::producer_snapshot_path(dir, base_offset.0),
-    ] {
+    for path in SegmentFile::RETIRED_WITH_SEGMENT.map(|file| file.path(dir, base_offset.0)) {
         let tombstone = deleted_path(&path);
         match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
             Ok(()) => tombstones.push(tombstone),
@@ -122,7 +115,7 @@ pub fn retire_files(
     io: &dyn LogIo,
     dir: &Path,
     base: Offset,
-    extensions: &[&str],
+    files: &[SegmentFile],
     retired: &mut Vec<PathBuf>,
     sync: DirSync,
 ) -> Result<(), LogError> {
@@ -130,8 +123,9 @@ pub fn retire_files(
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
     let mut renamed = Vec::new();
     let result = (|| {
-        for extension in extensions {
-            let path = dir.join(format!("{}.{extension}", name::format_base_offset(base.0)));
+        for file in files {
+            let path = file.path(dir, base.0);
+            let extension = file.extension();
             let tombstone = dir.join(format!(
                 "{}.{extension}.{generation}.deleted",
                 name::format_base_offset(base.0)

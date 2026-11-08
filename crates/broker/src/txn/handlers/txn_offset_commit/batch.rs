@@ -439,7 +439,14 @@ mod tests {
         check!(batch.producer_epoch == 5);
         check!(batch.base_sequence == 0);
         check!(batch.last_offset_delta == 1);
-        check!(log.transaction_marker_state(krabka_log::ProducerId(47)) == (5, -1, true));
+        check!(
+            log.transaction_marker_state(krabka_log::ProducerId(47))
+                == krabka_log::TransactionMarkerState {
+                    producer_epoch: 5,
+                    coordinator_epoch: -1,
+                    has_open_transaction: true,
+                }
+        );
         let record_rows: Vec<_> = batch
             .records
             .iter()

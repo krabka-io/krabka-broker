@@ -246,7 +246,9 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
             };
             let response =
                 response.map_err(|err| krabka_raft::RaftError::ChangeRejected(err.to_string()))?;
-            Ok(Some(encode_fetch_response_struct(&response)))
+            // A failed encode fails the request: the raft listener closes the
+            // follower's connection without writing a truncated response.
+            Ok(Some(encode_fetch_response_struct(&response)?))
         })
     }
 }

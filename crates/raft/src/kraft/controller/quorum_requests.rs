@@ -25,6 +25,7 @@ use {
     crate::{
         kraft::{
             event::{Event, LogEnd, SuccessorRank},
+            snapshot_fetch::SnapshotId,
             transport::wire,
             types::{Epoch, NodeId, ReplicaKey},
         },
@@ -474,12 +475,12 @@ impl Engine {
         if let Some(error) = self.leader_only_request_error(partition.current_leader_epoch) {
             return partition_error(self, error);
         }
-        let snapshot_id = (
-            partition.snapshot_id.end_offset,
-            partition.snapshot_id.epoch,
-        );
+        let snapshot_id = SnapshotId {
+            end_offset: partition.snapshot_id.end_offset,
+            epoch: partition.snapshot_id.epoch,
+        };
         let checkpoint = (snapshot_id != BOOTSTRAP_SNAPSHOT_ID)
-            .then(|| open_checkpoint(&self.data_dir, snapshot_id.0, snapshot_id.1))
+            .then(|| open_checkpoint(&self.data_dir, snapshot_id))
             .flatten();
         let Some(mut checkpoint) = checkpoint else {
             return partition_error(self, SNAPSHOT_NOT_FOUND);

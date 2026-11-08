@@ -4,21 +4,30 @@
 
 use {
     super::{
-        GroupActorMessage, GroupKindTag, chrono_now_ms, run_actor,
+        GroupActorMessage, GroupKindTag, chrono_now_ms,
+        pending_commits::CommitWaits,
+        run_actor,
         test_support::{
             completing_classic_group, empty_metadata, make_coordinator, rpc, seed_classic_group,
         },
     },
     crate::{
         codes,
-        coordinator::unified::{
-            classic_state::GroupState as ClassicGroupState, config::NextGenConfig,
-            group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver,
+        coordinator::{
+            test_support::offset_entry,
+            unified::{
+                classic_state::GroupState as ClassicGroupState, config::NextGenConfig,
+                group::CoordinatorGroup, regex_resolver::no_topic_regex_resolver,
+                test_support::stop_group_actor,
+            },
         },
         test_support::{BrokenTimer, TimerFailure},
     },
     assert2::{assert, check},
-    krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+    krabka_protocol::{
+        owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        records::RecordBatch,
+    },
     qubit_clock::Timer,
     std::{
         future::poll_fn,
@@ -243,4 +252,73 @@ async fn a_rebalance_deadline_whose_empty_generation_write_fails_keeps_the_actor
     check!(emptied.members.is_empty());
     check!(log.batches().await.is_empty());
     check!(!seeded.handle.tx.is_closed(), "the actor keeps running");
+}
+
+/// An unload takes a group out of the registry, waits for its actor to stop,
+/// and only then drops the respawn seed the actor may have left. A respawn in
+/// between, from the stopping actor's own exit or from a request already
+/// routed, would bring the group back on a broker that no longer leads its
+/// offsets partition. A seed whose group the registry no longer holds
+/// therefore respawns nothing.
+#[tokio::test]
+async fn a_respawn_seed_of_a_group_the_registry_no_longer_holds_respawns_nothing() {
+    let (coord, _log) = make_coordinator();
+    coord.leave_respawn_seed(CoordinatorGroup::new_classic("g"));
+
+    check!(coord.live_or_respawned("g").is_none());
+    check!(coord.find("g").is_none());
+}
+
+/// The closed handle of an actor that stopped after a failed write stays
+/// registered until its replacement takes its place, from the seed it left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_respawn_seed_of_a_registered_stopped_actor_respawns_it() {
+    let (coord, _log) = make_coordinator();
+    let stopped = coord.get_or_create_classic("g");
+    stop_group_actor(&coord, "g").await;
+    coord.leave_respawn_seed(CoordinatorGroup::new_classic("g"));
+
+    let next = coord
+        .live_or_respawned("g")
+        .expect("the stopped actor is replaced");
+
+    check!(!Arc::ptr_eq(&next, &stopped));
+    check!(!next.tx.is_closed());
+    check!(
+        coord
+            .find("g")
+            .is_some_and(|found| Arc::ptr_eq(&found, &next))
+    );
+}
+
+/// A stopping actor hands its commits still replicating to the respawn seed
+/// it left. When an unload drops that seed, each client still hears how its
+/// own write ended, as when the actor stops with no seed, rather than a
+/// dropped reply that the handler can only report as `UNKNOWN_SERVER_ERROR`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_respawn_seed_answers_the_commits_it_holds() {
+    let (coord, log) = make_coordinator();
+    log.hold_commits();
+    let mut group = CoordinatorGroup::new_classic("g");
+    let mut commits = CommitWaits::default();
+    let (reply, answered) = oneshot::channel();
+    commits
+        .begin(
+            &mut group,
+            &*log,
+            RecordBatch::default(),
+            vec![(("t".to_owned(), 0), offset_entry(7))],
+            reply,
+        )
+        .await;
+    coord.leave_respawn_seed(group);
+    check!(coord.attach_respawn_commits("g", commits).is_none());
+
+    coord.drop_respawn_seed("g");
+    log.release_commits();
+
+    let answer = timeout(Duration::from_secs(1), answered)
+        .await
+        .expect("the commit is answered");
+    check!(answer == Ok(Ok(())));
 }

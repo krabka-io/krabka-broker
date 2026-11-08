@@ -16,6 +16,7 @@ use {
     },
     krabka_raft::kraft::{
         NodeId, PeerSender,
+        snapshot_fetch::SnapshotId,
         transport::{api_key, wire},
     },
     krabka_units::prelude::{Time, secs},
@@ -147,10 +148,10 @@ struct SnapshotCluster {
     follower_start: Option<i64>,
     fetch_answer: Option<wire::FetchAnswer>,
     snapshot_response: Option<FetchSnapshotResponse>,
-    snapshot_id: Option<(i64, i32)>,
+    snapshot_id: Option<SnapshotId>,
     assembled: Vec<u8>,
     total: Option<usize>,
-    chunk_results: Vec<((i64, i32), i16)>,
+    chunk_results: Vec<(SnapshotId, i16)>,
 }
 #[rstest::fixture]
 fn snapshots() -> SnapshotCluster {
@@ -317,7 +318,7 @@ async fn follower_snapshot_request(snapshots: &mut SnapshotCluster) {
         cluster_id: Some(snapshots.cluster),
         from: NodeId(3),
         current_leader_epoch: i32::try_from(pair.epoch).expect("wire epoch"),
-        snapshot_id: (
+        snapshot_id: SnapshotId::new(
             offset.parse().expect("snapshot offset"),
             epoch.parse().expect("snapshot epoch"),
         ),

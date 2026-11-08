@@ -24,6 +24,7 @@ use {
                 },
             },
             event::SuccessorRank,
+            snapshot_fetch::SnapshotId,
             transport::{PeerSender, wire::FETCH_VERSION},
             types::LogOffsetMetadata,
         },
@@ -245,15 +246,15 @@ fn fetch_batch_classifier_separates_duplicate_append_and_gap(
 }
 
 #[yare::parameterized(
-    future_snapshot = { (11, 2), 10, None, true },
-    snapshot_at_log_end = { (10, 2), 10, None, false },
-    duplicate_in_flight_snapshot = { (11, 2), 10, Some((11, 2)), false },
-    newer_in_flight_snapshot = { (12, 2), 10, Some((11, 2)), true },
+    future_snapshot = { SnapshotId::new(11, 2), 10, None, true },
+    snapshot_at_log_end = { SnapshotId::new(10, 2), 10, None, false },
+    duplicate_in_flight_snapshot = { SnapshotId::new(11, 2), 10, Some(SnapshotId::new(11, 2)), false },
+    newer_in_flight_snapshot = { SnapshotId::new(12, 2), 10, Some(SnapshotId::new(11, 2)), true },
 )]
 fn snapshot_fetch_hint_starts_only_for_future_non_duplicate_snapshots(
-    snapshot_id: (i64, i32),
+    snapshot_id: SnapshotId,
     log_end: i64,
-    in_flight: Option<(i64, i32)>,
+    in_flight: Option<SnapshotId>,
     want: bool,
 ) {
     assert2::assert!(should_start_snapshot_fetch(snapshot_id, Offset(log_end), in_flight) == want);
@@ -927,7 +928,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
         )
         .call();
     let fetch_snapshot_response = wire::PeerResponse::FetchSnapshot {
-        snapshot_id: (11, 3),
+        snapshot_id: SnapshotId::new(11, 3),
         size: 0,
         position: 0,
         bytes: bytes::Bytes::new(),
@@ -942,7 +943,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
 
     let body = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
-        snapshot_id: Some((11, 3)),
+        snapshot_id: Some(SnapshotId::new(11, 3)),
         hwm: 11,
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)
@@ -958,7 +959,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
             max_bytes,
             ..
         }) => {
-            assert2::assert!(snapshot_id == (11, 3));
+            assert2::assert!(snapshot_id == SnapshotId::new(11, 3));
             assert2::assert!(position == 0);
             assert2::assert!(max_bytes == 512);
         }
@@ -968,7 +969,7 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
         engine
             .snapshot_fetch
             .as_ref()
-            .is_some_and(|s| s.snapshot_id == (11, 3))
+            .is_some_and(|s| s.snapshot_id == SnapshotId::new(11, 3))
     );
 
     engine.on_fetch_response(NodeId(2), &body);
@@ -1078,7 +1079,7 @@ async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged(
 ) {
     let body = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
-        snapshot_id: Some((11, 3)),
+        snapshot_id: Some(SnapshotId::new(11, 3)),
         hwm: 11,
         records: encode_batches(&[one_offset_batch(0, 3, b"foreign")]),
         ..leader_answer(NodeId(2), 3)
@@ -1224,9 +1225,9 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     .expect("the body encodes");
     let mut sends = record_peer_sends(&mut engine, fetch_response);
 
-    engine.snapshot_fetch = Some(SnapshotFetchState::new((12, 3), NodeId(2)));
+    engine.snapshot_fetch = Some(SnapshotFetchState::new(SnapshotId::new(12, 3), NodeId(2)));
     let error_body = wire::PeerResponse::FetchSnapshot {
-        snapshot_id: (12, 3),
+        snapshot_id: SnapshotId::new(12, 3),
         size: 0,
         position: 0,
         bytes: bytes::Bytes::new(),
@@ -1239,9 +1240,9 @@ async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH).await;
     assert2::assert!(send.peer == 2);
 
-    engine.snapshot_fetch = Some(SnapshotFetchState::new((12, 3), NodeId(2)));
+    engine.snapshot_fetch = Some(SnapshotFetchState::new(SnapshotId::new(12, 3), NodeId(2)));
     let ok_body = wire::PeerResponse::FetchSnapshot {
-        snapshot_id: (12, 3),
+        snapshot_id: SnapshotId::new(12, 3),
         size: 0,
         position: 0,
         bytes: bytes::Bytes::new(),
@@ -1308,7 +1309,7 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
 
     let redirect = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
-        snapshot_id: Some((20_000, 3)),
+        snapshot_id: Some(SnapshotId::new(20_000, 3)),
         hwm: 20_000,
         records: bytes::Bytes::new(),
         ..leader_answer(NodeId(2), 3)

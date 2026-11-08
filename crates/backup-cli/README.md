@@ -162,7 +162,9 @@ independently retained capture head before it will commit anything.
 ## Secured clusters
 
 `capture` and `restore-offsets` accept the same Kafka client-properties file as
-the JVM tools' `--command-config`. The backup tool reads `security.protocol`
+the JVM tools' `--command-config`, and so do `krabka-guard` and
+`krabka-barrier`: [`krabka-cli-connection`](../cli-connection/README.md) reads
+it for all three. The backup tool reads `security.protocol`
 (`PLAINTEXT`, `SSL`, `SASL_PLAINTEXT` or `SASL_SSL`), `sasl.mechanism`
 (`PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`) and `sasl.jaas.config`.
 TLS trust and client identity use PEM files:

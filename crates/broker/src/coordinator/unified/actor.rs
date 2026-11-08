@@ -138,21 +138,51 @@ impl GroupCoordinator {
         self.respawn_seeds.contains_key(group_id)
     }
 
+    /// Forget the respawn seed a stopped actor left for `group_id`, when the
+    /// group has no successor on this broker.
+    ///
+    /// The commits still replicating that the stopped actor handed to the
+    /// seed are detached, as when an actor stops with no seed, so each client
+    /// hears how its own write ended rather than a dropped reply.
+    pub(crate) fn drop_respawn_seed(&self, group_id: &str) {
+        let Some((_, seed)) = self.respawn_seeds.remove(group_id) else {
+            return;
+        };
+        if let Some(waits) = seed.commits {
+            waits
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .detach();
+        }
+    }
+
     /// The live actor of `group_id`, respawned first when a stopped actor
     /// left it a respawn seed, or `None` when no actor serves the group.
     ///
     /// Unlike [`find`](Self::find), it never returns the closed handle of an
     /// actor that stopped: a request sent there would get no answer, which
     /// the handlers could only report as `UNKNOWN_SERVER_ERROR`.
+    ///
+    /// It respawns only while the registry still holds the stopped actor. An
+    /// unload takes the group out of the registry before it drops the seed,
+    /// so a respawn in between, from the stopping actor's own exit or from a
+    /// lookup through this function, would bring the group back on a broker
+    /// that no longer coordinates it.
     #[must_use]
     pub(crate) fn live_or_respawned(
         self: &Arc<Self>,
         group_id: &str,
     ) -> Option<Arc<GroupActorHandle>> {
-        if let Some(kind) = self.respawn_kind(group_id) {
-            return Some(self.get_or_create_group(group_id, kind));
+        let found = self.find(group_id)?;
+        if !found.tx.is_closed() {
+            return Some(found);
         }
-        self.find(group_id).filter(|handle| !handle.tx.is_closed())
+        let Some(kind) = self.respawn_kind(group_id) else {
+            // A racing lookup may have replaced `found` meanwhile, and its
+            // successor taken the seed. Return that actor, spawning nothing.
+            return self.find(group_id).filter(|handle| !handle.tx.is_closed());
+        };
+        self.respawn_closed_group(group_id, kind, &found)
     }
 
     /// The protocol of the group a stopped actor left for `group_id`'s next
@@ -501,7 +531,7 @@ async fn run_actor(
     // to stop. An actor that stopped after a failed write meanwhile leaves no
     // successor on a broker that no longer coordinates the group.
     if !coordinator.groups.contains_key(&group.group_id) {
-        coordinator.respawn_seeds.remove(&group.group_id);
+        coordinator.drop_respawn_seed(&group.group_id);
     }
     // An actor that left a respawn seed hands its commits still
     // replicating to the next actor, which publishes them as they commit.

@@ -1,0 +1,1 @@
+{"error":"Unable to produce to the DLQ topic dlq.rf3final-0: error 29.","first":0,"group":"grp-rf3final","last":0,"message":"Failed to write to DLQ, proceeding to ARCHIVED regardless.","partition":0,"severity":"ERROR","target":"krabka_broker::share_partition::manager::dead_letter","timestamp":"2026-11-07T04:02:56.695323Z","topic_id":"2cb8cb89-4268-4b7c-96ea-f4f21a440f1c"}

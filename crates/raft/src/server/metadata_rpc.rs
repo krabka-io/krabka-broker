@@ -10,23 +10,12 @@ use {
         kraft::{Epoch, KraftController, ReplicaKey},
         wire::{
             KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
-            KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            KrabkaSubmitChangeResponse, SubmitChangeCode,
         },
     },
     bytes::Bytes,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
 };
-
-/// `KrabkaSubmitChangeResponse::error_code`: the change was applied.
-const SUBMIT_CHANGE_APPLIED: i16 = 0;
-/// `KrabkaSubmitChangeResponse::error_code`: this node is not the leader;
-/// consult `leader_hint`.
-const SUBMIT_CHANGE_NOT_LEADER: i16 = 1;
-/// `KrabkaSubmitChangeResponse::error_code`: metadata validation rejected the
-/// records (also returned when the wincode body fails to decode).
-const SUBMIT_CHANGE_REJECTED: i16 = 2;
-/// `KrabkaSubmitChangeResponse::error_code`: any other engine failure.
-const SUBMIT_CHANGE_FAILED: i16 = 3;
 
 /// `leader_hint` sentinel meaning "the current leader is unknown".
 const LEADER_HINT_UNKNOWN: i64 = -1;
@@ -53,28 +42,38 @@ pub(super) async fn dispatch_submit_change(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "submit-change body decode failed");
-            let resp = KrabkaSubmitChangeResponse {
-                error_code: SUBMIT_CHANGE_REJECTED,
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            };
-            let mut out = Vec::with_capacity(16);
-            resp.encode_v0(&mut out)?;
-            return Ok(Bytes::from(out));
+            return encode_submit_change_response(&undecodable_body());
         }
     };
     let resp = match engine.submit_change(records).await {
         Ok(result) => applied_change(&result)?,
         Err(e) => submit_change_failure(&e),
     };
+    encode_submit_change_response(&resp)
+}
+
+/// The v0 bytes of a `SubmitChange` or delegation-token mutation `response`.
+fn encode_submit_change_response(
+    response: &KrabkaSubmitChangeResponse,
+) -> Result<Bytes, RaftError> {
     let mut out = Vec::with_capacity(16);
-    resp.encode_v0(&mut out)?;
+    response.encode_v0(&mut out)?;
     Ok(Bytes::from(out))
+}
+
+/// The response to a forwarded body that does not decode: the leader rejects
+/// it, as it rejects records that fail metadata validation.
+fn undecodable_body() -> KrabkaSubmitChangeResponse {
+    KrabkaSubmitChangeResponse {
+        error_code: SubmitChangeCode::Rejected.to_i16(),
+        leader_hint: LEADER_HINT_UNKNOWN,
+        result: Bytes::new(),
+    }
 }
 
 fn applied_change(result: &SubmitChangeResult) -> Result<KrabkaSubmitChangeResponse, RaftError> {
     Ok(KrabkaSubmitChangeResponse {
-        error_code: SUBMIT_CHANGE_APPLIED,
+        error_code: SubmitChangeCode::Applied.to_i16(),
         leader_hint: LEADER_HINT_UNKNOWN,
         result: Bytes::from(
             <serde_wincode::SerdeCompat<SubmitChangeResult> as wincode::Serialize>::serialize(
@@ -87,22 +86,22 @@ fn applied_change(result: &SubmitChangeResult) -> Result<KrabkaSubmitChangeRespo
 /// The forwarded `submit_change` or delegation-token mutation response for a
 /// local write that failed with `error`.
 fn submit_change_failure(error: &RaftError) -> KrabkaSubmitChangeResponse {
-    let (error_code, leader_hint) = match error {
-        RaftError::Metadata(_) => (SUBMIT_CHANGE_REJECTED, LEADER_HINT_UNKNOWN),
+    let (code, leader_hint) = match error {
+        RaftError::Metadata(_) => (SubmitChangeCode::Rejected, LEADER_HINT_UNKNOWN),
         RaftError::NotLeader { current_leader } => (
-            SUBMIT_CHANGE_NOT_LEADER,
+            SubmitChangeCode::NotLeader,
             current_leader
                 .and_then(|l| i64::try_from(l.0).ok())
                 .unwrap_or(LEADER_HINT_UNKNOWN),
         ),
-        RaftError::UncommittedTail => (SUBMIT_CHANGE_UNCOMMITTED_TAIL, LEADER_HINT_UNKNOWN),
+        RaftError::UncommittedTail => (SubmitChangeCode::UncommittedTail, LEADER_HINT_UNKNOWN),
         other => {
             tracing::warn!(error = ?other, "submit-change failed");
-            (SUBMIT_CHANGE_FAILED, LEADER_HINT_UNKNOWN)
+            (SubmitChangeCode::Failed, LEADER_HINT_UNKNOWN)
         }
     };
     KrabkaSubmitChangeResponse {
-        error_code,
+        error_code: code.to_i16(),
         leader_hint,
         result: Bytes::new(),
     }
@@ -139,14 +138,7 @@ where
         Ok(mutations) => mutations,
         Err(error) => {
             tracing::warn!(%error, "delegation-token mutation body decode failed");
-            let response = KrabkaSubmitChangeResponse {
-                error_code: SUBMIT_CHANGE_REJECTED,
-                leader_hint: LEADER_HINT_UNKNOWN,
-                result: Bytes::new(),
-            };
-            let mut out = Vec::with_capacity(16);
-            response.encode_v0(&mut out)?;
-            return Ok(Bytes::from(out));
+            return encode_submit_change_response(&undecodable_body());
         }
     };
     // The same error codes as a forwarded `SubmitChange`, so the forwarding
@@ -155,9 +147,7 @@ where
         Ok(result) => applied_change(&result)?,
         Err(error) => submit_change_failure(&error),
     };
-    let mut out = Vec::with_capacity(16);
-    response.encode_v0(&mut out)?;
-    Ok(Bytes::from(out))
+    encode_submit_change_response(&response)
 }
 
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
@@ -403,25 +393,25 @@ mod tests {
         metadata_rejection = {
             "metadata rejection",
             RaftError::Metadata(krabka_metadata::MetadataError::TopicExists("t".into())),
-            SUBMIT_CHANGE_REJECTED,
+            SubmitChangeCode::Rejected.to_i16(),
             LEADER_HINT_UNKNOWN,
         },
         not_leader = {
             "not the leader",
             RaftError::NotLeader { current_leader: Some(NodeId(3)) },
-            SUBMIT_CHANGE_NOT_LEADER,
+            SubmitChangeCode::NotLeader.to_i16(),
             3,
         },
         uncommitted_tail = {
             "uncommitted tail",
             RaftError::UncommittedTail,
-            SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            SubmitChangeCode::UncommittedTail.to_i16(),
             LEADER_HINT_UNKNOWN,
         },
         other_failure = {
             "other failure",
             RaftError::ChangeRejected("no".into()),
-            SUBMIT_CHANGE_FAILED,
+            SubmitChangeCode::Failed.to_i16(),
             LEADER_HINT_UNKNOWN,
         },
     )]
@@ -539,7 +529,7 @@ mod tests {
 
         let mut cur = &resp_bytes[..];
         let resp = KrabkaSubmitChangeResponse::decode_v0(&mut cur).expect("decode response");
-        assert2::assert!(resp.error_code == SUBMIT_CHANGE_APPLIED);
+        assert2::assert!(resp.error_code == SubmitChangeCode::Applied.to_i16());
     }
 
     /// A forwarded token mutation that the leader fails answers the code the
@@ -551,13 +541,13 @@ mod tests {
             (
                 "uncommitted tail",
                 RaftError::UncommittedTail,
-                SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                SubmitChangeCode::UncommittedTail.to_i16(),
                 LEADER_HINT_UNKNOWN,
             ),
             (
                 "metadata rejection",
                 RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord("token")),
-                SUBMIT_CHANGE_REJECTED,
+                SubmitChangeCode::Rejected.to_i16(),
                 LEADER_HINT_UNKNOWN,
             ),
             (
@@ -565,7 +555,7 @@ mod tests {
                 RaftError::NotLeader {
                     current_leader: Some(NodeId(3)),
                 },
-                SUBMIT_CHANGE_NOT_LEADER,
+                SubmitChangeCode::NotLeader.to_i16(),
                 3,
             ),
         ];

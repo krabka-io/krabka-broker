@@ -1,0 +1,30 @@
+[package]
+name = "krabka-cli-connection"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The cluster connection every krabka operator CLI shares: --bootstrap-server and a Kafka --command-config file"
+
+[lints]
+workspace = true
+
+[dependencies]
+# `ClientSecurity` is the policy the file maps onto, and `Client` is what
+# `ConnectionArgs::connect` builds.
+krabka-client-core = { version = "0.8.0" }
+krabka-security = { workspace = true }
+# `--command-config` is read with the same `Properties.load` port that reads
+# `meta.properties`, so it reads what Kafka's tools read.
+krabka-format = { path = "../format" }
+
+clap = { workspace = true, features = ["env"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+yare = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
