@@ -8,6 +8,14 @@ release that contains `krabka-java-regex`.
 
 ### Fixed
 
+- A backreference to a group the pattern does not have, such as `(a)\2`,
+  compiles and never matches, as in Java, where it was refused. `(a)\2|b`
+  matches `b`.
+- A quantified look-around, such as `(?=(a))*`, compiles and matches as
+  Java's `closure` repeats a zero-width atom, where it was refused: with a
+  least count of 1 or more it is the look-around; `?`, `*`, `{0,m}` and their
+  possessive forms take it at most once and never go back to skip it; `??`
+  tries skipping it first; and `*?`, `{0,m}?` and `{0}` never take it.
 - Bounds where Java has no atom to repeat, as in `a*{2}`, `a{2}{3}`, `{2}`
   and `(?i){2}`, repeat the empty atom as in Java, instead of the atom
   before them or the text of the braces. `(?i){2}` is no longer refused.
