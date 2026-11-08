@@ -4,8 +4,6 @@
 //! with each other, so they are grouped here purely as the periodic work the
 //! broker spawns at startup.
 
-#[cfg(not(target_family = "wasm"))]
-use crate::{oauth_jwks::JwksRefresher, time_util::system_timer};
 use {
     crate::{
         blocking::spawn_blocking,
@@ -30,12 +28,17 @@ use {
     },
     krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt},
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
     tokio::{
         task::JoinHandle,
         time::{self, Instant},
     },
     tokio_util::sync::CancellationToken,
+};
+#[cfg(not(target_family = "wasm"))]
+use {
+    crate::{oauth_jwks::JwksRefresher, time_util::system_timer},
+    std::sync::PoisonError,
 };
 
 pub(super) fn spawn_storage_security_maintenance(
