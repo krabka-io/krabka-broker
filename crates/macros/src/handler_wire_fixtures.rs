@@ -1,8 +1,8 @@
 //! Fixed wire fields shared by independent ACL-filter fixtures.
 
 use moxy::{
-    ast::{Parse, ParseError, Parser, Path, PathArguments, Token},
-    token::{Ident, Spanner, TokenStream},
+    ast::{ParseError, Path},
+    token::TokenStream,
 };
 
 pub fn empty_match_acl_filter(input: &TokenStream) -> Result<TokenStream, ParseError> {
@@ -21,64 +21,9 @@ pub fn empty_match_acl_filter(input: &TokenStream) -> Result<TokenStream, ParseE
     })
 }
 
-pub fn token_refusal_result(input: &TokenStream) -> Result<TokenStream, ParseError> {
-    let parser = Parser::from_tokens(input);
-    let target = Path::parse(&parser)?;
-    if !target.last().is_some_and(|segment| {
-        matches!(
-            segment.ident.text(),
-            "RenewDelegationTokenResponse" | "ExpireDelegationTokenResponse"
-        )
-    }) || target
-        .iter()
-        .any(|segment| !matches!(segment.args, PathArguments::None))
-    {
-        return Err(ParseError::new(
-            target.span(),
-            "expected a concrete Renew or ExpireDelegationTokenResponse",
-        ));
-    }
-    let _: Token![,] = Parse::parse(&parser)?;
-    let case = Ident::parse(&parser)?;
-    let _: Token![,] = Parse::parse(&parser)?;
-    let actual = Ident::parse(&parser)?;
-    if !parser.is_empty() {
-        return Err(
-            parser.error("expected response type, case binding and actual response binding")
-        );
-    }
-    Ok(moxy::template! {
-        crate::handlers::delegation_token_test_support::MutationResponse {
-            actual: {{ actual }},
-            expected: {{ target }} {
-                error_code: {{ case }}.error.0,
-                expiry_timestamp_ms: {{ case }}.expiry.0,
-                ..Default::default()
-            },
-            case: {{ case }}.name,
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use {
-        super::{empty_match_acl_filter, token_refusal_result},
-        crate::meta::compact,
-    };
-
-    #[yare::parameterized(
-        renew = { "RenewDelegationTokenResponse" },
-        expire = { "wire::ExpireDelegationTokenResponse" },
-    )]
-    fn constructs_complete_pinned_refusals_for_both_token_responses(target: &str) {
-        let output =
-            token_refusal_result(&format!("{target}, case, response").parse().unwrap()).unwrap();
-        let rendered = compact(&output);
-        assert2::assert!(rendered.contains(&format!("expected:{target}{{error_code:case.error.0,expiry_timestamp_ms:case.expiry.0,..Default::default()}}")));
-        assert2::assert!(rendered.contains("actual:response"));
-        assert2::assert!(rendered.contains("case:case.name"));
-    }
+    use {super::empty_match_acl_filter, crate::meta::compact};
 
     #[yare::parameterized(
         request = { "DescribeAclsRequest" },

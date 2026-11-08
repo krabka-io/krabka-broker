@@ -156,11 +156,7 @@ mod handlers {
 
 mod test_support {
     use {
-        super::{
-            Address, Arc, Broker, Directory, Events, Handle, Identity, active_events,
-            handlers::{self, RequestContext},
-            install_events, record,
-        },
+        super::{Address, Broker, Identity, active_events, handlers::RequestContext, record},
         tokio::task,
     };
 
@@ -197,49 +193,6 @@ mod test_support {
             false,
             "PLAINTEXT",
         )
-    }
-
-    pub struct Authorization {
-        pub(crate) events: Events,
-    }
-    pub struct ShareStarter {
-        authorizer: Option<Authorization>,
-        enabled: bool,
-    }
-
-    pub fn start_share_broker() -> ShareStarter {
-        ShareStarter {
-            authorizer: None,
-            enabled: true,
-        }
-    }
-
-    impl ShareStarter {
-        pub(crate) fn authorizer(mut self, authorizer: Authorization) -> Self {
-            self.authorizer = Some(authorizer);
-            self
-        }
-
-        pub(crate) fn support(mut self, enabled: bool) -> Self {
-            self.enabled = enabled;
-            self
-        }
-
-        pub(crate) async fn call(self) -> handlers::test_support::StartedBroker {
-            task::yield_now().await;
-            let events = self.authorizer.unwrap().events;
-            install_events(&events);
-            record(&events, format!("start:{}", self.enabled));
-            handlers::test_support::StartedBroker {
-                broker: Handle {
-                    broker: Arc::new(Broker {
-                        events: Arc::clone(&events),
-                        enabled: self.enabled,
-                    }),
-                },
-                dir: Directory { events },
-            }
-        }
     }
 }
 
@@ -460,78 +413,5 @@ fn contexts_borrow_visible_or_hygienic_bindings_and_keep_expression_order() {
                 .iter()
                 .position(|event| event == "connection expression")
                 .unwrap()
-    );
-}
-
-async fn dispatch(
-    broker: &Broker,
-    value: u8,
-    context: &handlers::RequestContext<'_>,
-) -> Result<u8, &'static str> {
-    assert!(context.identity.name == "alice");
-    record(&broker.events, format!("dispatch:{value}"));
-    task::yield_now().await;
-    Ok(if broker.enabled { value } else { 0 })
-}
-
-#[tokio::test]
-async fn refusal_matrix_preserves_each_cases_setup_response_assertion_and_cleanup() {
-    struct Case {
-        name: &'static str,
-        authorizer: test_support::Authorization,
-        enabled: bool,
-        input: u8,
-        expected: u8,
-    }
-    let events = Events::default();
-    let cases = [
-        Case {
-            name: "enabled",
-            authorizer: test_support::Authorization {
-                events: Arc::clone(&events),
-            },
-            enabled: true,
-            input: 7,
-            expected: 7,
-        },
-        Case {
-            name: "disabled",
-            authorizer: test_support::Authorization {
-                events: Arc::clone(&events),
-            },
-            enabled: false,
-            input: 9,
-            expected: 0,
-        },
-    ];
-    krabka_macros::share_refusal_matrix! {
-        case(row) [cases];
-        bind(handle, _directory, broker, context, response);
-        invoke [dispatch(&broker, row.input, &context)];
-    }
-    assert!(
-        *events.lock().unwrap()
-            == [
-                "start:true",
-                "broker",
-                "identity:alice",
-                "address",
-                "context:builder-client:test-connection",
-                "dispatch:7",
-                "shutdown",
-                "address dropped",
-                "identity dropped:alice",
-                "directory dropped",
-                "start:false",
-                "broker",
-                "identity:alice",
-                "address",
-                "context:builder-client:test-connection",
-                "dispatch:9",
-                "shutdown",
-                "address dropped",
-                "identity dropped:alice",
-                "directory dropped"
-            ]
     );
 }

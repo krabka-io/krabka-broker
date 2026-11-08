@@ -124,18 +124,6 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
     })
 }
 
-pub fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(input)?;
-    let assertion = duration_parse_assertion();
-    Ok(moxy::template! {
-        fn {{ name }}(cases: &[(&str, Option<i64>)]) {
-            for &(raw, expected) in cases {
-                {{ assertion }}
-            }
-        }
-    })
-}
-
 fn duration_parse_assertion() -> TokenStream {
     moxy::template! {
         ::assert2::check!(parse_time(raw).ok().map(::krabka_units::Time::millis_i64) == expected, "{raw}");

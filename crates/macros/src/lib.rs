@@ -1458,16 +1458,6 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
     cli_support::argv_entrypoint(meta, item)
 }
 
-/// Generate a duration-parser check over each caller's literal cases.
-///
-/// # Errors
-///
-/// Rejects input outside this macro's syntax.
-#[cfg_attr(not(test), moxy::function)]
-pub fn duration_cases_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    cli_support::duration_cases(tokens)
-}
-
 /// Generate a sorted directory-tree fixture with the caller's path projection.
 ///
 /// # Errors
@@ -1890,7 +1880,6 @@ mod reconciliation_projection;
 mod request_test_identity;
 mod scheduled_loads;
 mod share_fixture_schemas;
-mod share_refusal_matrix;
 mod share_state_constructors;
 mod share_state_operation;
 mod share_state_results;
@@ -1908,11 +1897,6 @@ pub fn reconciliation_fields(
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
     reconciliation_fields::expand(&meta.into(), item)
-}
-/// Run share-offset refusal cases with direct startup, identity, assertions and shutdown.
-#[moxy::function]
-pub fn share_refusal_matrix(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
-    share_refusal_matrix::expand(input)
 }
 /// Derive projection construction from the member declaration's visible fields.
 #[moxy::derive(ReconciliationMember, attributes(reconciliation))]
@@ -1966,12 +1950,6 @@ pub fn freeze_refusal_rules(input: NativeTokenStream) -> Result<NativeTokenStrea
 #[moxy::function]
 pub fn empty_match_acl_filter(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     handler_wire_fixtures::empty_match_acl_filter(&input.into()).map(Into::into)
-}
-
-/// Compare a delegation-token refusal with the full selected wire response.
-#[moxy::function]
-pub fn token_refusal_result(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
-    handler_wire_fixtures::token_refusal_result(&input.into()).map(Into::into)
 }
 
 /// Construct an external share-state request from visible field expressions.
@@ -2130,7 +2108,7 @@ mod export_contract_tests {
         name: &'static str,
         expand: Expand,
     }
-    const FUNCTION_MACROS: [FunctionMacro; 83] = [
+    const FUNCTION_MACROS: [FunctionMacro; 82] = [
         FunctionMacro {
             name: "dispatch_table",
             expand: dispatch_table,
@@ -2314,10 +2292,6 @@ mod export_contract_tests {
         FunctionMacro {
             name: "keyed_record_batch_fixture",
             expand: keyed_record_batch_fixture,
-        },
-        FunctionMacro {
-            name: "duration_cases_fixture",
-            expand: duration_cases_fixture,
         },
         FunctionMacro {
             name: "directory_tree_fixture",
