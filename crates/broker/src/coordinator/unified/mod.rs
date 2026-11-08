@@ -29,6 +29,7 @@ pub(crate) mod topic_hash;
 
 mod admin_ops;
 mod group_coordinator;
+mod group_state;
 mod image_metadata;
 mod member_helpers;
 mod member_records;

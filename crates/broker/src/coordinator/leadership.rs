@@ -31,7 +31,7 @@ use {
     krabka_ids::{LeaderEpoch, PartitionIndex},
     krabka_metadata::{MetadataImage, NodeId},
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashMap,
         sync::{
             Arc, MutexGuard, PoisonError,
             atomic::{AtomicU64, Ordering},
@@ -254,68 +254,10 @@ async fn unload_partition(
         .config
         .shutdown_ack_timeout
         .max(Duration::from_millis(1));
-    // Offset-only groups have a classic actor but no protocol-type record.
-    // Include every live actor and seed map so losing an offsets partition
-    // cannot leave any stale coordinator state reachable on the old leader.
-    // Respawn seeds too: one can outlive its actor's entry.
-    let mut known_group_ids = HashSet::new();
-    known_group_ids.extend(
-        coordinator
-            .group_types
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(coordinator.groups.iter().map(|entry| entry.key().clone()));
-    known_group_ids.extend(
-        coordinator
-            .share_groups
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .streams_groups
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(coordinator.seeds.iter().map(|entry| entry.key().clone()));
-    known_group_ids.extend(
-        coordinator
-            .seeds_cache
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .respawn_seeds
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .share_seeds
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .share_seeds_cache
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .streams_seeds
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    known_group_ids.extend(
-        coordinator
-            .streams_seeds_cache
-            .iter()
-            .map(|entry| entry.key().clone()),
-    );
-    let group_ids: Vec<String> = known_group_ids
+    // Search every per-group map, so losing an offsets partition cannot
+    // leave any stale coordinator state reachable on the old leader.
+    let group_ids: Vec<String> = coordinator
+        .known_group_ids()
         .into_iter()
         .filter(|group_id| partition_for_group(image, group_id) == Some(partition.get()))
         .collect();
