@@ -8,7 +8,10 @@
 //! host name that a controller bound to a wildcard address advertises.
 
 use {
-    crate::host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
+    crate::{
+        controller_endpoint::CONTROLLER_LISTENER_NAME,
+        host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
+    },
     krabka_protocol::{
         owned::add_raft_voter_request::{AddRaftVoterRequest, Listener},
         primitives::uuid::Uuid,
@@ -21,7 +24,7 @@ use {
 /// [`crate::host_port::advertised_host`] decides.
 pub(super) fn controller_listener(bound: SocketAddr) -> Listener {
     Listener {
-        name: "CONTROLLER".to_owned(),
+        name: CONTROLLER_LISTENER_NAME.to_owned(),
         host: advertised_host(bound.ip(), local_host_name),
         port: bound.port(),
         ..Default::default()
@@ -55,7 +58,7 @@ pub(super) fn advertised_controller_listener(
         return controller_listener(bound);
     };
     Listener {
-        name: "CONTROLLER".to_owned(),
+        name: CONTROLLER_LISTENER_NAME.to_owned(),
         host,
         port,
         ..Default::default()
@@ -108,7 +111,7 @@ pub(super) fn controller_target(
             leader
                 .endpoints
                 .iter()
-                .find(|endpoint| endpoint.name.eq_ignore_ascii_case("CONTROLLER"))
+                .find(|endpoint| endpoint.name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
                 .or_else(|| leader.endpoints.first())
         });
     leader_endpoint.map_or_else(
