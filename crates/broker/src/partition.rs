@@ -226,6 +226,28 @@ pub fn empty_marker_materialization() -> Arc<sync::Mutex<OwedMarkerResolutions>>
     Arc::new(sync::Mutex::new(HashMap::default()))
 }
 
+/// Lock `log`, the log of `topic`-`partition`, with the poison policy of
+/// [`Partition::lock_log`]. For code that holds the log's `Arc` but not the
+/// [`Partition`], such as a closure that runs on the blocking pool.
+///
+/// Only the partition's writer recovers a poisoned guard and keeps going
+/// (`partition_writer::storage::lock_log`); every other reader and writer of
+/// the log comes through here.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the mutex is poisoned.
+pub fn lock_partition_log<'a>(
+    log: &'a Mutex<Log>,
+    topic: &str,
+    partition: PartitionIndex,
+) -> Result<MutexGuard<'a, Log>, BrokerError> {
+    log.lock().map_err(|_| BrokerError::PartitionWriterDied {
+        topic: topic.to_owned(),
+        partition: partition.0,
+    })
+}
+
 impl Partition {
     /// The complete checkpoint history, without changing the test's independent expected rows.
     #[cfg(test)]
@@ -293,8 +315,9 @@ impl Partition {
         }
     }
 
-    /// The partition's [`Log`], locked. Every `Partition` query on the log
-    /// goes through here, so each answers a poisoned mutex the same way.
+    /// The partition's [`Log`], locked. Every query on a partition's log goes
+    /// through here or through [`lock_partition_log`], so each answers a
+    /// poisoned mutex the same way.
     ///
     /// # Errors
     ///
@@ -303,12 +326,7 @@ impl Partition {
     /// read what that task left half-written. The error maps to
     /// `NOT_LEADER_OR_FOLLOWER`, so a client retries against the next leader.
     pub(crate) fn lock_log(&self) -> Result<MutexGuard<'_, Log>, BrokerError> {
-        self.log
-            .lock()
-            .map_err(|_| BrokerError::PartitionWriterDied {
-                topic: self.topic.clone(),
-                partition: self.index.0,
-            })
+        lock_partition_log(&self.log, &self.topic, self.index)
     }
 
     /// Next offset the underlying [`Log`] will assign. Cheap: takes the

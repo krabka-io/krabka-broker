@@ -113,7 +113,14 @@ async fn complete_topic_deletion(
 ) -> Result<(), RaftError> {
     let local = broker.partitions.partitions_of(name);
     let cleanup = LocalDeletion::snapshot(broker, name, Uuid::from_bytes(wire_topic_id.0), &local);
-    let tiered = tiered_partitions(broker, &broker.partitions, &image, name, &local);
+    // A poisoned partition log cannot say whether the partition is tiered, so
+    // the deletion stops before it commits rather than orphan remote segments.
+    let tiered =
+        tiered_partitions(broker, &broker.partitions, &image, name, &local).map_err(|error| {
+            RaftError::ChangeRejected(format!(
+                "topic deletion cannot read a partition log: {error}"
+            ))
+        })?;
     let controller = Arc::clone(&broker.controller);
     let reader = broker.remote_reader.clone();
     let broker_id = broker.config.broker_id;

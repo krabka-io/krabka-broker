@@ -35,7 +35,7 @@ pub(super) fn catch_up(
     // remote tier, and `Log::read` refuses them. Reading from the global floor
     // instead would fail every pass and the move would never finish.
     let (current_start, current_leo) = {
-        let current = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let current = part.lock_log()?;
         (current.local_log_start_offset(), current.log_end_offset())
     };
     // Recover the guard if a panic elsewhere poisoned the mutex rather
@@ -70,7 +70,7 @@ pub(super) fn catch_up(
         future_leo
     };
     let read = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let log = part.lock_log()?;
         log.read(fetch_offset, ByteSize::from_bytes(granted))?
     };
     if read.batches.is_empty() {

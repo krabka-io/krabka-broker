@@ -186,11 +186,16 @@ async fn expire_log_producers(partitions: &PartitionRegistry, now_ms: i64, expir
     let expiration_ms = expiration.millis_i64();
     let sweep = spawn_blocking(move || {
         for partition in hosted {
-            partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove_expired_producers(now_ms, expiration_ms);
+            // A poisoned log is left out of this sweep.
+            match partition.lock_log() {
+                Ok(mut log) => log.remove_expired_producers(now_ms, expiration_ms),
+                Err(error) => tracing::warn!(
+                    topic = %partition.topic,
+                    partition = partition.index.get(),
+                    %error,
+                    "producer expiry: skipping a partition whose log mutex is poisoned"
+                ),
+            }
         }
     });
     if let Err(error) = sweep.await {

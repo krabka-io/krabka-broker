@@ -18,7 +18,6 @@ use {
     },
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
-    std::sync::PoisonError,
 };
 
 /// The remote archive behind one tiered partition, which a trim has to make
@@ -47,27 +46,31 @@ impl ArchiveFloor<'_> {
 /// The archive a trim of `part` has to enforce its floor on: `None` for a
 /// partition whose log does not tier, on a broker with no remote tier, or for
 /// a topic the image no longer names.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned,
+/// so a trim never goes ahead without the floor it may owe the archive.
 pub(super) fn archive_floor<'a>(
     env: &'a TrimEnv<'_>,
     topic: &str,
     part: &Partition,
-) -> Option<ArchiveFloor<'a>> {
-    let tiered = part
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .config_snapshot()
-        .remote_storage_enable;
+) -> Result<Option<ArchiveFloor<'a>>, BrokerError> {
+    let tiered = part.lock_log()?.config_snapshot().remote_storage_enable;
     if !tiered {
-        return None;
+        return Ok(None);
     }
-    let reader = env.broker.remote_reader.as_deref()?;
-    let topic_id = env.image.topic(topic)?.topic_id;
-    Some(ArchiveFloor {
+    let Some(reader) = env.broker.remote_reader.as_deref() else {
+        return Ok(None);
+    };
+    let Some(topic_id) = env.image.topic(topic).map(|topic| topic.topic_id) else {
+        return Ok(None);
+    };
+    Ok(Some(ArchiveFloor {
         reader,
         tp: TopicIdPartition::new(topic_id, topic, part.index.get()),
         broker_id: env.broker.config.broker_id,
-    })
+    }))
 }
 
 /// Why a trim behind the archive did not happen.

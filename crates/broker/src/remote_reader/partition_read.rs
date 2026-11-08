@@ -13,6 +13,7 @@
 use {
     super::{AbortedTxnEntry, RemoteReader},
     crate::{
+        error::BrokerError,
         metrics::{BrokerMetrics, RemoteTierPath},
         partition::Partition,
     },
@@ -20,10 +21,7 @@ use {
     krabka_ids::LeaderEpoch,
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
-    std::{
-        sync::{PoisonError, atomic::Ordering},
-        time::Instant,
-    },
+    std::{sync::atomic::Ordering, time::Instant},
 };
 
 impl RemoteReader {
@@ -36,13 +34,18 @@ impl RemoteReader {
     /// still on disk sits above everything the tier holds. See
     /// `Log::established_log_start`. An offset below an established floor is
     /// gone from every tier, and a local read answers it with `OffsetTooLow`.
-    pub(crate) fn serves(partition: &Partition, offset: Offset) -> bool {
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.config_snapshot().remote_storage_enable
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub(crate) fn serves(partition: &Partition, offset: Offset) -> Result<bool, BrokerError> {
+        let log = partition.lock_log()?;
+        Ok(log.config_snapshot().remote_storage_enable
             && offset < log.local_log_start_offset()
             && log
                 .established_log_start()
-                .is_none_or(|floor| offset >= floor)
+                .is_none_or(|floor| offset >= floor))
     }
 
     /// Reads the whole batches of `partition` from `offset` on out of the
@@ -134,7 +137,10 @@ impl RemoteReader {
     /// # Errors
     ///
     /// Returns the RLMM's error when the archive lookup cannot list the
-    /// partition's segments.
+    /// partition's segments, and [`RemoteStorageError::Backend`] when the
+    /// log mutex is poisoned. Callers check the log first through
+    /// [`Partition::lock_log`], which answers `NOT_LEADER_OR_FOLLOWER`, so
+    /// this only catches a panic that lands in between.
     pub(crate) async fn owning_epoch_for(
         &self,
         partition: &Partition,
@@ -143,7 +149,9 @@ impl RemoteReader {
     ) -> Result<LeaderEpoch, RemoteStorageError> {
         let current = LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
         let (cached, earliest) = {
-            let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let log = partition
+                .lock_log()
+                .map_err(|error| RemoteStorageError::Backend(error.to_string()))?;
             let checkpoint = log.epoch_checkpoint();
             let epochs = (
                 checkpoint.epoch_for_offset(offset),

@@ -133,12 +133,7 @@ pub async fn bootstrap(
         let partition_id = PartitionIndex(record.partition);
         if let Some(partition) = partitions.get(OFFSETS_TOPIC, partition_id) {
             if record.leader == config.node_id {
-                let log = partition.log.lock().map_err(|_| {
-                    BrokerError::Startup(format!(
-                        "{OFFSETS_TOPIC}-{} log lock poisoned during replay",
-                        record.partition
-                    ))
-                })?;
+                let log = partition.lock_log()?;
                 replayed.merge(replay_records(&log, coordinator)?);
             }
             continue;

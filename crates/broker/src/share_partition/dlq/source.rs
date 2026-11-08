@@ -11,20 +11,21 @@
 use {
     super::record::SourceRecord,
     crate::{
-        blocking::spawn_blocking, diskless::read::DisklessReadHandle, metrics::BrokerMetrics,
-        partition::Partition, remote_reader::RemoteReader,
+        blocking::spawn_blocking,
+        diskless::read::DisklessReadHandle,
+        error::BrokerError,
+        metrics::BrokerMetrics,
+        partition::{Partition, lock_partition_log},
+        remote_reader::RemoteReader,
         share_partition::source::diskless_logical_start,
     },
     bytes::Buf as _,
     krabka_compression::RecordDecompressionPolicy,
-    krabka_log::Offset,
+    krabka_log::{Offset, RawRead},
     krabka_protocol::records::RecordBatch,
     krabka_remote_storage::TopicIdPartition,
     krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes},
-    std::{
-        collections::BTreeMap,
-        sync::{Arc, PoisonError},
-    },
+    std::{collections::BTreeMap, sync::Arc},
 };
 
 /// The most bytes of one log read. Most dead-letter ranges are one record, so
@@ -139,18 +140,21 @@ pub(super) struct SourceTier<'a> {
 /// Reads the raw batches of `[first, last]` from the log of `partition`, off
 /// the reactor thread, or from the archive or WAL when local storage no longer
 /// holds `first`. A cold read can return batches past `last`, and the collector
-/// leaves them out.
+/// leaves them out. A failed read, a poisoned log mutex among them, returns
+/// `None`: the record is not copied.
 async fn read_raw(
     partition: &Arc<Partition>,
     tier: Option<&SourceTier<'_>>,
     first: i64,
     last: i64,
 ) -> Option<bytes::Bytes> {
-    let local_start = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .local_log_start_offset();
+    let local_start = match partition.lock_log() {
+        Ok(log) => log.local_log_start_offset(),
+        Err(error) => {
+            tracing::warn!(%error, first, last, "dead-letter source log is unreadable");
+            return None;
+        }
+    };
     if partition.diskless
         && let Some(tier) = tier
         && let Some(reader) = tier.diskless
@@ -174,7 +178,9 @@ async fn read_raw(
             .flatten();
     }
     if let Some((tier, reader)) = tier
-        .filter(|_| RemoteReader::serves(partition, Offset(first)))
+        // A poisoned log does not serve from the tier; the local read below
+        // refuses it too.
+        .filter(|_| RemoteReader::serves(partition, Offset(first)).unwrap_or(false))
         .and_then(|tier| tier.reader.map(|reader| (tier, reader)))
     {
         let max_bytes = usize::try_from(MAX_FETCH.bytes_u64()).unwrap_or(usize::MAX);
@@ -190,9 +196,10 @@ async fn read_raw(
         };
     }
     let log = Arc::clone(&partition.log);
-    let read = spawn_blocking(move || {
-        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.read_raw(Offset(first), Offset(last.saturating_add(1)), MAX_FETCH)
+    let (topic, index) = (partition.topic.clone(), partition.index);
+    let read = spawn_blocking(move || -> Result<RawRead, BrokerError> {
+        let guard = lock_partition_log(&log, &topic, index)?;
+        Ok(guard.read_raw(Offset(first), Offset(last.saturating_add(1)), MAX_FETCH)?)
     })
     .await;
     match read {

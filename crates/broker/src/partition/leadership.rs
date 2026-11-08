@@ -15,7 +15,7 @@ use {
     krabka_log::Log,
     std::{
         future::Future,
-        sync::{Arc, PoisonError, atomic::Ordering},
+        sync::{Arc, atomic::Ordering},
     },
     tokio::sync::{OwnedRwLockReadGuard, RwLockWriteGuard},
 };
@@ -179,7 +179,8 @@ impl Partition {
     /// term.
     ///
     /// # Errors
-    /// Returns the checkpoint's error when the epoch cannot be recorded. A
+    /// Returns the checkpoint's error when the epoch cannot be recorded, and
+    /// [`BrokerError::PartitionWriterDied`] when the log mutex is poisoned. A
     /// changed target is then not published, as a failed diskless promotion
     /// is not.
     pub(crate) async fn install_local_leadership(
@@ -197,7 +198,7 @@ impl Partition {
             // in-flight Produce requests, which hold read guards too.
             let target = self.replication_target.read().await;
             if Self::target_matches(&target, topic_id, local_node, epoch) {
-                let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut log = self.lock_log()?;
                 return assign_leader_epoch_start(&mut log, epoch);
             }
         }
@@ -230,7 +231,7 @@ impl Partition {
         // of the log, so the producer state read here is the state at the log
         // end where the new epoch starts.
         let prepared = {
-            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut log = self.lock_log()?;
             assign_leader_epoch_start(&mut log, epoch).map(|()| log.recovered_producers())
         };
         producer_state
@@ -247,6 +248,10 @@ impl Partition {
     /// Produce admission also checks `current_leader`, so it cannot observe
     /// the metadata promotion until `prepare` and producer-state recovery have
     /// completed successfully.
+    ///
+    /// # Errors
+    /// Returns `prepare`'s error, or [`BrokerError::PartitionWriterDied`] when
+    /// the log mutex is poisoned. The new role is then not published.
     pub(crate) async fn install_replication_target_after_log_prepare<T, F>(
         &self,
         topic_id: Option<uuid::Uuid>,
@@ -281,7 +286,7 @@ impl Partition {
         F: Future<Output = ()>,
     {
         let prepared = {
-            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut log = self.lock_log()?;
             prepare(&mut log)?
         };
         after_prepare(prepared).await;

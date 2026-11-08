@@ -8,7 +8,7 @@ use {
         FetchReaderExt as _,
         plan::{
             PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
-            required_leader,
+            refused_read, required_leader,
         },
         read::{LiveOffsets, ReadRequest, do_read},
         remote::{RemoteFetchWait, try_remote_read},
@@ -346,7 +346,12 @@ async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollSt
         let Some(part) = read.partition.clone() else {
             continue;
         };
-        LiveOffsets::of(&part).await.report(&mut read.out);
+        match LiveOffsets::of(&part).await {
+            Ok(live) => live.report(&mut read.out),
+            Err(error) => {
+                read.out = refused_read(read.partition_index, codes::from_broker_error(&error));
+            }
+        }
     }
 }
 

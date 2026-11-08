@@ -44,8 +44,10 @@ use {
         lag::{future_offset_lag, offset_lag_for},
     },
     crate::{
-        codes, future_log::FutureLogRegistry, handlers::cluster_describe_denied,
-        partition::Partition,
+        codes,
+        future_log::FutureLogRegistry,
+        handlers::cluster_describe_denied,
+        partition::{Partition, lock_partition_log},
     },
     krabka_ids::PartitionIndex,
     std::{
@@ -195,7 +197,9 @@ struct LoadedLog {
 ///
 /// Kafka's `logManager.allLogs.groupBy(log => log.parentDir)`. A log's own
 /// directory decides where it is reported, so a log mid-move shows under the
-/// directory that holds it.
+/// directory that holds it. A partition's current log whose mutex a panic
+/// poisoned is not read and not reported, as a log with no parent directory
+/// is not.
 fn loaded_logs_by_dir(
     hosted: &[Arc<Partition>],
     future_logs: &FutureLogRegistry,
@@ -219,7 +223,20 @@ fn loaded_logs_by_dir(
             continue;
         }
         let (parent, size) = {
-            let log = log.lock().unwrap_or_else(PoisonError::into_inner);
+            // Only the partition's current log takes its poison policy. The
+            // future log belongs to the move's registry.
+            let log = if is_future_key {
+                log.lock().unwrap_or_else(PoisonError::into_inner)
+            } else {
+                match lock_partition_log(&log, &topic, partition) {
+                    Ok(log) => log,
+                    Err(error) => {
+                        tracing::warn!(topic = %topic, partition = partition.0, %error,
+                            "describe_log_dirs: skipping an unreadable partition log");
+                        continue;
+                    }
+                }
+            };
             (
                 log.dir().parent().map(PathBuf::from),
                 log.size().bytes_u64(),

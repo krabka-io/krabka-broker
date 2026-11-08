@@ -185,11 +185,11 @@ krabka_macros::dispatch_table! {
     // `handle(broker, &request, version, ctx)`, called without awaiting: the
     // result is wrapped in a ready future.
     typed_sync:
-        DescribeAcls,
-        DescribeProducers;
+        DescribeAcls;
     // The same, for a handler that cannot fail and returns its response
     // struct itself.
     typed_infallible:
+        DescribeProducers,
         OffsetForLeaderEpoch,
         ListConfigResources,
         DescribeConfigs,

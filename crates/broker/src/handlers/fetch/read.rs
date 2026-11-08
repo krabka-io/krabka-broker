@@ -27,7 +27,7 @@ use {
     krabka_verified::FetchReader,
     std::{
         fmt, io,
-        sync::{Arc, Mutex, PoisonError},
+        sync::{Arc, Mutex},
     },
 };
 
@@ -158,7 +158,7 @@ async fn read_local_log(
         log_start,
         window: w,
         plan,
-    } = plan_read(part, fetch_offset, hw, reader, out);
+    } = plan_read(part, fetch_offset, hw, reader, out)?;
     // Log mutex released here.
 
     // The cache answers with whole batches, so it takes the window's limit and
@@ -203,6 +203,15 @@ async fn read_local_log(
             read_committed_aborts,
         } => {
             let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
+            // `run_page_cache_io` recovers a poisoned guard, so a log poisoned
+            // since `plan_read` is refused here instead. A panic between this
+            // check and the lock still slips through; the next fetch refuses.
+            if part.log.is_poisoned() {
+                return Err(BrokerError::PartitionWriterDied {
+                    topic: part.topic.clone(),
+                    partition: part.index.0,
+                });
+            }
             run_blocking_read(&part.log, &BlockingRead {
                 fetch_offset,
                 limit_offset,
@@ -544,14 +553,19 @@ pub struct LiveOffsets {
 
 impl LiveOffsets {
     /// Reads the bounds off `part` now.
-    pub async fn of(part: &Partition) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub async fn of(part: &Partition) -> Result<Self, BrokerError> {
         let high_watermark = part.high_watermark().await;
-        let mut log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        Self {
+        let mut log = part.lock_log()?;
+        Ok(Self {
             log_start: log.reported_log_start(),
             high_watermark,
             last_stable_offset: log.last_stable_offset(high_watermark),
-        }
+        })
     }
 
     /// Writes all three bounds into `response`.
@@ -611,14 +625,20 @@ struct PlannedWindow {
     plan: ReadPlan,
 }
 
+/// Plans one partition's read under its log mutex.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned;
+/// see [`Partition::lock_log`].
 fn plan_read(
     partition: &Partition,
     fetch_offset: Offset,
     high_watermark: Offset,
     reader: FetchReader,
     response: &mut PartitionData,
-) -> PlannedWindow {
-    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+) -> Result<PlannedWindow, BrokerError> {
+    let mut log = partition.lock_log()?;
     // The global floor as Kafka reports it, which a follower raises its own
     // start to: see `Log::reported_log_start`.
     let log_start = log.reported_log_start();
@@ -667,11 +687,11 @@ fn plan_read(
             read_committed_aborts: window.read_committed_aborts,
         }
     };
-    PlannedWindow {
+    Ok(PlannedWindow {
         log_start,
         window,
         plan,
-    }
+    })
 }
 
 /// The bytes of `regions`, in order, which a `read_raw` of the same window
@@ -700,15 +720,18 @@ fn should_use_sendfile(total_bytes: usize, has_regions: bool, minimum_bytes: usi
 #[cfg(test)]
 mod tests {
     use {
-        super::{RawServed, ServedRecords, read_task_panicked},
+        super::{RawServed, ServedRecords, read_task_panicked, refused_read},
         crate::{
             blocking::inline_blocking_on_this_thread,
-            codes::{NONE, OFFSET_OUT_OF_RANGE},
+            codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
             delivery::test_support::batch_at,
             error::BrokerError,
             handlers::test_support::default_records_batch,
             log_dir_status::LogDirRegistry,
-            partition::{Partition, test_support::test_partition},
+            partition::{
+                Partition,
+                test_support::{poison_log, test_partition},
+            },
             time_util::now_ms,
         },
         assert2::assert,
@@ -1383,11 +1406,7 @@ mod tests {
     /// transaction.
     #[tokio::test]
     async fn live_offsets_report_the_bounds_a_local_read_reports() {
-        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
-        {
-            let _log = before_and_transaction(&partition, "append the open transaction");
-        }
-        partition.replica_state.lock().await.hw = Offset(2);
+        let (partition, _dir) = open_transaction_partition().await;
 
         let mut local = PartitionData::default();
         super::do_read(
@@ -1400,10 +1419,13 @@ mod tests {
         let mut reported = PartitionData::default();
         super::LiveOffsets::of(&partition)
             .await
+            .expect("log is not poisoned")
             .report(&mut reported);
 
         assert!(
-            super::LiveOffsets::of(&partition).await
+            super::LiveOffsets::of(&partition)
+                .await
+                .expect("log is not poisoned")
                 == super::LiveOffsets {
                     log_start: Offset(0),
                     high_watermark: Offset(2),
@@ -1421,6 +1443,40 @@ mod tests {
                 local.last_stable_offset
             )
         );
+    }
+
+    /// A fetch from a partition whose log mutex a panicked task poisoned
+    /// answers the refused `NOT_LEADER_OR_FOLLOWER` row, rather than serve what
+    /// that task left half-written, and the bounds a cold-tier read reports
+    /// are refused the same way.
+    #[tokio::test]
+    async fn a_fetch_from_a_poisoned_log_is_refused() {
+        let (partition, _dir) = open_transaction_partition().await;
+        poison_log(&partition);
+
+        let mut out = PartitionData::default();
+        super::do_read(
+            &partition,
+            consumer_request(0),
+            &LogDirRegistry::default(),
+            &mut out,
+        )
+        .await;
+
+        assert!(out == refused_read(0, NOT_LEADER_OR_FOLLOWER));
+        assert!(let Err(BrokerError::PartitionWriterDied { .. }) =
+            super::LiveOffsets::of(&partition).await);
+    }
+
+    /// A partition holding a batch and an open transaction, with its high
+    /// watermark at 2.
+    async fn open_transaction_partition() -> (Partition, tempfile::TempDir) {
+        let (partition, dir) = test_partition(Arc::new(Notify::new()));
+        {
+            let _log = before_and_transaction(&partition, "append the open transaction");
+        }
+        partition.replica_state.lock().await.hw = Offset(2);
+        (partition, dir)
     }
 
     /// A log holding one batch per entry of `activations`, two records each.
