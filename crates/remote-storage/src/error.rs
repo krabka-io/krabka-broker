@@ -103,8 +103,16 @@ pub enum RemoteStorageError {
     #[error("write-once archive: {0}")]
     Worm(#[from] WormError),
 
+    /// A backend, for example an object store, could not serve the request
+    /// now: it was throttled, failed with a server error, timed out or lost
+    /// the connection. The same request can succeed later, so a caller may
+    /// retry it.
+    #[error("remote storage backend unavailable: {0}")]
+    Unavailable(String),
+
     /// A backend, for example an object store, raised an error. The error
-    /// does not map cleanly to one of the structured variants above.
+    /// does not map cleanly to one of the structured variants above, and
+    /// [`Unavailable`](Self::Unavailable) holds the ones a retry can clear.
     #[error("remote storage backend error: {0}")]
     Backend(String),
 
@@ -143,6 +151,7 @@ impl From<krabka_object_store::ObjectStoreError> for RemoteStorageError {
                 key: key.to_string(),
                 reason,
             },
+            E::Unavailable(m) => Self::Unavailable(m),
             E::Backend(m) => Self::Backend(m),
         }
     }
@@ -181,6 +190,21 @@ mod tests {
         check!(
             precondition.to_string() == "precondition failed for `worm/manifest`: etag mismatch"
         );
+    }
+
+    /// A caller that decides whether to retry reads the split here, so the
+    /// conversion must keep a retryable failure apart from a fatal one.
+    #[test]
+    fn retryable_and_fatal_backend_failures_stay_apart() {
+        let retryable = RemoteStorageError::from(
+            krabka_object_store::ObjectStoreError::Unavailable("503 SlowDown".to_owned()),
+        );
+        let fatal = RemoteStorageError::from(krabka_object_store::ObjectStoreError::Backend(
+            "403 AccessDenied".to_owned(),
+        ));
+
+        check!(matches!(&retryable, RemoteStorageError::Unavailable(m) if m == "503 SlowDown"));
+        check!(matches!(&fatal, RemoteStorageError::Backend(m) if m == "403 AccessDenied"));
     }
 
     /// `?` on a [`WormError`] must land in one variant that still renders the

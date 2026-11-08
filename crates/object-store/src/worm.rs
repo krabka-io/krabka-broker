@@ -448,7 +448,7 @@ mod tests {
         let error = result
             .expect("configured deadline must expire before the test guard")
             .unwrap_err();
-        check!(matches!(error, ObjectStoreError::Backend(_)));
+        check!(matches!(error, ObjectStoreError::Unavailable(_)));
         if retry_deadline {
             check!(error.to_string().contains("retry deadline exceeded"));
         }

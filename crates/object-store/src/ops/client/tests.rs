@@ -175,7 +175,7 @@ async fn list_stream_surfaces_a_backend_failure_as_an_error_item() {
 
     let c = ObjectStoreClient::new(Arc::new(CountingStore::failing_list()));
     let err = c.list_stream(None).try_next().await.unwrap_err();
-    assert!(matches!(err, ObjectStoreError::Backend(_)));
+    assert!(matches!(err, ObjectStoreError::Unavailable(_)));
 }
 
 /// The default request asks for no digest, and the outcome reports the

@@ -64,6 +64,8 @@ enum Fault {
     InternalError,
     #[step_param("NoSuchKey")]
     NoSuchKey,
+    #[step_param("AccessDenied")]
+    AccessDenied,
 }
 
 impl Fault {
@@ -72,6 +74,7 @@ impl Fault {
             Self::SlowDown => FaultKind::Throttled,
             Self::InternalError => FaultKind::ServerError,
             Self::NoSuchKey => FaultKind::NotFound,
+            Self::AccessDenied => FaultKind::AccessDenied,
         }
     }
 
@@ -82,6 +85,7 @@ impl Fault {
             Self::SlowDown => "503 SlowDown",
             Self::InternalError => "500 InternalError",
             Self::NoSuchKey => "injected",
+            Self::AccessDenied => "403 AccessDenied",
         }
     }
 }
@@ -342,7 +346,7 @@ fn throttled_puts(drill_scenario: &DrillScenario, throttled: PutNumbers) {
         .iter()
         .map(|write| match write {
             Ok(_) => PutAnswer::Stored,
-            Err(ObjectStoreError::Backend(message))
+            Err(ObjectStoreError::Unavailable(message))
                 if message.contains(Fault::SlowDown.status()) =>
             {
                 PutAnswer::Throttled
@@ -368,8 +372,15 @@ fn read_returns_segment(drill_scenario: &DrillScenario) {
     assert2::assert!(bytes.as_ref() == SEGMENT);
 }
 
-#[rstest_bdd_macros::then("the broker sees a backend failure naming {fault}")]
-fn backend_failure(drill_scenario: &DrillScenario, fault: Fault) {
+#[rstest_bdd_macros::then("the broker sees a retryable failure naming {fault}")]
+fn retryable_failure(drill_scenario: &DrillScenario, fault: Fault) {
+    let error = drill_scenario.answer.get().error();
+    assert2::assert!(let Some(ObjectStoreError::Unavailable(message)) = error);
+    assert2::assert!(message.contains(fault.status()));
+}
+
+#[rstest_bdd_macros::then("the broker sees a fatal failure naming {fault}")]
+fn fatal_failure(drill_scenario: &DrillScenario, fault: Fault) {
     let error = drill_scenario.answer.get().error();
     assert2::assert!(let Some(ObjectStoreError::Backend(message)) = error);
     assert2::assert!(message.contains(fault.status()));
