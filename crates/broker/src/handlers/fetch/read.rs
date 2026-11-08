@@ -10,7 +10,7 @@ use {
         plan::refused_read,
     },
     crate::{
-        blocking::{run_blocking, run_page_cache_io},
+        blocking::{BlockingError, OnPoison, run_blocking, run_page_cache_io},
         codes,
         diskless::hot_tail::HotTailCache,
         error::BrokerError,
@@ -18,6 +18,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::Partition,
     },
+    krabka_ids::PartitionIndex,
     krabka_log::{AbortedTxn, Log, LogError, Offset, RawReadPlan},
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
@@ -203,16 +204,7 @@ async fn read_local_log(
             read_committed_aborts,
         } => {
             let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
-            // `run_page_cache_io` recovers a poisoned guard, so a log poisoned
-            // since `plan_read` is refused here instead. A panic between this
-            // check and the lock still slips through; the next fetch refuses.
-            if part.log.is_poisoned() {
-                return Err(BrokerError::PartitionWriterDied {
-                    topic: part.topic.clone(),
-                    partition: part.index.0,
-                });
-            }
-            run_blocking_read(&part.log, &BlockingRead {
+            run_blocking_read(&part.log, (&part.topic, part.index), &BlockingRead {
                 fetch_offset,
                 limit_offset,
                 effective_lso,
@@ -321,16 +313,26 @@ struct BlockingRead {
 /// `#[tokio::test]` builds keep the `spawn_blocking` path, and
 /// `wasm32-wasip1`, which has no blocking pool, reads inline.
 /// [`crate::blocking`] makes that choice.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] for `topic`-`partition` when
+/// the log mutex is poisoned when the plan takes it, even if it was not when
+/// `plan_read` took it, and the read's own errors otherwise.
 async fn run_blocking_read(
     log: &Arc<Mutex<Log>>,
+    (topic, partition): (&str, PartitionIndex),
     read: &BlockingRead,
 ) -> Result<ServedRecords, BrokerError> {
     let read = BlockingRead { ..*read };
     // Under the log mutex, the plan alone: index lookups and handle clones,
     // which never wait on storage, so it runs on the calling task whenever
     // the mutex is free and hands off only to wait for a holder.
+    // The poison is checked under the guard the plan runs under, so a log a
+    // task panicked over since `plan_read` is refused too.
     let (plan, aborted) = run_page_cache_io(
         log,
+        OnPoison::Refuse,
         |_| true,
         move |log| {
             let plan = log.plan_raw_read(read.fetch_offset, read.limit_offset, read.read_max)?;
@@ -339,7 +341,13 @@ async fn run_blocking_read(
         },
     )
     .await
-    .map_err(|error| read_task_panicked(&error))??;
+    .map_err(|error| match error {
+        BlockingError::Poisoned => BrokerError::PartitionWriterDied {
+            topic: topic.to_owned(),
+            partition: partition.0,
+        },
+        other => read_task_panicked(&other),
+    })??;
     // Off the mutex, the read: the header walks, the readahead hints and the
     // copy or description of the run, which the producer's appends to the
     // partition no longer wait behind. The page cache and the direct-write
@@ -736,7 +744,7 @@ mod tests {
         },
         assert2::assert,
         bytes::Bytes,
-        krabka_ids::ProducerId,
+        krabka_ids::{PartitionIndex, ProducerId},
         krabka_log::{DeliveryPolicy, Log, LogConfig, LogError, Offset},
         krabka_protocol::{
             owned::fetch_response::{AbortedTransaction, PartitionData},
@@ -747,6 +755,7 @@ mod tests {
         std::{
             io,
             sync::{Arc, Mutex, MutexGuard},
+            thread,
         },
         tokio::{
             runtime::{Builder, Runtime},
@@ -837,6 +846,36 @@ mod tests {
         }
     }
 
+    /// The read under the log mutex checks the poison under its own guard, so a
+    /// log a task panicked over after `plan_read` took the mutex is refused too:
+    /// no window opens between a check and the read.
+    #[test]
+    fn the_blocking_read_refuses_a_log_poisoned_after_planning() {
+        let LogInDir { dir: _dir, log } = two_record_log();
+        let read = whole_log_read(log.log_end_offset());
+        let log = Arc::new(Mutex::new(log));
+        let poisoner = Arc::clone(&log);
+        assert!(
+            thread::spawn(move || {
+                let _guard = poisoner.lock();
+                panic!("poison the log mutex");
+            })
+            .join()
+            .is_err()
+        );
+
+        let refused = Builder::new_current_thread()
+            .build()
+            .expect("build a current-thread runtime")
+            .block_on(super::run_blocking_read(
+                &log,
+                ("t", PartitionIndex(3)),
+                &read,
+            ));
+
+        assert!(let Err(BrokerError::PartitionWriterDied { partition: 3, .. }) = refused);
+    }
+
     /// [`super::run_blocking_read`] picks its hand-off from the runtime
     /// flavor: `block_in_place` on the multi-threaded runtime the broker runs
     /// on, `spawn_blocking` on a current-thread runtime, where
@@ -862,7 +901,11 @@ mod tests {
 
         let served = |runtime: Runtime| {
             runtime
-                .block_on(super::run_blocking_read(&log, &read))
+                .block_on(super::run_blocking_read(
+                    &log,
+                    ("t", PartitionIndex(0)),
+                    &read,
+                ))
                 .expect("the blocking read succeeds")
         };
         let current_thread = served(
@@ -1061,7 +1104,11 @@ mod tests {
         let split = Builder::new_current_thread()
             .build()
             .expect("build a current-thread runtime")
-            .block_on(super::run_blocking_read(&log, &read))
+            .block_on(super::run_blocking_read(
+                &log,
+                ("t", PartitionIndex(0)),
+                &read,
+            ))
             .expect("the split read succeeds");
 
         assert!(single.aborted.len() == 1);
