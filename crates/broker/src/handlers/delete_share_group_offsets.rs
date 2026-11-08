@@ -145,27 +145,18 @@ pub async fn handle(
         Ok(outcomes) => outcomes,
         Err(error_code) => return Ok(top_level(error_code, None)),
     };
+    invalidate_deleted_partitions(broker, &gid, &outcomes);
     // The actor answers in Kafka's row order: the deleted topics, the topics
     // `sharePartitionsEligibleForOffsetDeletion` refused, then the topics
     // whose state delete failed.
     for (topic_name, outcome) in outcomes {
         responses.push(match outcome {
-            DeleteTopicOutcome::Deleted {
-                topic_id,
-                partitions,
-            } => {
-                for partition in partitions {
-                    broker
-                        .share_partition_leaders
-                        .invalidate(&gid, topic_id, partition);
-                }
-                DeleteShareGroupOffsetsResponseTopic {
-                    topic_name,
-                    topic_id: Uuid(*topic_id.as_bytes()),
-                    error_code: codes::NONE,
-                    ..Default::default()
-                }
-            }
+            DeleteTopicOutcome::Deleted { topic_id, .. } => DeleteShareGroupOffsetsResponseTopic {
+                topic_name,
+                topic_id: Uuid(*topic_id.as_bytes()),
+                error_code: codes::NONE,
+                ..Default::default()
+            },
             DeleteTopicOutcome::UnknownTopic => DeleteShareGroupOffsetsResponseTopic {
                 topic_name,
                 topic_id: Uuid::default(),
@@ -200,6 +191,29 @@ pub async fn handle(
         ..Default::default()
     };
     Ok(resp)
+}
+
+/// Drops the cached acquisition-state cell of every partition whose share
+/// state the actor deleted, so the next `ShareFetch` on this broker re-reads
+/// the durable SPSO.
+fn invalidate_deleted_partitions(
+    broker: &Broker,
+    gid: &str,
+    outcomes: &[(String, DeleteTopicOutcome)],
+) {
+    for (_, outcome) in outcomes {
+        if let DeleteTopicOutcome::Deleted {
+            topic_id,
+            partitions,
+        } = outcome
+        {
+            for &partition in partitions {
+                broker
+                    .share_partition_leaders
+                    .invalidate(gid, *topic_id, partition);
+            }
+        }
+    }
 }
 
 /// Kafka's row message for a topic the group holds no share state for.
