@@ -494,11 +494,7 @@ fn fails_on_missing_token_file(store_configuration_scenario: &StoreConfiguration
     assert2::assert!(error.contains(&token_file.display().to_string()), "{error}");
 }
 
-// `@inprogress` scenarios document known defects. `krabka_bdd::scenarios!`
-// leaves them out of its step check by default but still runs them, so
-// `tags` leaves them out of the run too.
 krabka_bdd::scenarios!(
     "tests/features/store_configuration",
-    tags = "not @formulated and not @inprogress",
     fixtures = [store_configuration_scenario: StoreConfigurationScenario]
 );

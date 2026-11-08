@@ -266,7 +266,7 @@ mod tests {
                     actor::GroupActorMessage,
                     classic_state::ClassicGroup,
                     group::{CoordinatorGroup, GroupKind, GroupOffsets},
-                    test_support::make_coord,
+                    test_support::{make_coord, stop_group_actor},
                 },
             },
             txn::marker::{MarkerFailureClass, classify_marker_failure},
@@ -300,6 +300,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_abort_resolves_the_marks_a_stopped_classic_actor_left() {
         let coordinator = make_coord();
+        let _ = coordinator.get_or_create_classic("g");
+        stop_group_actor(&coordinator, "g").await;
         let mut group = CoordinatorGroup::seeded(
             "g",
             GroupKind::Classic(ClassicGroup::new("g")),

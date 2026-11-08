@@ -75,7 +75,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | :--- | :--- | :--- | :--- | :--- |
 | `checkpoint` | table | broker default |  | `[audit.checkpoint]` — checkpoint cadence. See `[audit.checkpoint]` below. |
 | `enabled` | boolean | `true` |  | Whether the audit subsystem is active. |
-| `failure_mode` | string | broker default |  | Whether privileged operations continue when audit processing fails. |
+| `failure_mode` | string | broker default |  | Whether privileged operations continue when audit processing fails: `fail-open` or `fail-closed`. A `fail-closed` broker needs an `[audit.signing]` key and refuses to start without one. A `fail-open` broker without a key starts with checkpoints disabled. |
 | `signing` | table | broker default |  | `[audit.signing]` — Ed25519 checkpoint signing key. See `[audit.signing]` below. |
 | `spool` | table | broker default |  | `[audit.spool]` — durable spool for the AU-5 degraded path. See `[audit.spool]` below. |
 | `topic` | string | `"__krabka_audit"` |  | Internal topic name for audit records. It has to start with `__`: the broker reports it internal on `Metadata` and refuses to freeze it by that prefix, and a name outside the convention would satisfy only the first of the two. |
@@ -96,7 +96,7 @@ units column says `milliseconds` or `seconds` is a plain integer in that unit.
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `key_id` | string | required |  | Key id recorded on each checkpoint, so a verifier can follow a key rotation. |
-| `key_path` | string | required |  | Path to the PKCS#8 Ed25519 private key that signs audit checkpoints. |
+| `key_path` | string | required |  | Path to the PKCS#8 Ed25519 private key that signs audit checkpoints. The broker reads it at startup, so a key that does not load stops the broker at boot whatever the audit failure mode. |
 
 #### `[audit.spool]`
 

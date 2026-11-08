@@ -260,9 +260,11 @@ sync_every_n = 1
 every_n = 1000
 every_secs = 60
 
-#[audit.signing]
-#key_path = "/etc/krabka/audit/checkpoint.pk8"
-#key_id = "audit-2026"
+# A fail-closed broker refuses to start without a checkpoint signing key, and
+# any broker refuses to start when the key it names does not load.
+[audit.signing]
+key_path = "/etc/krabka/audit/checkpoint.pk8"
+key_id = "audit-2026"
 
 [freeze]
 max_entries = 1000

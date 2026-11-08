@@ -157,7 +157,8 @@ configuration reference.
 
 On a cluster with TLS, SASL or an authorizer, pass a Kafka client-properties
 file with `--command-config`, as for the JVM tools. `capture` and
-`restore-offsets` read the same file. The tool reads `security.protocol`,
+`restore-offsets` read the same file, and `krabka-guard` and `krabka-barrier`
+take it too. The tool reads `security.protocol`,
 `sasl.mechanism` and `sasl.jaas.config`, and it reads TLS trust and client
 identity from PEM files:
 

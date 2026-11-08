@@ -1,0 +1,26 @@
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+	group.streams.assignors = [AssignorPlugin, AssignorPlugin$Last, AssignorPlugin$Failure, sticky]
+[2026-11-07 03:57:08,785] INFO Kafka version: 4.4.0 (org.apache.kafka.common.utils.internals.AppInfoParser)
+[2026-11-07 03:57:08,785] INFO Kafka commitId: 1156b2752aaa28ea (org.apache.kafka.common.utils.internals.AppInfoParser)
+[2026-11-07 03:57:08,786] INFO [KafkaRaftServer nodeId=1] Kafka Server started (kafka.server.KafkaRaftServer)
+ASSIGNOR_CALLBACK last b {0=[0, 1]}
+[2026-11-07 03:57:45,045] INFO [BrokerServer id=1] shut down completed (kafka.server.BrokerServer)
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+	group.streams.assignors = [sticky]
+[2026-11-07 03:57:51,180] INFO Kafka version: 4.4.0 (org.apache.kafka.common.utils.internals.AppInfoParser)
+[2026-11-07 03:57:51,180] INFO Kafka commitId: 1156b2752aaa28ea (org.apache.kafka.common.utils.internals.AppInfoParser)
+[2026-11-07 03:57:51,181] INFO [KafkaRaftServer nodeId=1] Kafka Server started (kafka.server.KafkaRaftServer)

@@ -47,6 +47,7 @@ mod validate;
 #[cfg(test)]
 mod test_support;
 
+pub(crate) use self::audit::require_signing_key_when_fail_closed;
 pub use self::{
     audit::{
         FileAuditCheckpointConfig, FileAuditConfig, FileAuditSigningConfig, FileAuditSpoolConfig,

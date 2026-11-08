@@ -1,0 +1,7 @@
+[2026-11-07 04:01:03,872] ERROR Unable to produce ProduceRequestHandler(param: ShareGroupDLQRecordParameter[groupId=grp-rf3final, topicIdPartition=fEuQSQMQRDWvZ1KirSz0CQ:src-rf3final-0, firstOffset=0, lastOffset=0, deliveryCount=Optional[1], cause=Optional[org.apache.kafka.server.share.dlq.ShareGroupDLQManager$ShareGroupDLQThrowable: Offset rejected by client.]]
+dlqTopicData: TopicPartitionData[topicName=dlq.rf3final, numPartitions=Optional[1], topicId=Optional[RsVsuejMT9Oafl9NEW2s_Q], partitionLeaderNodes=[127.0.0.1:64506 (id: 2 rack: null isFenced: false)]]
+) to DLQ topic node 127.0.0.1:64506 (id: 2 rack: null isFenced: false) - null. (org.apache.kafka.server.share.dlq.ShareGroupDLQStateManager$ProduceRequestHandler)
+[2026-11-07 04:01:03,875] ERROR Failed to write to DLQ, proceeding to ARCHIVED regardless. (kafka.server.share.SharePartition)
+org.apache.kafka.common.errors.TopicAuthorizationException: Topic authorization failed.
+[2026-11-07 04:01:11,959] INFO NetworkPartitionMetadataClient sendThread initialized and started (org.apache.kafka.server.util.NetworkPartitionMetadataClient)
+[2026-11-07 04:01:11,959] INFO [NetworkPartitionMetadataClientSendThread]: Starting (org.apache.kafka.server.util.NetworkPartitionMetadataClient$SendThread)

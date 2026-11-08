@@ -19,7 +19,7 @@ use {
         coordinator::GroupCoordinator,
         diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
         fetch_session::FetchSessionCache,
-        future_log::FutureLogRegistry,
+        future_log::{FutureLogRegistry, MoveLock},
         handlers::DispatchRegistry,
         heartbeat::controller_state::ControllerLivenessState,
         listener_tls::{ListenerTlsCache, ListenerTlsInputs},
@@ -139,6 +139,9 @@ pub struct Broker {
     /// request for the same partition idempotent, or to reject a
     /// conflicting target.
     pub(crate) future_logs: Arc<FutureLogRegistry>,
+    /// Held by each `AlterReplicaLogDirs` request while it starts its moves,
+    /// so that two requests for one partition cannot both start a move.
+    pub(crate) move_lock: MoveLock,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// The auto topic creation: Kafka's `DefaultAutoTopicCreationManager`.
     pub(crate) auto_topic_creation: Arc<AutoTopicCreation>,

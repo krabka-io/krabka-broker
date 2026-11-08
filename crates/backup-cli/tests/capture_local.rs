@@ -18,11 +18,11 @@ use {
         archive::{Archive, ArchiveArgs},
         capture::capture_key,
         cli::CaptureSigningArgs,
-        connection::SecurityArgs,
         manifest::{MANIFEST, METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, sha256_hex},
         report::OperationReport,
         run,
     },
+    krabka_cli_connection::SecurityArgs,
     std::{fs, path::Path},
 };
 
