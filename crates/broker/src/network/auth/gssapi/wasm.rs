@@ -4,7 +4,7 @@
 //! keep the native names and the handler keeps its signature, so the
 //! configuration and the SASL dispatch build unchanged. [`GssapiConfig`] has
 //! no values, so `BrokerConfig::gssapi` is always `None` and a listener that
-//! enables GSSAPI fails validation with `BrokerError::GssapiConfigMissing`.
+//! enables GSSAPI fails validation with `ConfigError::GssapiConfigMissing`.
 
 use {
     super::state::ConnectionAuth,

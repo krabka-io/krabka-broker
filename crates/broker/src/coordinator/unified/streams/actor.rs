@@ -2,8 +2,8 @@
 //! the heartbeat epoch exchange, reconciliation, and persistence.
 //!
 //! This actor mirrors the overall shape of the KIP-932 share-group actor
-//! ([`super::super::share::actor`]): a `tokio::select!` loop over an mpsc
-//! message channel plus a `heartbeat_interval` session tick, the
+//! ([`share::actor`]): a `tokio::select!` loop over an mpsc message channel
+//! plus a `heartbeat_interval` session tick, the
 //! `Pending*Records` → `RecordBatch` → `OffsetsLog::append` flush, and a
 //! last-known-good cache hand-off through
 //! `GroupCoordinator::update_streams_cache`.
@@ -21,23 +21,19 @@
 //! source, so the group stays `NotReady` with empty assignments. Members there
 //! still mint a `member_id` and advance their epoch, but the actor assigns no
 //! tasks.
+//!
+//! [`share::actor`]: crate::coordinator::unified::share::actor
 
 #[cfg(test)]
 use crate::task_util::spawn_dropping_mailbox;
 use {
-    crate::{coordinator::unified::commit_validation_reply, time_util::sleep_until_opt},
+    crate::time_util::sleep_until_opt,
     krabka_metadata::NodeId,
     krabka_protocol::owned::{
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
-    std::{
-        cmp::Ordering,
-        collections::{BTreeMap, HashSet},
-        future,
-        sync::Arc,
-        time::Instant,
-    },
+    std::{collections::BTreeMap, future, sync::Arc, time::Instant},
     tokio::{
         sync::{mpsc, oneshot, watch::Receiver},
         task::JoinHandle,
@@ -45,6 +41,7 @@ use {
     },
 };
 
+pub(crate) mod commit_validation;
 mod description;
 mod heartbeat;
 mod reconciliation;
@@ -64,23 +61,27 @@ mod test_support;
 pub use self::description::{DescriptionPush, PushAnswer};
 use {
     self::{
+        commit_validation::{
+            CommitIdentity, subscribed_topics, validate_offset_commit, validate_offset_fetch,
+        },
         heartbeat::{handle_heartbeat, handle_session_tick},
         records::{apply_seed, reconcile_and_flush},
         response::build_describe,
     },
     super::{
-        config::StreamsGroupConfig,
+        config::{StreamsGroupConfig, resolve_broker_and_group_config},
         description::{DescriptionEpochs, DescriptionRuntime, TopologyDescription},
+        migration::DowngradeOutcome,
         persistence::StreamsGroupTopologyValue,
-        state::{self, StreamsGroupState, StreamsGroupStatePhase},
+        state::{self, StreamsGroupState},
+        topology::{ConfiguredTopology, InternalTopicSpec},
     },
     crate::{
         codes,
-        config_keys::parse::java_trim,
         coordinator::{
             DeleteGroupError,
             unified::{
-                GroupCoordinator,
+                ClientIdentity, GroupCoordinator, GroupType, StreamsGroupSeed,
                 actor::{CommitFence, ReapOutcome, SubscribedTopics},
                 offsets_log::{OffsetsLog, write_failure_code},
             },
@@ -143,7 +144,7 @@ pub enum StreamsGroupActorMessage {
         push: Box<DescriptionPush>,
         reply: oneshot::Sender<PushAnswer>,
     },
-    Seed(super::super::StreamsGroupSeed),
+    Seed(StreamsGroupSeed),
     /// Retention runs under the Streams membership actor, never its offset home.
     ReapExpiredOffsets {
         now_ms: i64,
@@ -154,7 +155,7 @@ pub enum StreamsGroupActorMessage {
     Convert {
         member_id: String,
         now_ms: i64,
-        reply: oneshot::Sender<Result<super::migration::DowngradeOutcome, BrokerError>>,
+        reply: oneshot::Sender<Result<DowngradeOutcome, BrokerError>>,
     },
     DeleteDescription(oneshot::Sender<Result<bool, BrokerError>>),
     PrepareConversion(oneshot::Sender<Result<bool, BrokerError>>),
@@ -166,7 +167,7 @@ pub enum StreamsGroupActorMessage {
 #[derive(Debug, Default)]
 pub struct StreamsHeartbeatResult {
     pub response: StreamsGroupHeartbeatResponse,
-    pub creatable_topics: Vec<super::topology::InternalTopicSpec>,
+    pub creatable_topics: Vec<InternalTopicSpec>,
 }
 
 /// Read-only projection of [`StreamsGroupState`] for the
@@ -185,7 +186,7 @@ pub struct StreamsDescribeView {
     /// The topology as the last configuration sized it, when it is ready:
     /// Kafka describes this one, with the decided partition count of every
     /// internal topic.
-    pub configured_topology: Option<super::topology::ConfiguredTopology>,
+    pub configured_topology: Option<ConfiguredTopology>,
     /// The members, by member id.
     pub members: Vec<StreamsDescribeMember>,
     /// KIP-1331: the topology description that the plugin holds for the
@@ -233,7 +234,7 @@ impl StreamsGroupActorHandle {
     pub fn spawn(
         group_id: String,
         config: Arc<StreamsGroupConfig>,
-        coordinator: Arc<super::super::GroupCoordinator>,
+        coordinator: Arc<GroupCoordinator>,
     ) -> Self {
         let owner = Arc::new(());
         let actor_owner = Arc::clone(&owner);
@@ -258,325 +259,6 @@ impl StreamsGroupActorHandle {
             _task: task,
         }
     }
-}
-
-/// Validates a `TxnOffsetCommit` of `partitions`, each a `(topic name,
-/// partition)`, against a streams group's membership by sending a message to
-/// its actor, as [`validate_offset_commit`] does with
-/// [`CommitFence::Transactional`].
-///
-/// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
-///
-/// The shared `validate_commit` knows only about the classic and
-/// consumer `GroupActorHandle`. A streams-group consumer keeps its membership
-/// in the streams actor, not a classic one, so this function must validate it
-/// instead. Otherwise the broker fences the commit against an empty classic
-/// actor and rejects it with `UNKNOWN_MEMBER_ID`.
-pub(crate) async fn validate_streams_group_commit(
-    handle: &StreamsGroupActorHandle,
-    member_id: &str,
-    group_instance_id: Option<&str>,
-    member_epoch: i32,
-    partitions: Vec<(String, i32)>,
-) -> Option<i16> {
-    send_validate_commit(
-        handle,
-        CommitIdentity {
-            member_id,
-            group_instance_id,
-            member_epoch,
-            fence: CommitFence::Transactional,
-        },
-        partitions,
-    )
-    .await
-}
-
-/// Validates an `OffsetCommit` at `api_version` of `partitions`, each a
-/// `(topic name, partition)`, against a streams group's membership by sending
-/// a message to its actor, as [`validate_offset_commit`] does with
-/// [`CommitFence::Offset`].
-///
-/// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
-pub(crate) async fn validate_streams_group_offset_commit(
-    handle: &StreamsGroupActorHandle,
-    member_id: &str,
-    member_epoch: i32,
-    api_version: i16,
-    partitions: Vec<(String, i32)>,
-) -> Option<i16> {
-    send_validate_commit(
-        handle,
-        CommitIdentity {
-            member_id,
-            group_instance_id: None,
-            member_epoch,
-            fence: CommitFence::Offset { api_version },
-        },
-        partitions,
-    )
-    .await
-}
-
-/// Who a commit says it comes from, and which API sent it.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CommitIdentity<'a> {
-    pub member_id: &'a str,
-    pub group_instance_id: Option<&'a str>,
-    pub member_epoch: i32,
-    pub fence: CommitFence,
-}
-
-async fn send_validate_commit(
-    handle: &StreamsGroupActorHandle,
-    identity: CommitIdentity<'_>,
-    partitions: Vec<(String, i32)>,
-) -> Option<i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::ValidateCommit {
-            member_id: identity.member_id.to_owned(),
-            group_instance_id: identity.group_instance_id.map(str::to_owned),
-            member_epoch: identity.member_epoch,
-            fence: identity.fence,
-            partitions,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Some(codes::UNKNOWN_SERVER_ERROR);
-    }
-    let result = rx.await;
-    commit_validation_reply(&result)
-}
-
-/// Validates the v9+ member fields of an `OffsetFetch` against a streams
-/// group's membership by sending a message to its actor, as
-/// [`validate_offset_fetch`] does.
-///
-/// It returns `Some(error_code)` to refuse the fetch, and `None` to allow it.
-///
-/// A streams group keeps its members in the streams actor, while its
-/// committed offsets live in the offsets-home actor, which knows no streams
-/// member. Without this check a stale or unknown member would read the
-/// group's offsets.
-pub(crate) async fn validate_streams_group_offset_fetch(
-    handle: &StreamsGroupActorHandle,
-    member_id: Option<&str>,
-    member_epoch: i32,
-) -> Option<i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::ValidateFetch {
-            member_id: member_id.map(str::to_owned),
-            member_epoch,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Some(codes::UNKNOWN_SERVER_ERROR);
-    }
-    let result = rx.await;
-    commit_validation_reply(&result)
-}
-
-/// Kafka's `StreamsGroup.validateOffsetFetch`.
-///
-/// A fetch with no member id and a negative epoch is the admin client or a
-/// client that sends neither, and it is allowed. Otherwise the member must
-/// exist (`UNKNOWN_MEMBER_ID`) and the epoch must be its member epoch
-/// (`STALE_MEMBER_EPOCH`, for an older epoch as for a newer one).
-///
-/// # Errors
-///
-/// Returns the group error code of a refused fetch.
-pub(crate) fn validate_offset_fetch(
-    state: &StreamsGroupState,
-    member_id: Option<&str>,
-    member_epoch: i32,
-) -> Result<(), i16> {
-    if member_id.is_none() && member_epoch < 0 {
-        return Ok(());
-    }
-    let member = member_id
-        .and_then(|id| state.members.get(id))
-        .ok_or(codes::UNKNOWN_MEMBER_ID)?;
-    if member.member_epoch == member_epoch {
-        Ok(())
-    } else {
-        Err(codes::STALE_MEMBER_EPOCH)
-    }
-}
-
-/// Asks a streams group which topics `OffsetDelete` must leave alone, as
-/// Kafka's `OffsetMetadataManager.deleteOffsets` asks
-/// `StreamsGroup.isSubscribedToTopic`. `StreamsGroup.validateOffsetDelete`
-/// accepts every group.
-///
-/// # Errors
-///
-/// `GROUP_ID_NOT_FOUND` when the actor has stopped, as the classic and
-/// consumer paths answer for theirs.
-pub(crate) async fn streams_offset_delete_guard(
-    handle: &StreamsGroupActorHandle,
-) -> Result<SubscribedTopics, i16> {
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::OffsetDeleteGuard { reply: tx })
-        .await
-        .is_err()
-    {
-        return Err(codes::GROUP_ID_NOT_FOUND);
-    }
-    rx.await.map_err(|_| codes::GROUP_ID_NOT_FOUND)
-}
-
-/// Kafka's `StreamsGroup.isSubscribedToTopic`, for every topic at once.
-///
-/// An empty group subscribes to nothing, so that its offsets can be deleted
-/// and expire. Otherwise the group subscribes to the source and repartition
-/// source topics of its stored topology (`StreamsTopology.sourceTopicMap`),
-/// and to nothing before it has one.
-pub(crate) fn subscribed_topics(
-    state: &StreamsGroupState,
-    topology: Option<&StreamsGroupTopologyValue>,
-) -> SubscribedTopics {
-    let topics = match topology {
-        Some(topology) if state.phase != StreamsGroupStatePhase::Empty => topology
-            .subtopologies
-            .iter()
-            .flat_map(|subtopology| {
-                subtopology.source_topics.iter().cloned().chain(
-                    subtopology
-                        .repartition_source_topics
-                        .iter()
-                        .map(|topic| topic.name.clone()),
-                )
-            })
-            .collect(),
-        _ => HashSet::new(),
-    };
-    SubscribedTopics::Named(topics)
-}
-
-/// The first `OffsetCommit` version that a member of the streams protocol may
-/// use.
-const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
-
-/// Kafka's `StreamsGroup.validateOffsetCommit`.
-///
-/// A negative epoch commits on a group with no members: that is the admin
-/// client or a consumer that does not use group management. A
-/// `TxnOffsetCommit` with no member id, the unknown generation and no group
-/// instance id carries no member to check. Otherwise the member must exist,
-/// an `OffsetCommit` must be v9 or later, and the member's own epoch commits
-/// every partition; a newer epoch is `STALE_MEMBER_EPOCH`.
-///
-/// An older epoch goes through Kafka's `createAssignmentEpochValidator`
-/// (KIP-1251) over `partitions`, each a `(topic name, partition)`: see
-/// [`assignment_epoch_error`].
-///
-/// # Errors
-///
-/// Returns the error code of a refused commit, which refuses every partition
-/// of it.
-pub(crate) fn validate_offset_commit(
-    state: &StreamsGroupState,
-    topology: Option<&StreamsGroupTopologyValue>,
-    identity: CommitIdentity<'_>,
-    partitions: &[(String, i32)],
-) -> Result<(), i16> {
-    let CommitIdentity {
-        member_id,
-        group_instance_id,
-        member_epoch,
-        fence,
-    } = identity;
-    if member_epoch < 0 && state.members.is_empty() {
-        return Ok(());
-    }
-    if fence == CommitFence::Transactional
-        && member_epoch == -1
-        && member_id.is_empty()
-        && group_instance_id.is_none()
-    {
-        return Ok(());
-    }
-    let member = state
-        .members
-        .get(member_id)
-        .ok_or(codes::UNKNOWN_MEMBER_ID)?;
-    if let CommitFence::Offset { api_version } = fence
-        && api_version < FIRST_STREAMS_PROTOCOL_COMMIT_VERSION
-    {
-        return Err(codes::UNSUPPORTED_VERSION);
-    }
-    match member_epoch.cmp(&member.member_epoch) {
-        Ordering::Equal => Ok(()),
-        Ordering::Greater => Err(codes::STALE_MEMBER_EPOCH),
-        Ordering::Less => {
-            assignment_epoch_error(member, topology, member_epoch, partitions).map_or(Ok(()), Err)
-        }
-    }
-}
-
-/// Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator` (KIP-1251),
-/// which lets a member commit at an epoch older than its own.
-///
-/// The group must hold a topology. Each partition's topic must be a source or
-/// repartition source topic of one of its subtopologies
-/// (`StreamsTopology.sourceTopicMap`), and the partition must be an active task
-/// of that subtopology which the member holds, assigned or pending
-/// revocation. The epoch at which the member was assigned that task, the
-/// `AssignmentEpochs` of its current assignment record, must not be newer than
-/// `member_epoch`. A failure of any of these is `STALE_MEMBER_EPOCH`, and it
-/// refuses the whole commit.
-///
-/// Kafka's `sourceTopicMap` is a `HashMap` that each subtopology overwrites in
-/// turn, so a topic that two subtopologies read maps to the last one written.
-/// This function takes the last subtopology in the topology's order. A
-/// topology that Kafka accepts never has such a topic.
-fn assignment_epoch_error(
-    member: &state::StreamsMemberState,
-    topology: Option<&StreamsGroupTopologyValue>,
-    member_epoch: i32,
-    partitions: &[(String, i32)],
-) -> Option<i16> {
-    let Some(topology) = topology else {
-        return Some(codes::STALE_MEMBER_EPOCH);
-    };
-    let holds = |tasks: &BTreeMap<String, Vec<i32>>, subtopology: &str, partition: i32| {
-        tasks
-            .get(subtopology)
-            .is_some_and(|partitions| partitions.contains(&partition))
-    };
-    let refused = partitions.iter().any(|(topic, partition)| {
-        let Some(subtopology) = topology.subtopologies.iter().rev().find(|subtopology| {
-            subtopology.source_topics.contains(topic)
-                || subtopology
-                    .repartition_source_topics
-                    .iter()
-                    .any(|source| &source.name == topic)
-        }) else {
-            return true;
-        };
-        let id = subtopology.subtopology_id.as_str();
-        if !holds(&member.active, id, *partition)
-            && !holds(&member.active_pending_revocation, id, *partition)
-        {
-            return true;
-        }
-        let assigned_at = member.active_task_epochs(id, &[*partition]);
-        assigned_at
-            .first()
-            .is_none_or(|&epoch| member_epoch < epoch)
-    });
-    refused.then_some(codes::STALE_MEMBER_EPOCH)
 }
 
 /// The actor's full mutable state.
@@ -610,7 +292,7 @@ struct ActorState {
     /// does not hold. Every heartbeat answer carries them, as Kafka's
     /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
     /// sends them to the controller as a `CreateTopics` request.
-    creatable_topics: Vec<super::topology::InternalTopicSpec>,
+    creatable_topics: Vec<InternalTopicSpec>,
     /// The members whose target the last target assignment changed, set when
     /// a reconcile installed a target and taken by the records of the
     /// transition that installed it.
@@ -623,7 +305,7 @@ struct ActorState {
     /// Kafka's `StreamsGroup.configuredTopology`: the topology as the most
     /// recent configuration against the metadata image sized it. It is
     /// `None` until a configuration succeeds.
-    configured_topology: Option<super::topology::ConfiguredTopology>,
+    configured_topology: Option<ConfiguredTopology>,
     /// When Kafka's initial rebalance delay of the group ends: set when the
     /// first member joins an empty group, and cleared when the delayed
     /// assignment runs.
@@ -718,7 +400,7 @@ impl MetadataLink {
     /// image, so the loop takes the source before it handles each wake-up.
     fn attach(
         &mut self,
-        coordinator: &super::super::GroupCoordinator,
+        coordinator: &GroupCoordinator,
     ) -> Option<Arc<krabka_metadata::MetadataImage>> {
         if self.source.is_some() {
             return None;
@@ -742,7 +424,7 @@ fn session_tick(config: &StreamsGroupConfig) -> Interval {
 async fn actor_loop(
     group_id: String,
     default_config: Arc<StreamsGroupConfig>,
-    coordinator: Arc<super::super::GroupCoordinator>,
+    coordinator: Arc<GroupCoordinator>,
     owner: Arc<()>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
@@ -756,7 +438,7 @@ async fn actor_loop(
     // A stale Streams lookup after conversion must not recreate plugin state.
     if coordinator
         .group_type(&actor.state.group_id)
-        .is_none_or(|kind| kind == super::super::GroupType::Streams)
+        .is_none_or(|kind| kind == GroupType::Streams)
     {
         actor.description_runtime = Arc::clone(
             coordinator
@@ -926,7 +608,7 @@ impl ActorState {
     fn assignment_pending(&self) -> bool { self.state.target.epoch < self.state.group_epoch }
 
     /// The configured topology, when it is ready for an assignment.
-    fn ready_topology(&self) -> Option<&super::topology::ConfiguredTopology> {
+    fn ready_topology(&self) -> Option<&ConfiguredTopology> {
         self.configured_topology
             .as_ref()
             .filter(|configured| configured.is_ready())
@@ -973,9 +655,7 @@ fn forget_abandoned_group(coordinator: &GroupCoordinator, actor: &ActorState, ow
         description::retire_runtime(actor, coordinator);
         coordinator
             .group_types
-            .remove_if(group_id, |_, group_type| {
-                *group_type == super::super::GroupType::Streams
-            });
+            .remove_if(group_id, |_, group_type| *group_type == GroupType::Streams);
         entry.remove();
     }
 }
@@ -999,14 +679,14 @@ async fn handle_message(
             if turn
                 .coordinator
                 .group_type(&actor.state.group_id)
-                .is_some_and(|kind| kind != super::super::GroupType::Streams)
+                .is_some_and(|kind| kind != GroupType::Streams)
             {
                 return Step::RefusedJoin(Box::new(DeferredReply {
                     reply,
                     response: response::error_resp(codes::GROUP_ID_NOT_FOUND, None),
                 }));
             }
-            match handle_heartbeat(actor, turn, &request, super::super::ClientIdentity {
+            match handle_heartbeat(actor, turn, &request, ClientIdentity {
                 id: &client_id,
                 host: &client_host,
             })
@@ -1127,10 +807,7 @@ async fn handle_message(
         StreamsGroupActorMessage::Delete(reply) => {
             let result = description::delete(actor, turn).await;
             let stop = result.is_ok() || matches!(result, Err(DeleteGroupError::Internal));
-            let _ = reply.send(result);
-            if stop {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, stop);
         }
         StreamsGroupActorMessage::Convert {
             member_id,
@@ -1140,21 +817,14 @@ async fn handle_message(
             let result = description::convert(actor, turn, &member_id, now_ms).await;
             let stop = matches!(
                 &result,
-                Ok(super::migration::DowngradeOutcome::Converted
-                    | super::migration::DowngradeOutcome::Removed)
+                Ok(DowngradeOutcome::Converted | DowngradeOutcome::Removed)
             ) || result.is_err();
-            let _ = reply.send(result);
-            if stop {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, stop);
         }
         StreamsGroupActorMessage::PrepareConversion(reply) => {
             let result = description::prepare_conversion(actor, turn).await;
             let failed = result.is_err();
-            let _ = reply.send(result);
-            if failed {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, failed);
         }
         StreamsGroupActorMessage::ReapExpiredOffsets {
             now_ms,
@@ -1163,31 +833,29 @@ async fn handle_message(
         } => match description::reap(actor, turn, now_ms, retention_ms).await {
             Ok(outcome) => {
                 let stop = outcome.group_deleted;
-                let _ = reply.send(outcome);
-                if stop {
-                    return Step::Stop;
-                }
+                return reply_and_step(reply, outcome, stop);
             }
             Err(error) => {
                 exit_on_write_failure(&actor.state.group_id, &error);
-                let _ = reply.send(ReapOutcome::default());
-                return Step::Stop;
+                return reply_and_step(reply, ReapOutcome::default(), true);
             }
         },
         StreamsGroupActorMessage::DeleteDescription(reply) => {
             let result = description::cleanup(actor, turn, true).await;
             let failed = result.is_err();
-            let _ = reply.send(result);
-            if failed {
-                return Step::Stop;
-            }
+            return reply_and_step(reply, result, failed);
         }
         StreamsGroupActorMessage::Shutdown(reply) => {
-            let _ = reply.send(());
-            return Step::Stop;
+            return reply_and_step(reply, (), true);
         }
     }
     Step::Continue
+}
+
+/// Sends `result` on `reply`, and ends the actor when the turn `stops` it.
+fn reply_and_step<T>(reply: oneshot::Sender<T>, result: T, stops: bool) -> Step {
+    let _ = reply.send(result);
+    if stops { Step::Stop } else { Step::Continue }
 }
 
 /// Logs that the actor of `group_id` exits after `error`, a failed log write,
@@ -1199,50 +867,6 @@ fn exit_on_write_failure(group_id: &str, error: &BrokerError) -> i16 {
         "streams-group actor exiting after log-write failure",
     );
     write_failure_code(error)
-}
-
-/// The streams config of `group_id` on `node`: the group config overrides in
-/// `image` over the broker `defaults`, whose assignment interval is the
-/// dynamic broker value of `image` when one applies.
-///
-/// Kafka's `GroupMetadataManager` reads
-/// `groupConfig.streamsAssignmentIntervalMs()` over the broker's current
-/// `GroupCoordinatorConfig`, which a dynamic broker config reconfigures.
-pub(crate) fn resolve_broker_and_group_config(
-    defaults: &StreamsGroupConfig,
-    image: &krabka_metadata::MetadataImage,
-    node: Option<NodeId>,
-    group_id: &str,
-) -> StreamsGroupConfig {
-    resolve_group_config_from_image(&defaults.for_broker(image, node), image, group_id)
-}
-
-/// The streams config of `group_id`: the group config overrides in `image`
-/// over the broker `defaults`.
-pub(crate) fn resolve_group_config_from_image(
-    defaults: &StreamsGroupConfig,
-    image: &krabka_metadata::MetadataImage,
-    group_id: &str,
-) -> StreamsGroupConfig {
-    let Some(overrides) = image.group_config(group_id) else {
-        return defaults.clone();
-    };
-    // Kafka 4.4 falls back to the broker default if a persisted selection is
-    // unavailable on this node. Preserve all unrelated group overrides.
-    let mut applicable = overrides.clone();
-    if let Some(name) = applicable.get(super::config::KEY_ASSIGNOR_NAME)
-        && defaults.task_assignors.get(java_trim(name)).is_none()
-        && super::config::StreamsAssignorKind::from_config_name(java_trim(name)).is_none()
-    {
-        applicable.remove(super::config::KEY_ASSIGNOR_NAME);
-    }
-    match defaults.with_group_overrides(&applicable) {
-        Ok(config) => config,
-        Err(error) => {
-            tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
-            defaults.clone()
-        }
-    }
 }
 
 async fn wait_for_metadata_change(

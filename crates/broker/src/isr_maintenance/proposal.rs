@@ -4,6 +4,7 @@
 
 use {
     crate::{
+        error::BrokerError,
         partition::Partition,
         replica_state::{FollowerStats, LeaderPolicy, ReplicaState},
     },
@@ -17,9 +18,9 @@ use {
     },
     std::{
         collections::{BTreeSet, HashSet},
-        sync::PoisonError,
         time::Instant,
     },
+    tracing::warn,
 };
 
 /// A computed ISR change proposal. `compute_proposal` captures all fields
@@ -48,16 +49,22 @@ pub(super) struct Proposal {
 ///
 /// `None` when the log records no start for `epoch`, which Kafka's rule reads
 /// as "admit nobody yet".
-fn leader_epoch_start(part: &Partition, epoch: LeaderEpoch) -> Option<Offset> {
-    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-    log.epoch_checkpoint()
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned.
+fn leader_epoch_start(part: &Partition, epoch: LeaderEpoch) -> Result<Option<Offset>, BrokerError> {
+    let log = part.lock_log()?;
+    Ok(log
+        .epoch_checkpoint()
         .entries()
         .iter()
         .find(|entry| entry.epoch == epoch)
-        .map(|entry| entry.start_offset)
+        .map(|entry| entry.start_offset))
 }
 
-/// Returns `Some(Proposal)` if the ISR should change, else `None`.
+/// Returns `Some(Proposal)` if the ISR should change, else `None`. A
+/// partition whose log mutex is poisoned gets `None`, after a warning.
 ///
 /// `record` is the partition as the current metadata image holds it, and
 /// `policy` what that image and this broker's configuration say about it.
@@ -75,7 +82,13 @@ pub(super) async fn compute_proposal(
     {
         return None;
     }
-    let epoch_start = leader_epoch_start(part, LeaderEpoch(record.leader_epoch.0));
+    // A poisoned log leaves this partition out of the scan this round.
+    let epoch_start = leader_epoch_start(part, LeaderEpoch(record.leader_epoch.0))
+        .inspect_err(|error| {
+            warn!(topic = %part.topic, partition = part.index.get(), %error,
+                "isr-maintenance: skipping a partition whose log mutex is poisoned");
+        })
+        .ok()?;
     let (proposal, advanced) = {
         let mut state = part.replica_state.lock().await;
         // A no-proposal result can also mean installation is still catching

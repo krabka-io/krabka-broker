@@ -109,7 +109,9 @@ use {
                     TxnOffsetReservation, validate_commit,
                 },
                 offsets_log::LeaderAppend,
-                streams::actor::{StreamsGroupActorHandle, validate_streams_group_commit},
+                streams::actor::{
+                    StreamsGroupActorHandle, commit_validation::validate_streams_group_commit,
+                },
             },
         },
         error::BrokerError,

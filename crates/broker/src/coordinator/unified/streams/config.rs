@@ -1,7 +1,10 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use {
     super::{
-        assignor::{AssignorInput, AssignorMember, StreamsAssignment, TaskAssignorRegistry},
+        assignor::{
+            AssignorInput, AssignorMember, BUILTIN_STICKY_ASSIGNOR, StreamsAssignment,
+            TaskAssignorRegistry,
+        },
         description::{NativeBackend, TopologyDescriptionPlugin},
     },
     crate::{
@@ -393,7 +396,7 @@ impl StreamsGroupConfig {
         } else {
             self.task_assignors
                 .names()
-                .chain(once("sticky"))
+                .chain(once(BUILTIN_STICKY_ASSIGNOR))
                 .collect::<Vec<_>>()
                 .join(",")
         }
@@ -405,7 +408,14 @@ impl StreamsGroupConfig {
         self.task_assignor_name
             .as_deref()
             .or_else(|| self.task_assignors.default_name())
-            .unwrap_or("sticky")
+            .unwrap_or(BUILTIN_STICKY_ASSIGNOR)
+    }
+
+    /// Whether the selected assignor can fail. The built-in sticky assignor
+    /// cannot, so only a native extension makes a reconcile worth undoing.
+    #[must_use]
+    pub fn assignor_may_fail(&self) -> bool {
+        self.selected_task_assignor_name() != BUILTIN_STICKY_ASSIGNOR
     }
 
     /// Execute the selected implementation without fallback on failure.
@@ -417,7 +427,7 @@ impl StreamsGroupConfig {
         input: &AssignorInput,
     ) -> Result<StreamsAssignment, String> {
         let name = self.selected_task_assignor_name();
-        if name == "sticky" {
+        if name == BUILTIN_STICKY_ASSIGNOR {
             return Ok(super::assignor::assign(members, input));
         }
         let assignment = self
@@ -511,7 +521,7 @@ impl StreamsGroupConfig {
                         out.task_assignor_name = Some(java_trim(value).into());
                     } else {
                         out.assignor = StreamsAssignorKind::parse(java_trim(value))?;
-                        out.task_assignor_name = Some("sticky".into());
+                        out.task_assignor_name = Some(BUILTIN_STICKY_ASSIGNOR.into());
                     }
                 }
                 KEY_RACK_AWARE_ASSIGNMENT_TAGS => {
@@ -673,6 +683,56 @@ where
     Ok(parsed)
 }
 
+/// The streams config of `group_id` on `node`: the group config overrides in
+/// `image` over the broker `defaults`, whose assignment interval is the
+/// dynamic broker value of `image` when one applies.
+///
+/// Kafka's `GroupMetadataManager` reads
+/// `groupConfig.streamsAssignmentIntervalMs()` over the broker's current
+/// `GroupCoordinatorConfig`, which a dynamic broker config reconfigures.
+pub(crate) fn resolve_broker_and_group_config(
+    defaults: &StreamsGroupConfig,
+    image: &MetadataImage,
+    node: Option<NodeId>,
+    group_id: &str,
+) -> StreamsGroupConfig {
+    resolve_group_config_from_image(&defaults.for_broker(image, node), image, group_id)
+}
+
+/// The streams config of `group_id`: the group config overrides in `image`
+/// over the broker `defaults`.
+pub(crate) fn resolve_group_config_from_image(
+    defaults: &StreamsGroupConfig,
+    image: &MetadataImage,
+    group_id: &str,
+) -> StreamsGroupConfig {
+    let Some(overrides) = image.group_config(group_id) else {
+        return defaults.clone();
+    };
+    // Kafka 4.4 falls back to the broker default if a persisted selection is
+    // unavailable on this node. Preserve all unrelated group overrides.
+    let mut applicable = overrides.clone();
+    if let Some(name) = applicable.get(KEY_ASSIGNOR_NAME)
+        && defaults.task_assignors.get(java_trim(name)).is_none()
+        && StreamsAssignorKind::from_config_name(java_trim(name)).is_none()
+    {
+        applicable.remove(KEY_ASSIGNOR_NAME);
+    }
+    match defaults.with_group_overrides(&applicable) {
+        Ok(config) => config,
+        Err(error) => {
+            // Logged under the actor module, where this resolution ran before
+            // it moved here, so that existing log filters still see it.
+            tracing::error!(
+                target: "krabka_broker::coordinator::unified::streams::actor",
+                group_id,
+                %error,
+                "ignoring invalid persisted streams group config",
+            );
+            defaults.clone()
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert};

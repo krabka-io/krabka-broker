@@ -279,7 +279,7 @@ pub use {
     broker::{Broker, BrokerHandle},
     config::{BootstrapMode, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind},
     config_keys::{TopicConfigDoc, topic_config_docs},
-    error::BrokerError,
+    error::{BrokerError, ConfigError},
 };
 /// Benchmark seam over the zero-copy fetch drain, driven by
 /// `benches/fetch_drain.rs`.
@@ -318,6 +318,6 @@ pub use network::dispatch::response_framing;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use replicator::hot_path as replicate_hot_path;
 pub use {
-    health::{HealthState, NotReady},
+    health::{BrokerState, HealthState, NotReady},
     krabka_raft::NodeId,
 };

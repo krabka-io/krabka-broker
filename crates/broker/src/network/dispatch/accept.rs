@@ -351,13 +351,12 @@ mod tests {
     use {
         super::*,
         crate::{
-            config::ListenerSpec, network::auth::SslPrincipalMapper,
-            test_support::localhost_ecdsa_pair,
+            config::ListenerSpec, listener_tls::ensure_crypto_provider,
+            network::auth::SslPrincipalMapper, test_support::localhost_ecdsa_pair,
         },
         assert2::{assert, check},
         krabka_metadata::{BrokerConfigRecord, MetadataRecord},
         krabka_security::{ClientAuthMode, ListenerProtocol},
-        rustls::crypto::aws_lc_rs,
         std::{fs, path::Path},
     };
 
@@ -422,7 +421,7 @@ mod tests {
     }
 
     fn tls_fixture() -> TlsFixture {
-        drop(aws_lc_rs::default_provider().install_default());
+        ensure_crypto_provider();
         let dir = tempfile::tempdir().expect("tempdir");
         let (cert, key) = localhost_ecdsa_pair();
         let (cert, key) = (cert.pem(), key.serialize_pem());

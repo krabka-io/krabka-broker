@@ -8,9 +8,9 @@ use {
     crate::{
         config::BrokerConfig,
         error::BrokerError,
+        listener_tls::ensure_crypto_provider,
         network::{client::InterBrokerClient, ktls_probe::probe_ktls_support},
     },
-    rustls::crypto::aws_lc_rs,
     std::sync::Arc,
 };
 
@@ -23,7 +23,7 @@ pub(super) struct StartupTransport {
 pub(super) async fn prepare_startup_transport(
     config: &BrokerConfig,
 ) -> Result<StartupTransport, BrokerError> {
-    let _ = aws_lc_rs::default_provider().install_default();
+    ensure_crypto_provider();
     let tls_dynamic = config
         .tls_config
         .as_ref()

@@ -19,7 +19,7 @@ use {
         coordinator::unified::{
             actor::GroupActorMessage,
             group::{GroupOffsets, OffsetEntry, OffsetFetchMember, OffsetFetchSelection},
-            streams::actor::validate_streams_group_offset_fetch,
+            streams::actor::commit_validation::validate_streams_group_offset_fetch,
         },
         handlers::group_actor_error_code,
         task_util::ask,

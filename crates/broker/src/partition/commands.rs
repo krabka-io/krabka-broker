@@ -9,17 +9,15 @@ use {
         error::BrokerError,
         log_dir_status::LogDirRegistry,
         partition::{
-            Partition, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch, WriterMessage,
+            Partition, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch,
+            WriterMessage, lock_partition_log,
         },
         partition_writer::{flag_storage_failure, storage_failure_error},
         task_util::{AskError, ask},
     },
     krabka_log::Offset,
     krabka_protocol::records::RecordBatch,
-    std::{
-        collections::BTreeMap,
-        sync::{Arc, PoisonError},
-    },
+    std::{collections::BTreeMap, sync::Arc},
     tokio::sync::oneshot,
 };
 
@@ -81,7 +79,9 @@ impl Partition {
     ///
     /// # Errors
     ///
-    /// Returns the log's refusal for a stale producer epoch.
+    /// Returns the log's refusal for a stale producer epoch, and
+    /// `InvalidTransactionState` when the blocking task fails or the log
+    /// mutex is poisoned.
     pub(crate) async fn start_transaction_verification(
         &self,
         batch: krabka_log::TransactionalBatch,
@@ -89,9 +89,10 @@ impl Partition {
         clock: (i64, i64),
     ) -> Result<krabka_log::VerificationGuard, krabka_log::TransactionAppendRefusal> {
         let log = Arc::clone(&self.log);
-        let start = move || {
-            log.lock()
-                .unwrap_or_else(PoisonError::into_inner)
+        let (topic, index) = (self.topic.clone(), self.index);
+        let start = move || -> Result<_, krabka_log::TransactionAppendRefusal> {
+            lock_partition_log(&log, &topic, index)
+                .map_err(|_| krabka_log::TransactionAppendRefusal::InvalidTransactionState)?
                 .maybe_start_transaction_verification(batch, supports_epoch_bump, clock)
         };
         run_blocking(start).await.unwrap_or(Err(
@@ -104,7 +105,8 @@ impl Partition {
     /// waiting for WAL quorum must not block metadata reconciliation.
     ///
     /// # Errors
-    /// Returns an error if the blocking task cannot complete, or if the log
+    /// Returns an error if the blocking task cannot complete, if the log
+    /// mutex is poisoned ([`BrokerError::PartitionWriterDied`]), or if the log
     /// start checkpoint that must precede enabling remote storage cannot be
     /// written. The log then keeps its old config, and a storage failure, a
     /// panic in the task included, takes the partition's log directory
@@ -117,9 +119,10 @@ impl Partition {
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
         let log = Arc::clone(&self.log);
+        let (topic, index) = (self.topic.clone(), self.index);
         let writer = self.writer_tx.clone();
-        let result = run_blocking(move || {
-            let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
+        let applied = run_blocking(move || -> Result<(), BrokerError> {
+            let mut log = lock_partition_log(&log, &topic, index)?;
             let current = log.config_snapshot();
             if current == merged {
                 return Ok(());
@@ -140,9 +143,13 @@ impl Partition {
             let _ = writer.try_send(WriterMessage::ConfigChanged);
             Ok(())
         })
-        .await
-        .map_err(|error| storage_failure_error("log configuration task failed", error))
-        .and_then(|applied| applied.map_err(BrokerError::Log));
+        .await;
+        let result = applied.unwrap_or_else(|error| {
+            Err(storage_failure_error(
+                "log configuration task failed",
+                error,
+            ))
+        });
         if let Err(error) = &result {
             flag_storage_failure(error, &self.log_dir, log_dir_status);
         }

@@ -23,7 +23,7 @@
 
 pub use crate::handlers::test_support::StartedBroker;
 use {
-    crate::share_coordinator::key::ShareKeyRef,
+    crate::{listener_tls::ensure_crypto_provider, share_coordinator::key::ShareKeyRef},
     krabka_metadata::{
         FeatureLevelRecord, krabka_version::KRABKA_VERSION_FEATURE,
         metadata_version::SHARE_VERSION_FEATURE,
@@ -39,7 +39,6 @@ use {
         rand::SystemRandom,
         signature::{EcdsaKeyPair, Ed25519KeyPair},
     },
-    rustls::crypto::aws_lc_rs,
     std::{
         collections::{BTreeMap, HashSet},
         fmt, fs,
@@ -284,7 +283,7 @@ pub struct LoopbackTlsListener {
 /// Binds an HTTPS fixture with a fresh loopback certificate and returns the
 /// trust bundle path. The directory stays alive for background client requests.
 pub async fn loopback_tls_listener() -> LoopbackTlsListener {
-    let _ = aws_lc_rs::default_provider().install_default();
+    ensure_crypto_provider();
     let EcdsaPair { cert, key } = ecdsa_pair_for_host("127.0.0.1");
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let cert_path = dir.path().join("cert.pem");
@@ -1494,12 +1493,10 @@ impl ServerNameCapture {
 pub async fn capture_server_name() -> ServerNameCapture {
     use tokio_rustls::{
         LazyConfigAcceptor, TlsConnector,
-        rustls::{
-            ClientConfig, RootCertStore, crypto::aws_lc_rs::default_provider, server::Acceptor,
-        },
+        rustls::{ClientConfig, RootCertStore, server::Acceptor},
     };
 
-    drop(default_provider().install_default());
+    ensure_crypto_provider();
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind the ClientHello capture listener");
@@ -3094,7 +3091,7 @@ pub async fn committed_partition(
         false,
     )
     .unwrap();
-    part.current_leader.store(leader.0, Ordering::Relaxed);
+    part.test_set_leader(leader.0);
     part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
     part
 }

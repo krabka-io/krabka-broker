@@ -9,6 +9,7 @@
 use {
     crate::{
         broker::Broker,
+        error::BrokerError,
         metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
         remote_log_manager::{ArchiveMode, cascade_remote_partition_delete},
@@ -26,32 +27,43 @@ use {
 /// After teardown the `Partition` is gone and the broker loses the
 /// `remote.storage.enable` flag plus the topic id; this snapshot is the sole
 /// record that drives the remote-tier partition-delete cascade.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if a partition's log mutex is
+/// poisoned. Its tiering flag is then unknown, and a deletion that went ahead
+/// without it could leave that partition's archive behind.
 pub(super) fn tiered_partitions(
     broker: &Broker,
     partitions: &PartitionRegistry,
     image: &krabka_metadata::MetadataImage,
     topic_name: &str,
     local_partitions: &[PartitionIndex],
-) -> Vec<TopicIdPartition> {
+) -> Result<Vec<TopicIdPartition>, BrokerError> {
     if broker.remote_reader.is_none() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(topic_id) = image.topic(topic_name).map(|topic| topic.topic_id) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    local_partitions
-        .iter()
-        .copied()
-        .filter(|&index| {
-            partitions.get(topic_name, index).is_some_and(|partition| {
-                partition
-                    .log
-                    .lock()
-                    .is_ok_and(|log| log.config_snapshot().remote_storage_enable)
-            })
-        })
-        .map(|index| TopicIdPartition::new(topic_id, topic_name.to_owned(), index.get()))
-        .collect()
+    let mut tiered = Vec::new();
+    for &index in local_partitions {
+        let Some(partition) = partitions.get(topic_name, index) else {
+            continue;
+        };
+        if partition
+            .lock_log()?
+            .config_snapshot()
+            .remote_storage_enable
+        {
+            tiered.push(TopicIdPartition::new(
+                topic_id,
+                topic_name.to_owned(),
+                index.get(),
+            ));
+        }
+    }
+    Ok(tiered)
 }
 
 /// Fires off the detached tasks that walk each tiered partition's remote

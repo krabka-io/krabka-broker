@@ -10,7 +10,7 @@ use {
         delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics},
         log_dir::partition_dir,
         partition::{
-            Partition, WriterGate, WriterMessage, empty_marker_materialization,
+            LeaderSlot, Partition, WriterGate, WriterMessage, empty_marker_materialization,
             initial_replication_target, unchecked_log_start, unreported_leader_log_start,
         },
         partition_registry::PartitionRegistry,
@@ -19,17 +19,14 @@ use {
     },
     arc_swap::ArcSwap,
     bytes::Bytes,
-    krabka_ids::PartitionIndex,
+    krabka_ids::{LeaderEpoch, PartitionIndex},
     krabka_log::{DeliveryPolicy, Log, LogConfig},
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::{Time, convert::TimeExt as _},
     qubit_clock::{ManualMonotonicClock, WallClock},
     std::{
         fs::create_dir_all,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicI32, AtomicU64},
-        },
+        sync::{Arc, Mutex},
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tokio::{
@@ -223,8 +220,7 @@ pub fn partition_with_batches(
         hw_advance_notify: Arc::new(Notify::new()),
         leadership_notify: Arc::new(Notify::new()),
         delivery,
-        current_leader: Arc::new(AtomicU64::new(leader.0)),
-        current_leader_epoch: Arc::new(AtomicI32::new(0)),
+        leader_slot: Arc::new(LeaderSlot::new(leader, LeaderEpoch(0))),
         replication_target: initial_replication_target(None),
         diskless: false,
         reported_leader_log_start: unreported_leader_log_start(),

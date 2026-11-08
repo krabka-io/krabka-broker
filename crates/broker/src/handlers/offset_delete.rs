@@ -72,7 +72,7 @@ use {
         codes,
         coordinator::unified::{
             actor::{GroupActorHandle, GroupActorMessage, SubscribedTopics},
-            streams::actor::streams_offset_delete_guard,
+            streams::actor::commit_validation::streams_offset_delete_guard,
         },
         handlers::ErrorCodeResponse as _,
     },

@@ -39,7 +39,7 @@ impl BrokerHandle {
             ) else {
                 return false;
             };
-            if record.leader != leader || part.current_leader.load(Ordering::Acquire) != leader.0 {
+            if record.leader != leader || part.leader() != leader.0 {
                 return false;
             }
             let state = part.replica_state.lock().await;
@@ -74,10 +74,7 @@ impl BrokerHandle {
                 self.broker
                     .partitions
                     .get(topic, PartitionIndex(partition))
-                    .is_some_and(|part| {
-                        part.current_leader.load(Ordering::Acquire) == leader.0
-                            && part.current_leader_epoch.load(Ordering::Acquire) == leader_epoch.0
-                    }),
+                    .is_some_and(|part| part.is_leader_at(leader, leader_epoch.0)),
             )
         })
         .await;

@@ -86,11 +86,10 @@ pub async fn run(
 mod tests {
     use {
         super::*,
-        crate::test_support::localhost_ecdsa_pair,
+        crate::{listener_tls::ensure_crypto_provider, test_support::localhost_ecdsa_pair},
         assert2::assert,
         krabka_security::ClientAuthMode,
         krabka_units::secs,
-        rustls::crypto::aws_lc_rs,
         std::{
             fs,
             path::{Path, PathBuf},
@@ -99,8 +98,6 @@ mod tests {
         },
         tokio::{task, time::advance},
     };
-
-    fn install_provider() { let _ = aws_lc_rs::default_provider().install_default(); }
 
     /// A certificate and a key, both PEM encoded.
     struct PemPair {
@@ -186,7 +183,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn run_reloads_after_mtime_change_and_skips_unchanged_ticks() {
-        install_provider();
+        ensure_crypto_provider();
         let dir = tempfile::tempdir().unwrap();
         let PemPair {
             cert: cert_a,

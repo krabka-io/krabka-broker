@@ -51,7 +51,7 @@ use {
     krabka_units::{Time, convert::TimeExt as _, secs},
     std::{
         collections::{BTreeMap, HashMap, HashSet},
-        sync::{Arc, atomic::Ordering},
+        sync::Arc,
     },
     tokio::{
         sync::{mpsc::Sender, oneshot},
@@ -533,7 +533,7 @@ pub async fn replica_lag_samples(
 ) -> HashMap<ReplicaLagLabel, i64> {
     let mut samples = HashMap::new();
     for partition in partitions.arcs() {
-        if partition.current_leader.load(Ordering::Acquire) != node_id.0 {
+        if partition.leader() != node_id.0 {
             continue;
         }
         let index = partition.index.get();

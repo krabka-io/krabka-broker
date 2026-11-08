@@ -24,11 +24,7 @@ use {
     futures_util::future::join_all,
     krabka_metadata::{MetadataImage, NodeId},
     krabka_security::ListenerProtocol,
-    std::{
-        collections::HashMap,
-        sync::{Arc, atomic::Ordering},
-        time::Instant,
-    },
+    std::{collections::HashMap, sync::Arc, time::Instant},
 };
 
 /// The outcome of one attempt to fan out `WriteTxnMarkers`.
@@ -175,7 +171,7 @@ pub async fn dispatch_markers(
         let leader = if let Some(partition) = image.partition(&tp.topic, tp.partition.get()) {
             Some(partition.leader)
         } else if let Some(partition) = partitions.get(&tp.topic, tp.partition) {
-            if partition.current_leader.load(Ordering::Acquire) != node_id.0 {
+            if partition.leader() != node_id.0 {
                 return MarkerFanOut {
                     written: Vec::new(),
                     failure: Some(BrokerError::Txn(format!(

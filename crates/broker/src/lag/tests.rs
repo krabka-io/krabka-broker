@@ -90,7 +90,7 @@ fn led_partition(dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
         .topic(topic)
         .partition(partition)
         .call();
-    part.current_leader.store(LEADER.0, Ordering::Release);
+    part.test_set_leader(LEADER.0);
     part
 }
 
@@ -322,9 +322,7 @@ async fn losing_leadership_releases_the_partitions_replica_lag_series() {
     sample_replica_lag(&partitions, &broker_metrics).await;
     assert!(published_replica_lag(&broker_metrics, 0) == Some(12));
 
-    partition
-        .current_leader
-        .store(OTHER_BROKER.0, Ordering::Release);
+    partition.test_set_leader(OTHER_BROKER.0);
     sample_replica_lag(&partitions, &broker_metrics).await;
 
     check!(published_replica_lag(&broker_metrics, 0) == None);

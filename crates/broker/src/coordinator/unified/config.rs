@@ -411,9 +411,9 @@ mod tests {
             coordinator::unified::{
                 assignor::{Assignment, GroupSpec, TopicMetadata},
                 share::config::{SHARE_GROUP_ASSIGNMENT_INTERVAL_MS, ShareGroupConfig},
-                streams::{
-                    actor::resolve_broker_and_group_config,
-                    config::{STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS, StreamsGroupConfig},
+                streams::config::{
+                    STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS, StreamsGroupConfig,
+                    resolve_broker_and_group_config,
                 },
                 test_support::{
                     BrokerValue, ImageMetadatalessProvider, InMemoryOffsetsLog, group_config_image,

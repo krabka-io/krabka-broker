@@ -29,7 +29,7 @@ use {
         primitives::uuid::Uuid,
         records::RecordsPayload,
     },
-    std::{collections::BTreeMap, sync::atomic},
+    std::collections::BTreeMap,
 };
 
 /// The topic every scenario creates.
@@ -136,7 +136,7 @@ async fn replicated_topic_holds_one_record(zstd_topic: &mut ZstdTopicScenario) {
         &started.broker.broker_arc_for_test(),
         TOPIC,
         async |partition| {
-            partition.current_leader.load(atomic::Ordering::Acquire) == THIS_NODE.0
+            partition.leader() == THIS_NODE.0
                 && partition
                     .replica_state
                     .lock()

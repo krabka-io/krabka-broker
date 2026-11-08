@@ -15,11 +15,7 @@ use {
     krabka_log::{Log, LogConfig},
     krabka_metadata::NodeId,
     krabka_protocol::records::RecordBatch,
-    std::{
-        fs,
-        path::Path,
-        sync::{Arc, atomic::Ordering},
-    },
+    std::{fs, path::Path, sync::Arc},
 };
 
 /// A batch of `count` records, stamped with the wall clock the way a real
@@ -92,7 +88,7 @@ pub(super) fn test_partition(
         storage == StorageMode::Diskless,
     )
     .unwrap();
-    handle.current_leader.store(leader.0, Ordering::Relaxed);
+    handle.test_set_leader(leader.0);
     handle
 }
 

@@ -316,6 +316,7 @@ mod tests {
         crate::{
             BrokerError as BrokerStartError, SslPrincipalMapper,
             config::test_support::base,
+            error::ConfigError,
             test_support::{OAuthTokenContents, oauth_token_file},
         },
         assert2::assert,
@@ -346,7 +347,9 @@ mod tests {
         c.listeners[1].bind_addr = c.listeners[0].bind_addr;
         assert!(matches!(
             c.validate(),
-            Err(BrokerStartError::ListenerConflict { .. })
+            Err(BrokerStartError::Config(
+                ConfigError::ListenerConflict { .. }
+            ))
         ));
     }
 
@@ -401,7 +404,9 @@ mod tests {
         c.inter_broker_listener_name = "NONESUCH".to_owned();
         assert!(matches!(
             c.validate(),
-            Err(BrokerStartError::InvalidInterBrokerListener { .. })
+            Err(BrokerStartError::Config(
+                ConfigError::InvalidInterBrokerListener { .. }
+            ))
         ));
     }
 
@@ -444,7 +449,9 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::SaslListenerNoMechanisms { .. })
+            Err(BrokerError::Config(
+                ConfigError::SaslListenerNoMechanisms { .. }
+            ))
         ));
     }
 
@@ -712,7 +719,7 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::GssapiConfigMissing)
+            Err(BrokerError::Config(ConfigError::GssapiConfigMissing))
         ));
     }
 }

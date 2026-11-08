@@ -41,14 +41,17 @@ use {
         },
         error::BrokerError,
     },
-    krabka_protocol::owned::{
-        common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
-        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        consumer_group_heartbeat_response::{
-            Assignment as RespAssignment, ConsumerGroupHeartbeatResponse,
+    krabka_protocol::{
+        owned::{
+            common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
+            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            consumer_group_heartbeat_response::{
+                Assignment as RespAssignment, ConsumerGroupHeartbeatResponse,
+            },
         },
+        primitives::uuid::Uuid,
     },
-    std::{mem, time::Instant},
+    std::{collections::HashMap, mem, time::Instant},
     tokio::sync::oneshot,
 };
 
@@ -290,7 +293,6 @@ pub fn step_heartbeat(
     now: Instant,
     regexes: &RegexResolution<'_>,
 ) -> HeartbeatStep {
-    // ─── Leave path ──────────────────────────────────────────────
     // Kafka's `consumerGroupHeartbeat`: -1 leaves the group, and -2 is a
     // static member that leaves for a while.
     if req.member_epoch == LEAVE_GROUP_MEMBER_EPOCH
@@ -298,28 +300,11 @@ pub fn step_heartbeat(
     {
         return leave_step(state, metadata, req);
     }
-
-    // ─── Validate assignor selection ─────────────────────────────
-    if req
-        .server_assignor
-        .as_deref()
-        .is_some_and(|name| !config.assignor_enabled(name))
-    {
-        return HeartbeatStep::answer(error_resp(codes::UNSUPPORTED_ASSIGNOR));
+    if let Some(refused) = refused_assignor(config, req) {
+        return refused;
     }
-
-    // Kafka's `throwIfConsumerGroupIsFull`: only a member id the group does
-    // not hold is refused.
-    if state.members.len() >= config.max_size
-        && (req.member_id.is_empty() || !state.members.contains_key(&req.member_id))
-    {
-        return rejected(HeartbeatError {
-            code: codes::GROUP_MAX_SIZE_REACHED,
-            message: format!(
-                "The consumer group has reached its maximum capacity of {} members.",
-                config.max_size
-            ),
-        });
+    if let Some(refused) = refused_over_capacity(state, config, req) {
+        return refused;
     }
 
     // KIP-848 (finalized): the consumer generates its own member UUID and
@@ -331,100 +316,211 @@ pub fn step_heartbeat(
         Ok(resolved) => resolved,
         Err(error) => return rejected(error),
     };
-
-    // ─── First join ──────────────────────────────────────────────
-    // Kafka's `getOrMaybeCreateMember` creates the member with its defaults,
-    // and the heartbeat then updates it like any other member: the topic
-    // names change from none, and the pattern from none.
+    let inputs = HeartbeatInputs {
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        regexes,
+    };
     if resolved == Resolved::New {
-        let mut m = match try_build_member(&member_id, req, client, now) {
-            Ok(m) => m,
-            Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
-        };
-        let recorder = Recorder::start(state, &[&member_id]);
-        let new_regex = m.subscribed_topic_regex.take();
-        let names_changed = !m.subscribed_topic_names.is_empty();
-        state.add_or_update_member(m);
-        let owned = reported_owned(req);
-        let update = after_member_update(
-            state,
-            config,
-            metadata,
-            MemberChange {
-                member_id: &member_id,
-                old_regex: None,
-                new_regex,
-                names_changed,
-                owned: owned.as_ref(),
-            },
-            regexes,
-        );
-        state.track_rebalance_timeout(&member_id, now);
-        let MemberUpdateRecords {
-            pending,
-            resolutions,
-        } = member_update_records(recorder, state, update, &member_id, None);
-        let response = build_assignment_resp(state, &member_id, config, true);
-        return HeartbeatStep {
-            response,
-            pending,
-            resolutions,
-        };
+        return join_new_member(state, inputs, &member_id);
     }
-
-    // ─── Static replacement ──────────────────────────────────────
-    // Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember`: the new member
-    // takes the released member's subscription, target and assignment under
-    // its own id, at epoch 0, and the released member goes. Kafka's
-    // `replaceMember` writes those records first in the batch.
     let assigned_before = state
         .members
         .get(&member_id)
         .map(|member| member.assigned_partitions.clone());
-    let replacement = match &resolved {
+    let replacement = match replace_released_static_member(state, req, &resolved, &member_id) {
+        Ok(replacement) => replacement,
+        Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
+    };
+    heartbeat_existing_member(
+        state,
+        inputs,
+        &member_id,
+        assigned_before.as_ref(),
+        replacement,
+    )
+}
+
+/// The request inputs [`step_heartbeat`] hands to the steps of a heartbeat
+/// that does not leave the group.
+#[derive(Clone, Copy)]
+struct HeartbeatInputs<'a> {
+    config: &'a NextGenConfig,
+    metadata: &'a dyn MetadataProvider,
+    req: &'a ConsumerGroupHeartbeatRequest,
+    client: ClientIdentity<'a>,
+    now: Instant,
+    regexes: &'a RegexResolution<'a>,
+}
+
+/// The `UNSUPPORTED_ASSIGNOR` answer when `req` names a server assignor that
+/// `config` does not enable, or `None`.
+fn refused_assignor(
+    config: &NextGenConfig,
+    req: &ConsumerGroupHeartbeatRequest,
+) -> Option<HeartbeatStep> {
+    req.server_assignor
+        .as_deref()
+        .is_some_and(|name| !config.assignor_enabled(name))
+        .then(|| HeartbeatStep::answer(error_resp(codes::UNSUPPORTED_ASSIGNOR)))
+}
+
+/// Kafka's `throwIfConsumerGroupIsFull`: the `GROUP_MAX_SIZE_REACHED` answer
+/// when the group is full, or `None`. Only a member id the group does not hold
+/// is refused.
+fn refused_over_capacity(
+    state: &GroupState,
+    config: &NextGenConfig,
+    req: &ConsumerGroupHeartbeatRequest,
+) -> Option<HeartbeatStep> {
+    let full = state.members.len() >= config.max_size
+        && (req.member_id.is_empty() || !state.members.contains_key(&req.member_id));
+    full.then(|| {
+        rejected(HeartbeatError {
+            code: codes::GROUP_MAX_SIZE_REACHED,
+            message: format!(
+                "The consumer group has reached its maximum capacity of {} members.",
+                config.max_size
+            ),
+        })
+    })
+}
+
+/// The first join of `member_id`, which the group does not hold.
+///
+/// Kafka's `getOrMaybeCreateMember` creates the member with its defaults, and
+/// the heartbeat then updates it like any other member: the topic names change
+/// from none, and the pattern from none.
+fn join_new_member(
+    state: &mut GroupState,
+    inputs: HeartbeatInputs<'_>,
+    member_id: &str,
+) -> HeartbeatStep {
+    let HeartbeatInputs {
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        regexes,
+    } = inputs;
+    let mut m = match try_build_member(member_id, req, client, now) {
+        Ok(m) => m,
+        Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
+    };
+    let recorder = Recorder::start(state, &[member_id]);
+    let new_regex = m.subscribed_topic_regex.take();
+    let names_changed = !m.subscribed_topic_names.is_empty();
+    state.add_or_update_member(m);
+    let owned = reported_owned(req);
+    let update = after_member_update(
+        state,
+        config,
+        metadata,
+        MemberChange {
+            member_id,
+            old_regex: None,
+            new_regex,
+            names_changed,
+            owned: owned.as_ref(),
+        },
+        regexes,
+    );
+    state.track_rebalance_timeout(member_id, now);
+    let MemberUpdateRecords {
+        pending,
+        resolutions,
+    } = member_update_records(recorder, state, update, member_id, None);
+    let response = build_assignment_resp(state, member_id, config, true);
+    HeartbeatStep {
+        response,
+        pending,
+        resolutions,
+    }
+}
+
+/// Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember`, when `resolved`
+/// replaces a released static member: the new member takes the released
+/// member's subscription, target and assignment under its own id, at epoch 0,
+/// and the released member goes.
+///
+/// It returns Kafka's `replaceMember` records, which come first in the batch,
+/// or `None` when `resolved` replaces no member. It returns the compile error
+/// of a replacing member's `SubscribedTopicRegex` that does not compile.
+fn replace_released_static_member(
+    state: &mut GroupState,
+    req: &ConsumerGroupHeartbeatRequest,
+    resolved: &Resolved,
+    member_id: &str,
+) -> Result<Option<PendingRecords>, String> {
+    match resolved {
         Resolved::Replaces { previous } => {
             if let Some(check) = req
                 .subscribed_topic_regex
                 .as_deref()
                 .and_then(|pattern| check_subscribed_topic_regex(pattern).err())
             {
-                return HeartbeatStep::answer(invalid_regex_resp(check));
+                return Err(check);
             }
-            Some(replace_static_member(state, previous, &member_id))
+            Ok(Some(replace_static_member(state, previous, member_id)))
         }
-        Resolved::New | Resolved::Existing => None,
-    };
+        Resolved::New | Resolved::Existing => Ok(None),
+    }
+}
 
-    // ─── Steady state ────────────────────────────────────────────
+/// The steady-state heartbeat of `member_id`, a member the group holds:
+/// updates and reconciles it, and answers with its assignment when Kafka sends
+/// one.
+///
+/// `assigned_before` is the member's assignment before any static
+/// replacement, and `replacement` holds that replacement's records.
+fn heartbeat_existing_member(
+    state: &mut GroupState,
+    inputs: HeartbeatInputs<'_>,
+    member_id: &str,
+    assigned_before: Option<&HashMap<Uuid, Vec<i32>>>,
+    replacement: Option<PendingRecords>,
+) -> HeartbeatStep {
+    let HeartbeatInputs {
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        regexes,
+    } = inputs;
     let request_for_member;
     let req = if req.member_id == member_id {
         req
     } else {
         request_for_member = ConsumerGroupHeartbeatRequest {
-            member_id: member_id.clone(),
+            member_id: member_id.to_owned(),
             ..req.clone()
         };
         &request_for_member
     };
-    let recorder = Recorder::start(state, &[&member_id]);
+    let recorder = Recorder::start(state, &[member_id]);
     let update = match update_member_state(state, config, metadata, req, client, now, regexes) {
         Ok(update) => update,
         Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
     };
-    state.track_rebalance_timeout(&member_id, now);
+    state.track_rebalance_timeout(member_id, now);
     let MemberUpdateRecords {
         pending,
         resolutions,
-    } = member_update_records(recorder, state, update, &member_id, replacement);
+    } = member_update_records(recorder, state, update, member_id, replacement);
     // Kafka sends the assignment only on a join (epoch 0), on a full request,
     // or when the member's assigned partitions changed.
-    let assignment_changed = assigned_before.as_ref()
+    let assignment_changed = assigned_before
         != state
             .members
-            .get(&member_id)
+            .get(member_id)
             .map(|member| &member.assigned_partitions);
     let include_assignment = req.member_epoch == 0 || is_full_request(req) || assignment_changed;
-    let response = build_assignment_resp(state, &member_id, config, include_assignment);
+    let response = build_assignment_resp(state, member_id, config, include_assignment);
     HeartbeatStep {
         response,
         pending,

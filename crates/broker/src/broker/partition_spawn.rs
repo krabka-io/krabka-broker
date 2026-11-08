@@ -10,8 +10,9 @@ use {
         error::BrokerError,
         log_dir_status::LogDirRegistry,
         partition::{
-            Partition, PartitionRuntimeConfig, ReplicationTarget, WriterGate, WriterMessage,
-            empty_marker_materialization, unchecked_log_start, unreported_leader_log_start,
+            LeaderSlot, Partition, PartitionRuntimeConfig, ReplicationTarget, WriterGate,
+            WriterMessage, empty_marker_materialization, unchecked_log_start,
+            unreported_leader_log_start,
         },
         partition_writer::{
             WriterIdentity, WriterPolicy, WriterServices, WriterSignals, WriterStorage, run_gated,
@@ -31,10 +32,7 @@ use {
     std::{
         collections::HashMap,
         path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicI32, AtomicU64},
-        },
+        sync::{Arc, Mutex},
     },
     tokio::sync::{self, Notify, RwLock, mpsc},
 };
@@ -292,8 +290,10 @@ pub fn try_spawn_partition_with_replication_target(
     let initial_wal_watermark = initial_replica_state.hw;
     let replica_state = Arc::new(sync::Mutex::new(initial_replica_state));
     let hw_advance_notify = Arc::new(Notify::new());
-    let current_leader = Arc::new(AtomicU64::new(initial_target.leader_node_id.0));
-    let current_leader_epoch = Arc::new(AtomicI32::new(initial_target.leader_epoch.0));
+    let leader_slot = Arc::new(LeaderSlot::new(
+        initial_target.leader_node_id,
+        krabka_ids::LeaderEpoch(initial_target.leader_epoch.0),
+    ));
     let replication_target = Arc::new(RwLock::new(initial_target));
     let log_dir = Arc::new(arc_swap::ArcSwap::from_pointee(log_dir));
     // A partition that assigns offsets through a sequencer or acknowledges
@@ -364,8 +364,7 @@ pub fn try_spawn_partition_with_replication_target(
         hw_advance_notify,
         leadership_notify: Arc::new(Notify::new()),
         delivery,
-        current_leader,
-        current_leader_epoch,
+        leader_slot,
         replication_target,
         diskless,
         reported_leader_log_start: unreported_leader_log_start(),

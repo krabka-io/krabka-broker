@@ -19,11 +19,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, first_record_at_or_after_timestamp},
     krabka_verified::{DisklessBatchStep, diskless_batch_step},
     object_store::{GetOptions, GetRange, ObjectStore, path::Path},
-    std::{
-        fmt::Display,
-        io,
-        sync::{Arc, PoisonError},
-    },
+    std::{fmt::Display, io, sync::Arc},
     tokio::sync::Mutex as AsyncMutex,
     uuid::Uuid,
 };
@@ -220,6 +216,8 @@ fn wal_timestamp_error(error: impl Display) -> RemoteStorageError {
 
 /// Tries to satisfy a local `OFFSET_OUT_OF_RANGE` fetch from the diskless WAL
 /// objects, reading at most `max_bytes`, the partition's budget for this read.
+///
+/// A poisoned log answers the row `NOT_LEADER_OR_FOLLOWER` and reads nothing.
 pub async fn try_diskless_read(
     broker: &Broker,
     p: &mut PendingRead,
@@ -229,9 +227,9 @@ pub async fn try_diskless_read(
     if !part.diskless || p.topic_id == WireUuid::ZERO {
         return None;
     }
-    let remote_storage_enable = {
-        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.config_snapshot().remote_storage_enable
+    let remote_storage_enable = match part.lock_log() {
+        Ok(log) => log.config_snapshot().remote_storage_enable,
+        Err(error) => return Some(fail_log_query(p, &error)),
     };
     if remote_storage_enable {
         return None;
@@ -267,13 +265,24 @@ pub async fn try_diskless_read(
     let bytes_est = records.len();
     // The row may carry the refused out-of-range answer (all -1); a served read
     // reports the partition's live bounds, as a local read does.
-    LiveOffsets::of(part).await.report(&mut p.out);
+    match LiveOffsets::of(part).await {
+        Ok(live) => live.report(&mut p.out),
+        Err(error) => return Some(fail_log_query(p, &error)),
+    }
     p.out.error_code = codes::NONE;
     if p.reader.is_read_committed() {
         p.out.aborted_transactions = Some(Vec::new());
     }
     p.out.records = Some(RecordsPayload::Raw(records));
     Some(bytes_est)
+}
+
+/// Answers `p` with the code of a local log query that failed and serves
+/// nothing.
+fn fail_log_query(p: &mut PendingRead, error: &BrokerError) -> usize {
+    p.out.error_code = codes::from_broker_error(error);
+    p.out.records = None;
+    0
 }
 
 fn first_batch_bytes_at_or_after(

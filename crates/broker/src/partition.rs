@@ -21,7 +21,7 @@ use {
         wal::{OffsetSequencer, quorum::registry::WalShardRegistry},
     },
     arc_swap::ArcSwap,
-    krabka_ids::PartitionIndex,
+    krabka_ids::{LeaderEpoch, NodeId, PartitionIndex},
     krabka_log::{Log, Offset, ReadOutput},
     krabka_units::ByteSize,
     std::{
@@ -135,6 +135,29 @@ impl PartitionRuntimeConfig {
     }
 }
 
+/// The leader and leader epoch the metadata image names for a partition.
+///
+/// Atomic for lock-free reads in the Produce and Fetch hot paths. The broker
+/// stamps the epoch on every appended batch and validates it on every follower
+/// Fetch. Only the metadata listener moves them, when it publishes a
+/// replication target; everything else reads them through [`Partition`].
+#[derive(Debug, Default)]
+pub struct LeaderSlot {
+    node: AtomicU64,
+    epoch: AtomicI32,
+}
+
+impl LeaderSlot {
+    /// A slot that names `node` as the leader at `epoch`.
+    #[must_use]
+    pub const fn new(node: NodeId, epoch: LeaderEpoch) -> Self {
+        Self {
+            node: AtomicU64::new(node.get()),
+            epoch: AtomicI32::new(epoch.get()),
+        }
+    }
+}
+
 /// Runtime handle for a single partition.
 ///
 /// Cheap to clone. `log`, `writer_tx`, and `append_notify` are all `Arc`-ish,
@@ -186,12 +209,10 @@ pub struct Partition {
     /// The writer actor holds a clone of the same handles, so an append
     /// refreshes the mirror without reaching back through this struct.
     pub(crate) delivery: DeliveryHandles,
-    /// Current leader's `NodeId` from the metadata image. Atomic for
-    /// lock-free reads in the Produce/Fetch hot paths.
-    pub current_leader: Arc<AtomicU64>,
-    /// Current `leader_epoch` from the metadata image. The broker stamps it on
-    /// every appended batch and validates it on every follower Fetch.
-    pub current_leader_epoch: Arc<AtomicI32>,
+    /// The leader and leader epoch the metadata image names. Read them with
+    /// [`Self::leader`], [`Self::leader_epoch`] and [`Self::is_leader_at`].
+    /// A clone of the partition shares the slot.
+    pub(crate) leader_slot: Arc<LeaderSlot>,
     /// Serializes follower mutations against topic recreation and local
     /// leader/epoch installation. Replication holds a read guard through the
     /// writer acknowledgement; metadata reconciliation takes the write guard.
@@ -224,6 +245,28 @@ pub fn unchecked_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
 /// New partitions begin with no transaction-marker resolutions owed to group actors.
 pub fn empty_marker_materialization() -> Arc<sync::Mutex<OwedMarkerResolutions>> {
     Arc::new(sync::Mutex::new(HashMap::default()))
+}
+
+/// Lock `log`, the log of `topic`-`partition`, with the poison policy of
+/// [`Partition::lock_log`]. For code that holds the log's `Arc` but not the
+/// [`Partition`], such as a closure that runs on the blocking pool.
+///
+/// Only the partition's writer recovers a poisoned guard and keeps going
+/// (`partition_writer::storage::lock_log`); every other reader and writer of
+/// the log comes through here.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the mutex is poisoned.
+pub fn lock_partition_log<'a>(
+    log: &'a Mutex<Log>,
+    topic: &str,
+    partition: PartitionIndex,
+) -> Result<MutexGuard<'a, Log>, BrokerError> {
+    log.lock().map_err(|_| BrokerError::PartitionWriterDied {
+        topic: topic.to_owned(),
+        partition: partition.0,
+    })
 }
 
 impl Partition {
@@ -282,8 +325,7 @@ impl Partition {
             replica_state,
             hw_advance_notify,
             leadership_notify: Arc::new(Notify::new()),
-            current_leader: Arc::new(AtomicU64::new(0)),
-            current_leader_epoch: Arc::new(AtomicI32::new(0)),
+            leader_slot: Arc::default(),
             delivery,
             replication_target: initial_replication_target(None),
             diskless: false,
@@ -293,8 +335,9 @@ impl Partition {
         }
     }
 
-    /// The partition's [`Log`], locked. Every `Partition` query on the log
-    /// goes through here, so each answers a poisoned mutex the same way.
+    /// The partition's [`Log`], locked. Every query on a partition's log goes
+    /// through here or through [`lock_partition_log`], so each answers a
+    /// poisoned mutex the same way.
     ///
     /// # Errors
     ///
@@ -303,12 +346,7 @@ impl Partition {
     /// read what that task left half-written. The error maps to
     /// `NOT_LEADER_OR_FOLLOWER`, so a client retries against the next leader.
     pub(crate) fn lock_log(&self) -> Result<MutexGuard<'_, Log>, BrokerError> {
-        self.log
-            .lock()
-            .map_err(|_| BrokerError::PartitionWriterDied {
-                topic: self.topic.clone(),
-                partition: self.index.0,
-            })
+        lock_partition_log(&self.log, &self.topic, self.index)
     }
 
     /// Next offset the underlying [`Log`] will assign. Cheap: takes the

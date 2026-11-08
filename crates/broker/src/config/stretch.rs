@@ -2,7 +2,7 @@
 //! rack, roles and durability settings agree with it.
 
 use {
-    crate::{BrokerError, config::BrokerConfig},
+    crate::{BrokerError, config::BrokerConfig, error::ConfigError},
     krabka_verified::stretch,
 };
 
@@ -54,9 +54,11 @@ impl BrokerConfig {
 
         let site_count = i64::try_from(profile.sites.len()).unwrap_or(i64::MAX);
         if site_count != STRETCH_SITE_COUNT {
-            return Err(BrokerError::StretchProfileNeedsThreeSites {
-                count: profile.sites.len(),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::StretchProfileNeedsThreeSites {
+                    count: profile.sites.len(),
+                },
+            ));
         }
         for (i, site) in profile.sites.iter().enumerate() {
             if profile
@@ -64,36 +66,50 @@ impl BrokerConfig {
                 .get(..i)
                 .is_some_and(|before| before.contains(site))
             {
-                return Err(BrokerError::StretchProfileDuplicateSite { site: site.clone() });
+                return Err(BrokerError::Config(
+                    ConfigError::StretchProfileDuplicateSite { site: site.clone() },
+                ));
             }
         }
         if !profile.sites.contains(&profile.witness_site) {
-            return Err(BrokerError::StretchWitnessSiteUnknown {
-                site: profile.witness_site.clone(),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::StretchWitnessSiteUnknown {
+                    site: profile.witness_site.clone(),
+                },
+            ));
         }
         if !profile.sites.contains(&profile.preferred_leader_site) {
-            return Err(BrokerError::StretchPreferredSiteUnknown {
-                site: profile.preferred_leader_site.clone(),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::StretchPreferredSiteUnknown {
+                    site: profile.preferred_leader_site.clone(),
+                },
+            ));
         }
         if profile.preferred_leader_site == profile.witness_site {
-            return Err(BrokerError::StretchPreferredSiteIsWitness {
-                site: profile.witness_site.clone(),
-            });
+            return Err(BrokerError::Config(
+                ConfigError::StretchPreferredSiteIsWitness {
+                    site: profile.witness_site.clone(),
+                },
+            ));
         }
 
         let Some(rack) = self.rack.as_ref() else {
-            return Err(BrokerError::StretchRequiresRack);
+            return Err(BrokerError::Config(ConfigError::StretchRequiresRack));
         };
         if !profile.sites.contains(rack) {
-            return Err(BrokerError::StretchRackNotInProfile { rack: rack.clone() });
+            return Err(BrokerError::Config(ConfigError::StretchRackNotInProfile {
+                rack: rack.clone(),
+            }));
         }
         if *rack == profile.witness_site && !self.is_witness() {
-            return Err(BrokerError::StretchWitnessSiteNeedsWitnessRole);
+            return Err(BrokerError::Config(
+                ConfigError::StretchWitnessSiteNeedsWitnessRole,
+            ));
         }
         if self.is_witness() && *rack != profile.witness_site {
-            return Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() });
+            return Err(BrokerError::Config(
+                ConfigError::StretchWitnessRoleOutsideWitnessSite { rack: rack.clone() },
+            ));
         }
 
         for (name, factor) in [
@@ -121,10 +137,10 @@ impl BrokerConfig {
                 site_count,
                 i64::from(self.default_min_insync_replicas),
             ) {
-                return Err(BrokerError::StretchMinInsyncUnsafe {
+                return Err(BrokerError::Config(ConfigError::StretchMinInsyncUnsafe {
                     min_insync: self.default_min_insync_replicas,
                     replication_factor: factor,
-                });
+                }));
             }
         }
         Ok(())
@@ -215,7 +231,9 @@ mod tests {
         let c = stretch_data_node_with_sites(&["dc-a", "dc-w"]);
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchProfileNeedsThreeSites { count: 2 })
+            Err(BrokerError::Config(
+                ConfigError::StretchProfileNeedsThreeSites { count: 2 }
+            ))
         ));
     }
 
@@ -224,7 +242,7 @@ mod tests {
         let c = stretch_data_node_with_sites(&["dc-a", "dc-a", "dc-w"]);
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchProfileDuplicateSite { site }) if site == "dc-a"
+            Err(BrokerError::Config(ConfigError::StretchProfileDuplicateSite { site })) if site == "dc-a"
         ));
     }
 
@@ -234,7 +252,7 @@ mod tests {
         c.stretch.as_mut().expect("profile").witness_site = "dc-elsewhere".to_owned();
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchWitnessSiteUnknown { site }) if site == "dc-elsewhere"
+            Err(BrokerError::Config(ConfigError::StretchWitnessSiteUnknown { site })) if site == "dc-elsewhere"
         ));
     }
 
@@ -244,7 +262,7 @@ mod tests {
         c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-elsewhere".to_owned();
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchPreferredSiteUnknown { site }) if site == "dc-elsewhere"
+            Err(BrokerError::Config(ConfigError::StretchPreferredSiteUnknown { site })) if site == "dc-elsewhere"
         ));
     }
 
@@ -254,7 +272,7 @@ mod tests {
         c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-w".to_owned();
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchPreferredSiteIsWitness { site }) if site == "dc-w"
+            Err(BrokerError::Config(ConfigError::StretchPreferredSiteIsWitness { site })) if site == "dc-w"
         ));
     }
 
@@ -267,7 +285,7 @@ mod tests {
         };
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchRequiresRack)
+            Err(BrokerError::Config(ConfigError::StretchRequiresRack))
         ));
     }
 
@@ -276,7 +294,7 @@ mod tests {
         let c = stretch_node("dc-elsewhere", vec![NodeRole::Controller, NodeRole::Broker]);
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchRackNotInProfile { rack }) if rack == "dc-elsewhere"
+            Err(BrokerError::Config(ConfigError::StretchRackNotInProfile { rack })) if rack == "dc-elsewhere"
         ));
     }
 
@@ -285,7 +303,9 @@ mod tests {
         let c = stretch_node("dc-w", vec![NodeRole::Controller, NodeRole::Broker]);
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchWitnessSiteNeedsWitnessRole)
+            Err(BrokerError::Config(
+                ConfigError::StretchWitnessSiteNeedsWitnessRole
+            ))
         ));
     }
 
@@ -294,7 +314,7 @@ mod tests {
         let c = stretch_node("dc-a", witness_roles());
         assert!(matches!(
             c.validate(),
-            Err(BrokerError::StretchWitnessRoleOutsideWitnessSite { rack }) if rack == "dc-a"
+            Err(BrokerError::Config(ConfigError::StretchWitnessRoleOutsideWitnessSite { rack })) if rack == "dc-a"
         ));
     }
 
@@ -311,10 +331,10 @@ mod tests {
         c.default_min_insync_replicas = min_insync;
         check!(matches!(
             c.validate(),
-            Err(BrokerError::StretchMinInsyncUnsafe {
+            Err(BrokerError::Config(ConfigError::StretchMinInsyncUnsafe {
                 min_insync: got,
                 replication_factor: 3
-            }) if got == min_insync
+            })) if got == min_insync
         ));
     }
 
@@ -332,10 +352,10 @@ mod tests {
         c.default_replication_factor = replication_factor;
         check!(matches!(
             c.validate(),
-            Err(BrokerError::StretchMinInsyncUnsafe {
+            Err(BrokerError::Config(ConfigError::StretchMinInsyncUnsafe {
                 min_insync: 2,
                 replication_factor: got,
-            }) if got == replication_factor
+            })) if got == replication_factor
         ));
     }
 

@@ -139,6 +139,27 @@ impl fmt::Display for NotReady {
     }
 }
 
+/// The states of Kafka's `BrokerState` that [`HealthState::broker_state`]
+/// reports. Each discriminant is Kafka's ordinal, which the `broker_state`
+/// gauge exports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrokerState {
+    /// The listeners are not bound yet.
+    Starting = 1,
+    /// Log-dir recovery is still running.
+    Recovery = 2,
+    /// The node is up and serving.
+    Running = 3,
+    /// The node has begun to shut down.
+    PendingControlledShutdown = 6,
+}
+
+impl BrokerState {
+    /// Kafka's ordinal for this state.
+    #[must_use]
+    pub fn ordinal(self) -> i64 { i64::from(self as u8) }
+}
+
 /// The conditions the `/readyz` route reports on, shared between the HTTP
 /// routes and the broker startup phases that satisfy them. Cloning shares the
 /// state.
@@ -211,18 +232,17 @@ impl HealthState {
         let _ = self.inner.progress.set(progress);
     }
 
-    /// Returns the Kafka `BrokerState` ordinal (1=STARTING, 2=RECOVERY,
-    /// 3=RUNNING, 6=`PENDING_CONTROLLED_SHUTDOWN`, 7=`SHUTTING_DOWN`).
+    /// The Kafka [`BrokerState`] this node is in.
     #[must_use]
-    pub fn broker_state(&self) -> i64 {
+    pub fn broker_state(&self) -> BrokerState {
         if self.inner.shutting_down.load(Ordering::Acquire) {
-            6 // PENDING_CONTROLLED_SHUTDOWN
+            BrokerState::PendingControlledShutdown
         } else if !self.inner.log_dir_recovery_complete.load(Ordering::Acquire) {
-            2 // RECOVERY
+            BrokerState::Recovery
         } else if !self.inner.listeners_bound.load(Ordering::Acquire) {
-            1 // STARTING
+            BrokerState::Starting
         } else {
-            3 // RUNNING
+            BrokerState::Running
         }
     }
 

@@ -20,10 +20,7 @@ use {
         TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
         TransactionMarkerRequest, transaction_marker_equal_epoch_fenced,
     },
-    std::{
-        collections::HashMap,
-        sync::{Arc, atomic::Ordering},
-    },
+    std::{collections::HashMap, sync::Arc},
 };
 
 /// Append a transaction marker and, on a `__consumer_offsets` partition,
@@ -97,11 +94,7 @@ pub(super) async fn append_marker_and_materialize(
         producer_epoch: current_producer_epoch,
         coordinator_epoch: current_coordinator_epoch,
         has_open_transaction: has_pending_transaction,
-    } = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
-        .transaction_marker_state(producer_id);
+    } = partition.lock_log()?.transaction_marker_state(producer_id);
     if transaction_marker_equal_epoch_fenced(
         transaction_version,
         producer_epoch,
@@ -177,7 +170,7 @@ pub(super) async fn append_marker_and_materialize(
     // The owned produce path stamps this field from the metadata image. A
     // marker does not travel that path, so it stamps its own, and a marker
     // that kept the default of zero would carry a false leader epoch.
-    marker.partition_leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+    marker.partition_leader_epoch = partition.leader_epoch().get();
     let append_from = partition.log_end_offset()?;
     let appended = if let Some(stamp) = commit_stamp {
         partition.produce_commit_marker(marker, stamp).await
@@ -242,10 +235,7 @@ fn landed_marker_offset(
     producer_epoch: i16,
     from: krabka_log::Offset,
 ) -> Result<Option<i64>, BrokerError> {
-    let log = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?;
+    let log = partition.lock_log()?;
     let end = log.log_end_offset();
     let mut next = from;
     while next < end {
