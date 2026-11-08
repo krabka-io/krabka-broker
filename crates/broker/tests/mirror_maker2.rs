@@ -109,7 +109,7 @@ use {
         process::{Command, Output, Stdio},
         time::Duration,
     },
-    support::bridge_gateway,
+    support::{HeldPort, bridge_gateway},
     tokio::{time, time::Instant},
 };
 
@@ -500,6 +500,9 @@ struct SourceKafka {
     container: String,
     /// `<gateway>:<port>`, what both the tools and MM2 bootstrap against.
     bootstrap: String,
+    /// Holds the published host port until the container is removed, so
+    /// nothing else can take it before `docker run -p` binds it.
+    _port: HeldPort,
 }
 
 impl Drop for SourceKafka {
@@ -514,8 +517,8 @@ impl SourceKafka {
     /// Boot the source broker and return once its own tools reach it.
     async fn start(gateway: &str) -> Self {
         let container = support::unique_container_name("krabka-mm2-source");
-        let port = support::free_port();
-        let bootstrap = format!("{gateway}:{port}");
+        let port = support::hold_port();
+        let bootstrap = format!("{gateway}:{}", port.port());
         // A single-partition coordinator topic at replication factor one and
         // no initial rebalance delay: one node cannot open the 50-partition
         // default at factor three, and the group below has to form promptly.
@@ -538,7 +541,7 @@ impl SourceKafka {
         ];
         let mut command = Command::new("docker");
         command.args(["run", "-d", "--name", &container, "-p"]);
-        command.arg(format!("{port}:9092"));
+        command.arg(format!("{}:9092", port.port()));
         for entry in &env {
             command.arg("-e").arg(entry);
         }
@@ -553,6 +556,7 @@ impl SourceKafka {
         let source = Self {
             container,
             bootstrap,
+            _port: port,
         };
         source.wait_ready().await;
         source

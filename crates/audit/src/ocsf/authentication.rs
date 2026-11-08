@@ -3,10 +3,7 @@
 //! claimed, and why it failed when it did.
 
 use {
-    super::{
-        ProductInfo,
-        envelope::{metadata, status_id, user},
-    },
+    super::envelope::{Envelope, status_id, user},
     crate::event::{AuditEndpoint, AuditOutcome, AuditPrincipal},
     serde_json::json,
 };
@@ -18,7 +15,7 @@ pub(super) fn ocsf_authentication(
     source: &AuditEndpoint,
     reason: Option<&String>,
     time_ms: i64,
-    product: &ProductInfo,
+    envelope: &Envelope<'_>,
 ) -> serde_json::Value {
     // class 3002 Authentication, activity 1 = Logon.
     let class_uid = 3002_i64;
@@ -35,6 +32,6 @@ pub(super) fn ocsf_authentication(
         "auth_protocol": mechanism,
         "actor": { "user": user(principal) },
         "src_endpoint": { "ip": source.ip, "port": source.port },
-        "metadata": metadata(product),
+        "metadata": envelope.metadata(),
     })
 }

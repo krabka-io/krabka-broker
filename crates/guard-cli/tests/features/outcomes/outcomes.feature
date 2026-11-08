@@ -2,7 +2,7 @@ Feature: Every outcome reaches a runbook as one exit code
 
   A runbook branches on the exit code, and the README and KFC-9 fix what each
   one means: 0 accepted, 1 refused, 2 unreachable, 3 unverifiable, 4 approval
-  missing and 5 signature failure.
+  missing, 5 signature failure and 64 a command line that does not parse.
 
   Rule: Each broker answer becomes one exit code
 
@@ -38,3 +38,13 @@ Feature: Every outcome reaches a runbook as one exit code
       Given no broker listens at the bootstrap address
       When alice tries to freeze the payments topic
       Then the tool reports an unreachable broker
+
+  Rule: A command line the tool cannot parse is a usage error, not an unreachable broker
+
+    Scenario: A flag the tool does not know ends on exit code 64
+      When an operator runs the tool with a flag it does not know
+      Then the tool reports a usage error
+
+    Scenario: Asking the tool for help is not a usage error
+      When an operator asks the tool for help
+      Then the tool reports success

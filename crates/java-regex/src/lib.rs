@@ -57,15 +57,25 @@
 //! window of a look-behind, which for such a repeat is the whole input, and a
 //! long input can take it past the step limit.
 //!
+//! Two more constructs Java compiles are read as Java reads them. A
+//! backreference to a group the pattern does not have, such as `(a)\2`,
+//! never matches, as in Java, on the matcher, since `fancy_regex` refuses
+//! it. A quantifier of a look-around, such as `(?=(a))*`, which
+//! `fancy_regex` cannot parse, is rewritten by what Java's `closure` makes of
+//! a zero-width atom. `?` and `{0,1}` try it once, `??` after trying to skip
+//! it. Any other quantifier runs it its least count of times, and a greedy or
+//! possessive one tries it once more. A try that holds is never undone, and a
+//! lazy one never keeps a try past its least count.
+//!
 //! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
 //! rather than match them another way. Each is a [`PatternError`].
 //!
 //! - A Unicode block, such as `\p{InGreek}`, and `\X`.
 //! - A named char, `\N{name}`.
-//! - A quantifier of a look-around, such as `(?=(a))*`, which `fancy_regex`
-//!   cannot parse.
-//! - A backreference to a group the pattern does not have, such as `(a)\2`,
-//!   which `fancy_regex` refuses, and which never matches in Java.
+//! - A quantifier of a look-around that refers to a group, where Java runs
+//!   the look-around twice or more, as in `(?=(\1a|a)){2}`: each run may
+//!   change the group, and two copies of the look-around would number its
+//!   groups twice.
 //! - A look-behind whose maximum length overflows Java's `int`, such as
 //!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
 //!   allows. Where the overflowed maximum still covers every start, as in
@@ -203,13 +213,6 @@ impl JavaPattern {
         let tree =
             Expr::parse_tree(&translated).map_err(|error| PatternError(error.to_string()))?;
         let groups = 1 + count_groups(&tree.expr);
-        // `fancy_regex` refuses a reference to a group the pattern does not
-        // have. It is not asked where a look-behind is too large for it, and
-        // the matcher does not refuse one, so the check is made here.
-        if let Some(group) = backref_past(&tree.expr, groups) {
-            let error = FancyError::CompileError(Box::new(CompileError::InvalidBackref(group)));
-            return Err(PatternError(error.to_string()));
-        }
         let refuse = |refusal: Refusal| PatternError(format!("{pattern:?} {}", refusal.reason()));
         // `fancy_regex` would take minutes to build a look-behind too large
         // for the `regex` crate, so it is not asked to.
@@ -218,8 +221,14 @@ impl JavaPattern {
             too_large,
             windows,
         } = check_look_behinds(&tree.expr, &look_behind_code_points).map_err(refuse)?;
+        // Java compiles a reference to a group the pattern does not have, and
+        // it never matches. `fancy_regex` refuses one, and is not asked where
+        // a look-behind is too large for it, so the matcher answers, as `Fail`.
         let fancy = if too_large {
             Err(FancyFailure::Unbuilt(refuse(Refusal::TooLarge)))
+        } else if let Some(group) = backref_past(&tree.expr, groups) {
+            let error = FancyError::CompileError(Box::new(CompileError::InvalidBackref(group)));
+            Err(FancyFailure::Unbuilt(PatternError(error.to_string())))
         } else {
             compile_fancy(&translated)
         };
@@ -480,8 +489,8 @@ enum FancyFailure {
     /// look-ahead, or a part too large for the `regex` crate. The matcher
     /// answers instead where it knows every node.
     Unbuilt(PatternError),
-    /// `fancy_regex` refuses the pattern for another reason, such as a
-    /// backreference to a group the pattern does not have.
+    /// `fancy_regex` refuses the pattern for a reason other than one the
+    /// matcher answers instead.
     Refused(PatternError),
 }
 
@@ -3011,23 +3020,122 @@ mod tests {
         }
     }
 
-    /// A pattern `fancy_regex` refuses for a reason other than a size or a
-    /// look-behind it cannot build stays refused, the matcher answering or
-    /// not: here a backreference to a group the pattern does not have, which
-    /// JDK 25.0.4 compiles, and which never matches there.
+    /// A backreference to a group the pattern does not have compiles, as JDK
+    /// 25.0.4 compiles it, and never matches, as there. `fancy_regex` refuses
+    /// it, so the matcher answers, the alternatives around it included. Each
+    /// row is `Matcher.matches()` on JDK 21.0.12.
     #[yare::parameterized(
-        alone = { "(a)\\2" },
-        beside_a_look_behind_too_large_to_build = { "(?<=x{1,1000000000})y(a)\\2" },
-        beside_a_look_behind_fancy_regex_cannot_build = { "(?<=\\R?x)y(a)\\2" },
-        after_a_large_repeat = { "x{1,1000000000}(a)\\2" },
+        alone = { "(a)\\2", "aa", false },
+        an_alternative_matches = { "(a)\\2|b", "b", true },
+        not_the_reference = { "(a)\\2|b", "a", false },
+        under_a_case_flag = { "(?i)(a)\\2|b", "B", true },
+        optional = { "(a)\\2?b", "ab", true },
+        beside_a_look_behind_too_large_to_build = { "(?<=x{1,1000000000})y(a)\\2|y", "y", true },
+        beside_a_look_behind_fancy_regex_cannot_build = { "(?<=\\R?x)y(a)\\2|y", "y", true },
+        after_a_large_repeat = { "x{1,1000000000}(a)\\2|x", "x", true },
     )]
-    fn a_backreference_to_a_missing_group_is_refused(source: &str) {
+    fn a_backreference_to_a_missing_group_never_matches(source: &str, input: &str, expected: bool) {
         check!(
-            JavaPattern::compile(source).err()
-                == Some(PatternError(
-                    "Error compiling regex: Invalid back reference to group 2".to_owned()
-                ))
+            pattern(source).matches(input) == Ok(expected),
+            "{source:?} against {input:?}"
         );
+    }
+
+    /// A quantified look-around, which `fancy_regex` cannot parse, matches as
+    /// Java's `closure` repeats a zero-width atom, and sets its groups as Java
+    /// does. Each row is `Matcher.matches()` on JDK 21.0.12, and group 1 as
+    /// `replaceAll` gives it, `None` where the pattern does not match.
+    #[yare::parameterized(
+        greedy_ques_takes_it = { "(?=(a))?a", "a", Some("a") },
+        lazy_ques_skips_it_first = { "(?=(a))??a", "a", Some("") },
+        possessive_ques_takes_it = { "(?=(a))?+a", "a", Some("a") },
+        greedy_star_takes_it = { "(?=(a))*a", "a", Some("a") },
+        lazy_star_never_takes_it = { "(?=(a))*?a", "a", Some("") },
+        possessive_star_takes_it = { "(?=(a))*+a", "a", Some("a") },
+        plus_needs_it = { "(?=(a))+a", "a", Some("a") },
+        plus_refuses_without_it = { "(?=b)+a", "a", None },
+        zero_bound_never_takes_it = { "(?=(a)){0}a", "a", Some("") },
+        least_two_is_the_look_ahead = { "(?=(a)){2,3}a", "a", Some("a") },
+        lazy_bounds_never_take_it = { "(?=(a)){0,2}?a", "a", Some("") },
+        star_skips_one_that_fails = { "(?=(b))*a", "a", Some("") },
+        greedy_never_goes_back_to_skip_it = { "(?=(a))?(?!\\1)a", "a", None },
+        lazy_ques_tries_the_skip = { "(?=(a))??(?!\\1)a", "a", Some("") },
+        lazy_star_keeps_the_skip = { "(?=(a))*?(?!\\1)a", "a", Some("") },
+        negative_look_ahead = { "(?!(b))*a", "a", Some("") },
+        look_behind = { "(?<=(x))?a", "a", Some("") },
+        counted_zero_to_one_is_a_ques = { "(?=(a)){0,1}?\\1", "a", Some("a") },
+        counted_zero_to_two_is_a_curly = { "(?=(a)){0,2}?\\1", "a", None },
+        self_reference_run_once = { "(?=(\\1a|a)){1}\\1", "aa", None },
+        self_reference_tried_once = { "(?=(\\1a|a))*\\1", "aa", None },
+        self_reference_lazy_tail = { "(?=(\\1a|a)){1,2}?\\1", "aa", None },
+    )]
+    fn a_quantified_look_around_reads_as_java_repeats_a_zero_width_atom(
+        source: &str,
+        input: &str,
+        group: Option<&str>,
+    ) {
+        let java = pattern(source);
+        let matched = java
+            .matches(input)
+            .map(|matched| matched.then(|| java.replace(input, "$1", true).unwrap_or_default()));
+        check!(
+            matched == Ok(group.map(str::to_owned)),
+            "{source:?} against {input:?}"
+        );
+    }
+
+    /// Each position of a global replacement tests the look-around afresh:
+    /// `replaceAll` on JDK 21.0.12.
+    #[test]
+    fn a_quantified_look_around_is_tested_at_each_match() {
+        check!(pattern("(?=(a))*").replace("aa", "[$1]", true) == Ok("[a]a[a]a[]".to_owned()));
+    }
+
+    /// What follows a quantified look-around reads as Java reads what follows
+    /// a quantifier: a further quantifier is dangling, and bounds must be
+    /// legal. A look-around that refers to a group and that Java runs twice or
+    /// more is refused too: on JDK 21.0.12 `(?=(\1a|a)){2}\1` matches `aa`,
+    /// the second run extending the group, which one copy of it cannot do.
+    #[yare::parameterized(
+        dangling_after_the_modifier = { "(?=a)*+*" },
+        no_least_count = { "(?=a){,2}" },
+        backwards_range = { "(?=a){3,1}" },
+        self_reference_run_twice = { "(?=(\\1a|a)){2}\\1" },
+        self_reference_tried_after_its_least = { "(?=(\\1a|a))+\\1" },
+    )]
+    fn a_quantified_look_around_is_refused(source: &str) {
+        check!(let Err(_) = JavaPattern::compile(source));
+    }
+
+    /// A quantified look-around in a repeated group of a look-behind keeps
+    /// the group as deterministic as Java's `TreeInfo` reads it: a fixed count
+    /// is, so Java compiles the look-behind, and a range or a `?` is not, so
+    /// Java refuses it with no obvious maximum length. Each row is JDK 21.0.12.
+    #[yare::parameterized(
+        zero = { "(?<=((?=a){0}a)*)a", true },
+        one = { "(?<=((?=a){1}a)*)a", true },
+        two = { "(?<=((?=a){2}a)*)a", true },
+        ques = { "(?<=((?=a)?a)*)a", false },
+        possessive_ques = { "(?<=((?=a)?+a)*)a", false },
+        range = { "(?<=((?=a){1,2}a)*)a", false },
+        lazy_star = { "(?<=((?=a)*?a)*)a", false },
+    )]
+    fn a_quantified_look_around_in_a_look_behind_is_as_deterministic_as_in_java(
+        source: &str,
+        compiles: bool,
+    ) {
+        let matched = JavaPattern::compile(source)
+            .ok()
+            .map(|java| java.matches("a"));
+        check!(matched == compiles.then_some(Ok(true)), "{source:?}");
+    }
+
+    /// The group a failed alternative set before the missing reference is
+    /// unset again for the alternative that matches: `replaceAll` on JDK
+    /// 21.0.12.
+    #[test]
+    fn a_missing_reference_leaves_no_group_behind() {
+        check!(pattern("(a)\\2|a").replace("aa", "[$1]", true) == Ok("[][]".to_owned()));
     }
 
     /// A large look-behind under the size limit still compiles. Each row is

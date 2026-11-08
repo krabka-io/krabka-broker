@@ -8,10 +8,7 @@
 use {
     crate::{
         broker::Broker,
-        codes::{
-            COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR,
-            UNKNOWN_SERVER_ERROR,
-        },
+        codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
         coordinator::{GroupCoordinator, bootstrap::OFFSETS_TOPIC},
         features::{STREAMS_VERSION, feature_enabled},
         task_util::AskError,
@@ -120,11 +117,28 @@ pub fn share_group_not_found_message(coordinator: &GroupCoordinator, group_id: &
     }
 }
 
-pub fn group_actor_error_code(error: AskError) -> i16 {
+/// The code of a request to a group actor that got no reply: an actor whose
+/// mailbox is closed is replaced, so the client retries, and an actor that
+/// took the request and stopped answers [`actor_stopped_code`].
+pub fn group_actor_error_code(broker: &Broker, group_id: &str, error: AskError) -> i16 {
     match error {
         AskError::Closed => COORDINATOR_LOAD_IN_PROGRESS,
-        AskError::Dropped => UNKNOWN_SERVER_ERROR,
+        AskError::Dropped => actor_stopped_code(broker, group_id),
     }
+}
+
+/// The code of a request that a group's actor dropped unanswered.
+///
+/// An actor drops the requests still in its mailbox when it stops: when this
+/// broker unloads the group's offsets partition, and after a failed write.
+/// Kafka's `CoordinatorRuntime` fails the operations of a shard that unloads
+/// with `NOT_COORDINATOR`, so the routing check runs again, and answers
+/// `NOT_COORDINATOR` once another broker leads the partition. A broker that
+/// still serves the group answers `COORDINATOR_NOT_AVAILABLE`, which the
+/// client retries, and the retry reaches a new actor built from the committed
+/// state of the group.
+pub fn actor_stopped_code(broker: &Broker, group_id: &str) -> i16 {
+    group_coordinator_error(broker, group_id).unwrap_or(COORDINATOR_NOT_AVAILABLE)
 }
 
 /// `true` for a value that Kafka's `Utils.throwIfEmptyString` refuses: one

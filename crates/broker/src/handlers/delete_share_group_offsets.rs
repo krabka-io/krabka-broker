@@ -25,10 +25,10 @@ use {
         error::BrokerError,
         features::share_groups_enabled,
         handlers::{
-            ApiVersion, ErrorResponse as _, RequestContext, acl_denied, group_coordinator_error,
-            share_group_not_found_message,
+            ApiVersion, ErrorResponse as _, RequestContext, acl_denied, group_actor_error_code,
+            group_coordinator_error, share_group_not_found_message,
         },
-        task_util::{AskError, ask},
+        task_util::ask,
     },
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::{
@@ -137,11 +137,8 @@ pub async fn handle(
     .await;
     let actor_result = match asked {
         Ok(actor_result) => actor_result,
-        Err(AskError::Closed) => return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None)),
-        Err(AskError::Dropped) => {
-            return Err(BrokerError::Share(
-                "share-group delete actor stopped".into(),
-            ));
+        Err(error) => {
+            return Ok(top_level(group_actor_error_code(broker, &gid, error), None));
         }
     };
     let outcomes = match actor_result {

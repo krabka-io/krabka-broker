@@ -34,6 +34,7 @@ use {
             },
         },
         error::BrokerError,
+        metadata_epoch::next_i32,
     },
     krabka_protocol::primitives::uuid::Uuid,
     std::{collections::HashMap, sync::Arc},
@@ -324,7 +325,7 @@ fn replayed_classic_state(state: &ClassicGroup) -> Result<ClassicGroup, BrokerEr
 /// failed with `error` after its record reached the log, so that the record
 /// may still commit; `None` when the write never reached the log. Take it
 /// before reverting `state`.
-pub(super) fn written_classic_state(
+fn written_classic_state(
     state: &ClassicGroup,
     error: &BrokerError,
 ) -> Option<Result<ClassicGroup, BrokerError>> {
@@ -335,7 +336,7 @@ pub(super) fn written_classic_state(
 /// Leave `written`, from [`written_classic_state`], as the respawn seed of
 /// `group`'s next actor. The caller's actor then stops, and the next
 /// one serves the group a reload of the log builds, with `group`'s offsets.
-pub(super) fn leave_written_classic_group(
+fn leave_written_classic_group(
     group: &mut CoordinatorGroup,
     written: Result<ClassicGroup, BrokerError>,
     coordinator: &GroupCoordinator,
@@ -347,6 +348,90 @@ pub(super) fn leave_written_classic_group(
         Err(error) => tracing::warn!(group_id = %group.group_id, %error,
             "classic actor could not rebuild the group it wrote"),
     }
+}
+
+/// A classic group's k2 write that failed, after [`persist_classic_or_revert`]
+/// restored the group from before the transition.
+pub(super) struct ClassicWriteFailure {
+    pub(super) error: BrokerError,
+    /// The group that a reload of the log builds when the write may still
+    /// commit, from [`written_classic_state`].
+    written: Option<Box<Result<ClassicGroup, BrokerError>>>,
+}
+
+impl ClassicWriteFailure {
+    /// `true` when the write reached the log and may still commit.
+    pub(super) fn may_commit(&self) -> bool { self.written.is_some() }
+
+    /// The actor's keep-running flag after the failure. A write that never
+    /// reached the log keeps the actor running on the restored group. One
+    /// that may still commit leaves the group it wrote as the respawn seed of
+    /// `group`'s next actor, and the actor stops: Kafka's
+    /// `CoordinatorRuntime` keeps the records of a write once they are in the
+    /// log, and a reload builds the group from them.
+    pub(super) fn keep_running(
+        self,
+        group: &mut CoordinatorGroup,
+        coordinator: &GroupCoordinator,
+    ) -> bool {
+        let Some(written) = self.written else {
+            return true;
+        };
+        leave_written_classic_group(group, *written, coordinator);
+        false
+    }
+}
+
+/// Persist the classic k2 snapshot of `state`, the group after a transition
+/// from `previous`. When the write fails, `state` is restored to `previous`.
+///
+/// # Errors
+///
+/// Returns the failure of the write, which says whether it may still commit.
+pub(super) async fn persist_classic_or_revert(
+    state: &mut ClassicGroup,
+    previous: &ClassicGroup,
+    offsets_log: &dyn OffsetsLog,
+) -> Result<(), ClassicWriteFailure> {
+    let Err(error) = flush_classic_metadata(state, offsets_log).await else {
+        return Ok(());
+    };
+    let written = written_classic_state(state, &error).map(Box::new);
+    state.clone_from(previous);
+    Err(ClassicWriteFailure { error, written })
+}
+
+/// Why a classic group that lost its last member could not persist its next
+/// generation.
+pub(super) enum EmptyGenerationFailure {
+    /// The generation id is at its limit, so there is no next generation.
+    Exhausted,
+    /// The write of the next generation failed.
+    Write(ClassicWriteFailure),
+}
+
+/// Bump the generation of `state`, a classic group that lost its last member
+/// in a transition from `previous`, and persist it, as Kafka's
+/// `completeClassicGroupJoin` writes an empty group under its next
+/// generation. On a failure `state` is restored to `previous`.
+///
+/// # Errors
+///
+/// Returns [`EmptyGenerationFailure::Exhausted`] when there is no next
+/// generation id, and the write's failure when it fails.
+pub(super) async fn persist_empty_generation(
+    state: &mut ClassicGroup,
+    previous: &ClassicGroup,
+    offsets_log: &dyn OffsetsLog,
+) -> Result<(), EmptyGenerationFailure> {
+    let Some(generation_id) = next_i32(state.generation_id) else {
+        state.clone_from(previous);
+        return Err(EmptyGenerationFailure::Exhausted);
+    };
+    state.generation_id = generation_id;
+    persist_classic_or_revert(state, previous, offsets_log)
+        .await
+        .map_err(EmptyGenerationFailure::Write)
 }
 
 /// Leave the consumer group that the log holds, with `group`'s offsets, as

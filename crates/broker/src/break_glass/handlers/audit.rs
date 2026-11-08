@@ -133,7 +133,8 @@ mod tests {
         assert2::{assert, check},
         krabka_audit::{
             AuditEndpoint, AuditEvent, AuditMode, AuditPrincipal, AuditRecord, AuditSink,
-            AuditStats, AuditWriter, AuditWriterParams, ChainState, LifecycleKind, Spool,
+            AuditStats, AuditWriter, AuditWriterParams, ChainState, LifecycleKind, OcsfVersion,
+            OcsfVersionSwitch, Spool,
         },
         krabka_units::prelude::{hours, mebibytes},
         std::{sync::Arc, time::Duration},
@@ -176,6 +177,7 @@ mod tests {
                 time_ms: 1,
             },
             &Broker::audit_product(),
+            OcsfVersion::V1,
         );
         let probe = tempfile::tempdir().expect("probe tempdir");
         let one = {
@@ -204,6 +206,7 @@ mod tests {
         let writer = AuditWriter::new(receiver, AuditWriterParams {
             sink: Arc::new(FailingSink),
             product: Broker::audit_product(),
+            ocsf_version: OcsfVersionSwitch::new(OcsfVersion::V1),
             signer: None,
             checkpoint_every_n: 0,
             checkpoint_every: hours(1),

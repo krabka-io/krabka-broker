@@ -61,15 +61,21 @@ struct Ports {
     advertised: String,
     listen: String,
     controller: String,
+    /// Holds the client and controller ports for the whole process, so no
+    /// other socket takes one between the scenarios that rebind them. Never
+    /// read.
+    _held: [support::HeldPort; 2],
 }
 
 fn ports() -> &'static Ports {
     crate::once_value!(Ports, {
-        let (client, controller) = (support::free_port(), support::free_port());
+        let held = [support::hold_port(), support::hold_port()];
+        let (client, controller) = (held[0].port(), held[1].port());
         Ports {
             advertised: format!("host.docker.internal:{client}"),
             listen: format!("0.0.0.0:{client}"),
             controller: format!("0.0.0.0:{controller}"),
+            _held: held,
         }
     })
 }

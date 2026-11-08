@@ -58,6 +58,7 @@ impl ClientCatalog {
         let KrabkaBroker {
             handle,
             dir: _directory,
+            inter_broker_port: _inter_broker_port,
         } = self.broker.expect("Krabka started");
         handle.shutdown().await;
     }

@@ -9,7 +9,7 @@
 use {
     crate::{
         AuditEventClass, AuditRecord, ChainState, Checkpoint, EpochMs, FileEd25519Signer,
-        HEADER_SEQ, ProductInfo, Seq, TrustedKeys, VerifyReport,
+        HEADER_SEQ, OcsfVersion, ProductInfo, Seq, TrustedKeys, VerifyReport,
         chain::ChainLink,
         test_support::{TestSigner, admin, denied, signer_with_key_id},
         verify_partition_dir,
@@ -77,11 +77,16 @@ impl AuditPartition {
         }
     }
 
-    /// Append `count` chained audit events.
+    /// Append `count` chained audit events, written below `krabka.version` 3.
     pub(super) fn write_events(&mut self, count: u64) {
+        self.write_events_at(count, OcsfVersion::V1);
+    }
+
+    /// Append `count` chained audit events in record `version`.
+    pub(super) fn write_events_at(&mut self, count: u64, version: OcsfVersion) {
         for _ in 0..count {
             self.clock += 1;
-            let record = AuditRecord::from_event(&admin(self.clock), &product());
+            let record = AuditRecord::from_event(&admin(self.clock), &product(), version);
             self.append_chained(record);
         }
     }
@@ -137,7 +142,7 @@ impl AuditPartition {
         match alteration {
             Alteration::Rewritten => {
                 self.stored[index].value =
-                    AuditRecord::from_event(&denied(self.clock), &product()).value;
+                    AuditRecord::from_event(&denied(self.clock), &product(), OcsfVersion::V1).value;
             }
             Alteration::Removed => {
                 self.stored.remove(index);

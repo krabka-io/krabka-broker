@@ -4,11 +4,11 @@ use {
         error::RemoteStorageError,
         metadata::RemoteLogSegmentMetadata,
         s3::{
-            S3RemoteStorage,
+            KeyPrefixForm, KeyPrefixGate, S3RemoteStorage,
             test_support::{
                 WORM_KEY_ID, WormAccess, WormArchive, memory_worm_archive, rsm, sample_data,
-                sample_metadata, seeded_blocking, stamped_metadata, worm_epoch, worm_rsm,
-                write_file,
+                sample_metadata, seeded_blocking, stamped_metadata, worm_config, worm_epoch,
+                worm_rsm, write_file,
             },
         },
         storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
@@ -260,6 +260,48 @@ async fn worm_copy_writes_a_manifest_next_to_the_segment() {
                 &manifest,
                 &signature.public_key.0
             ));
+        })
+        .call()
+        .await;
+}
+
+/// A WORM copy at the trimmed spelling writes every object, the manifest
+/// included, under the trimmed prefix, and the manifest names those keys.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worm_copy_writes_the_manifest_under_the_spelling_the_gate_selects() {
+    let keys = TempDir::new().unwrap();
+    let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some(" tier ".to_owned()))
+        .with_key_prefix_gate(KeyPrefixGate::new(KeyPrefixForm::Normalized))
+        .with_worm_unchecked(&worm_config(keys.path(), WormAccess::ReadWrite))
+        .unwrap();
+    let md = stamped_metadata()
+        .segment_id(uuid::Uuid::from_u128(57))
+        .call();
+    seeded_blocking()
+        .store(store)
+        .metadata(md)
+        .then(move |store, md| {
+            let manifest = read_manifest(&store, &md);
+            let named: Vec<&str> = manifest
+                .body
+                .objects
+                .iter()
+                .map(|object| object.key.as_str())
+                .collect();
+            let listed: Vec<String> = S3RemoteStorage::block_os(store.ops.list(None))
+                .unwrap()
+                .into_iter()
+                .map(|meta| meta.location.to_string())
+                .collect();
+            let dir = "tier/orders-0-AAAAAAAAAAAAAAAAAAAAAQ/";
+            check!(
+                store
+                    .segment_key(&md, MANIFEST_SUFFIX)
+                    .as_ref()
+                    .starts_with(dir)
+            );
+            check!(named.iter().all(|key| key.starts_with(dir)), "{named:?}");
+            check!(listed.iter().all(|key| key.starts_with(dir)), "{listed:?}");
         })
         .call()
         .await;

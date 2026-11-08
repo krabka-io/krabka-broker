@@ -12,11 +12,13 @@ mod support;
 
 use {
     crate::support::{
+        HeldPort,
         client::connect_with_context,
         discovery::named_topic_metadata,
         fetch::{
             FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
         },
+        hold_port,
         producer::{no_retry_acks_all_producer, producer_record},
         remove_container_with_volumes, topics,
     },
@@ -40,7 +42,6 @@ use {
     std::{
         collections::BTreeSet,
         env, fs,
-        net::TcpListener,
         process::{self, Command},
         time::{Duration, Instant},
     },
@@ -71,14 +72,6 @@ fn docker(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr),
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("ephemeral address")
-        .port()
 }
 
 fn metric_value(body: &str, name: &str) -> Option<f64> {
@@ -210,9 +203,12 @@ impl Drop for TinyFs {
 struct BrokerProcess {
     name: String,
     node_id: u32,
-    client_port: u16,
-    controller_port: u16,
-    metrics_port: u16,
+    /// The published host ports for the container's 9092, 9093 and 9404. Each
+    /// is held for as long as this lives, so no other socket takes it before
+    /// `docker run --publish` binds it.
+    client_port: HeldPort,
+    controller_port: HeldPort,
+    metrics_port: HeldPort,
     root: tempfile::TempDir,
 }
 
@@ -231,12 +227,14 @@ impl BrokerProcess {
         }
     }
 
-    fn bootstrap(&self) -> String { format!("127.0.0.1:{}", self.client_port) }
+    fn bootstrap(&self) -> String { format!("127.0.0.1:{}", self.client_port.port()) }
 
-    fn metrics_url(&self) -> String { format!("http://127.0.0.1:{}/metrics", self.metrics_port) }
+    fn metrics_url(&self) -> String {
+        format!("http://127.0.0.1:{}/metrics", self.metrics_port.port())
+    }
 
     fn advertised_controller(&self) -> String {
-        format!("host.docker.internal:{}", self.controller_port)
+        format!("host.docker.internal:{}", self.controller_port.port())
     }
 
     fn voter(&self) -> String {
@@ -297,7 +295,7 @@ impl BrokerProcess {
              [process]\n\
              roles = [\"controller\", \"broker\"]\n",
             id = self.node_id,
-            client = self.client_port,
+            client = self.client_port.port(),
         );
         fs::write(self.root.path().join("broker.toml"), config).expect("write broker config");
     }
@@ -305,9 +303,9 @@ impl BrokerProcess {
     fn run(&self, cluster_id: &str, primary: Option<&TinyFs>, extra: Option<&TinyFs>) {
         let root_mount = format!("{}:{ROOT}", self.root.path().display());
         let user = self.user();
-        let client = format!("{}:9092", self.client_port);
-        let controller = format!("{}:9093", self.controller_port);
-        let metrics = format!("{}:9404", self.metrics_port);
+        let client = format!("{}:9092", self.client_port.port());
+        let controller = format!("{}:9093", self.controller_port.port());
+        let metrics = format!("{}:9404", self.metrics_port.port());
         let broker_id = format!("--broker-id={}", self.node_id);
         let cluster_id = format!("--cluster-id={cluster_id}");
         let config = format!("--config-file={ROOT}/broker.toml");
@@ -394,9 +392,9 @@ impl Cluster {
             .map(|node_id| BrokerProcess {
                 name: format!("{stem}-broker-{node_id}"),
                 node_id,
-                client_port: free_port(),
-                controller_port: free_port(),
-                metrics_port: free_port(),
+                client_port: hold_port(),
+                controller_port: hold_port(),
+                metrics_port: hold_port(),
                 root: tempfile::TempDir::new().expect("broker root"),
             })
             .collect::<Vec<_>>();

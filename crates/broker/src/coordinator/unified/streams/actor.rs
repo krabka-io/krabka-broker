@@ -22,6 +22,8 @@
 //! still mint a `member_id` and advance their epoch, but the actor assigns no
 //! tasks.
 
+#[cfg(test)]
+use crate::task_util::spawn_dropping_mailbox;
 use {
     crate::{coordinator::unified::commit_validation_reply, time_util::sleep_until_opt},
     krabka_metadata::NodeId,
@@ -241,6 +243,18 @@ impl StreamsGroupActorHandle {
         Self {
             tx,
             owner,
+            _task: task,
+        }
+    }
+
+    /// A stand-in actor that takes every message and drops it unanswered, as
+    /// an actor does when it stops with requests still in its mailbox.
+    #[cfg(test)]
+    pub(crate) fn dropping_replies() -> Self {
+        let (tx, task) = spawn_dropping_mailbox();
+        Self {
+            tx,
+            owner: Arc::new(()),
             _task: task,
         }
     }

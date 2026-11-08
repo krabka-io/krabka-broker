@@ -1,8 +1,9 @@
 //! Segment deletion: the idempotent sweep of every key a copy could have
 //! written, and the archive backstop that refuses to issue a delete at all.
 //!
-//! The sweep issues one delete per artifact a copy could have written, and
-//! nothing else. A WORM archive never reaches the sweep, because a store that
+//! The sweep issues one delete per artifact a copy could have written, under
+//! each spelling of the prefix, and nothing else. A prefix with no stray
+//! characters has one spelling, so that is one delete per artifact. A WORM archive never reaches the sweep, because a store that
 //! is never asked cannot be talked into obliging.
 
 use {
@@ -15,7 +16,8 @@ use {
 };
 
 impl S3RemoteStorage {
-    /// Deletes every object of one segment: one request per artifact.
+    /// Deletes every object of one segment: one request per artifact and
+    /// spelling of the prefix.
     pub(super) fn delete_segment_objects(
         &self,
         metadata: &RemoteLogSegmentMetadata,
@@ -29,11 +31,13 @@ impl S3RemoteStorage {
                 key: self.log_key(metadata).to_string(),
             }));
         }
-        for key in segment_suffixes().map(|suffix| self.segment_key(metadata, suffix)) {
-            match Self::block_os(self.ops.delete(&key)) {
-                // Idempotent: deleting an absent object succeeds.
-                Ok(()) | Err(ObjectStoreError::NotFound(_)) => {}
-                Err(e) => return Err(e.into()),
+        for keys in segment_suffixes().map(|suffix| self.segment_keys(metadata, suffix)) {
+            for key in keys.all() {
+                match Self::block_os(self.ops.delete(key)) {
+                    // Idempotent: deleting an absent object succeeds.
+                    Ok(()) | Err(ObjectStoreError::NotFound(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
         Ok(())
@@ -46,9 +50,13 @@ mod tests {
     use {
         super::{ObjectOps, RemoteStorageError, S3RemoteStorage, WormError},
         crate::{
-            s3::test_support::{
-                CountingRsm, WormArchive, counting_rsm, memory_worm_archive, rsm, sample_data,
-                sample_metadata, seeded_blocking, stamped_metadata,
+            s3::{
+                KeyPrefixForm, KeyPrefixGate,
+                test_support::{
+                    CountingRsm, WormArchive, counting_rsm, memory_worm_archive,
+                    prefixed_counting_rsm, rsm, sample_data, sample_metadata, seeded_blocking,
+                    stamped_metadata,
+                },
             },
             storage_manager::{IndexType, RemoteStorageManager},
             test_support::TransactionIndex,
@@ -98,6 +106,36 @@ mod tests {
 
                 // Six requests, one per artifact: no second layout to sweep.
                 check!(counter.attempts(StoreOp::Delete) - before == 6);
+                check!(all_keys(&store) == Vec::<String>::new());
+            })
+            .call()
+            .await;
+    }
+
+    /// Under a padded prefix the sweep deletes each artifact under both
+    /// spellings, and leaves nothing of a segment written under either.
+    #[yare::parameterized(
+        written_as_configured = { KeyPrefixForm::AsConfigured },
+        written_normalized = { KeyPrefixForm::Normalized },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+    async fn padded_prefix_delete_sweeps_both_spellings(written: KeyPrefixForm) {
+        let gate = KeyPrefixGate::new(written);
+        let CountingRsm { store, counter } = prefixed_counting_rsm().prefix(" tier ").call();
+        let store = store.with_key_prefix_gate(gate.clone());
+        let md = sample_metadata(uuid::Uuid::from_u128(17));
+        seeded_blocking()
+            .store(store)
+            .metadata(md)
+            .then(move |store, md| {
+                gate.set(match written {
+                    KeyPrefixForm::AsConfigured => KeyPrefixForm::Normalized,
+                    KeyPrefixForm::Normalized => KeyPrefixForm::AsConfigured,
+                });
+                let before = counter.attempts(StoreOp::Delete);
+                store.delete_log_segment_data(&md).unwrap();
+
+                check!(counter.attempts(StoreOp::Delete) - before == 12);
                 check!(all_keys(&store) == Vec::<String>::new());
             })
             .call()

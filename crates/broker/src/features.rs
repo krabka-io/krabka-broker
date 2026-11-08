@@ -309,7 +309,7 @@ mod tests {
     }
 
     /// The whole supported-feature table a default node advertises: the
-    /// registry, with the krabka-owned `krabka.version` at [0, 1] after Kafka's
+    /// registry, with the krabka-owned `krabka.version` at [0, 3] after Kafka's
     /// own features, which keep their ranges.
     #[test]
     fn supported_features_include_krabka_version() {
@@ -332,7 +332,7 @@ mod tests {
                     feature(STREAMS_VERSION, 0, 1),
                     feature(ELR_VERSION, 0, 1),
                     feature("kraft.version", 0, 1),
-                    feature("krabka.version", 0, 2),
+                    feature("krabka.version", 0, 3),
                 ]
         );
     }

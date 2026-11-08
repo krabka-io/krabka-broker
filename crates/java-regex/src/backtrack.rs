@@ -153,6 +153,9 @@ enum Inst {
         group: usize,
         fold: Option<BackrefFold>,
     },
+    /// Never matches: a reference to a group the pattern does not have, which
+    /// Java compiles and which never matches there.
+    Fail,
     Assert(Check),
     /// The block matches here, or with `behind` it matches text that ends
     /// here and starts where [`Behind`] says, or with `negated` it does not.
@@ -530,6 +533,7 @@ impl Program {
         let mut compiler = Compiler {
             blocks: vec![Vec::new()],
             slot_count: 2 * groups,
+            groups,
             next_group: 1,
             folds: folds.iter(),
             linebreak_atoms: linebreak_atoms.iter(),
@@ -620,6 +624,8 @@ impl Program {
 struct Compiler<'a> {
     blocks: Vec<Vec<Inst>>,
     slot_count: usize,
+    /// The groups of the pattern, group 0 included.
+    groups: usize,
     /// The number of the next group, in the order the groups open.
     next_group: usize,
     /// The folds of the references under a case flag not reached yet.
@@ -749,6 +755,10 @@ impl Compiler<'_> {
                 } else {
                     None
                 };
+                if *group >= self.groups {
+                    code.push(Inst::Fail);
+                    return Some(());
+                }
                 code.push(Inst::Backref {
                     group: *group,
                     fold,
@@ -1135,7 +1145,7 @@ impl<'a> Machine<'a> {
                     }
                 }
                 Inst::Match if end.is_none_or(|end| end == pos) => return Ok(Some(pos)),
-                Inst::Match => None,
+                Inst::Match | Inst::Fail => None,
             };
             (pc, pos) = match next {
                 Some(next) => next,

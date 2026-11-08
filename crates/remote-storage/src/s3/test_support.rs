@@ -4,7 +4,7 @@
 
 pub(super) use crate::test_support::{sample_data, sample_metadata, write_file};
 use {
-    super::S3RemoteStorage,
+    super::{KeyPrefixForm, KeyPrefixGate, S3RemoteStorage},
     crate::{
         metadata::RemoteLogSegmentMetadata,
         storage_manager::RemoteStorageManager,
@@ -27,6 +27,8 @@ pub(super) fn rsm(prefix: Option<&str>) -> S3RemoteStorage {
 }
 
 /// A remote storage over a counting store, and the store.
+///
+/// The storage's prefix is `prefix`, written in the spelling `form` selects.
 pub(super) struct CountingRsm {
     pub(super) store: S3RemoteStorage,
     pub(super) counter: Arc<FaultInjectingStore>,
@@ -35,13 +37,22 @@ pub(super) struct CountingRsm {
 /// [`rsm`] over a store that counts the requests reaching it, so a test can
 /// assert how many an operation issues rather than only what it leaves behind.
 /// The policy injects no faults; only the counters are of interest.
-pub(super) fn counting_rsm() -> CountingRsm {
+pub(super) fn counting_rsm() -> CountingRsm { prefixed_counting_rsm().call() }
+
+/// [`counting_rsm`] under a configured prefix, written in the spelling `form`
+/// selects.
+#[bon::builder]
+pub(super) fn prefixed_counting_rsm(
+    #[builder(into)] prefix: Option<String>,
+    #[builder(default)] form: KeyPrefixForm,
+) -> CountingRsm {
     let counter = Arc::new(FaultInjectingStore::new(
         Arc::new(InMemory::new()),
         FaultPolicy::none(),
     ));
     CountingRsm {
-        store: S3RemoteStorage::with_store(Arc::<FaultInjectingStore>::clone(&counter), None),
+        store: S3RemoteStorage::with_store(Arc::<FaultInjectingStore>::clone(&counter), prefix)
+            .with_key_prefix_gate(KeyPrefixGate::new(form)),
         counter,
     }
 }
