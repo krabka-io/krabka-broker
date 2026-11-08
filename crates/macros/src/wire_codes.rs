@@ -63,10 +63,10 @@ struct GuardRow<'a>(&'a Code);
 impl ToTokens for GuardRow<'_> {
     fn to_tokens(&self, output: &mut TokenStream) {
         let Code { name, message, .. } = self.0;
-        let message = match message {
-            Some(message) => moxy::template! { Some({{ message }}) },
-            None => moxy::template! { None },
-        };
+        let message = message.as_ref().map_or_else(
+            || moxy::template! { None },
+            |message| moxy::template! { Some({{ message }}) },
+        );
         output.extend(moxy::template! {
             NamedCode { name: stringify!({{ name }}), code: {{ name }}, message: {{ message }} },
         });

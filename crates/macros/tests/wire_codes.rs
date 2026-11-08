@@ -13,9 +13,9 @@ mod codes {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) struct KafkaError {
-        pub(super) name: &'static str,
-        pub(super) message: &'static str,
+    pub struct KafkaError {
+        pub name: &'static str,
+        pub message: &'static str,
     }
 
     krabka_macros::wire_codes! {
@@ -36,7 +36,7 @@ mod codes {
         }
     }
 
-    pub(super) const fn lookup(code: i16) -> Option<KafkaError> { declared_kafka_error(code) }
+    pub const fn lookup(code: i16) -> Option<KafkaError> { declared_kafka_error(code) }
 
     #[test]
     fn private_guard_tables_keep_every_name_value_and_message_in_declared_order() {
