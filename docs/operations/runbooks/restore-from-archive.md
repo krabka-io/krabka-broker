@@ -134,7 +134,9 @@ step 3, from a record kept outside the cluster.
    read, which is usually the prefix or the credentials. `5` is an integrity
    failure in the archive, and a second run against the same archive fails the
    same way; `--continue-on-corrupt` turns a damaged segment into a skipped one,
-   and the report then names exactly what was skipped. `6` is a target that
+   and the report then names exactly what was skipped. The flag never skips a
+   segment the archive could not be read for: a throttled or unreachable store
+   still exits `4`, and a re-run once the store answers reads it. `6` is a target that
    could not be written, and a different target may work.
 
 3. **Boot a broker** on the restored directory. It is an ordinary krabka data

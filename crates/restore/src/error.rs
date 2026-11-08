@@ -226,11 +226,53 @@ impl RestoreError {
             Self::Format { .. } | Self::Log(_) | Self::Io(_) => EXIT_MATERIALIZE,
         }
     }
+
+    /// Whether this error means a segment's archived copy is damaged, which is
+    /// what `--continue-on-corrupt` skips.
+    ///
+    /// Damage is a batch that fails its checksum or ends early, a copy that is
+    /// missing an artifact or fails an integrity check, and an artifact that
+    /// the listing named but the archive no longer holds or holds at a size no
+    /// real artifact has. A failure to read the archive is not damage: the
+    /// segment may be intact, and a later run can read it. Neither is an
+    /// authenticity failure, nor a failure on the target.
+    #[must_use]
+    pub fn is_segment_damage(&self) -> bool {
+        matches!(
+            self,
+            Self::ChecksumMismatch { .. }
+                | Self::TruncatedSegment { .. }
+                | Self::TornCopy { .. }
+                | Self::Integrity(_)
+                | Self::Records(_)
+                | Self::ObjectStore(
+                    ObjectStoreError::NotFound(_) | ObjectStoreError::TooLarge { .. }
+                )
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::check};
+
+    /// `--continue-on-corrupt` skips damage only: a segment the archive could
+    /// not be read for, or one that fails authentication, stops the restore.
+    #[yare::parameterized(
+        checksum = { RestoreError::ChecksumMismatch { key: "seg.log".into(), position: 0, expected: 1, computed: 2 }, true },
+        torn_copy = { RestoreError::TornCopy { topic: "orders".into(), partition: 0, segment_id: Uuid::nil(), artifact: ".index".into() }, true },
+        lost_artifact = { RestoreError::ObjectStore(ObjectStoreError::NotFound("seg.log".into())), true },
+        oversized_artifact = { RestoreError::ObjectStore(ObjectStoreError::TooLarge { key: "seg.log".into(), size: 2, max_bytes: 1 }), true },
+        unavailable_archive = { RestoreError::ObjectStore(ObjectStoreError::Unavailable("503 SlowDown".into())), false },
+        refused_archive = { RestoreError::ObjectStore(ObjectStoreError::Backend("403 AccessDenied".into())), false },
+        changed_artifact = { RestoreError::ObjectStore(ObjectStoreError::Precondition { key: "seg.log".into(), reason: "etag".into() }), false },
+        unavailable_remote_storage = { RestoreError::RemoteStorage(RemoteStorageError::Unavailable("503".into())), false },
+        authenticity = { RestoreError::Authenticity { reason: "digest".into() }, false },
+        target_io = { RestoreError::Io(Error::other("disk full")), false },
+    )]
+    fn continue_on_corrupt_skips_only_damage(error: RestoreError, damage: bool) {
+        assert2::check!(error.is_segment_damage() == damage, "{error}");
+    }
 
     #[test]
     fn exit_codes_are_distinct_and_documented() {
