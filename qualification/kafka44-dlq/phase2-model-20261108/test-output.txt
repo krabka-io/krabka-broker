@@ -10,4 +10,3 @@ test share_partition::state::dlq_model::dlq_model_detects_lost_recovery_mutant .
 test share_partition::state::dlq_model::dlq_archiving_fault_schedules ... ok
 
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 9149 filtered out; finished in 0.00s
-

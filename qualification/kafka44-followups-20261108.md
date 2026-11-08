@@ -1,0 +1,22 @@
+# Kafka 4.4 follow-up integration (2026-11-08)
+
+Base: `234dadc77`. Local branch: `finish/kafka44-qualified-followups`.
+This integrates recovered worker artifacts; it does not graduate universal parity.
+No remote publication, merge, release or production change was performed.
+
+## Integrated work
+
+- Topology: directory fsync after namespace mutations, retry semantics, stale queued-push regressions. [Receipt](streams-storage-durability-20261108/README.md): 5 filesystem and 29 actor tests passed again during recovery using the exact source/binary hashes; syscall ordering and directory-sync EIO trace included.
+- DLQ: phase-two persistence crash schedules using the production acquisition-state machine. [Receipt](kafka44-dlq/phase2-model-20261108/receipt.json): 4 tests passed again during recovery; normal graph 128 unique/185 generated states. Lost-recovery mutant is detected. Forty historical ordering/RF3 denial artifact hashes revalidated. Updated stale summary to respect later ordering evidence.
+- Assignors: [invalid output](streams-assignor-invalid-20261108/README.md), [RF3 movement](streams-assignor-movement-20261108/README.md), and [ACL faults](streams-assignor-acl-20261108/README.md). All 54 retained scenario rows passed their characterization expectations and source hashes match receipts. Live brokers were not rerun during recovery.
+- [JVM extension assessment](native-extension-assessment-20261108/README.md): released signatures and native SPI boundaries; no JVM loader claimed.
+
+## Remaining work and decisions
+
+1. Kafka accepts an unknown assignment owner while native rejects it without partial state. This is a measured behavioral difference, not a parity pass. Validation remains intact.
+2. Arbitrary Java/JAR loading requires a separately designed JVM/worker bridge, type conversion, lifecycle, cancellation and failure handling. Native callbacks are not that bridge.
+3. DLQ phase-two fault schedules are model evidence, not distributed persister-failure or crash-during-ARCHIVING evidence. Existing RF3 denial covers completed writes and clean restart. No exactly-once guarantee.
+4. Topology directory sync is not a physical power-cut test or distributed fencing. The backend has no ownership generation/CAS; concurrent old/new owners remain outside the supported host contract.
+5. Arbitrary fault schedules, inconsistent plugins across nodes and active-member plugin-removal restart remain unqualified.
+
+The combined tree was assembled without conflicts. Checks are lane-scoped; no combined full broker suite or workspace Clippy run is claimed. The retained base is intentionally pinned, not silently rebased onto a moving remote main.
