@@ -26,7 +26,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
     krabka_protocol::records::{Record, RecordBatch},
-    std::sync::{Arc, atomic::Ordering},
+    std::sync::Arc,
     tokio::{
         sync::{Mutex, Notify},
         time::{Instant, sleep_until, timeout},
@@ -246,8 +246,7 @@ impl ShareCoordinator {
 
     /// Whether `part` leads on this broker at the leader epoch of `term`.
     pub(super) fn leads(&self, part: &Partition, term: Term) -> bool {
-        part.current_leader.load(Ordering::Acquire) == self.node_id.0
-            && part.current_leader_epoch.load(Ordering::Acquire) == term.leader_epoch
+        part.is_leader_at(self.node_id, term.leader_epoch)
     }
 
     /// Waits until the high watermark of the state partition of `term`
@@ -331,8 +330,7 @@ impl ShareCoordinator {
                 .iter()
                 .filter(|e| {
                     let key = e.key();
-                    self.state_partition_for(&key.group, &key.topic_id, key.partition)
-                        == Some(state_partition)
+                    self.state_partition_for(key.as_key_ref()) == Some(state_partition)
                 })
                 .map(|e| Arc::clone(e.value()))
                 .collect();

@@ -82,105 +82,34 @@ const REQUEST_TIMEOUT_MS: i32 = 30_000;
 /// `DefaultAutoTopicCreationManager`.
 const ERROR_CACHE_CAPACITY: usize = 1_000;
 
-/// One of Kafka's `Errors` entries: the code, `Errors.name()` and
-/// `Errors.message()`.
-struct KafkaError {
-    code: i16,
-    name: &'static str,
-    message: &'static str,
-}
-
-/// Kafka's `Errors` entries for the codes that a `CreateTopics` answer can
-/// carry: the code, `Errors.name()` and `Errors.message()`, from `Errors.java`
-/// of Kafka 4.3.1. The first entry is the fallback of `Errors.forCode` for a
-/// code that is not in the table.
-const CREATE_TOPICS_ERRORS: [KafkaError; 15] = [
-    KafkaError {
-        code: codes::UNKNOWN_SERVER_ERROR,
-        name: "UNKNOWN_SERVER_ERROR",
-        message: "The server experienced an unexpected error when processing the request.",
-    },
-    KafkaError {
-        code: codes::REQUEST_TIMED_OUT,
-        name: "REQUEST_TIMED_OUT",
-        message: "The request timed out.",
-    },
-    KafkaError {
-        code: codes::INVALID_TOPIC_EXCEPTION,
-        name: "INVALID_TOPIC_EXCEPTION",
-        message: "The request attempted to perform an operation on an invalid topic.",
-    },
-    KafkaError {
-        code: codes::TOPIC_AUTHORIZATION_FAILED,
-        name: "TOPIC_AUTHORIZATION_FAILED",
-        message: "Topic authorization failed.",
-    },
-    KafkaError {
-        code: codes::CLUSTER_AUTHORIZATION_FAILED,
-        name: "CLUSTER_AUTHORIZATION_FAILED",
-        message: "Cluster authorization failed.",
-    },
-    KafkaError {
-        code: codes::UNSUPPORTED_VERSION,
-        name: "UNSUPPORTED_VERSION",
-        message: "The version of API is not supported.",
-    },
-    KafkaError {
-        code: codes::TOPIC_ALREADY_EXISTS,
-        name: "TOPIC_ALREADY_EXISTS",
-        message: "Topic with this name already exists.",
-    },
-    KafkaError {
-        code: codes::INVALID_PARTITIONS,
-        name: "INVALID_PARTITIONS",
-        message: "Number of partitions is below 1.",
-    },
-    KafkaError {
-        code: codes::INVALID_REPLICATION_FACTOR,
-        name: "INVALID_REPLICATION_FACTOR",
-        message: "Replication factor is below 1 or larger than the number of available brokers.",
-    },
-    KafkaError {
-        code: codes::INVALID_REPLICA_ASSIGNMENT,
-        name: "INVALID_REPLICA_ASSIGNMENT",
-        message: "Replica assignment is invalid.",
-    },
-    KafkaError {
-        code: codes::INVALID_CONFIG,
-        name: "INVALID_CONFIG",
-        message: "Configuration is invalid.",
-    },
-    KafkaError {
-        code: codes::NOT_CONTROLLER,
-        name: "NOT_CONTROLLER",
-        message: "This is not the correct controller for this cluster.",
-    },
-    KafkaError {
-        code: codes::INVALID_REQUEST,
-        name: "INVALID_REQUEST",
-        message: "This most likely occurs because of a request being malformed by the client library or \
-         the message was sent to an incompatible broker. See the broker logs for more details.",
-    },
-    KafkaError {
-        code: codes::POLICY_VIOLATION,
-        name: "POLICY_VIOLATION",
-        message: "Request parameters do not satisfy the configured policy.",
-    },
-    KafkaError {
-        code: codes::THROTTLING_QUOTA_EXCEEDED,
-        name: "THROTTLING_QUOTA_EXCEEDED",
-        message: "The throttling quota has been exceeded.",
-    },
+/// The codes that a `CreateTopics` answer can carry, the ones this module
+/// names and logs by their own `Errors` entry.
+const CREATE_TOPICS_CODES: [i16; 14] = [
+    codes::REQUEST_TIMED_OUT,
+    codes::INVALID_TOPIC_EXCEPTION,
+    codes::TOPIC_AUTHORIZATION_FAILED,
+    codes::CLUSTER_AUTHORIZATION_FAILED,
+    codes::UNSUPPORTED_VERSION,
+    codes::TOPIC_ALREADY_EXISTS,
+    codes::INVALID_PARTITIONS,
+    codes::INVALID_REPLICATION_FACTOR,
+    codes::INVALID_REPLICA_ASSIGNMENT,
+    codes::INVALID_CONFIG,
+    codes::NOT_CONTROLLER,
+    codes::INVALID_REQUEST,
+    codes::POLICY_VIOLATION,
+    codes::THROTTLING_QUOTA_EXCEEDED,
 ];
 
-/// Kafka's `Errors.forCode(code)`: the name and the default message of
-/// `code`, or those of `UNKNOWN_SERVER_ERROR` for a code that is not in
-/// [`CREATE_TOPICS_ERRORS`].
-fn kafka_error(code: i16) -> &'static KafkaError {
-    CREATE_TOPICS_ERRORS
-        .iter()
-        .find(|known| known.code == code)
-        .unwrap_or(&CREATE_TOPICS_ERRORS[0])
+/// The code whose `Errors` entry this module reads for `code`: `code` itself
+/// if a `CreateTopics` answer can carry it, and `UNKNOWN_SERVER_ERROR`, the
+/// fallback of `Errors.forCode`, for any other.
+fn create_topics_error(code: i16) -> i16 {
+    if CREATE_TOPICS_CODES.contains(&code) {
+        code
+    } else {
+        codes::UNKNOWN_SERVER_ERROR
+    }
 }
 
 /// The broker's auto topic creation.
@@ -439,7 +368,9 @@ impl AutoTopicCreation {
                         .error_message
                         .clone()
                         .filter(|message| !message.is_empty())
-                        .unwrap_or_else(|| kafka_error(topic.error_code).message.to_owned());
+                        .unwrap_or_else(|| {
+                            codes::default_message(create_topics_error(topic.error_code)).to_owned()
+                        });
                     tracing::debug!(
                         topic = %topic.name,
                         "Cached topic creation error for {}: {message}",
@@ -510,7 +441,7 @@ fn log_failed_rows(response: &CreateTopicsResponse) {
         .iter()
         .filter(|topic| topic.error_code != codes::NONE)
     {
-        let error_name = kafka_error(topic.error_code).name;
+        let error_name = codes::error_name(create_topics_error(topic.error_code));
         tracing::warn!(
             topic = %topic.name,
             "Auto topic creation failed for {} with error '{error_name}': {}",

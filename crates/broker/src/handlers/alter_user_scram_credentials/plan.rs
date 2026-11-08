@@ -257,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_emits_one_record_per_success_and_is_retry_stable() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
         };
@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_duplicate_username_across_upsertion_mechanisms_returns_one_error_row() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] allow_all;
             ready controller_leader;
@@ -320,7 +320,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_duplicate_username_between_deletion_and_upsertion_returns_one_error_row() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
             ready controller_leader;
@@ -346,7 +346,7 @@ mod tests {
                     .is_some()
             })
             .await;
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
@@ -375,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_duplicate_username_after_missing_deletion_preserves_resource_not_found() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker] allow_all;
             ready controller_leader;

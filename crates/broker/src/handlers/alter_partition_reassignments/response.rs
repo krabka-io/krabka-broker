@@ -149,15 +149,18 @@ mod tests {
         let req = request().topic("payments").partition_index(8).call();
         for case in submit_not_controller_rows() {
             let message = case.error_message.to_owned();
-            let expected = krabka_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
-                allow_replication_factor_change: true,
-                error_code: codes::NOT_CONTROLLER,
-                error_message: Some(message.clone()),
-                responses: vec![krabka_macros::tagged_wire!(ReassignableTopicResponse {
-                    name: "payments".to_owned(),
-                    partitions: vec![err_row(8, codes::NOT_CONTROLLER, message)],
-                })],
-            });
+            let expected =
+                krabka_broker_macros::unthrottled_wire!(AlterPartitionReassignmentsResponse {
+                    allow_replication_factor_change: true,
+                    error_code: codes::NOT_CONTROLLER,
+                    error_message: Some(message.clone()),
+                    responses: vec![krabka_broker_macros::tagged_wire!(
+                        ReassignableTopicResponse {
+                            name: "payments".to_owned(),
+                            partitions: vec![err_row(8, codes::NOT_CONTROLLER, message)],
+                        }
+                    )],
+                });
             check!(
                 not_controller_response(&req, &(case.error)(), case.known_leader) == Some(expected),
                 "{}",
@@ -184,7 +187,7 @@ mod tests {
     #[test]
     fn row_builders_preserve_non_default_fields() {
         let ok = ok_row(7);
-        let expected_ok = krabka_macros::tagged_wire!(ReassignablePartitionResponse {
+        let expected_ok = krabka_broker_macros::tagged_wire!(ReassignablePartitionResponse {
             partition_index: 7,
             error_code: 0,
             error_message: None,
@@ -192,7 +195,7 @@ mod tests {
         assert!(ok == expected_ok);
 
         let err = err_row(8, UNKNOWN_TOPIC_OR_PARTITION, "missing partition".into());
-        let expected_err = krabka_macros::tagged_wire!(ReassignablePartitionResponse {
+        let expected_err = krabka_broker_macros::tagged_wire!(ReassignablePartitionResponse {
             partition_index: 8,
             error_code: UNKNOWN_TOPIC_OR_PARTITION,
             error_message: Some("missing partition".into()),

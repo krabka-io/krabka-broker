@@ -94,12 +94,17 @@ async fn initialize_then_summary() {
     lead_all(&coord).await;
 
     coord
-        .initialize(&image_with_topic(TOPIC, 1), "g", TOPIC, 0, 5, Offset(100))
+        .initialize(
+            &image_with_topic(TOPIC, 1),
+            ShareKeyRef::new("g", TOPIC, 0),
+            5,
+            Offset(100),
+        )
         .await
         .unwrap();
 
     let summary = coord
-        .read_summary_checked(&image_with_topic(TOPIC, 1), "g", TOPIC, 0)
+        .read_summary_checked(&image_with_topic(TOPIC, 1), ShareKeyRef::new("g", TOPIC, 0))
         .await;
     assert!(
         summary
@@ -133,14 +138,21 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             let partition = registry
                 .get(
                     SHARE_STATE_TOPIC,
-                    coord.state_partition_for("g", &TOPIC, 0).unwrap(),
+                    coord
+                        .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
+                        .unwrap(),
                 )
                 .expect("state partition is open");
             // The first request reaches its append while the logical key is
             // still absent. Pause that append at the metadata transition seam.
             let transition = partition.replication_target.write().await;
-            let first = coord.initialize(&image, "g", TOPIC, 0, 2, Offset(10));
-            let next = coord.initialize(&image, "g", TOPIC, 0, next_epoch, Offset(20));
+            let first = coord.initialize(&image, ShareKeyRef::new("g", TOPIC, 0), 2, Offset(10));
+            let next = coord.initialize(
+                &image,
+                ShareKeyRef::new("g", TOPIC, 0),
+                next_epoch,
+                Offset(20),
+            );
             tokio::pin!(first, next);
             tokio::select! {
                 biased;
@@ -184,17 +196,24 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
                     delivery_complete_count: 0,
                 }
             };
-            assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
-            let snapshots: Vec<_> =
-                logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0).unwrap())
-                    .into_iter()
-                    .filter_map(|record| match record.logged {
-                        Logged::Snapshot(snapshot) => {
-                            Some((snapshot.snapshot_epoch, snapshot.state_epoch))
-                        }
-                        _ => None,
-                    })
-                    .collect();
+            assert!(
+                coord
+                    .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+                    .await
+                    == Ok(Some(expected))
+            );
+            let snapshots: Vec<_> = logged_records(
+                &coord,
+                coord
+                    .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
+                    .unwrap(),
+            )
+            .into_iter()
+            .filter_map(|record| match record.logged {
+                Logged::Snapshot(snapshot) => Some((snapshot.snapshot_epoch, snapshot.state_epoch)),
+                _ => None,
+            })
+            .collect();
             let expected_snapshots = if next_epoch == 1 {
                 vec![(0, 2)]
             } else {
@@ -202,7 +221,12 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             };
             assert!(snapshots == expected_snapshots);
             coord.reload_all_partitions_for_test().await;
-            assert!(coord.read_summary_checked(&image, "g", TOPIC, 0).await == Ok(Some(expected)));
+            assert!(
+                coord
+                    .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+                    .await
+                    == Ok(Some(expected))
+            );
             let entry = coord.entry(key).expect("state replayed");
             assert!(entry.lock().await.fence_state_epoch == expected.state_epoch);
         }
@@ -228,12 +252,14 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
 
     check!(
         coord
-            .initialize(&image, &longest, TOPIC, 0, 5, Offset(100))
+            .initialize(&image, ShareKeyRef::new(&longest, TOPIC, 0), 5, Offset(100))
             .await
             == Ok(())
     );
     check!(
-        coord.read_summary_checked(&image, &longest, TOPIC, 0).await
+        coord
+            .read_summary_checked(&image, ShareKeyRef::new(&longest, TOPIC, 0))
+            .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 5,
                 leader_epoch: 0,
@@ -241,10 +267,20 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
                 delivery_complete_count: 0
             }))
     );
-    check!(coord.delete(&image, &longest, TOPIC, 0).await == Ok(()));
+    check!(
+        coord
+            .delete(&image, ShareKeyRef::new(&longest, TOPIC, 0))
+            .await
+            == Ok(())
+    );
 
     let refused = coord
-        .initialize(&image, &too_long, TOPIC, 0, 5, Offset(100))
+        .initialize(
+            &image,
+            ShareKeyRef::new(&too_long, TOPIC, 0),
+            5,
+            Offset(100),
+        )
         .await;
     check!(
         refused
@@ -255,11 +291,19 @@ async fn a_group_id_over_32767_bytes_is_not_initialized() {
     );
     check!(
         coord
-            .read_summary_checked(&image, &too_long, TOPIC, 0)
+            .read_summary_checked(&image, ShareKeyRef::new(&too_long, TOPIC, 0))
             .await
             == Ok(None)
     );
 }
+
+/// The summary of the state that [`seeded`] stores.
+const SEEDED_SUMMARY: ShareStateSummary = ShareStateSummary {
+    state_epoch: 2,
+    leader_epoch: 3,
+    start_offset: Offset(10),
+    delivery_complete_count: 4,
+};
 
 /// A coordinator with stored state, and the image it runs over.
 struct Seeded {
@@ -281,26 +325,30 @@ async fn seeded(dir: &Path, trunk: bool) -> Seeded {
     let image = image_with_topic(TOPIC, 2);
     let wide = image_with_topic(TOPIC, 3);
     coord
-        .initialize(&wide, "g", TOPIC, 0, 2, Offset(10))
+        .initialize(&wide, ShareKeyRef::new("g", TOPIC, 0), 2, Offset(10))
         .await
         .unwrap();
     coord
-        .initialize(&wide, "g", TOPIC, 2, 2, Offset(10))
+        .initialize(&wide, ShareKeyRef::new("g", TOPIC, 2), 2, Offset(10))
         .await
         .unwrap();
-    coord.read(&image, "g", TOPIC, 0, 3).await.unwrap();
     coord
-        .write(&image, "g", TOPIC, 0, share_write((2, 3), (10, 4), vec![]))
+        .read(&image, ShareKeyRef::new("g", TOPIC, 0), 3)
+        .await
+        .unwrap();
+    coord
+        .write(
+            &image,
+            ShareKeyRef::new("g", TOPIC, 0),
+            share_write((2, 3), (10, 4), vec![]),
+        )
         .await
         .unwrap();
     assert!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await
-            == Ok(Some(ShareStateSummary {
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: Offset(10),
-                delivery_complete_count: 4
-            }))
+        coord
+            .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+            .await
+            == Ok(Some(SEEDED_SUMMARY))
     );
     Seeded { coord, image }
 }
@@ -424,7 +472,11 @@ async fn read_fences_and_persists_the_leader_epoch() {
             let dir = tempdir().unwrap();
             let Seeded { coord, image } = seeded(dir.path(), trunk).await;
             let read = coord
-                .read(&image, "g", TOPIC, partition, leader_epoch)
+                .read(
+                    &image,
+                    ShareKeyRef::new("g", TOPIC, partition),
+                    leader_epoch,
+                )
                 .await
                 .map(|st| ReadSummary {
                     state_epoch: st.state_epoch,
@@ -435,16 +487,16 @@ async fn read_fences_and_persists_the_leader_epoch() {
                 let written = coord
                     .write(
                         &image,
-                        "g",
-                        TOPIC,
-                        partition,
+                        ShareKeyRef::new("g", TOPIC, partition),
                         share_write((2, 3), (10, 4), vec![]),
                     )
                     .await;
                 check!(written == expected_write, "row {index}, trunk {trunk}");
             }
             coord.reload_all_partitions_for_test().await;
-            let summary = coord.read_summary_checked(&image, "g", TOPIC, 0).await;
+            let summary = coord
+                .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+                .await;
             check!(
                 summary.map(|s| s.map(|s| s.leader_epoch)) == Ok(Some(reloaded_leader_epoch)),
                 "row {index}, trunk {trunk}"
@@ -458,10 +510,12 @@ async fn read_fences_and_persists_the_leader_epoch() {
 async fn failed_read_append_changes_no_state() {
     let dir = tempdir().unwrap();
     let Seeded { coord, image } = seeded(dir.path(), false).await;
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
+    let state_partition = coord
+        .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
+        .unwrap();
     coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
 
-    let read = coord.read(&image, "g", TOPIC, 0, 8).await;
+    let read = coord.read(&image, ShareKeyRef::new("g", TOPIC, 0), 8).await;
     assert!(
         read == Err(ShareStateError::Operation {
             code: codes::COORDINATOR_NOT_AVAILABLE,
@@ -469,13 +523,10 @@ async fn failed_read_append_changes_no_state() {
         })
     );
     assert!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await
-            == Ok(Some(ShareStateSummary {
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: Offset(10),
-                delivery_complete_count: 4
-            }))
+        coord
+            .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+            .await
+            == Ok(Some(SEEDED_SUMMARY))
     );
 }
 
@@ -487,11 +538,13 @@ async fn reinitialize_keeps_the_recorded_leader_epoch() {
     let dir = tempdir().unwrap();
     let Seeded { coord, image } = seeded(dir.path(), false).await;
     coord
-        .initialize(&image, "g", TOPIC, 0, 3, Offset(40))
+        .initialize(&image, ShareKeyRef::new("g", TOPIC, 0), 3, Offset(40))
         .await
         .unwrap();
     check!(
-        coord.read_summary_checked(&image, "g", TOPIC, 0).await
+        coord
+            .read_summary_checked(&image, ShareKeyRef::new("g", TOPIC, 0))
+            .await
             == Ok(Some(ShareStateSummary {
                 state_epoch: 3,
                 leader_epoch: 0,
@@ -513,9 +566,7 @@ async fn reinitialize_keeps_the_recorded_leader_epoch() {
         let written = coord
             .write(
                 &image,
-                "g",
-                TOPIC,
-                0,
+                ShareKeyRef::new("g", TOPIC, 0),
                 share_write((3, leader_epoch), (40, 0), vec![]),
             )
             .await;
@@ -563,16 +614,16 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
         coord
             .write(
                 &image,
-                "g",
-                TOPIC,
-                0,
+                ShareKeyRef::new("g", TOPIC, 0),
                 share_write((1, 0), (start, dcc), batches),
             )
             .await
             .unwrap();
     }
 
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
+    let state_partition = coord
+        .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
+        .unwrap();
     let logged: Vec<Logged> = logged_records(&coord, state_partition)
         .into_iter()
         .map(|record| record.logged)
@@ -609,7 +660,10 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
         }),
     ];
     assert!(logged == expected);
-    let state = coord.state_for_test("g", TOPIC, 0).await.unwrap();
+    let state = coord
+        .state_for_test(ShareKeyRef::new("g", TOPIC, 0))
+        .await
+        .unwrap();
     check!(state.state_batches == vec![batch(Offset(12)..=Offset(39))]);
     check!(state.updates_since_snapshot == 1);
 }
@@ -676,7 +730,9 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 clock: _clock,
             } = configured_coordinator(dir.path(), config);
             let image = initialize_led_group().coordinator(&coord).call().await;
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
+            let state_partition = coord
+                .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
+                .unwrap();
             let part = reg
                 .get(SHARE_STATE_TOPIC, state_partition)
                 .expect("the state partition is open");
@@ -702,20 +758,25 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
             });
 
             let answer = match op {
-                Op::Initialize => coord.initialize(&image, "g", TOPIC, 0, 2, Offset(5)).await,
+                Op::Initialize => {
+                    coord
+                        .initialize(&image, ShareKeyRef::new("g", TOPIC, 0), 2, Offset(5))
+                        .await
+                }
                 Op::Write => {
                     coord
                         .write(
                             &image,
-                            "g",
-                            TOPIC,
-                            0,
+                            ShareKeyRef::new("g", TOPIC, 0),
                             share_write((1, 0), (0, 0), vec![batch(Offset(0)..=Offset(9))]),
                         )
                         .await
                 }
-                Op::Read => coord.read(&image, "g", TOPIC, 0, 1).await.map(|_| ()),
-                Op::Delete => coord.delete(&image, "g", TOPIC, 0).await,
+                Op::Read => coord
+                    .read(&image, ShareKeyRef::new("g", TOPIC, 0), 1)
+                    .await
+                    .map(|_| ()),
+                Op::Delete => coord.delete(&image, ShareKeyRef::new("g", TOPIC, 0)).await,
             };
             if let Some(mover) = mover {
                 mover.await.expect("the partition moves");
@@ -816,7 +877,7 @@ async fn initialized_share_state_key(
     let image = image_with_topic(TOPIC, 1);
     setup
         .coord
-        .initialize(&image, "g", TOPIC, 0, 5, Offset(100))
+        .initialize(&image, ShareKeyRef::new("g", TOPIC, 0), 5, Offset(100))
         .await
         .expect("initial share state");
     share_state_initialization.setup = Some(setup);
@@ -854,16 +915,14 @@ async fn initialize_existing_share_state(
         coord
             .initialize(
                 image,
-                "g",
-                TOPIC,
-                0,
+                ShareKeyRef::new("g", TOPIC, 0),
                 request.state_epoch,
                 Offset(request.start_offset),
             )
             .await,
     ));
     let partition = coord
-        .state_partition_for("g", &TOPIC, 0)
+        .state_partition_for(ShareKeyRef::new("g", TOPIC, 0))
         .expect("state partition route");
     share_state_initialization.snapshots = Some(
         logged_records(coord, partition)
@@ -872,7 +931,9 @@ async fn initialize_existing_share_state(
             .count(),
     );
     share_state_initialization.summary = Some(observed_share_summary(
-        coord.read_summary_checked(image, "g", TOPIC, 0).await,
+        coord
+            .read_summary_checked(image, ShareKeyRef::new("g", TOPIC, 0))
+            .await,
     ));
 }
 
@@ -958,7 +1019,7 @@ fn requested_share_state_write(share_state_write: &mut ShareStateWrite, request:
             .expect("seeded coordinator was given")
             .coord;
         let partition = coord
-            .state_partition_for("g", &TOPIC, request.partition)
+            .state_partition_for(ShareKeyRef::new("g", TOPIC, request.partition))
             .expect("state partition route");
         coord.partitions.remove(SHARE_STATE_TOPIC, partition);
     }
@@ -978,9 +1039,7 @@ async fn write_seeded_share_state(share_state_write: &mut ShareStateWrite) {
     let result = coord
         .write(
             image,
-            "g",
-            TOPIC,
-            request.partition,
+            ShareKeyRef::new("g", TOPIC, request.partition),
             share_write(
                 (request.state_epoch, request.leader_epoch),
                 (request.start_offset, request.delivery_complete_count),
@@ -1049,15 +1108,23 @@ async fn active_summary_answers_load_in_progress_while_a_load_has_dropped_the_ke
 
     let terms = coord.start_loading_all_for_test(&mut *coord.leader_partitions.write().await);
     let mid_load = (
-        coord.stored_summary_for_test("g", TOPIC, 0).await,
-        coord.active_summary_for_test("g", TOPIC, 0).await,
+        coord
+            .stored_summary_for_test(ShareKeyRef::new("g", TOPIC, 0))
+            .await,
+        coord
+            .active_summary_for_test(ShareKeyRef::new("g", TOPIC, 0))
+            .await,
     );
     for (partition, generation) in terms {
         coord.load_partition(partition, generation).await;
     }
     let loaded = (
-        coord.active_summary_for_test("g", TOPIC, 0).await,
-        coord.active_summary_for_test("no-state", TOPIC, 0).await,
+        coord
+            .active_summary_for_test(ShareKeyRef::new("g", TOPIC, 0))
+            .await,
+        coord
+            .active_summary_for_test(ShareKeyRef::new("no-state", TOPIC, 0))
+            .await,
     );
 
     check!(mid_load == (None, Err(codes::COORDINATOR_LOAD_IN_PROGRESS)));

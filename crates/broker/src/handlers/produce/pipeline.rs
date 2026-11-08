@@ -42,7 +42,7 @@ use {
         BatchIndexAndErrorMessage, PartitionProduceResponse,
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::{Arc, PoisonError, atomic},
+    std::sync::{Arc, PoisonError},
     tokio::sync::OwnedRwLockReadGuard,
 };
 
@@ -846,7 +846,7 @@ pub(super) async fn complete_partition(
         }
         return Ok(PartitionOutcome::Done(out));
     };
-    let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let leader_epoch = part.leader_epoch().get();
 
     // ── segment.bytes ────────────────────────────────────────────────
     // Kafka's `UnifiedLog.append` refuses a record set larger than the topic's

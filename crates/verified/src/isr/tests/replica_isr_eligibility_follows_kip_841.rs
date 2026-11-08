@@ -29,6 +29,7 @@ use {
     rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
+#[derive(Default)]
 struct IsrCandidate {
     leader_end: i64,
     high_watermark: i64,
@@ -38,13 +39,8 @@ struct IsrCandidate {
 
 #[fixture]
 fn candidate() -> IsrCandidate {
-    // Start this scenario with fresh inputs and observations.
-
     IsrCandidate {
-        leader_end: 0,
-        high_watermark: 0,
-        facts: None,
-        selected: None,
+        ..IsrCandidate::default()
     }
 }
 

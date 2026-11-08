@@ -27,6 +27,7 @@ use {
         TopicMetadata, groups::ListGroupsOptions,
     },
     krabka_client_core::security::ClientSecurity,
+    krabka_log::epoch_ms,
     krabka_object_store::MAX_WAL_OBJECT_BYTES,
     krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
     krabka_remote_storage::{ObjectEntry, Sha256Digest, diskless::capture::DisklessWalCapture},
@@ -36,7 +37,7 @@ use {
         io::{Error, ErrorKind},
         path::Path,
         sync::Arc,
-        time::{self, SystemTime},
+        time::SystemTime,
     },
     tokio::fs,
 };
@@ -128,14 +129,7 @@ async fn read_capture_file(path: &Path, name: &str) -> Result<Vec<u8>, BackupErr
 /// Milliseconds since the Unix epoch, saturating at zero on a clock set before
 /// it. The value names a capture directory and nothing branches on it, so a
 /// nonsensical clock produces an odd name rather than a failure.
-fn now_ms() -> u64 {
-    u64::try_from(
-        SystemTime::now()
-            .duration_since(time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis()),
-    )
-    .unwrap_or(0)
-}
+fn now_ms() -> u64 { epoch_ms(SystemTime::now()).unsigned_abs() }
 
 /// Load command-config security and copy this node's restore inputs into the
 /// archive.

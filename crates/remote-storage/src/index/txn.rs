@@ -123,20 +123,6 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct TxnIndexVersion(i16);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct TxnIndexEntrySetup {
-        #[default(TxnIndexVersion(0))]
-        version: TxnIndexVersion,
-        #[default(ProducerId(1000))]
-        producer_id: ProducerId,
-        #[default(Offset(0))]
-        start: Offset,
-        #[default(Offset(4))]
-        last: Offset,
-        #[default(Offset(5))]
-        lso: Offset,
-    }
-
     #[bon::builder]
     fn entry_bytes(
         #[builder(into, default = TxnIndexVersion (0))] version: TxnIndexVersion,
@@ -145,20 +131,6 @@ mod tests {
         #[builder(into, default = Offset (4))] last: Offset,
         #[builder(into, default = Offset (5))] lso: Offset,
     ) -> Vec<u8> {
-        let setup = TxnIndexEntrySetup {
-            version,
-            producer_id,
-            start,
-            last,
-            lso,
-        };
-        let TxnIndexEntrySetup {
-            version,
-            producer_id,
-            start,
-            last,
-            lso,
-        } = setup;
         let mut buf = Vec::new();
         buf.extend_from_slice(&version.0.to_be_bytes());
         buf.extend_from_slice(&producer_id.0.to_be_bytes());

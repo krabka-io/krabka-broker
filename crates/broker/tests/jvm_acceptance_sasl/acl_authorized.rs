@@ -19,6 +19,7 @@ use {
 };
 const TOPIC: &str = "foo";
 const GROUP: &str = "cg-foo";
+#[derive(Default)]
 struct AuthorizedRecords {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -28,14 +29,8 @@ struct AuthorizedRecords {
 }
 #[rstest::fixture]
 fn authorized() -> AuthorizedRecords {
-    // Start this scenario with fresh inputs and observations.
-
     AuthorizedRecords {
-        broker: None,
-        directory: None,
-        client: None,
-        produced: None,
-        consumed: None,
+        ..AuthorizedRecords::default()
     }
 }
 #[rstest_bdd_macros::given(

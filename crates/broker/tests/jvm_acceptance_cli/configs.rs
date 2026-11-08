@@ -18,6 +18,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct TopicConfiguration {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -31,17 +32,8 @@ struct TopicConfiguration {
 
 #[fixture]
 fn configuration() -> TopicConfiguration {
-    // Start this scenario with fresh inputs and observations.
-
     TopicConfiguration {
-        broker: None,
-        directory: None,
-        topic: String::new(),
-        settings: Vec::new(),
-        description: String::new(),
-        streams: BTreeMap::new(),
-        streams_descriptions: BTreeMap::new(),
-        refused_alter: None,
+        ..TopicConfiguration::default()
     }
 }
 
@@ -283,6 +275,7 @@ struct EntityAnswer {
     quota_entities: Vec<String>,
 }
 
+#[derive(Default)]
 struct EntityConfiguration {
     comparison: Option<OracleComparison>,
     cases: Vec<EntitySetting>,
@@ -291,12 +284,8 @@ struct EntityConfiguration {
 
 #[fixture]
 fn entities() -> EntityConfiguration {
-    // Start this scenario with fresh inputs and observations.
-
     EntityConfiguration {
-        comparison: None,
-        cases: Vec::new(),
-        answers: Vec::new(),
+        ..EntityConfiguration::default()
     }
 }
 

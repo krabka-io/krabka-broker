@@ -14,6 +14,7 @@ use {
         api_catalog::UnstableApiVersions,
         codes,
         coordinator::unified::streams::{
+            assignor::BUILTIN_STICKY_ASSIGNOR,
             config::StreamsGroupConfig,
             persistence::StreamsGroupTopologyValue,
             state::{StreamsGroupState, StreamsMemberState, TopologyStatus},
@@ -334,7 +335,7 @@ pub(super) fn build_describe(
         .collect();
     members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
     StreamsDescribeView {
-        assignor_name: "sticky".into(),
+        assignor_name: BUILTIN_STICKY_ASSIGNOR.into(),
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
         assignment_epoch: state.target.epoch,

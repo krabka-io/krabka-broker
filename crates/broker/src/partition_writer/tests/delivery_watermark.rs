@@ -34,11 +34,15 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     delivery.adopt(&waker);
 
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
-        topic: "scheduled".to_owned(),
-        delivery: delivery.clone(),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        Arc::clone(&log),
+        rx,
+        WriterOptions::builder()
+            .topic("scheduled".to_owned())
+            .delivery(delivery.clone())
+            .build(),
+    );
 
     // A batch that is already active moves the watermark to the log end.
     let ack_rx = queue_batch(&tx, batch_at(NOW_MS - 60_000)).await;
@@ -79,11 +83,15 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     let log = open_default_log(dir.path());
     let delivery = DeliveryHandles::new();
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
-        topic: "immediate".to_owned(),
-        delivery: delivery.clone(),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        Arc::clone(&log),
+        rx,
+        WriterOptions::builder()
+            .topic("immediate".to_owned())
+            .delivery(delivery.clone())
+            .build(),
+    );
 
     let ack_rx = queue_batch(&tx, sample_batch().count(3).call()).await;
     ack_rx.await.expect("ack").expect("append ok");

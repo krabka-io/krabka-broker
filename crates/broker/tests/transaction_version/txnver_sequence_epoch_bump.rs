@@ -11,7 +11,7 @@
 use {
     crate::{
         support::{
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
             topics::TopicPartitionCount,
             transaction_wire::{
@@ -97,11 +97,12 @@ async fn produce(
     let request = ProduceRequest {
         // A Kafka producer names its transactional id on every request.
         transactional_id: batch_transactional_id.map(str::to_owned),
-        ..batch_request(batch, SinglePartitionProduceSetup {
-            topic: (topic).into(),
-            topic_id: id,
-            ..SinglePartitionProduceSetup::replicated()
-        })
+        ..single_partition_produce()
+            .records(batch)
+            .topic(topic)
+            .topic_id(id)
+            .acknowledgements(ProduceAcknowledgements::AllReplicas)
+            .call()
     };
     let response = settled_produce(client, request, Duration::from_secs(10)).await;
     response.responses[0].partition_responses[0].error_code

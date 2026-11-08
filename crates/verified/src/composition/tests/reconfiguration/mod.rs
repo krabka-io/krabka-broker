@@ -59,29 +59,6 @@ impl RequestFlags {
     fn contains(self, property: RequestProperty) -> bool { self.0 & property as u16 != 0 }
 }
 
-#[derive(Clone, Copy)]
-struct GeneratedRequestSetup {
-    count: VoterCount,
-    flags: RequestFlags,
-    kind: VoterChangeKind,
-    membership: TargetMembership,
-    version: KraftFeatureLevel,
-    requested: KraftFeatureLevel,
-}
-
-impl Default for GeneratedRequestSetup {
-    fn default() -> Self {
-        Self {
-            count: VoterCount(3),
-            flags: RequestFlags(0x7f),
-            kind: VoterChangeKind::Add,
-            membership: TargetMembership::Absent,
-            version: KraftFeatureLevel(1),
-            requested: KraftFeatureLevel(1),
-        }
-    }
-}
-
 mod oracle;
 use oracle::{check_overlap, current, leading, target};
 mod commit_waiter;
@@ -138,47 +115,38 @@ fn request_cases() -> impl Strategy<Value = RequestCase> {
 
 #[bon::builder]
 fn generated_request(
-    #[builder(into, default = GeneratedRequestSetup::default().count)] count: VoterCount,
-    #[builder(into, default = GeneratedRequestSetup::default().flags)] flags: RequestFlags,
-    #[builder(default = GeneratedRequestSetup::default().kind)] kind: VoterChangeKind,
-    #[builder(default = GeneratedRequestSetup::default().membership)] membership: TargetMembership,
-    #[builder(into, default = GeneratedRequestSetup::default().version)] version: KraftFeatureLevel,
-    #[builder(into, default = GeneratedRequestSetup::default().requested)]
-    requested: KraftFeatureLevel,
+    #[builder(into, default = VoterCount(3))] count: VoterCount,
+    #[builder(into, default = RequestFlags(0x7f))] flags: RequestFlags,
+    #[builder(default = VoterChangeKind::Add)] kind: VoterChangeKind,
+    #[builder(default = TargetMembership::Absent)] membership: TargetMembership,
+    #[builder(into, default = KraftFeatureLevel(1))] version: KraftFeatureLevel,
+    #[builder(into, default = KraftFeatureLevel(1))] requested: KraftFeatureLevel,
 ) -> (
     ReconfigurationLeadership,
     CurrentVoterSet,
     VoterChangeRequest,
     TargetVoter,
 ) {
-    let setup = GeneratedRequestSetup {
-        count,
-        flags,
-        kind,
-        membership,
-        version,
-        requested,
-    };
     (
         ReconfigurationLeadership {
-            is_leader: setup.flags.contains(Leader),
-            no_pending_change: setup.flags.contains(NoPendingChange),
-            epoch_committed: setup.flags.contains(EpochCommitted),
+            is_leader: flags.contains(Leader),
+            no_pending_change: flags.contains(NoPendingChange),
+            epoch_committed: flags.contains(EpochCommitted),
         },
         CurrentVoterSet {
-            voter_count: setup.count.0,
-            kraft_version: setup.version.0,
-            latest_controls_committed: setup.flags.contains(ControlsCommitted),
-            all_voters_support_requested: setup.flags.contains(VotersSupportVersion),
+            voter_count: count.0,
+            kraft_version: version.0,
+            latest_controls_committed: flags.contains(ControlsCommitted),
+            all_voters_support_requested: flags.contains(VotersSupportVersion),
         },
         VoterChangeRequest {
-            kind: setup.kind,
-            requested_kraft_version: setup.requested.0,
+            kind,
+            requested_kraft_version: requested.0,
         },
         TargetVoter {
-            membership: setup.membership,
-            version_compatible: setup.flags.contains(CompatibleTargetVersion),
-            caught_up: setup.flags.contains(TargetCaughtUp),
+            membership,
+            version_compatible: flags.contains(CompatibleTargetVersion),
+            caught_up: flags.contains(TargetCaughtUp),
         },
     )
 }

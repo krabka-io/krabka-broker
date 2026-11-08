@@ -53,10 +53,15 @@ const ACCEPT: i8 = 1;
 /// A `request_percentage` so small that any handler time exceeds it.
 const STARVED_REQUEST_PERCENTAGE: f64 = 0.0001;
 
-/// The broker's quota window, in seconds. A byte-rate bucket holds this many
-/// seconds of its rate. The window is long, so the bucket refills by a
-/// negligible part of a batch between two fetches of a case.
+/// The broker's quota window, in seconds: two samples of half of it.
 const QUOTA_WINDOW_SECS: u32 = 20;
+
+/// The window Kafka's `Rate` measures a new client over, in seconds:
+/// `quota.window.num - 1` samples of `quota.window.size.seconds`, one sample
+/// of 10 s here. It is also Kafka's `maxValueInQuotaWindow` span. The window
+/// is long, so the measured rate falls by a negligible part of a batch
+/// between two fetches of a case.
+const PADDED_WINDOW_SECS: u32 = QUOTA_WINDOW_SECS / 2;
 
 /// A broker with a [`QUOTA_WINDOW_SECS`] quota window.
 async fn start() -> HandlerStartedBroker {
@@ -73,7 +78,8 @@ async fn start() -> HandlerStartedBroker {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum MemberQuota {
     None,
-    /// The `consumer_byte_rate` whose bucket holds this many batches.
+    /// The `consumer_byte_rate` that allows this many batches over the padded
+    /// window.
     BatchesPerWindow(f64),
     /// `request_percentage`.
     RequestPercentage(f64),
@@ -130,7 +136,7 @@ async fn open_session(broker: &BrokerHandle, name: &str, group: &str, user: &str
 /// Sets the `consumer_byte_rate` of `user` so that its bucket holds `batches`
 /// batches of `topic`.
 async fn set_batches_per_window(broker: &BrokerHandle, topic: &str, user: &str, batches: f64) {
-    let rate = f64::from(batch_size(broker, topic)) * batches / f64::from(QUOTA_WINDOW_SECS);
+    let rate = f64::from(batch_size(broker, topic)) * batches / f64::from(PADDED_WINDOW_SECS);
     set_user_quota(broker, user, "consumer_byte_rate", rate).await;
 }
 
@@ -180,8 +186,9 @@ impl FetchOutcome {
 
 /// Three fetches of one batch each, on a topic of two batches.
 ///
-/// A byte-rate bucket that holds a batch and a half. The first fetch fits. The
-/// second takes the bucket past it, so it is throttled and answers no rows,
+/// A byte-rate quota that allows a batch and a half. The first fetch fits. The
+/// second takes the measured rate past it, so it is throttled and answers no
+/// rows,
 /// and its batch stays acquired by the member. Its bytes come off the quota
 /// again, so the third fetch, which acquires nothing, is not throttled.
 /// Charged without the refund, it would be. A starved request quota throttles
@@ -249,11 +256,10 @@ async fn share_fetch_is_charged_to_the_member_quotas() {
 }
 
 /// Kafka caps a share fetch at `maxQuotaWindowBytes`, the bytes the member's
-/// byte rate allows in one quota window, which is half of what its bucket
-/// holds. A member whose bucket holds a batch and a half asks for the whole
-/// topic. Uncapped, it would acquire both batches, overflow the bucket, and
-/// be throttled with its records dropped on every attempt. Capped, it gets the
-/// first batch, unthrottled.
+/// byte rate allows over the padded window. A member whose quota allows a
+/// batch and a half asks for the whole topic. Uncapped, it would acquire both
+/// batches, go over its quota, and be throttled with its records dropped on
+/// every attempt. Capped, it gets the first batch, unthrottled.
 #[tokio::test]
 async fn a_share_fetch_acquires_no_more_than_the_quota_window_allows() {
     let HandlerStartedBroker { broker, dir: _dir } = start().await;

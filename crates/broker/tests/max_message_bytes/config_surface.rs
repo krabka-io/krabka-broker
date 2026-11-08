@@ -42,8 +42,6 @@ struct MessageCap {
 }
 #[fixture]
 fn cap() -> MessageCap {
-    // Start this scenario with fresh inputs and observations.
-
     MessageCap {
         process: None,
         topic: Uuid::ZERO,

@@ -3,12 +3,9 @@
 
 use {
     super::{IdleTimer, WriteIdle, for_response},
-    crate::test_support::localhost_ecdsa_pair,
+    crate::{listener_tls::ensure_crypto_provider, test_support::localhost_ecdsa_pair},
     assert2::assert,
-    rustls::{
-        crypto::aws_lc_rs,
-        pki_types::{PrivateKeyDer, ServerName},
-    },
+    rustls::pki_types::{PrivateKeyDer, ServerName},
     std::{
         io,
         pin::Pin,
@@ -100,7 +97,7 @@ struct TlsPair {
 }
 
 async fn tls_pair(window: Duration) -> TlsPair {
-    let _ = aws_lc_rs::default_provider().install_default();
+    ensure_crypto_provider();
     let (certificate, key) = localhost_ecdsa_pair();
     let cert = certificate.der().clone();
     let server = rustls::ServerConfig::builder()

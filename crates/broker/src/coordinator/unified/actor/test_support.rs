@@ -134,18 +134,6 @@ pub(super) fn subscribed_consumer_group(
 }
 
 /// A subscribing consumer with the actor fixtures' ordinary rebalance timeout.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ConsumerMemberSetup<'a> {
-    #[default("m1")]
-    pub member_id: &'a str,
-    #[default(&["t"])]
-    pub topics: &'a [&'a str],
-    #[default(crate::coordinator::unified::ClientIdentity { id: "client", host: "host" })]
-    pub client: ClientIdentity<'a>,
-    #[default(Instant::now())]
-    pub now: Instant,
-}
-
 #[bon::builder]
 pub(super) fn subscribed_member(
     #[builder(default = "m1")] member_id: &'_ str,
@@ -154,18 +142,6 @@ pub(super) fn subscribed_member(
     client: ClientIdentity<'_>,
     #[builder(default = Instant :: now ())] now: Instant,
 ) -> MemberState {
-    let setup = ConsumerMemberSetup {
-        member_id,
-        topics,
-        client,
-        now,
-    };
-    let ConsumerMemberSetup {
-        member_id,
-        topics,
-        client,
-        now,
-    } = setup;
     super::member_state::build_member(
         member_id,
         &ConsumerGroupHeartbeatRequest {
@@ -598,13 +574,6 @@ pub(super) async fn spawn_and_downgrade(
     (handle, view)
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct BidirectionalClassicSetup<'a> {
-    #[default("m1")]
-    pub member_id: &'a str,
-    pub instance_id: Option<&'a str>,
-}
-
 /// A bidirectional coordinator whose first actor was spawned from a classic seed.
 #[bon::builder]
 pub(super) fn seeded_bidirectional_coordinator(
@@ -615,15 +584,11 @@ pub(super) fn seeded_bidirectional_coordinator(
     Arc<InMemoryOffsetsLog>,
     Arc<GroupActorHandle>,
 ) {
-    let setup = BidirectionalClassicSetup {
-        member_id,
-        instance_id,
-    };
     let (coordinator, log) = bidirectional_coordinator();
     let handle = seed_classic_member()
         .coord(&coordinator)
-        .member_id(setup.member_id)
-        .maybe_instance_id(setup.instance_id)
+        .member_id(member_id)
+        .maybe_instance_id(instance_id)
         .call();
     (coordinator, log, handle)
 }

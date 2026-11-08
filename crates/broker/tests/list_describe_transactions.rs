@@ -256,6 +256,7 @@ impl CoordinatorState {
     }
 }
 
+#[derive(Default)]
 struct TransactionInspection {
     coordinator: Option<CoordinatorState>,
     transactional_id: String,
@@ -265,13 +266,8 @@ struct TransactionInspection {
 
 #[fixture]
 fn inspection() -> TransactionInspection {
-    // Start this scenario with fresh inputs and observations.
-
     TransactionInspection {
-        coordinator: None,
-        transactional_id: String::new(),
-        listed: None,
-        described: Vec::new(),
+        ..TransactionInspection::default()
     }
 }
 

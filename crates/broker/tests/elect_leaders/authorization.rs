@@ -122,7 +122,10 @@ async fn request_election_without_cluster_alter(
                     topic: ("foo-auth-test").to_owned(),
                     ..Default::default()
                 },
-                &PlainAuthenticationSetup::with_password(CLIENT_ID, b"alice-secret"),
+                &PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .password(b"alice-secret")
+                    .build(),
             )
             .await
         })

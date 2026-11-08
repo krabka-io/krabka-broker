@@ -20,10 +20,7 @@ use {
         TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
         TransactionMarkerRequest, transaction_marker_equal_epoch_fenced,
     },
-    std::{
-        collections::HashMap,
-        sync::{Arc, atomic::Ordering},
-    },
+    std::{collections::HashMap, sync::Arc},
 };
 
 /// Append a transaction marker and, on a `__consumer_offsets` partition,
@@ -97,11 +94,7 @@ pub(super) async fn append_marker_and_materialize(
         producer_epoch: current_producer_epoch,
         coordinator_epoch: current_coordinator_epoch,
         has_open_transaction: has_pending_transaction,
-    } = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
-        .transaction_marker_state(producer_id);
+    } = partition.lock_log()?.transaction_marker_state(producer_id);
     if transaction_marker_equal_epoch_fenced(
         transaction_version,
         producer_epoch,
@@ -177,7 +170,7 @@ pub(super) async fn append_marker_and_materialize(
     // The owned produce path stamps this field from the metadata image. A
     // marker does not travel that path, so it stamps its own, and a marker
     // that kept the default of zero would carry a false leader epoch.
-    marker.partition_leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+    marker.partition_leader_epoch = partition.leader_epoch().get();
     let append_from = partition.log_end_offset()?;
     let appended = if let Some(stamp) = commit_stamp {
         partition.produce_commit_marker(marker, stamp).await
@@ -242,10 +235,7 @@ fn landed_marker_offset(
     producer_epoch: i16,
     from: krabka_log::Offset,
 ) -> Result<Option<i64>, BrokerError> {
-    let log = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?;
+    let log = partition.lock_log()?;
     let end = log.log_end_offset();
     let mut next = from;
     while next < end {
@@ -294,7 +284,6 @@ mod tests {
             },
             handlers::test_support::StartedBroker,
             partition::Partition,
-            test_support::StandalonePartitionSetup,
             txn::{
                 handlers::write_txn_markers::{
                     CommittedOffsets,
@@ -309,6 +298,7 @@ mod tests {
         assert2::assert,
         bytes::Bytes,
         krabka_ids::PartitionIndex,
+        krabka_protocol::records::Record,
         tokio::sync::{mpsc, oneshot},
     };
 
@@ -368,18 +358,14 @@ mod tests {
 
     #[tokio::test]
     async fn internal_marker_path_records_supplied_commit_stamp() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
         } = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_setup = StandalonePartitionSetup {
-            topic: "stamped-orders",
-            ..Default::default()
-        };
-        open_partition(&broker, dir.path(), part_setup);
+        open_partition(&broker, dir.path())
+            .topic("stamped-orders")
+            .call();
         let part = broker
             .partitions
             .get("stamped-orders", PartitionIndex(0))
@@ -421,8 +407,6 @@ mod tests {
     /// retry once it is not. Below 2 only a lower epoch is fenced.
     #[tokio::test]
     async fn transaction_version_2_fences_an_equal_marker_epoch() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
@@ -460,10 +444,7 @@ mod tests {
             cases.into_iter().enumerate()
         {
             let topic = format!("tv-marker-{index}");
-            let part = open_partition(&broker, dir.path(), StandalonePartitionSetup {
-                topic: &topic,
-                ..Default::default()
-            });
+            let part = open_partition(&broker, dir.path()).topic(&topic).call();
             part.produce_batch(single_transactional_batch((producer_id, 4), Record {
                 value: Some(Bytes::from_static(b"event")),
                 ..Record::default()
@@ -500,17 +481,14 @@ mod tests {
 
     #[tokio::test]
     async fn marker_adapter_fences_generations_and_suppresses_exact_retries() {
-        use krabka_protocol::records::Record;
-
         let StartedBroker {
             broker: broker_handle,
             dir,
         } = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        open_partition(&broker, dir.path(), StandalonePartitionSetup {
-            topic: "fenced-orders",
-            ..Default::default()
-        });
+        open_partition(&broker, dir.path())
+            .topic("fenced-orders")
+            .call();
         let part = broker
             .partitions
             .get("fenced-orders", PartitionIndex(0))

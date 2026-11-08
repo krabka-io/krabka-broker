@@ -312,8 +312,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn retry_jitter() -> RetryJitter {
-        // Start this scenario with fresh inputs and observations.
-        RetryJitter::default()
+        RetryJitter {
+            ..RetryJitter::default()
+        }
     }
     #[given("a Streams description retry requests {draws} independent jitter samples")]
     fn jitter_sample_size(retry_jitter: &mut RetryJitter, draws: usize) {

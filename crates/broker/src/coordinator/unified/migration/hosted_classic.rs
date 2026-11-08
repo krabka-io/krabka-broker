@@ -565,8 +565,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn hosted_classic() -> HostedClassic {
-        // Start this scenario with fresh inputs and observations.
-        HostedClassic::default()
+        HostedClassic {
+            ..HostedClassic::default()
+        }
     }
 
     #[when("the consumer coordinator serves the hosted classic SyncGroup request")]

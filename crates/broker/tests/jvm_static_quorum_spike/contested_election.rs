@@ -28,6 +28,7 @@ use {
 
 const CONTESTED_CONTAINER: &str = "krabka-kip996-contested";
 
+#[derive(Default)]
 struct ContestedElection {
     controllers: Option<[BrokerHandle; 2]>,
     survivor: Option<BrokerHandle>,
@@ -40,17 +41,8 @@ struct ContestedElection {
 }
 #[rstest::fixture]
 fn contested() -> ContestedElection {
-    // Start this scenario with fresh inputs and observations.
-
     ContestedElection {
-        controllers: None,
-        survivor: None,
-        dirs: None,
-        properties: None,
-        old_leader: 0,
-        old_term: 0,
-        survivor_id: 0,
-        logs: String::new(),
+        ..ContestedElection::default()
     }
 }
 #[rstest_bdd_macros::given(

@@ -495,17 +495,6 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
 }
 
 /// Fully pinned independent expectations, shared by each static-config case.
-#[derive(krabka_macros::FieldDefaults)]
-struct ExpectedStaticConfigSetup<'a> {
-    #[default(config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)]
-    key: &'a str,
-    #[default("604800000")]
-    value: &'a str,
-    #[default(ConfigSourceCode(CONFIG_SOURCE_DEFAULT))]
-    source: ConfigSourceCode,
-    synonyms: Vec<DescribeConfigsSynonym>,
-}
-
 #[bon::builder]
 fn expected_entry(
     #[builder(default = config_keys :: TRANSACTIONAL_ID_EXPIRATION_MS)] key: &'_ str,
@@ -513,18 +502,6 @@ fn expected_entry(
     #[builder(into, default = ConfigSourceCode (CONFIG_SOURCE_DEFAULT))] source: ConfigSourceCode,
     #[builder(default)] synonyms: Vec<DescribeConfigsSynonym>,
 ) -> DescribeConfigsResourceResult {
-    let setup = ExpectedStaticConfigSetup {
-        key,
-        value,
-        source,
-        synonyms,
-    };
-    let ExpectedStaticConfigSetup {
-        key,
-        value,
-        source,
-        synonyms,
-    } = setup;
     expected_config_entry()
         .name(key)
         .maybe_value(Some(Some(value)))

@@ -44,8 +44,10 @@ use {
         lag::{future_offset_lag, offset_lag_for},
     },
     crate::{
-        codes, future_log::FutureLogRegistry, handlers::cluster_describe_denied,
-        partition::Partition,
+        codes,
+        future_log::FutureLogRegistry,
+        handlers::cluster_describe_denied,
+        partition::{Partition, lock_partition_log},
     },
     krabka_ids::PartitionIndex,
     std::{
@@ -195,7 +197,9 @@ struct LoadedLog {
 ///
 /// Kafka's `logManager.allLogs.groupBy(log => log.parentDir)`. A log's own
 /// directory decides where it is reported, so a log mid-move shows under the
-/// directory that holds it.
+/// directory that holds it. A partition's current log whose mutex a panic
+/// poisoned is not read and not reported, as a log with no parent directory
+/// is not.
 fn loaded_logs_by_dir(
     hosted: &[Arc<Partition>],
     future_logs: &FutureLogRegistry,
@@ -219,7 +223,20 @@ fn loaded_logs_by_dir(
             continue;
         }
         let (parent, size) = {
-            let log = log.lock().unwrap_or_else(PoisonError::into_inner);
+            // Only the partition's current log takes its poison policy. The
+            // future log belongs to the move's registry.
+            let log = if is_future_key {
+                log.lock().unwrap_or_else(PoisonError::into_inner)
+            } else {
+                match lock_partition_log(&log, &topic, partition) {
+                    Ok(log) => log,
+                    Err(error) => {
+                        tracing::warn!(topic = %topic, partition = partition.0, %error,
+                            "describe_log_dirs: skipping an unreadable partition log");
+                        continue;
+                    }
+                }
+            };
             (
                 log.dir().parent().map(PathBuf::from),
                 log.size().bytes_u64(),
@@ -253,7 +270,7 @@ mod tests {
         std::{fs, path::Path, sync::Arc},
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["client-a"];
     }
 
@@ -262,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_cluster_describe_for_whole_request() {
         let version = describe_log_dirs_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_broker_with_authorizer(Arc::new(DenyAll))];
             user ["ANONYMOUS"];
@@ -310,7 +327,7 @@ mod tests {
     async fn handle_lists_the_loaded_logs_of_a_healthy_dir() {
         let version = describe_log_dirs_response::MAX_VERSION;
         let extra = tempfile::tempdir().expect("extra log dir");
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_with_extra(extra.path())];
             user ["admin"];
@@ -402,7 +419,7 @@ mod tests {
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().join("data");
         fs::create_dir(&extra_dir).expect("create extra log dir");
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
             boot [start_with_extra(&extra_dir)];
             user ["admin"];

@@ -389,8 +389,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn classic_sync() -> ClassicSync {
-        // Start this scenario with fresh inputs and observations.
-        ClassicSync::default()
+        ClassicSync {
+            ..ClassicSync::default()
+        }
     }
     #[given("classic group g is {state} with m1 leader and m2 follower")]
     fn sync_group_state(classic_sync: &mut ClassicSync, state: String) {

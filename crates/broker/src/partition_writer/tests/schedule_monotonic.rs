@@ -39,10 +39,14 @@ fn spawn_writer(
     log: &Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
 ) -> JoinHandle<()> {
-    spawn_test_writer(dir, Arc::clone(log), rx, WriterOptions {
-        topic: "scheduled".to_owned(),
-        ..Default::default()
-    })
+    spawn_test_writer(
+        dir,
+        Arc::clone(log),
+        rx,
+        WriterOptions::builder()
+            .topic("scheduled".to_owned())
+            .build(),
+    )
 }
 
 /// The acknowledgements of two queued produces whose delivery times descend.

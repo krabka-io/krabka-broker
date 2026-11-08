@@ -825,8 +825,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn stored_offset() -> StoredOffset {
-        // Start this scenario with fresh inputs and observations.
-        StoredOffset::default()
+        StoredOffset {
+            ..StoredOffset::default()
+        }
     }
     #[given(
         "offset 42 at leader epoch 4 has metadata meta commit time 1000000 expiry {expiry} and topic identifier {topic_id}"

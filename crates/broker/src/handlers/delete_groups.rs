@@ -135,7 +135,7 @@ mod tests {
         }
     }
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -150,7 +150,7 @@ mod tests {
     }
 
     fn result(group_id: &str, error_code: i16) -> DeletableGroupResult {
-        krabka_macros::tagged_wire!(DeletableGroupResult {
+        krabka_broker_macros::tagged_wire!(DeletableGroupResult {
             group_id: group_id.to_owned(),
             error_code,
             error_message: None,
@@ -164,7 +164,7 @@ mod tests {
         results: Vec<DeletableGroupResult>,
     ) {
         let response = drive(broker, &request(groups), ctx).await;
-        let expected = krabka_macros::unthrottled_wire!(DeleteGroupsResponse { results });
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteGroupsResponse { results });
         assert!(response == expected);
     }
 
@@ -175,7 +175,7 @@ mod tests {
             dir: _dir,
         } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -193,7 +193,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyGroupNamedDenied;
 
-    krabka_macros::test_authorizer!(DenyGroupNamedDenied, req; {
+    krabka_broker_macros::test_authorizer!(DenyGroupNamedDenied, req; {
         if req.resource_name == "denied" {
             AuthorizationResult::Deny
         } else {
@@ -216,7 +216,7 @@ mod tests {
             dir: _dir,
         } = start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(p, peer);
             user ["alice"];
         };
@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_allowed_missing_group_returns_not_found() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, p, peer);
             boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
             user ["admin"];
@@ -317,7 +317,7 @@ mod tests {
             dir: _dir,
         } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(ctx);
             user ["alice"];
         };
@@ -335,7 +335,7 @@ mod tests {
         }
 
         let denied = |group_id: &str| {
-            krabka_macros::tagged_wire!(DeletableGroupResult {
+            krabka_broker_macros::tagged_wire!(DeletableGroupResult {
                 group_id: group_id.to_owned(),
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 error_message: None,

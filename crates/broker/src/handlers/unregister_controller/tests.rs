@@ -17,7 +17,7 @@ use {
     std::{collections::BTreeMap, sync::Arc},
 };
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     encode_request(UnregisterControllerRequest);
     decode_response(UnregisterControllerResponse);
     version [MAX_VERSION];
@@ -183,7 +183,7 @@ async fn finalize_metadata_version(broker: &Broker, level: i16) {
         FeatureUpdateKey, MAX_VERSION as UPDATE_FEATURES_VERSION, UpdateFeaturesRequest,
     };
 
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer, ctx);
         user ["Cluster:Alter"];
         client ["kafka-features"];
@@ -226,7 +226,7 @@ async fn send(
     principal: &str,
     controller_id: i32,
 ) -> UnregisterControllerResponse {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(principal, peer);
         user [principal];
     };

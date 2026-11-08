@@ -5,6 +5,7 @@ use {
     rstest_bdd_macros::{given, then, when},
 };
 
+#[derive(Default)]
 struct SequenceArithmetic {
     sequence: Option<i32>,
     actual: Option<(i32, i32)>,
@@ -12,11 +13,8 @@ struct SequenceArithmetic {
 
 #[fixture]
 fn arithmetic() -> SequenceArithmetic {
-    // Start this scenario with fresh inputs and observations.
-
     SequenceArithmetic {
-        sequence: None,
-        actual: None,
+        ..SequenceArithmetic::default()
     }
 }
 
@@ -39,6 +37,7 @@ fn wrapped_sequences(arithmetic: &SequenceArithmetic, incremented: i32, decremen
     assert!(arithmetic.actual == Some((incremented, decremented)));
 }
 
+#[derive(Default)]
 struct ProducerAdmission {
     entry: Option<ProducerEntryFacts>,
     retained: Vec<Option<RetainedSequenceRange>>,
@@ -47,12 +46,8 @@ struct ProducerAdmission {
 
 #[fixture]
 fn producer() -> ProducerAdmission {
-    // Start this scenario with fresh inputs and observations.
-
     ProducerAdmission {
-        entry: None,
-        retained: Vec::new(),
-        actual: None,
+        ..ProducerAdmission::default()
     }
 }
 

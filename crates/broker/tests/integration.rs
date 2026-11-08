@@ -8,7 +8,7 @@ use {
         discovery::{api_versions_request_for, topic_metadata_request},
         fetch::{FetchLimits, RequestWaitMillis, check_record_count, single_partition_fetch},
         offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::{ProduceAcknowledgements, SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::value_record,
         topics::{creatable_topic, create_topic_request},
         wire::write_frame,
@@ -101,6 +101,7 @@ fn timestamped_batch(entries: &[TimestampedValue<'_>]) -> RecordBatch {
     batch
 }
 
+#[derive(Default)]
 struct TimestampLookup {
     process: Option<InProcess>,
     responses: BTreeMap<i64, ListOffsetsResponse>,
@@ -108,11 +109,8 @@ struct TimestampLookup {
 
 #[fixture]
 fn timestamps() -> TimestampLookup {
-    // Start this scenario with fresh inputs and observations.
-
     TimestampLookup {
-        process: None,
-        responses: BTreeMap::new(),
+        ..TimestampLookup::default()
     }
 }
 
@@ -144,14 +142,13 @@ async fn timestamped_records(timestamps: &mut TimestampLookup, datatable: Vec<Ve
         .collect::<Vec<_>>();
     process
         .client
-        .send(batch_request(
-            timestamped_batch(&borrowed),
-            SinglePartitionProduceSetup {
-                topic: "by_ts".into(),
-                topic_id,
-                ..Default::default()
-            },
-        ))
+        .send(
+            single_partition_produce()
+                .records(timestamped_batch(&borrowed))
+                .topic("by_ts")
+                .topic_id(topic_id)
+                .call(),
+        )
         .await
         .unwrap();
     timestamps.process = Some(process);
@@ -211,8 +208,6 @@ struct RpcLifecycle {
 
 #[fixture]
 fn lifecycle() -> RpcLifecycle {
-    // Start this scenario with fresh inputs and observations.
-
     RpcLifecycle {
         process: None,
         topic_id: Uuid::ZERO,
@@ -304,14 +299,13 @@ async fn append_e2e(lifecycle: &mut RpcLifecycle) {
     lifecycle.produced = Some(
         process
             .client
-            .send(batch_request(
-                record_batch_with_values(&["a", "b", "c"]),
-                SinglePartitionProduceSetup {
-                    topic: "e2e".into(),
-                    topic_id: lifecycle.topic_id,
-                    ..Default::default()
-                },
-            ))
+            .send(
+                single_partition_produce()
+                    .records(record_batch_with_values(&["a", "b", "c"]))
+                    .topic("e2e")
+                    .topic_id(lifecycle.topic_id)
+                    .call(),
+            )
             .await
             .unwrap(),
     );
@@ -393,8 +387,9 @@ fn fetched_e2e(lifecycle: &RpcLifecycle) {
     );
 }
 
-krabka_macros::request_frame_fixture!(one_way_request);
+krabka_broker_macros::request_frame_fixture!(one_way_request);
 
+#[derive(Default)]
 struct OneWayProduce {
     process: Option<InProcess>,
     stream: Option<TcpStream>,
@@ -405,14 +400,8 @@ struct OneWayProduce {
 
 #[fixture]
 fn one_way() -> OneWayProduce {
-    // Start this scenario with fresh inputs and observations.
-
     OneWayProduce {
-        process: None,
-        stream: None,
-        readiness: None,
-        metadata_reply: Vec::new(),
-        latest: None,
+        ..OneWayProduce::default()
     }
 }
 
@@ -461,14 +450,11 @@ async fn send_one_way_frame(
 
 #[when("a Produce v9 frame sends one record with acks zero")]
 async fn unacknowledged_produce(one_way: &mut OneWayProduce) {
-    let produce = batch_request(
-        record_batch_with_values(&["value"]),
-        SinglePartitionProduceSetup {
-            topic: "one-way-produce".into(),
-            acknowledgements: ProduceAcknowledgements::NoResponse,
-            ..Default::default()
-        },
-    );
+    let produce = single_partition_produce()
+        .records(record_batch_with_values(&["value"]))
+        .topic("one-way-produce")
+        .acknowledgements(ProduceAcknowledgements::NoResponse)
+        .call();
     let mut body = BytesMut::new();
     produce.encode(&mut body, 9).expect("encode Produce v9");
     send_one_way_frame(one_way, 0, 9, 1, &body).await;
@@ -539,6 +525,7 @@ fn one_way_record_present(one_way: &OneWayProduce) {
     );
 }
 
+#[derive(Default)]
 struct DiskRecovery {
     directory: Option<TempDir>,
     broker: Option<BrokerHandle>,
@@ -548,13 +535,8 @@ struct DiskRecovery {
 
 #[fixture]
 fn recovery() -> DiskRecovery {
-    // Start this scenario with fresh inputs and observations.
-
     DiskRecovery {
-        directory: None,
-        broker: None,
-        created: None,
-        metadata: None,
+        ..DiskRecovery::default()
     }
 }
 

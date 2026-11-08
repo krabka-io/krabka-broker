@@ -1678,6 +1678,7 @@ mod tests {
         },
     };
 
+    #[derive(Default)]
     struct InFlightScenario {
         idempotent: bool,
         cap: Option<usize>,
@@ -1685,11 +1686,8 @@ mod tests {
 
     #[rstest::fixture]
     fn in_flight() -> InFlightScenario {
-        // Start this scenario with fresh inputs and observations.
-
         InFlightScenario {
-            idempotent: false,
-            cap: None,
+            ..InFlightScenario::default()
         }
     }
 

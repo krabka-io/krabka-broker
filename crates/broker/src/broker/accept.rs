@@ -8,10 +8,11 @@ use {
         config::ListenerSpec,
         metrics::ConnectionCloseReason,
         network::{client::tune_socket, dispatch},
-        quota::{QuotaType, lookup_ip_quota_with_key, positive_f64_to_u64},
+        quota::{QuotaType, lookup_ip_quota_with_key},
+        throttle::ClientQuota,
     },
     krabka_raft::{AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionQuotas},
-    krabka_units::{ByteSize, Time, convert::TimeExt as _},
+    krabka_units::{ByteSize, Time, convert::TimeExt},
     std::{
         net::{IpAddr, SocketAddr},
         ops::ControlFlow,
@@ -26,18 +27,14 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
-fn connection_creation_delay(rate: f64, maximum: Time) -> Time {
-    let delay_micros = positive_f64_to_u64((1.0_f64 / rate) * 1_000_000.0);
-    Time::from_micros(i64::try_from(delay_micros).unwrap_or(i64::MAX)).min(maximum)
-}
-
 /// The throttle for a new connection from `peer_ip`, or `None` when the
 /// connection may be served.
 ///
-/// A connection is throttled when the peer's `ip` entity has a positive
-/// `connection_creation_rate` and its token bucket is empty. The bucket spends
-/// no token on a throttled connection, as Kafka's
-/// `recordIpConnectionMaybeThrottle` un-records it.
+/// Kafka's `ConnectionQuotas.recordIpConnectionMaybeThrottle`: when the
+/// peer's `ip` entity has a `connection_creation_rate`, the connection is
+/// recorded on that entity's quota, measured over the client quota window,
+/// and the throttle is `QuotaUtils.boundedThrottleTime`, at most `maximum`.
+/// A throttled connection is never served, so it is un-recorded.
 fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time> {
     let image = broker.controller.current_image();
     let (entity_key, rate) = lookup_ip_quota_with_key(
@@ -46,15 +43,22 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
         peer_ip,
         QuotaType::ConnectionCreation,
     )?;
-    if rate <= 0.0 {
+    let quota = broker
+        .quota_buckets
+        .client_quota(QuotaType::ConnectionCreation, &entity_key, rate);
+    connection_throttle(&quota, broker.config.connection_creation_throttle_max)
+}
+
+/// Records one connection on `quota`, and returns its throttle bounded at
+/// `maximum`, or `None` and the connection kept when there is none. A
+/// throttled connection is taken back off the quota.
+fn connection_throttle(quota: &ClientQuota, maximum: Time) -> Option<Time> {
+    let throttle = quota.record(1).min(maximum);
+    if throttle <= <Time as TimeExt>::ZERO {
         return None;
     }
-    let bucket =
-        broker
-            .quota_buckets
-            .get_or_create(QuotaType::ConnectionCreation, &entity_key, rate);
-    (bucket.try_consume(1) == 0)
-        .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
+    quota.unrecord(1);
+    Some(throttle)
 }
 
 /// What the accept loop does with a connection it accepted.
@@ -274,11 +278,9 @@ pub(super) async fn accept_loop(
 /// All failures are non-fatal and logged at debug level. A connection that the
 /// broker cannot tune still serves correctly, but less efficiently.
 fn tune_accepted_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
-    tune_socket(stream, send_buffer, receive_buffer, [
-        |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on accepted socket"),
-        |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on accepted socket"),
-        |e| tracing::debug!(error = %e, "SO_RCVBUF set failed on accepted socket"),
-    ]);
+    tune_socket(stream, send_buffer, receive_buffer, |option, error| {
+        tracing::debug!(%error, "{option} set failed on accepted socket");
+    });
 }
 
 #[cfg(test)]
@@ -288,11 +290,13 @@ mod tests {
         crate::{
             network::test_support::{check_socket_tuning, tcp_pair},
             test_support::wait_tasks_started,
+            throttle::QuotaWindow,
         },
         assert2::assert,
-        krabka_units::{kibibytes, millis},
+        krabka_units::{kibibytes, millis, secs},
+        qubit_clock::ManualMonotonicClock,
         std::{
-            future,
+            future, iter,
             sync::atomic::{AtomicUsize, Ordering},
         },
     };
@@ -306,9 +310,43 @@ mod tests {
         drop(client);
     }
 
+    /// Kafka's `recordIpConnectionMaybeThrottle` at one connection a second:
+    /// a new `ip` entity is measured over ten padded samples, so ten
+    /// connections at once are served and the eleventh is 0.1 a second over,
+    /// a 1000 ms throttle, bounded here at 400 ms. A throttled connection is
+    /// taken back off the quota, so the twelfth is throttled the same and not
+    /// more.
     #[test]
-    fn connection_creation_delay_honors_nondefault_cap() {
-        assert!(connection_creation_delay(0.1, millis(17)) == millis(17));
+    fn a_connection_over_the_rate_is_throttled_bounded_and_unrecorded() {
+        let quota = ClientQuota::with_clock(
+            ManualMonotonicClock::new_shared(),
+            QuotaWindow::KAFKA_DEFAULT,
+            1.0,
+        );
+
+        let throttles: Vec<_> = iter::repeat_with(|| connection_throttle(&quota, millis(400)))
+            .take(12)
+            .collect();
+
+        let mut expected = vec![None; 10];
+        expected.extend([Some(millis(400)), Some(millis(400))]);
+        assert!(throttles == expected);
+    }
+
+    /// Unbounded, the eleventh connection's throttle is Kafka's
+    /// `(rate - bound) / bound * window`: 1.1 a second over 1, across 10 s.
+    #[test]
+    fn a_connection_throttle_is_kafkas_throttle_time() {
+        let quota = ClientQuota::with_clock(
+            ManualMonotonicClock::new_shared(),
+            QuotaWindow::KAFKA_DEFAULT,
+            1.0,
+        );
+        for _ in 0..10 {
+            assert!(connection_throttle(&quota, secs(60)).is_none());
+        }
+
+        assert!(connection_throttle(&quota, secs(60)) == Some(millis(1_000)));
     }
 
     #[test]

@@ -244,6 +244,7 @@ mod tests {
         serde_json::Value,
     };
 
+    #[derive(Default)]
     struct ElectionListing {
         stdout: String,
         outcomes: BTreeMap<TopicPartition, ElectionOutcome>,
@@ -251,11 +252,8 @@ mod tests {
 
     #[fixture]
     fn election() -> ElectionListing {
-        // Start this scenario with fresh inputs and observations.
-
         ElectionListing {
-            stdout: String::new(),
-            outcomes: BTreeMap::new(),
+            ..ElectionListing::default()
         }
     }
 
@@ -298,8 +296,6 @@ mod tests {
 
     #[fixture]
     fn label() -> PartitionLabel {
-        // Start this scenario with fresh inputs and observations.
-
         PartitionLabel {
             text: String::new(),
             parsed: Slot::new(),
@@ -330,6 +326,7 @@ mod tests {
         check!(label.parsed.get() == Some(expected));
     }
 
+    #[derive(Default)]
     struct CancellationListing {
         stdout: String,
         partitions: Vec<TopicPartition>,
@@ -337,11 +334,8 @@ mod tests {
 
     #[fixture]
     fn cancellation() -> CancellationListing {
-        // Start this scenario with fresh inputs and observations.
-
         CancellationListing {
-            stdout: String::new(),
-            partitions: Vec::new(),
+            ..CancellationListing::default()
         }
     }
 
@@ -383,8 +377,6 @@ mod tests {
 
     #[fixture]
     fn plans() -> PlanDocuments {
-        // Start this scenario with fresh inputs and observations.
-
         PlanDocuments {
             stdout: String::new(),
             generated: Slot::new(),

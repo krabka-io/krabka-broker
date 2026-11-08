@@ -368,8 +368,6 @@ mod tests {
 
     #[fixture]
     fn quota() -> ConnectionOverrides {
-        // Start this scenario with fresh inputs and observations.
-
         ConnectionOverrides {
             value: None,
             parsed: Slot::default(),

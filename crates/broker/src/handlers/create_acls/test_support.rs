@@ -35,7 +35,7 @@ pub(super) fn request(creations: Vec<AclCreation>) -> CreateAclsRequest {
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 

@@ -40,16 +40,6 @@ enum ExpectedLimit {
     RefusesRecord,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct KeyedBatchSetup {
-    offset: Offset,
-    #[default(bytes(1_000))]
-    value_size: ByteSize,
-    #[default(CompressionType::Gzip)]
-    compression: CompressionType,
-    producer: BatchProducer,
-}
-
 /// One oversized keyed record, compressed with gzip and anonymous by default.
 #[bon::builder]
 fn keyed_batch(
@@ -58,26 +48,20 @@ fn keyed_batch(
     #[builder(default = CompressionType :: Gzip)] compression: CompressionType,
     #[builder(default)] producer: BatchProducer,
 ) -> RecordBatch {
-    let setup = KeyedBatchSetup {
-        offset,
-        value_size,
-        compression,
-        producer,
-    };
-    let producer_id = match setup.producer {
+    let producer_id = match producer {
         BatchProducer::Anonymous => -1,
         BatchProducer::Transactional(producer) => producer.0,
     };
     RecordBatch {
-        base_offset: setup.offset.0,
+        base_offset: offset.0,
         last_offset_delta: 0,
         producer_id,
         attributes: Attributes::default()
-            .with_compression(setup.compression)
-            .with_transactional(matches!(setup.producer, BatchProducer::Transactional(_))),
+            .with_compression(compression)
+            .with_transactional(matches!(producer, BatchProducer::Transactional(_))),
         records: vec![Record {
             key: Some(Bytes::from_static(b"k")),
-            value: Some(Bytes::from(vec![7_u8; setup.value_size.bytes_usize()])),
+            value: Some(Bytes::from(vec![7_u8; value_size.bytes_usize()])),
             ..Default::default()
         }],
         ..RecordBatch::default()

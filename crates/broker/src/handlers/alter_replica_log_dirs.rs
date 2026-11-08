@@ -259,7 +259,7 @@ mod tests {
         tokio::{time, time::Instant},
     };
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         encode_request(AlterReplicaLogDirsRequest);
         decode_response(AlterReplicaLogDirsResponse);
     }
@@ -269,16 +269,18 @@ mod tests {
         partition_index: i32,
         error_code: i16,
     ) -> AlterReplicaLogDirsResponse {
-        krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
-            results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
-                topic_name: topic.to_owned(),
-                partitions: vec![krabka_macros::tagged_wire!(
-                    AlterReplicaLogDirPartitionResult {
-                        partition_index,
-                        error_code,
-                    }
-                )],
-            })],
+        krabka_broker_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![krabka_broker_macros::tagged_wire!(
+                AlterReplicaLogDirTopicResult {
+                    topic_name: topic.to_owned(),
+                    partitions: vec![krabka_broker_macros::tagged_wire!(
+                        AlterReplicaLogDirPartitionResult {
+                            partition_index,
+                            error_code,
+                        }
+                    )],
+                }
+            )],
         })
     }
 
@@ -307,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn handle_preserves_unknown_target_response_shape() {
         let version = 2;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|_| {})];
         };
@@ -330,16 +332,18 @@ mod tests {
             .expect("handle");
         let resp = decode_response(&bytes, version);
 
-        let expected = krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
-            results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
-                topic_name: "orders".to_owned(),
-                partitions: vec![krabka_macros::tagged_wire!(
-                    AlterReplicaLogDirPartitionResult {
-                        partition_index: 7,
-                        error_code: codes::LOG_DIR_NOT_FOUND,
-                    }
-                )],
-            })],
+        let expected = krabka_broker_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![krabka_broker_macros::tagged_wire!(
+                AlterReplicaLogDirTopicResult {
+                    topic_name: "orders".to_owned(),
+                    partitions: vec![krabka_broker_macros::tagged_wire!(
+                        AlterReplicaLogDirPartitionResult {
+                            partition_index: 7,
+                            error_code: codes::LOG_DIR_NOT_FOUND,
+                        }
+                    )],
+                }
+            )],
         });
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -521,7 +525,7 @@ mod tests {
     async fn denial_starts_no_move_for_a_hosted_partition() {
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().to_path_buf();
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_broker_with(|config| {
                 config.authorizer = Arc::new(DenyAll);
@@ -579,7 +583,7 @@ mod tests {
         let version = 2;
         let extra = tempfile::tempdir().expect("extra log dir");
         let extra_dir = extra.path().to_path_buf();
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_with_extra_log_dir(&extra_dir)];
         };
@@ -730,7 +734,7 @@ mod tests {
                 vec![topic_result("widgets", &[0]), topic_result("orders", &[0])],
             ),
         ] {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker);
                 boot [start_broker_with_authorizer(Arc::new(DenyAll))];
             };

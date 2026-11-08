@@ -16,7 +16,7 @@ use {
     krabka_protocol::owned::elect_leaders_response::PartitionResult,
 };
 
-krabka_macros::partition_gate! {
+krabka_broker_macros::partition_gate! {
 /// KFC-9: find the approved proposal that authorizes an unclean election of one
 /// partition, and stamp it consumed.
 ///

@@ -52,6 +52,7 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 mod tests {
     use {super::expand, crate::meta::compact, assert2::assert, moxy::ast::ItemStruct};
 
+    #[derive(Default)]
     struct UuidDeriveScenario {
         source: String,
         expansion: Option<Result<String, String>>,
@@ -59,11 +60,8 @@ mod tests {
 
     #[rstest::fixture]
     fn uuid_derive() -> UuidDeriveScenario {
-        // Start this scenario with fresh inputs and observations.
-
         UuidDeriveScenario {
-            source: String::new(),
-            expansion: None,
+            ..UuidDeriveScenario::default()
         }
     }
 

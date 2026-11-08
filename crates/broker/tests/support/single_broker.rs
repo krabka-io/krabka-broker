@@ -143,8 +143,14 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     }
 }
 
-krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
-krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, expect, bound_config);
+krabka_broker_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
+krabka_broker_macros::bound_start_fixture!(
+    start,
+    start_bound,
+    ::krabka_broker,
+    expect,
+    bound_config
+);
 
 /// Hold both listeners through startup and advertise their actual addresses.
 pub async fn start_with_bound_listeners(

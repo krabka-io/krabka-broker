@@ -13,7 +13,7 @@ use {
         control_plane::freeze_scope,
         support::{
             self,
-            produce::{SinglePartitionProduceSetup, send_batch},
+            produce::{BatchSender as _, single_partition_produce},
             records::value_record,
             topics::{creatable_topic, create_topic_request},
         },
@@ -102,12 +102,15 @@ fn one_record(value: &str) -> RecordBatch {
 
 /// Produce one record and hand back the partition row.
 pub async fn produce(client: &Client, topic: &str, topic_id: WireUuid) -> PartitionProduceResponse {
-    let resp = send_batch(&client, one_record("v"), SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        ..Default::default()
-    })
-    .await;
+    let resp = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(one_record("v"))
+                .topic(topic)
+                .topic_id(topic_id)
+                .call(),
+        )
+        .await;
     resp.responses[0].partition_responses[0].clone()
 }
 

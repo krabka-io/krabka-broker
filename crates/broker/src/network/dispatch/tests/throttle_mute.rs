@@ -198,7 +198,7 @@ fn response_correlation_id(frame: &BytesMut) -> i32 {
     i32::from_be_bytes(frame[..4].try_into().expect("response correlation id"))
 }
 
-krabka_macros::single_partition_produce_fixture!(single_partition_produce);
+krabka_broker_macros::single_partition_produce_fixture!(single_partition_produce);
 
 /// Builds a `Produce` request body for `topic` carrying `count` records of
 /// `record_bytes` each.
@@ -211,20 +211,18 @@ fn produce_body(topic: &str, acks: i16, record_bytes: usize, count: usize) -> By
             ..Default::default()
         })
         .collect();
-    let request = single_partition_produce(SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        records: Some(
-            RecordBatch {
-                last_offset_delta: i32::try_from(count - 1).expect("record count"),
-                records,
-                ..Default::default()
-            }
-            .into(),
-        ),
-        acknowledgements: ProduceAcknowledgements::from_wire(WireAcknowledgements(acks)),
-        timeout: ProduceTimeoutMillis(30_000),
-        ..Default::default()
-    });
+    let request = single_partition_produce()
+        .topic(topic)
+        .records(RecordBatch {
+            last_offset_delta: i32::try_from(count - 1).expect("record count"),
+            records,
+            ..Default::default()
+        })
+        .acknowledgements(ProduceAcknowledgements::from_wire(WireAcknowledgements(
+            acks,
+        )))
+        .timeout(30_000)
+        .call();
     let mut body = BytesMut::new();
     request
         .encode(&mut body, PRODUCE_VERSION)
@@ -420,32 +418,39 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
 ///
 /// A produce charges both `producer_byte_rate` and `request_percentage`. The
 /// request quota is seeded far below what this request needs, so it saturates
-/// at `quota_throttle_max`. The byte rate leaves about three quarters of a
-/// window of debt, which Kafka does not bound — so summing the two is
-/// observably different from taking the longest. Kafka reports one
-/// `throttle_time_ms` and mutes the channel once, so the response must carry a
-/// single window and the connection must be readable again after one.
+/// at `quota_throttle_max`. The byte rate throttles for three quarters of a
+/// window, which Kafka does not bound — so summing the two is observably
+/// different from taking the longest. Kafka reports one `throttle_time_ms`
+/// and mutes the channel once, so the response must carry a single window and
+/// the connection must be readable again after one.
+///
+/// The test broker's quotas keep one sample, and Kafka's `Rate` measures a
+/// new client's first request over 1 ms then, so its throttle is
+/// `(frame / 1 ms - rate) / rate * 1 ms` = `frame / rate - 1 ms`. A rate of
+/// the frame per 751 ms makes it 750 ms.
 #[tokio::test]
 async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     let mute_window = millis(1000);
+    let body = produce_body("no-such-topic", 1, 1024, 8);
+    let frame_len = request_frame()
+        .api_key(PRODUCE_KEY)
+        .api_version(PRODUCE_VERSION)
+        .maybe_tagged(Some(&[0]))
+        .body(&body)
+        .call()
+        .len();
+    let byte_rate = f64::from(u32::try_from(frame_len).expect("frame length")) / 0.751;
     let StartedBroker {
         broker: handle,
         dir: _dir,
     } = broker_with_anonymous_quotas(mute_window, &[
-        quota("producer_byte_rate", 4800.0),
+        quota("producer_byte_rate", byte_rate),
         quota("request_percentage", 0.0001),
     ])
     .await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
-    send_request(
-        &mut framed,
-        PRODUCE_KEY,
-        PRODUCE_VERSION,
-        1,
-        &produce_body("no-such-topic", 1, 1024, 8),
-    )
-    .await;
+    send_request(&mut framed, PRODUCE_KEY, PRODUCE_VERSION, 1, &body).await;
     let first = response_frame(
         &mut framed,
         CLIENT_TIMEOUT,
@@ -471,9 +476,11 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
 
 /// KIP-13: a `Produce` is charged its whole request, header and body, once
 /// (#748), as Kafka's `KafkaApis.handleProduceRequest` charges
-/// `request.sizeInBytes` -- not only the record payloads. At 1000 bytes/sec
-/// with a one-second burst, the reported throttle is the frame size less the
-/// burst, in milliseconds.
+/// `request.sizeInBytes` -- not only the record payloads. The test broker's
+/// quotas keep one sample, so Kafka's `Rate` measures a new client's first
+/// request over 1 ms: at 1000 bytes/sec the throttle is
+/// `(frame / 1 ms - 1000) / 1000 * 1 ms`, the frame size less one, in
+/// milliseconds.
 #[tokio::test]
 async fn produce_charges_the_whole_request_frame_once() {
     let StartedBroker {
@@ -499,11 +506,10 @@ async fn produce_charges_the_whole_request_frame_once() {
     .await;
     let produce: ProduceResponse = decode_response_body(&response, PRODUCE_VERSION);
 
-    let expected = i32::try_from(frame_len).expect("frame length") - 1000;
+    let expected = i32::try_from(frame_len).expect("frame length") - 1;
     check!(
-        (expected - 5..=expected).contains(&produce.throttle_time_ms),
-        "frame of {frame_len} bytes, throttle {}",
-        produce.throttle_time_ms
+        produce.throttle_time_ms == expected,
+        "frame of {frame_len} bytes"
     );
 
     close_serve_loop(framed, server).await;
@@ -828,8 +834,8 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
     handle.shutdown().await;
 }
 
-krabka_macros::consumer_fetch_fixture!(consumer_fetch_request);
-krabka_macros::create_topic_fixture!(configured_topic_request);
+krabka_broker_macros::consumer_fetch_fixture!(consumer_fetch_request);
+krabka_broker_macros::create_topic_fixture!(configured_topic_request);
 
 async fn broker_with_throttle(throttle_max: Time) -> StartedBroker {
     start_broker_with(|cfg| cfg.quota_throttle_max = throttle_max).await

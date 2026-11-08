@@ -7,18 +7,18 @@ Feature: IP quotas govern connection creation and release independently
     Then the sole described IP entity reports connection creation rate two
 
   Scenario: The canonical loopback IP rate limits connections independently
-    Given IP entity 127.0.0.1 permits one new connection per second
-    When two loopback connections request API versions while another loopback IP requests them independently
-    Then the first connection is served the second closes without a response and the other IP is served within five hundred milliseconds
+    Given IP entity 127.0.0.3 permits one new connection per second
+    When eleven connections from the limited IP request API versions while another loopback IP requests them independently
+    Then the first ten connections are served the eleventh closes without a response and the other IP is served within five hundred milliseconds
 
   Scenario Outline: Equivalent loopback address spellings share the same connection quota
     Given IP entity <entity> permits one new connection per second
-    When two loopback connections request API versions while another loopback IP requests them independently
-    Then the first connection is served the second closes without a response and the other IP is served within five hundred milliseconds
+    When eleven connections from the limited IP request API versions while another loopback IP requests them independently
+    Then the first ten connections are served the eleventh closes without a response and the other IP is served within five hundred milliseconds
     Examples:
       | entity |
-      | ::ffff:127.0.0.1 |
-      | 127.1 |
+      | ::ffff:127.0.0.3 |
+      | 127.0.3 |
 
   Scenario: Unconfigured connection creation rates leave the baseline unthrottled
     Given a plaintext broker has no connection creation rate quota

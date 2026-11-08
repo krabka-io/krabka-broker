@@ -59,8 +59,6 @@ struct RestoredBatch {
 
 #[fixture]
 fn batch() -> RestoredBatch {
-    // Start this scenario with fresh inputs and observations.
-
     RestoredBatch {
         frame: None,
         coordinates: Slot::default(),

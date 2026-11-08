@@ -27,8 +27,6 @@ struct QuotaAdministration {
 }
 #[fixture]
 fn quota() -> QuotaAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     QuotaAdministration {
         port_ownership: None,
         cluster: None,

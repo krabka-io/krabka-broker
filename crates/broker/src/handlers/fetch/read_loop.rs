@@ -8,7 +8,7 @@ use {
         FetchReaderExt as _,
         plan::{
             PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
-            required_leader,
+            refused_read, required_leader,
         },
         read::{LiveOffsets, ReadRequest, do_read},
         remote::{RemoteFetchWait, try_remote_read},
@@ -346,7 +346,12 @@ async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollSt
         let Some(part) = read.partition.clone() else {
             continue;
         };
-        LiveOffsets::of(&part).await.report(&mut read.out);
+        match LiveOffsets::of(&part).await {
+            Ok(live) => live.report(&mut read.out),
+            Err(error) => {
+                read.out = refused_read(read.partition_index, codes::from_broker_error(&error));
+            }
+        }
     }
 }
 
@@ -935,11 +940,11 @@ mod tests {
             metrics::RequestPhases,
             partition::{Partition, test_support::test_partition},
             producer_state::ProducerState,
-            test_support::{StandalonePartitionSetup, StorageMode},
+            test_support::{STANDALONE_TOPIC, StorageMode},
         },
         assert2::assert,
         bytes::{Bytes, BytesMut},
-        krabka_ids::Offset,
+        krabka_ids::{Offset, PartitionIndex},
         krabka_log::{Log, LogConfig},
         krabka_protocol::{
             owned::fetch_response::{AbortedTransaction, EpochEndOffset, FetchableTopicResponse},
@@ -1139,20 +1144,23 @@ mod tests {
         Log::open(&part_dir, LogConfig::default()).expect("open partition log")
     }
 
+    #[bon::builder]
     fn spawn_fixture_partition(
-        broker: &Broker,
-        dir: &FsPath,
-        log: Log,
-        setup: StandalonePartitionSetup<'_>,
+        #[builder(start_fn)] broker: &Broker,
+        #[builder(start_fn)] dir: &FsPath,
+        #[builder(start_fn)] log: Log,
+        #[builder(default = STANDALONE_TOPIC)] topic: &str,
+        #[builder(into, default)] partition: PartitionIndex,
+        #[builder(default)] storage: StorageMode,
     ) -> Arc<Partition> {
         spawn_partition(
-            setup.topic.to_owned(),
-            setup.partition,
+            topic.to_owned(),
+            partition,
             dir.to_path_buf(),
             log,
             broker.log_dir_status.clone(),
             Arc::clone(&broker.producer_state),
-            setup.storage == StorageMode::Diskless,
+            storage == StorageMode::Diskless,
         )
         .unwrap()
     }
@@ -1160,14 +1168,6 @@ mod tests {
     /// A local partition read planned against `Broker`'s "leader with no
     /// replication target installed" default, for a topic that already holds
     /// one appended batch at offset 0.
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct NonemptyPartitionSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(b"v")]
-        payload: &'static [u8],
-    }
-
     #[bon::builder]
     async fn nonempty_local_partition(
         broker: &Broker,
@@ -1175,17 +1175,9 @@ mod tests {
         #[builder(default = "orders")] topic: &'_ str,
         #[builder(default = b"v")] payload: &'static [u8],
     ) -> Arc<Partition> {
-        let setup = NonemptyPartitionSetup { topic, payload };
-        let NonemptyPartitionSetup { topic, payload } = setup;
-        let part = spawn_fixture_partition(
-            broker,
-            dir,
-            open_fixture_log(dir, topic),
-            StandalonePartitionSetup {
-                topic,
-                ..Default::default()
-            },
-        );
+        let part = spawn_fixture_partition(broker, dir, open_fixture_log(dir, topic))
+            .topic(topic)
+            .call();
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
         part.produce_batch(sized_batch(payload))
@@ -1210,7 +1202,7 @@ mod tests {
         const TOPIC_B: &str = "budget-progress-b";
         const PAYLOAD: &[u8; 512] = &[b'x'; 512];
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1255,7 +1247,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fitting_first_batch_spends_the_exception_for_initial_and_replacement_reads() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1378,7 +1370,7 @@ mod tests {
         const ENTRIES: usize = 64;
         const FITTING: usize = 5;
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1565,7 +1557,7 @@ mod tests {
     async fn a_metadata_only_row_carries_an_empty_reads_aborted_transactions() {
         let cases = aborted_isolation_cases();
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -1631,11 +1623,10 @@ mod tests {
         let limit = log.log_end_offset();
         log.trim_to_offset(limit)
             .expect("trim the whole log away from under the fetch");
-        spawn_fixture_partition(broker, dir, log, StandalonePartitionSetup {
-            topic,
-            storage: StorageMode::Diskless,
-            ..Default::default()
-        })
+        spawn_fixture_partition(broker, dir, log)
+            .topic(topic)
+            .storage(StorageMode::Diskless)
+            .call()
     }
 
     /// One encoded batch of a single record.
@@ -1854,11 +1845,10 @@ mod tests {
             }],
         });
 
-        let part = partition(&broker, dir.path(), StandalonePartitionSetup {
-            topic: "cold",
-            storage: StorageMode::Diskless,
-            ..Default::default()
-        });
+        let part = partition(&broker, dir.path())
+            .topic("cold")
+            .storage(StorageMode::Diskless)
+            .call();
         let mut pending = super::PendingRead {
             topic_name: "cold".into(),
             topic_id: WireUuid(topic_id.into_bytes()),
@@ -2104,7 +2094,7 @@ mod tests {
     /// the (here empty) list its read found.
     #[tokio::test]
     async fn a_reread_carries_aborted_transactions_only_for_read_committed() {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_broker()];
         };
@@ -2185,21 +2175,6 @@ mod tests {
     struct FetchMinimumBytes(usize);
     #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
     struct FetchWaitMillis(i32);
-    #[derive(Clone, Copy, Default)]
-    struct PollStateSetup {
-        minimum: FetchMinimumBytes,
-        wait: FetchWaitMillis,
-    }
-
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct BlockedPollSetup<'a> {
-        #[default(FetchMinimumBytes(4096))]
-        minimum: FetchMinimumBytes,
-        #[default(FetchWaitMillis(30_000))]
-        wait: FetchWaitMillis,
-        #[default("the long poll completes promptly")]
-        failure: &'a str,
-    }
 
     #[bon::builder]
     async fn check_blocked_poll_completes(
@@ -2210,23 +2185,18 @@ mod tests {
         #[builder(into, default = FetchWaitMillis (30_000))] wait: FetchWaitMillis,
         #[builder(default = "the long poll completes promptly")] failure: &'_ str,
     ) {
-        let setup = BlockedPollSetup {
-            minimum,
-            wait,
-            failure,
-        };
         let phases = RequestPhases::default();
         let mut state = state_for()
             .pending(pending)
-            .minimum(setup.minimum)
-            .wait(setup.wait)
+            .minimum(minimum)
+            .wait(wait)
             .call();
         time::timeout(
             Duration::from_secs(2),
             super::long_poll_then_reread(broker, pending, waits, &mut state, &phases),
         )
         .await
-        .expect(setup.failure);
+        .expect(failure);
     }
 
     /// A read budget with `sendfile` off.
@@ -2247,10 +2217,9 @@ mod tests {
         #[builder(into, default)] minimum: FetchMinimumBytes,
         #[builder(into, default)] wait: FetchWaitMillis,
     ) -> super::LongPollState {
-        let setup = PollStateSetup { minimum, wait };
         super::LongPollState {
-            min_bytes: setup.minimum.0,
-            max_wait_ms: setup.wait.0,
+            min_bytes: minimum.0,
+            max_wait_ms: wait.0,
             sendfile_capable: false,
             bytes: super::PartitionBytes::new(pending.len()),
             remaining_response_bytes: usize::MAX,

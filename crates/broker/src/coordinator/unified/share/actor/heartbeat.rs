@@ -25,11 +25,18 @@ use {
         error::BrokerError,
         metadata_epoch::next_i32,
     },
-    krabka_protocol::owned::{
-        share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-        share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+    krabka_protocol::{
+        owned::{
+            share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+        },
+        primitives::uuid::Uuid,
     },
-    std::{collections::HashSet, time::Instant},
+    std::{
+        collections::{HashMap, HashSet},
+        ops::ControlFlow,
+        time::Instant,
+    },
 };
 
 pub(super) async fn handle_heartbeat(
@@ -42,27 +49,13 @@ pub(super) async fn handle_heartbeat(
 ) -> Result<ShareGroupHeartbeatResponse, BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
-
-    // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
         return handle_leave(state, config, metadata, coordinator, req, now_ms).await;
     }
-
-    // ─── Member lookup ───────────────────────────────────────────
-    // KIP-932 mirrors KIP-848: the client mints its own member UUID and
-    // sends it with `member_epoch == 0`. Epoch 0 from an unknown member is a
-    // first join under the client's id, which the handler has checked is set
-    // (`KafkaApis.isMemberIdValid`). Epoch 0 from a known member is a rejoin.
-    // Kafka's `getOrMaybeCreateMember` creates a new member with its defaults,
-    // and the heartbeat then updates it like any other.
-    let joining = req.member_epoch == 0 && !state.members.contains_key(&req.member_id);
-    if joining {
-        if state.members.len() >= config.max_size {
-            return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
-        }
-    } else if let Err(error_code) = state.validate_member_epoch(&req.member_id, req.member_epoch) {
-        return Ok(error_resp(error_code, config));
-    }
+    let joining = match check_member(state, config, req) {
+        ControlFlow::Continue(joining) => joining,
+        ControlFlow::Break(response) => return Ok(response),
+    };
     let recorder = ShareRecorder::start(state, &[&req.member_id]);
     let assigned_before = state
         .members
@@ -109,21 +102,58 @@ pub(super) async fn handle_heartbeat(
         start_initialize(state, coordinator, initialize);
     }
     cleanup_deleted_topics(state, coordinator, now_ms).await;
-    // Kafka sends the assignment only on a full request (a rejoin at epoch 0
-    // or a request that carries the subscription) or when it changed.
+    Ok(heartbeat_response(
+        state,
+        config,
+        req,
+        assigned_before.as_ref(),
+    ))
+}
+
+/// Look up the heartbeat's member: continue with whether the heartbeat is a
+/// first join, or break with the error response to answer with.
+///
+/// KIP-932 mirrors KIP-848: the client mints its own member UUID and sends it
+/// with `member_epoch == 0`. Epoch 0 from an unknown member is a first join
+/// under the client's id, which the handler has checked is set
+/// (`KafkaApis.isMemberIdValid`). A first join into a full group answers
+/// `GROUP_MAX_SIZE_REACHED`. Epoch 0 from a known member is a rejoin: Kafka's
+/// `getOrMaybeCreateMember` creates a new member with its defaults, and the
+/// heartbeat then updates it like any other. Every heartbeat that is not a
+/// first join must carry a valid member epoch.
+fn check_member(
+    state: &ShareGroupState,
+    config: &ShareGroupConfig,
+    req: &ShareGroupHeartbeatRequest,
+) -> ControlFlow<ShareGroupHeartbeatResponse, bool> {
+    let joining = req.member_epoch == 0 && !state.members.contains_key(&req.member_id);
+    if joining {
+        if state.members.len() >= config.max_size {
+            return ControlFlow::Break(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
+        }
+    } else if let Err(error_code) = state.validate_member_epoch(&req.member_id, req.member_epoch) {
+        return ControlFlow::Break(error_resp(error_code, config));
+    }
+    ControlFlow::Continue(joining)
+}
+
+/// The response to a successful heartbeat. Kafka sends the assignment only
+/// on a full request (a rejoin at epoch 0 or a request that carries the
+/// subscription) or when it changed from `assigned_before`.
+fn heartbeat_response(
+    state: &ShareGroupState,
+    config: &ShareGroupConfig,
+    req: &ShareGroupHeartbeatRequest,
+    assigned_before: Option<&HashMap<Uuid, Vec<i32>>>,
+) -> ShareGroupHeartbeatResponse {
     let assigned_changed = state
         .members
         .get(&req.member_id)
         .map(|m| &m.assigned_partitions)
-        != assigned_before.as_ref();
+        != assigned_before;
     let with_assignment =
         req.member_epoch == 0 || req.subscribed_topic_names.is_some() || assigned_changed;
-    Ok(build_assignment_resp(
-        state,
-        &req.member_id,
-        config,
-        with_assignment,
-    ))
+    build_assignment_resp(state, &req.member_id, config, with_assignment)
 }
 
 /// Kafka's `ShareGroupMember.Builder` updates of `shareGroupHeartbeat`, and
@@ -427,8 +457,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn share_heartbeat() -> ShareHeartbeatBehavior {
-        // Start this scenario with fresh inputs and observations.
-        ShareHeartbeatBehavior::default()
+        ShareHeartbeatBehavior {
+            ..ShareHeartbeatBehavior::default()
+        }
     }
     #[given(
         "Share group g subscribes to four-partition topic t with initialized partitions {initialized}"

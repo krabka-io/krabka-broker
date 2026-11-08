@@ -3712,6 +3712,7 @@ dependencies = [
  "krabka-client-core",
  "krabka-format",
  "krabka-ids",
+ "krabka-log",
  "krabka-macros",
  "krabka-metadata",
  "krabka-object-store",
@@ -3894,6 +3895,7 @@ dependencies = [
  "krabka-bdd",
  "krabka-bench-driver",
  "krabka-broker",
+ "krabka-broker-macros",
  "krabka-client-admin",
  "krabka-client-consumer",
  "krabka-client-core",
@@ -3977,6 +3979,34 @@ dependencies = [
  "yare",
  "zerocopy",
  "zlib-rs",
+]
+
+[[package]]
+name = "krabka-broker-macros"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "bytes",
+ "clap",
+ "derive_more",
+ "futures-util",
+ "krabka-macros",
+ "krabka-protocol",
+ "krabka-units 0.8.0",
+ "moxy",
+ "prometheus-client",
+ "rstest",
+ "rstest-bdd",
+ "rstest-bdd-macros",
+ "rust-embed",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "stateright",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "yare",
 ]
 
 [[package]]
@@ -4191,6 +4221,7 @@ dependencies = [
  "krabka-broker",
  "krabka-cli-connection",
  "krabka-client-core",
+ "krabka-log",
  "krabka-macros",
  "krabka-protocol",
  "krabka-security",
@@ -4356,7 +4387,6 @@ dependencies = [
  "rstest-bdd",
  "rstest-bdd-macros",
  "rust-embed",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "stateright",

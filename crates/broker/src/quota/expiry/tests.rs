@@ -5,11 +5,13 @@ use {
     super::*,
     crate::{
         metrics::{QuotaEntityLabel, test_support::encode_metrics},
-        quota::QuotaType,
+        quota::{QuotaType, test_support::manual_buckets},
     },
     assert2::check,
     krabka_metadata::EntityKey,
     krabka_units::{millis, secs},
+    qubit_clock::ManualMonotonicClock,
+    std::time::Duration,
 };
 
 fn key(user: &str, client_id: &str) -> EntityKey {
@@ -19,16 +21,18 @@ fn key(user: &str, client_id: &str) -> EntityKey {
     ]
 }
 
-/// A bucket table and the metrics that carry the series its bucket published.
+/// A quota table on a manual clock and the metrics that carry the series its
+/// quota published.
 struct AliceFixture {
+    clock: Arc<ManualMonotonicClock>,
     buckets: QuotaBuckets,
     metrics: BrokerMetrics,
 }
 
 fn alice_fixture() -> AliceFixture {
-    let buckets = QuotaBuckets::new();
+    let (clock, buckets) = manual_buckets();
     let metrics = BrokerMetrics::new();
-    drop(buckets.get_or_create(QuotaType::Produce, &key("alice", "app"), 1024.0));
+    drop(buckets.client_quota(QuotaType::Produce, &key("alice", "app"), 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -38,7 +42,11 @@ fn alice_fixture() -> AliceFixture {
                 client_id: Some("app".into()),
             }),
     );
-    AliceFixture { buckets, metrics }
+    AliceFixture {
+        clock,
+        buckets,
+        metrics,
+    }
 }
 
 /// The series names a `/metrics` body carries for the per-entity throttle.
@@ -55,25 +63,39 @@ fn check_expired(buckets: &QuotaBuckets, metrics: &BrokerMetrics) {
     check!(throttle_series(metrics).is_empty());
 }
 
-fn sweep_and_check_expired(buckets: &QuotaBuckets, metrics: &BrokerMetrics) {
+/// Lets a millisecond pass on `clock` and sweeps everything older than none.
+fn sweep_and_check_expired(
+    clock: &ManualMonotonicClock,
+    buckets: &QuotaBuckets,
+    metrics: &BrokerMetrics,
+) {
+    check!(let Ok(()) = clock.advance(Duration::from_millis(1)));
     sweep(buckets, metrics, millis(0));
     check_expired(buckets, metrics);
 }
 
 #[test]
 fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
-    let AliceFixture { buckets, metrics } = alice_fixture();
+    let AliceFixture {
+        clock,
+        buckets,
+        metrics,
+    } = alice_fixture();
     check!(throttle_series(&metrics).len() == 1);
 
-    // Nothing has touched the bucket since it was made, so any positive age
-    // below "just now" expires it.
-    sweep_and_check_expired(&buckets, &metrics);
+    // Nothing has touched the quota since it was made, a millisecond ago.
+    sweep_and_check_expired(&clock, &buckets, &metrics);
 }
 
 #[test]
 fn a_bucket_inside_the_window_keeps_its_series() {
-    let AliceFixture { buckets, metrics } = alice_fixture();
+    let AliceFixture {
+        clock,
+        buckets,
+        metrics,
+    } = alice_fixture();
 
+    check!(let Ok(()) = clock.advance(Duration::from_secs(3_600)));
     sweep(&buckets, &metrics, secs(3600));
 
     check!(buckets.len() == 1);
@@ -86,10 +108,10 @@ fn a_bucket_inside_the_window_keeps_its_series() {
 /// named `client_id="app"` and left this series behind.
 #[test]
 fn a_user_bucket_releases_the_series_of_its_own_key() {
-    let buckets = QuotaBuckets::new();
+    let (clock, buckets) = manual_buckets();
     let metrics = BrokerMetrics::new();
     let user: EntityKey = vec![("user".into(), Some("alice".into()))];
-    drop(buckets.get_or_create(QuotaType::Produce, &user, 1024.0));
+    drop(buckets.client_quota(QuotaType::Produce, &user, 1024.0));
     drop(
         metrics
             .quota_entity_throttle_seconds_total
@@ -101,5 +123,5 @@ fn a_user_bucket_releases_the_series_of_its_own_key() {
     );
     check!(throttle_series(&metrics).len() == 1);
 
-    sweep_and_check_expired(&buckets, &metrics);
+    sweep_and_check_expired(&clock, &buckets, &metrics);
 }

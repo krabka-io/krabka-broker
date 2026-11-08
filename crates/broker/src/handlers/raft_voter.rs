@@ -69,7 +69,7 @@ pub(super) async fn with_voter_broker(
 }
 
 #[cfg(test)]
-krabka_macros::wire_codec_helpers! { test_context ["admin-client"]; }
+krabka_broker_macros::wire_codec_helpers! { test_context ["admin-client"]; }
 
 /// The two voter refusal scenarios and their original authorization identities.
 #[cfg(test)]
@@ -110,7 +110,7 @@ pub(super) async fn check_voter_case<
 ) {
     use crate::test_support::dispatch_wire;
     with_voter_broker(case.authorizer(), async move |broker| {
-        krabka_macros::request_test_identity! { bind(ctx); user [case.user()]; };
+        krabka_broker_macros::request_test_identity! { bind(ctx); user [case.user()]; };
         let response: Response = dispatch_wire(broker, api, version, &request(broker), &ctx).await;
         assert2::assert!(response == expected());
     })

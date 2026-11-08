@@ -5,7 +5,7 @@
 //! derives the rest, and [`build_registry`], which assembles the whole table.
 //! A flat Moxy table declares the krabka-private wire codes and framing.
 //!
-//! [`dispatch_table!`]: krabka_macros::dispatch_table
+//! [`dispatch_table!`]: krabka_broker_macros::dispatch_table
 
 use {
     crate::{
@@ -94,7 +94,7 @@ use {
 // The handler is `crate::handlers::<snake_name>::handle` unless the entry names
 // another after `=>`. `auth` entries register the
 // hand-written `<snake_name>_adapter` imported above.
-krabka_macros::dispatch_table! {
+krabka_broker_macros::dispatch_table! {
     // `handle(broker, version, body, ctx)` on the raw body, awaited. Each of
     // these needs the bytes themselves: the voter, quorum, snapshot and
     // unregister apis forward them untouched to the active controller, and
@@ -185,11 +185,11 @@ krabka_macros::dispatch_table! {
     // `handle(broker, &request, version, ctx)`, called without awaiting: the
     // result is wrapped in a ready future.
     typed_sync:
-        DescribeAcls,
-        DescribeProducers;
+        DescribeAcls;
     // The same, for a handler that cannot fail and returns its response
     // struct itself.
     typed_infallible:
+        DescribeProducers,
         OffsetForLeaderEpoch,
         ListConfigResources,
         DescribeConfigs,

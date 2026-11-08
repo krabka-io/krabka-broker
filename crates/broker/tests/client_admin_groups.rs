@@ -24,8 +24,6 @@ struct GroupAdministration {
 }
 #[rstest::fixture]
 fn group_admin() -> GroupAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     GroupAdministration {
         directory: None,
         broker: None,

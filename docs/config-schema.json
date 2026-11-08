@@ -2491,7 +2491,7 @@
         },
         "quota_throttle_max": {
           "default": null,
-          "description": "Maximum request-quota throttle delay, which bounds how long one\nresponse over `request_percentage` mutes a client. Equivalent to\nKafka's `quota.window.size.seconds`; byte-rate and controller-mutation\nthrottles are not bounded.",
+          "description": "Length of one client-quota sample, Kafka's `quota.window.size.seconds`.\nIt is also the maximum request-quota throttle delay, which bounds how\nlong one response over `request_percentage` mutes a client; byte-rate\nand controller-mutation throttles are not bounded.",
           "format": "duration",
           "type": [
             "string",
@@ -2500,7 +2500,7 @@
         },
         "quota_window": {
           "default": null,
-          "description": "Time window that sizes the client byte-rate quota token bucket's burst\ncapacity. Equivalent to Kafka's sampling window `quota.window.num *\nquota.window.size.seconds`.",
+          "description": "Whole sampled window of the client quotas, Kafka's `quota.window.num *\nquota.window.size.seconds`: the quotas keep `quota_window /\nquota_throttle_max` samples of `quota_throttle_max` each. The per-IP\n`connection_creation_rate` is measured over the same window.",
           "format": "duration",
           "type": [
             "string",

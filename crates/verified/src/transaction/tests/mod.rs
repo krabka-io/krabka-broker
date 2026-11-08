@@ -58,23 +58,6 @@ struct MarkerSetup {
     target: MarkerTarget,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct MarkerPartitionSetup {
-    producer_epoch: ProducerEpoch,
-    coordinator_epoch: CoordinatorEpoch,
-    pending: PendingTransaction,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct TransactionSnapshotSetup {
-    #[default(ProducerId(7))]
-    producer_id: ProducerId,
-    #[default(ProducerEpoch(3))]
-    producer_epoch: ProducerEpoch,
-    #[default(TransactionStateCode(PREPARE_ABORT))]
-    state: TransactionStateCode,
-}
-
 #[bon::builder]
 fn marker(
     #[builder(into, default = ProducerId (1))] producer_id: ProducerId,
@@ -109,15 +92,10 @@ fn partition(
     #[builder(into, default)] coordinator_epoch: CoordinatorEpoch,
     #[builder(default)] pending: PendingTransaction,
 ) -> TransactionMarkerPartitionState {
-    let setup = MarkerPartitionSetup {
-        producer_epoch,
-        coordinator_epoch,
-        pending,
-    };
     TransactionMarkerPartitionState {
-        producer_epoch: setup.producer_epoch.0,
-        coordinator_epoch: setup.coordinator_epoch.0,
-        has_pending_transaction: setup.pending == PendingTransaction::Present,
+        producer_epoch: producer_epoch.0,
+        coordinator_epoch: coordinator_epoch.0,
+        has_pending_transaction: pending == PendingTransaction::Present,
     }
 }
 
@@ -127,15 +105,10 @@ fn snapshot(
     #[builder(into, default = ProducerEpoch (3))] producer_epoch: ProducerEpoch,
     #[builder(into, default = TransactionStateCode (PREPARE_ABORT))] state: TransactionStateCode,
 ) -> TransactionSnapshot {
-    let setup = TransactionSnapshotSetup {
-        producer_id,
-        producer_epoch,
-        state,
-    };
     TransactionSnapshot {
-        pid: setup.producer_id.0,
-        epoch: setup.producer_epoch.0,
-        state: setup.state.0,
+        pid: producer_id.0,
+        epoch: producer_epoch.0,
+        state: state.0,
     }
 }
 

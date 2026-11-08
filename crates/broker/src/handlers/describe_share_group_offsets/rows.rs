@@ -18,6 +18,7 @@ use {
         error::BrokerError,
         share_coordinator::{
             coordinator::{ShareStateSummary, UNINITIALIZED_START_OFFSET},
+            key::ShareKeyRef,
             persister_client::SharePersister,
         },
     },
@@ -36,7 +37,8 @@ use {
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`
 /// (`Errors.TOPIC_AUTHORIZATION_FAILED.message()`).
-const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
+const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str =
+    codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED);
 
 /// Kafka's `PartitionFactory.DEFAULT_LEADER_EPOCH`.
 const DEFAULT_LEADER_EPOCH: i32 = 0;
@@ -64,7 +66,8 @@ impl ShareSummaries for SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
-        self.read_state_summary(group, topic_id, partition).await
+        self.read_state_summary(ShareKeyRef::new(group, topic_id, partition))
+            .await
     }
 }
 

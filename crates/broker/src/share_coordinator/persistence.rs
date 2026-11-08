@@ -99,7 +99,7 @@ pub fn parse_state_key(mut buf: &[u8]) -> Result<ShareStateKey, BrokerError> {
 
 /// Share reads and writes carry the same batch fields in distinct wire types.
 /// Conversions keep protocol defaults for their tagged fields.
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::WireStateBatch)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::WireStateBatch)]
 #[wire_state_batch(
     read = read_share_group_state_response::StateBatch,
     write = write_share_group_state_request::StateBatch,
@@ -112,7 +112,7 @@ pub struct StateBatch {
 }
 
 /// Kafka's `ShareSnapshotValue` version 0, a full state image of one key.
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::ShareStateValue)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::ShareStateValue)]
 #[share_state(
     encode_doc = "Encodes the value with its `i16` version prefix, as Kafka's `CoordinatorRecordSerde.serializeValue` does.",
     decode_doc = "Returns an error when the bytes are not a version 0 `ShareSnapshotValue`."
@@ -132,7 +132,7 @@ pub struct ShareSnapshotValue {
 
 /// Kafka's `ShareUpdateValue` version 0, a delta over the latest snapshot of
 /// one key. It has no state epoch and no timestamps.
-#[derive(Debug, Clone, PartialEq, Eq, krabka_macros::ShareStateValue)]
+#[derive(Debug, Clone, PartialEq, Eq, krabka_broker_macros::ShareStateValue)]
 #[share_state(
     encode_doc = "Encodes the value with its `i16` version prefix.",
     decode_doc = "Returns an error when the bytes are not a version 0 `ShareUpdateValue`."

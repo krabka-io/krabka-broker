@@ -326,19 +326,8 @@ struct TieredFollower {
 
 #[fixture]
 fn tiered() -> TieredFollower {
-    // Start this scenario with fresh inputs and observations.
-
     TieredFollower {
-        brokers: None,
-        log_dirs: Vec::new(),
-        remote_dir: None,
-        admin: None,
-        new_replica_client: None,
-        controller: None,
-        settled: BTreeMap::new(),
-        topic: String::new(),
-        new_replica_start: None,
-        replicated: None,
+        ..TieredFollower::default()
     }
 }
 

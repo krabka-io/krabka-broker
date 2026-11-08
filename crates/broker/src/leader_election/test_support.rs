@@ -121,8 +121,8 @@ fn partition_record_from_election_setup(setup: ElectionSetup<'_>) -> PartitionRe
 }
 
 // Input partition for election tests, before any leader or ISR change.
-krabka_macros::fixture_constructors! { election: pub img_with_partition -> MetadataImage = image_from_election_setup; }
-krabka_macros::fixture_constructors! { election: pub seed_partition -> PartitionRecord = partition_record_from_election_setup; }
+krabka_broker_macros::fixture_constructors! { election: pub img_with_partition -> MetadataImage = image_from_election_setup; }
+krabka_broker_macros::fixture_constructors! { election: pub seed_partition -> PartitionRecord = partition_record_from_election_setup; }
 
 /// Run a failover scan whose metrics are not inspected by the test.
 pub async fn failover(
@@ -157,49 +157,14 @@ pub fn expected_clean_election(
 }
 
 /// Independent expected partition after one change to the three-replica fixture.
-pub struct ExpectedPartitionSetup<'a> {
-    pub topic: &'a str,
-    pub leader: NodeId,
-    pub isr: &'a [NodeId],
-    pub leader_epoch: LeaderEpoch,
-    pub directories: Vec<Uuid>,
-}
-
-impl Default for ExpectedPartitionSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "t",
-            leader: NodeId(2),
-            isr: &[NodeId(2), NodeId(3)],
-            leader_epoch: LeaderEpoch(6),
-            directories: vec![],
-        }
-    }
-}
-
 #[bon::builder]
 pub fn expected_partition(
-    #[builder(default = ExpectedPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = ExpectedPartitionSetup::default().leader)] leader: NodeId,
-    #[builder(default = ExpectedPartitionSetup::default().isr)] isr: &'_ [NodeId],
-    #[builder(into, default = ExpectedPartitionSetup::default().leader_epoch)]
-    leader_epoch: LeaderEpoch,
-    #[builder(default = ExpectedPartitionSetup::default().directories)] directories: Vec<Uuid>,
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(into, default = NodeId(2))] leader: NodeId,
+    #[builder(default = &[NodeId(2), NodeId(3)])] isr: &'_ [NodeId],
+    #[builder(into, default = LeaderEpoch(6))] leader_epoch: LeaderEpoch,
+    #[builder(default = vec![])] directories: Vec<Uuid>,
 ) -> PartitionRecord {
-    let setup = ExpectedPartitionSetup {
-        topic,
-        leader,
-        isr,
-        leader_epoch,
-        directories,
-    };
-    let ExpectedPartitionSetup {
-        topic,
-        leader,
-        isr,
-        leader_epoch,
-        directories,
-    } = setup;
     PartitionRecord {
         topic: topic.into(),
         partition: 0,

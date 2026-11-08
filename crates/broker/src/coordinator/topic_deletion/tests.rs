@@ -25,7 +25,7 @@ use {
     uuid::Uuid,
 };
 
-krabka_macros::delete_topic_request!(delete_request);
+krabka_broker_macros::delete_topic_request!(delete_request);
 
 krabka_macros::topic_record_fixture!(topic_record);
 

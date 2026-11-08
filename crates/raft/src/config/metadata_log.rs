@@ -97,6 +97,7 @@ mod tests {
         std::collections::BTreeMap,
     };
 
+    #[derive(Default)]
     struct MetadataStorage {
         root: Option<PathBuf>,
         config: Option<MetadataLogConfig>,
@@ -106,13 +107,8 @@ mod tests {
 
     #[fixture]
     fn storage() -> MetadataStorage {
-        // Start this scenario with fresh inputs and observations.
-
         MetadataStorage {
-            root: None,
-            config: None,
-            partition: None,
-            minimum_segment_bytes: None,
+            ..MetadataStorage::default()
         }
     }
 

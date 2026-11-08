@@ -148,24 +148,16 @@ pub(super) fn make_coordinator_with_config(
     (coord, log)
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct ShareSubscriptionSetup<'a> {
-    #[default("m1")]
-    pub member_id: &'a str,
-    pub epoch: MemberEpoch,
-}
-
 /// Ordinary share heartbeat for the test topic, with every other wire field defaulted.
 #[bon::builder]
 pub(super) fn subscribed_request(
     #[builder(default = "m1")] member_id: &'_ str,
     #[builder(into, default)] epoch: MemberEpoch,
 ) -> ShareGroupHeartbeatRequest {
-    let setup = ShareSubscriptionSetup { member_id, epoch };
     ShareGroupHeartbeatRequest {
         group_id: "g".into(),
-        member_id: setup.member_id.into(),
-        member_epoch: setup.epoch.0,
+        member_id: member_id.into(),
+        member_epoch: epoch.0,
         subscribed_topic_names: Some(vec!["t".into()]),
         ..Default::default()
     }
@@ -192,15 +184,6 @@ pub(super) async fn heartbeat(
 /// Seeds the group behind `handle` with `partitions` of `topic` already
 /// initialized, as bootstrap replay of a `ShareGroupStatePartitionMetadata`
 /// record would.
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct InitializedTopicSetup<'a> {
-    pub topic_id: Uuid,
-    #[default("t")]
-    pub topic_name: &'a str,
-    #[default(vec![PartitionIndex(0)])]
-    pub partitions: Vec<PartitionIndex>,
-}
-
 #[bon::builder]
 pub(super) async fn seed_initialized(
     handle: &ShareGroupActorHandle,
@@ -213,16 +196,6 @@ pub(super) async fn seed_initialized(
         share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
     };
 
-    let setup = InitializedTopicSetup {
-        topic_id,
-        topic_name,
-        partitions,
-    };
-    let InitializedTopicSetup {
-        topic_id,
-        topic_name,
-        partitions,
-    } = setup;
     handle
         .tx
         .send(ShareGroupActorMessage::Seed(ShareGroupSeed {

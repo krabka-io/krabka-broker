@@ -109,7 +109,7 @@ fn request(
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -119,7 +119,7 @@ use {
         test_support::start_broker_with_authorizer_no_audit as start_broker,
     },
     krabka_protocol::records::{Record, RecordBatch},
-    std::{fs, net::SocketAddr, ops::RangeInclusive, sync::atomic, time::Duration},
+    std::{fs, net::SocketAddr, ops::RangeInclusive, time::Duration},
     tokio::{task, time},
 };
 
@@ -168,7 +168,7 @@ async fn check_trim_response(
     let response = drive(broker, request, context).await;
     assert!(
         response
-            == krabka_macros::unthrottled_wire!(DeleteRecordsResponse {
+            == krabka_broker_macros::unthrottled_wire!(DeleteRecordsResponse {
                 topics: expected_trim_rows()
                     .topic(expected.topic)
                     .indices(expected.indices)
@@ -179,14 +179,6 @@ async fn check_trim_response(
     );
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RefusedTrimSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    #[default(KafkaErrorCode(codes::POLICY_VIOLATION))]
-    error: KafkaErrorCode,
-}
-
 #[bon::builder]
 async fn check_refused_trim(
     broker: &Broker,
@@ -194,26 +186,11 @@ async fn check_refused_trim(
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(into, default = KafkaErrorCode (codes :: POLICY_VIOLATION))] error: KafkaErrorCode,
 ) {
-    let setup = RefusedTrimSetup { topic, error };
-    let response = drive_trim(broker, ctx, request().topic(setup.topic).call()).await;
+    let response = drive_trim(broker, ctx, request().topic(topic).call()).await;
     assert!(
-        response.topics
-            == expected_trim_rows()
-                .topic(setup.topic)
-                .error(setup.error)
-                .call(),
+        response.topics == expected_trim_rows().topic(topic).error(error).call(),
         "{response:?}"
     );
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct TrimFrontierSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    offset: Offset,
-    low_watermark: Offset,
-    error: KafkaErrorCode,
-    frontier: Offset,
 }
 
 #[bon::builder]
@@ -227,21 +204,14 @@ async fn check_trim_frontier(
     #[builder(into, default)] error: KafkaErrorCode,
     #[builder(into, default)] frontier: Offset,
 ) {
-    let setup = TrimFrontierSetup {
-        topic,
-        offset,
-        low_watermark,
-        error,
-        frontier,
-    };
     let response = drive_trim(
         broker,
         ctx,
         request()
-            .topic(setup.topic)
+            .topic(topic)
             .partitions(&[TrimTarget {
                 index: PartitionIndex(0),
-                offset: setup.offset,
+                offset,
             }])
             .call(),
     )
@@ -249,17 +219,17 @@ async fn check_trim_frontier(
     check!(
         response.topics
             == expected_trim_rows()
-                .topic(setup.topic)
-                .low_watermark(setup.low_watermark)
-                .error(setup.error)
+                .topic(topic)
+                .low_watermark(low_watermark)
+                .error(error)
                 .call(),
         "{}",
-        setup.topic
+        topic
     );
     check!(
-        partition.log_start_offset().unwrap() == setup.frontier,
+        partition.log_start_offset().unwrap() == frontier,
         "{}",
-        setup.topic
+        topic
     );
 }
 
@@ -290,7 +260,7 @@ async fn pending_partition_fixture(
 
 #[tokio::test]
 async fn handle_denied_topic_returns_topic_auth_rows() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, p, peer);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -364,25 +334,11 @@ fn batch_at(activation_ms: i64, leader_epoch: i32) -> RecordBatch {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct PendingBatchTopicSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    delivery_mode: Option<&'a str>,
-}
-
 /// A topic config key and the value it is set to.
 #[derive(Clone, Copy)]
 struct ConfigPair<'a> {
     name: &'a str,
     value: &'a str,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ConfiguredPendingBatchSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    configs: &'a [ConfigPair<'a>],
 }
 
 // Create `topic` with the given `delivery.mode`, then append one batch
@@ -395,14 +351,6 @@ async fn topic_holding_a_pending_batch(
     #[builder(default = "orders")] topic: &'_ str,
     delivery_mode: Option<&'_ str>,
 ) {
-    let setup = PendingBatchTopicSetup {
-        topic,
-        delivery_mode,
-    };
-    let PendingBatchTopicSetup {
-        topic,
-        delivery_mode,
-    } = setup;
     let configs: Vec<ConfigPair<'_>> = delivery_mode
         .map(|mode| ConfigPair {
             name: DELIVERY_MODE,
@@ -431,9 +379,6 @@ async fn topic_with_configs_holding_a_pending_batch(
 ) {
     use krabka_protocol::owned::create_topics_response;
 
-    let setup = ConfiguredPendingBatchSetup { topic, configs };
-
-    let ConfiguredPendingBatchSetup { topic, configs } = setup;
     let broker = broker_handle.broker_arc_for_test();
 
     let config = |key: &str| {
@@ -485,7 +430,7 @@ async fn topic_with_configs_holding_a_pending_batch(
         .partitions
         .get(topic, krabka_ids::PartitionIndex(0))
         .expect("the partition is local");
-    let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let leader_epoch = part.leader_epoch().get();
     for activation_ms in [DELIVERED_MS, PENDING_MS] {
         part.produce_batch(batch_at(activation_ms, leader_epoch))
             .await
@@ -529,15 +474,19 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         )
         .await;
 
-        let expected = krabka_macros::unthrottled_wire!(DeleteRecordsResponse {
-            topics: vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-                name: topic.into(),
-                partitions: vec![krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                    partition_index: 0,
-                    low_watermark: expected_low_watermark,
-                    error_code: codes::NONE,
-                })],
-            })],
+        let expected = krabka_broker_macros::unthrottled_wire!(DeleteRecordsResponse {
+            topics: vec![krabka_broker_macros::tagged_wire!(
+                DeleteRecordsTopicResult {
+                    name: topic.into(),
+                    partitions: vec![krabka_broker_macros::tagged_wire!(
+                        DeleteRecordsPartitionResult {
+                            partition_index: 0,
+                            low_watermark: expected_low_watermark,
+                            error_code: codes::NONE,
+                        }
+                    )],
+                }
+            )],
         });
         check!(resp == expected, "{topic}");
     }
@@ -549,7 +498,7 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 
 #[tokio::test]
 async fn a_refused_trim_deletes_nothing() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, principal, peer, ctx);
         boot [handler_fixture_support::start_with_break_glass(gated_config)];
         user ["admin"];
@@ -567,14 +516,18 @@ async fn a_refused_trim_deletes_nothing() {
 
     let resp = drive_trim(&broker, &test_context(&principal, &peer), request().call()).await;
 
-    let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: "orders".to_owned(),
-        partitions: vec![krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-            partition_index: 0,
-            low_watermark: -1,
-            error_code: codes::POLICY_VIOLATION,
-        })],
-    })];
+    let expected = vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: "orders".to_owned(),
+            partitions: vec![krabka_broker_macros::tagged_wire!(
+                DeleteRecordsPartitionResult {
+                    partition_index: 0,
+                    low_watermark: -1,
+                    error_code: codes::POLICY_VIOLATION,
+                }
+            )],
+        }
+    )];
     assert!(resp.topics == expected, "{resp:?}");
     // The refusal refused: the log start offset did not move.
     check!(part.log_start_offset().unwrap() == before);
@@ -608,20 +561,22 @@ fn expected_trim_rows(
         low_watermark,
         error,
     };
-    vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: setup.topic.to_owned(),
-        partitions: setup
-            .indices
-            .iter()
-            .map(
-                |index| krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                    partition_index: index.0,
-                    low_watermark: setup.low_watermark.0,
-                    error_code: setup.error.0,
-                })
-            )
-            .collect(),
-    })]
+    vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: setup.topic.to_owned(),
+            partitions: setup
+                .indices
+                .iter()
+                .map(
+                    |index| krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                        partition_index: index.0,
+                        low_watermark: setup.low_watermark.0,
+                        error_code: setup.error.0,
+                    })
+                )
+                .collect(),
+        }
+    )]
 }
 
 /// A trim the partition has already satisfied answers success and deletes
@@ -728,8 +683,7 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
     let topic = "delete-records-follower";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
-    part.current_leader
-        .store(broker.config.node_id.0 + 1, atomic::Ordering::Release);
+    part.test_set_leader(broker.config.node_id.0 + 1);
 
     check_refused_trim()
         .broker(&broker)
@@ -856,21 +810,23 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
     ])
     .await;
 
-    let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
-        name: topic.to_owned(),
-        partitions: vec![
-            krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                partition_index: 0,
-                low_watermark: -1,
-                error_code: codes::NOT_LEADER_OR_FOLLOWER,
-            }),
-            krabka_macros::tagged_wire!(DeleteRecordsPartitionResult {
-                partition_index: 1,
-                low_watermark: -1,
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-            }),
-        ],
-    })];
+    let expected = vec![krabka_broker_macros::tagged_wire!(
+        DeleteRecordsTopicResult {
+            name: topic.to_owned(),
+            partitions: vec![
+                krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                    partition_index: 0,
+                    low_watermark: -1,
+                    error_code: codes::NOT_LEADER_OR_FOLLOWER,
+                }),
+                krabka_broker_macros::tagged_wire!(DeleteRecordsPartitionResult {
+                    partition_index: 1,
+                    low_watermark: -1,
+                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                }),
+            ],
+        }
+    )];
     assert!(resp.topics == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
@@ -918,7 +874,7 @@ async fn an_internal_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
         if topic != "orders" {
-            let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+            let leader_epoch = part.leader_epoch().get();
             part.produce_batch(batch_at(DELIVERED_MS, leader_epoch))
                 .await
                 .expect("append a batch");
@@ -1096,7 +1052,7 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
         }],
         ..Default::default()
     };
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(replicator, peer, ctx);
         user ["replicator"];
         client ["replica-2"];
@@ -1112,15 +1068,6 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
 
 /// The row a `DeleteRecords` of `topic-0` to `offset` answers, with
 /// `timeout_ms`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DeleteToSetup<'a> {
-    #[default("delete-records-followers")]
-    topic: &'a str,
-    offset: Offset,
-    #[default(RequestTimeoutMillis(200))]
-    timeout: RequestTimeoutMillis,
-}
-
 #[bon::builder]
 async fn delete_to(
     broker: &Broker,
@@ -1128,22 +1075,17 @@ async fn delete_to(
     #[builder(into, default)] offset: Offset,
     #[builder(into, default = RequestTimeoutMillis (200))] timeout: RequestTimeoutMillis,
 ) -> Vec<DeleteRecordsTopicResult> {
-    let setup = DeleteToSetup {
-        topic,
-        offset,
-        timeout,
-    };
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(admin, peer, ctx);
         user ["admin"];
     };
     let request = request()
-        .topic(setup.topic)
+        .topic(topic)
         .partitions(&[TrimTarget {
             index: PartitionIndex(0),
-            offset: setup.offset,
+            offset,
         }])
-        .timeout(setup.timeout)
+        .timeout(timeout)
         .call();
     drive(broker, &request, &ctx).await.topics
 }

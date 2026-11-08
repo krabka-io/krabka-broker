@@ -64,7 +64,7 @@ async fn start_partition_topic(
     }
 }
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
@@ -83,13 +83,6 @@ async fn drive(
         .expect("handle")
 }
 
-#[derive(Default)]
-struct PartitionRowsCaseSetup {
-    topics: Vec<CreatePartitionsTopic>,
-    mutation: PartitionMutation,
-    expected: Vec<CreatePartitionsTopicResult>,
-}
-
 /// Compare complete topic rows, using the supplied context or a fresh admin context.
 #[bon::builder]
 async fn check_topic_rows(
@@ -99,12 +92,7 @@ async fn check_topic_rows(
     #[builder(default)] mutation: PartitionMutation,
     #[builder(default)] expected: Vec<CreatePartitionsTopicResult>,
 ) {
-    let setup = PartitionRowsCaseSetup {
-        topics,
-        mutation,
-        expected,
-    };
-    let request = request(setup.topics, setup.mutation);
+    let request = request(topics, mutation);
     let response = if let Some(ctx) = ctx {
         drive(broker, &request, ctx).await
     } else {
@@ -112,13 +100,13 @@ async fn check_topic_rows(
         let address = peer();
         drive(broker, &request, &test_context(&admin, &address)).await
     };
-    let expected = expected_response(setup.expected);
+    let expected = expected_response(expected);
     assert!(response == expected);
 }
 
 #[tokio::test]
 async fn handle_denies_topic_alter_for_each_topic() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, p, peer);
         boot [start_broker] deny_all;
         user ["alice"];
@@ -291,7 +279,7 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
         .await;
     // Keep the two-token burst without refilling a token during a runner stall.
     seed_controller_quota(&broker_handle, 2.0 / 64.0).await;
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
     };
@@ -357,7 +345,7 @@ async fn a_conflicting_growth_refunds_only_its_obsolete_partition_delta() {
             .quota_window(QUOTA_WINDOW)
             .call()
             .await;
-        krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+        krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
         seed_controller_quota(&broker_handle, QUOTA_RATE).await;
         let ctx = test_context(&p, &peer);
         let stale = broker.controller.current_image();
@@ -746,7 +734,7 @@ async fn handle_growth_rows(partition_growth_rows: &mut PartitionGrowthRows, val
         .expect("started broker")
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
     let mutation = if validate {
         PartitionMutation::Validate
     } else {

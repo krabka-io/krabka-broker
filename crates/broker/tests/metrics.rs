@@ -95,14 +95,15 @@ async fn produce_to(addr: SocketAddr, topic: &str, partition: i32) -> ProduceOut
         }],
         ..Default::default()
     };
-    let (_body_len, r) = kafka_wire::request_once::<_, ProduceResponse>(
-        addr,
-        &req,
-        (0, PRODUCE_VERSION),
-        CLIENT_ID,
-        (1, true),
-    )
-    .await;
+    let (_body_len, r): (usize, ProduceResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(0)
+        .version(PRODUCE_VERSION)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await;
     let topic = r.responses.into_iter().next().expect("one topic in resp");
     let part = topic
         .partition_responses
@@ -119,8 +120,15 @@ async fn fetch_one(addr: SocketAddr) -> FetchResponse {
         .topic(TOPIC.into())
         .topic_id(Uuid::default())
         .call();
-    let (_, r): (usize, FetchResponse) =
-        kafka_wire::request_once(addr, &req, (1, FETCH_VERSION), CLIENT_ID, (1, true)).await;
+    let (_, r): (usize, FetchResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(1)
+        .version(FETCH_VERSION)
+        .client_id(CLIENT_ID)
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await;
     r
 }
 
@@ -150,6 +158,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     tempfile::TempDir,
 };
+#[derive(Default)]
 struct MetricEndpoint {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -159,14 +168,8 @@ struct MetricEndpoint {
 }
 #[fixture]
 fn endpoint() -> MetricEndpoint {
-    // Start this scenario with fresh inputs and observations.
-
     MetricEndpoint {
-        broker: None,
-        directory: None,
-        body: None,
-        produced: None,
-        fetched: None,
+        ..MetricEndpoint::default()
     }
 }
 async fn start_endpoint(endpoint: &mut MetricEndpoint, directory: TempDir, config: BrokerConfig) {

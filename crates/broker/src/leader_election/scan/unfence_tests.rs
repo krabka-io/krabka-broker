@@ -53,30 +53,12 @@ enum ElectionRecovery {
     Recovering,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ElectedSetup<'a> {
-    #[default(NodeId(1))]
-    leader: NodeId,
-    eligible: &'a [NodeId],
-    recovery: ElectionRecovery,
-}
-
 #[bon::builder]
 fn elected(
     #[builder(into, default = NodeId (1))] leader: NodeId,
     #[builder(default)] eligible: &'_ [NodeId],
     #[builder(default)] recovery: ElectionRecovery,
 ) -> Vec<MetadataRecord> {
-    let setup = ElectedSetup {
-        leader,
-        eligible,
-        recovery,
-    };
-    let ElectedSetup {
-        leader,
-        eligible,
-        recovery,
-    } = setup;
     let partition = expected_partition().leader(leader).isr(&[leader]).call();
     let eligible = eligible.to_vec();
     let recovery =

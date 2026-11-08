@@ -36,18 +36,8 @@ pub struct BreakGlass {
 
 #[fixture]
 pub(super) fn glass() -> BreakGlass {
-    // Start this scenario with fresh inputs and observations.
-
     BreakGlass {
-        cluster: None,
-        clients: BTreeMap::new(),
-        topic: String::new(),
-        proposed: None,
-        approval: None,
-        described: None,
-        before_transition: None,
-        deletion: None,
-        audit: Vec::new(),
+        ..BreakGlass::default()
     }
 }
 

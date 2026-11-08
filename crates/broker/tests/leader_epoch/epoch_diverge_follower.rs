@@ -6,7 +6,7 @@ use {
         support::{
             self,
             client::connect_client,
-            produce::{batch_request, replicated_topic_produce_for},
+            produce::{ProduceAcknowledgements, single_partition_produce},
             registered_cluster, shutdown_cluster,
             topics::AssignedTopicSetup,
         },
@@ -19,6 +19,7 @@ use {
     tokio::sync::MutexGuard,
 };
 type ReplicaCluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+#[derive(Default)]
 struct DivergentFollower {
     cluster: Option<ReplicaCluster>,
     permit: Option<MutexGuard<'static, ()>>,
@@ -28,14 +29,8 @@ struct DivergentFollower {
 }
 #[fixture]
 fn follower() -> DivergentFollower {
-    // Start this scenario with fresh inputs and observations.
-
     DivergentFollower {
-        cluster: None,
-        permit: None,
-        topic: String::new(),
-        follower: None,
-        divergent_end: None,
+        ..DivergentFollower::default()
     }
 }
 #[given(
@@ -57,10 +52,14 @@ async fn replicated_prefix(follower: &mut DivergentFollower, topic: String, reco
     let producer = connect_client(address, None).await;
     for index in 0..records {
         let response = producer
-            .send(batch_request(
-                record(&format!("v{index}")),
-                replicated_topic_produce_for(&topic, id.0),
-            ))
+            .send(
+                single_partition_produce()
+                    .records(record(&format!("v{index}")))
+                    .topic(&*topic)
+                    .topic_id(id)
+                    .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                    .call(),
+            )
             .await
             .expect("replicated prefix produce");
         assert!(response.responses[0].partition_responses[0].error_code == 0);

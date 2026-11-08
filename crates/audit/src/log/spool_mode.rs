@@ -174,20 +174,11 @@ mod tests {
 
     use crate::log::test_support::{AuditEventCount, CheckpointFrequency};
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct FailingSpoolSetup {
-        #[default(ROOMY_CAP)]
-        cap: krabka_units::ByteSize,
-        frequency: CheckpointFrequency,
-    }
-
     #[bon::builder]
     fn failing_spool(
         #[builder(default = ROOMY_CAP)] cap: krabka_units::ByteSize,
         #[builder(default)] frequency: CheckpointFrequency,
     ) -> FailingSpoolFixture {
-        let setup = FailingSpoolSetup { cap, frequency };
-        let FailingSpoolSetup { cap, frequency } = setup;
         let checkpoint_every_n = match frequency {
             CheckpointFrequency::Disabled => None,
             CheckpointFrequency::Every(count) => Some(count.0),

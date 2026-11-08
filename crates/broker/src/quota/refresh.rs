@@ -7,12 +7,11 @@
 use {
     super::{
         IpNames, QuotaType,
-        buckets::{BucketKey, LiveBucket, QuotaBuckets},
+        buckets::{BucketKey, LiveMeter, QuotaBuckets},
         ip_names::system_lookup,
     },
     crate::metadata_source::watch_image_loop,
     krabka_metadata::{EntityKey, MetadataImage},
-    krabka_units::convert::ByteRateExt as _,
     std::{future::Future, net::IpAddr, sync::Arc},
     tokio::{
         sync::{Notify, watch},
@@ -97,31 +96,31 @@ where
     }
 }
 
+/// Pushes the rates of `image` to every live quota meter.
+///
+/// A client quota takes its new bound with its samples kept, as Kafka's
+/// `ClientQuotaManager.updateQuotaMetricConfigs` gives the existing sensor a
+/// new `MetricConfig`. A quota the image no longer configures is bounded at
+/// zero, which throttles nothing.
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
-    let window = buckets.quota_window();
-    for LiveBucket {
+    for LiveMeter {
         key: BucketKey {
             quota_type,
             entity_key,
         },
         entry,
-    } in buckets.iter()
+    } in buckets.client_quotas()
     {
-        let new_rate = configured_rate(image, buckets.ip_names(), quota_type, &entity_key)
-            .map_or(0.0, |rate| quota_type.token_rate(rate));
-
-        let new_rate = super::bucket_rate(new_rate);
-        // Compared as the bucket stores it, so a rate finer than the bucket
-        // resolves does not reset the bucket on every image.
-        if !entry.bucket.runs_at_byte_rate(new_rate) {
+        let bound = configured_rate(image, buckets.ip_names(), quota_type, &entity_key)
+            .map_or(0.0, |rate| quota_type.metered_rate(rate));
+        if entry.meter.bound().to_bits() != bound.to_bits() {
             debug!(
                 quota_key = quota_type.config_key(),
                 ?entity_key,
-                new_rate = new_rate.bytes_per_sec_f64(),
-                "quota refresh: rate update"
+                bound,
+                "quota refresh: bound update"
             );
-            let burst = (new_rate * window).into();
-            entry.bucket.set_byte_rate_with_burst(new_rate, burst);
+            entry.meter.set_bound(bound);
         }
     }
 }
@@ -139,7 +138,7 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
 /// next image change.
 ///
 /// The rate comes back in the unit the image configures it in;
-/// [`QuotaType::token_rate`] converts it to the bucket's token unit.
+/// [`QuotaType::metered_rate`] converts it to the unit the meter records.
 fn configured_rate(
     image: &MetadataImage,
     ip_names: &IpNames,
@@ -159,17 +158,18 @@ fn configured_rate(
 #[cfg(test)]
 mod tests {
     use {
-        super::{super::bucket_rate, *},
+        super::*,
         crate::{
             quota::test_support::{
                 AliceBucket, QuotaEntityInput, QuotaRecordSetup, QuotaValue,
-                alice_app1_producer_quota, alice_bucket, app1_producer_quota,
+                alice_app1_producer_quota, alice_bucket, app1_producer_quota, manual_buckets,
                 shared_image_from_quota_setup,
             },
-            throttle::TokenBucket,
+            throttle::ClientQuota,
         },
-        assert2::assert,
+        assert2::{assert, check},
         krabka_metadata::EntityKey,
+        krabka_units::{millis, secs},
         std::{
             sync::atomic::{AtomicUsize, Ordering},
             time::Duration,
@@ -177,15 +177,17 @@ mod tests {
         tokio::{net, task::JoinHandle, time},
     };
 
-    krabka_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
+    krabka_broker_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
 
-    /// A refresh keeps each bucket at the rate its consumer created it with
-    /// (#692). A `request_percentage` of 50 is 500 000 microseconds of handler
-    /// time per second, not 50, and a fractional one does not round down to the
-    /// unlimited rate 0.
+    /// A refresh keeps each meter at the rate its consumer created it with
+    /// (#692). A `request_percentage` of 50 is a bound of 500 000
+    /// microseconds of handler time per second, not 50, and a fractional one
+    /// does not round down to the unlimited rate 0.
     #[test]
     fn refresh_keeps_the_rate_unit_each_quota_meters() {
-        for (quota_type, value, created_at, expected) in [
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (quota_type, value, created_at, want) in [
             (QuotaType::Request, 50.0, 500_000.0, 500_000.0),
             (QuotaType::Request, 0.0001, 1.0, 1.0),
             (QuotaType::Request, 0.000_05, 0.5, 0.5),
@@ -194,7 +196,7 @@ mod tests {
         ] {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-            let bucket = buckets.get_or_create(quota_type, &key, created_at);
+            let meter = buckets.client_quota(quota_type, &key, created_at);
 
             refresh_buckets(
                 &img_with_quota()
@@ -204,31 +206,30 @@ mod tests {
                 &buckets,
             );
 
-            assert2::check!(
-                bucket.byte_rate() == bucket_rate(expected),
-                "{quota_type:?}={value}"
-            );
+            actual.push((quota_type, value.to_string(), meter.bound()));
+            expected.push((quota_type, value.to_string(), want));
         }
+        check!(actual == expected);
     }
 
     #[test]
     fn refresh_updates_existing_bucket_rate() {
-        let AliceBucket { buckets, bucket: b } = alice_bucket().call();
-        assert!(b.byte_rate() == bucket_rate(0.0));
+        let AliceBucket { buckets, quota } = alice_bucket().call();
+        let before = quota.bound();
 
         let img = img_with_quota().value(2048.0).call();
         refresh_buckets(&img, &buckets);
-        assert!(b.byte_rate() == bucket_rate(2048.0));
+        assert!((before, quota.bound()) == (0.0, 2048.0));
     }
 
     #[test]
     fn refresh_zeroes_bucket_when_quota_removed_from_image() {
-        let AliceBucket { buckets, bucket: b } = alice_bucket().rate(1024.0).call();
-        assert!(b.byte_rate() == bucket_rate(1024.0));
+        let AliceBucket { buckets, quota } = alice_bucket().rate(1024.0).call();
+        let before = quota.bound();
 
         let empty = Arc::new(MetadataImage::new(uuid::Uuid::nil()));
         refresh_buckets(&empty, &buckets);
-        assert!(b.byte_rate() == bucket_rate(0.0));
+        assert!((before, quota.bound()) == (1024.0, 0.0));
     }
 
     /// An image change keeps the `connection_creation_rate` of an `ip` bucket.
@@ -279,7 +280,7 @@ mod tests {
         {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
-            let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
+            let b = buckets.client_quota(QuotaType::ConnectionCreation, &key, 1.0);
 
             let img = img_with_quota()
                 .entity(vec![QuotaEntityInput::ip(entity_name)])
@@ -287,7 +288,7 @@ mod tests {
                 .value(rate)
                 .call();
             refresh_buckets(&img, &buckets);
-            assert!(b.byte_rate() == bucket_rate(expected), "{case}");
+            assert!((b.bound() - expected).abs() < 1.0e-9, "{case}");
         }
     }
 
@@ -298,7 +299,7 @@ mod tests {
     fn refresh_keeps_the_rate_an_alias_ip_entity_configures() {
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some("::1".into()))];
-        let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
+        let b = buckets.client_quota(QuotaType::ConnectionCreation, &key, 1.0);
         let img = img_with_quota()
             .entity(vec![QuotaEntityInput::ip(Some("0:0:0:0:0:0:0:1"))])
             .key("connection_creation_rate")
@@ -308,7 +309,7 @@ mod tests {
         buckets.ip_names().update(&img);
         refresh_buckets(&img, &buckets);
 
-        assert!(b.byte_rate() == bucket_rate(3.0));
+        assert!((b.bound() - 3.0).abs() < 1.0e-9);
     }
 
     /// The refresh task resolves an `ip` entity that names a host, and applies
@@ -324,7 +325,7 @@ mod tests {
             .to_canonical();
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some(peer.to_string()))];
-        let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
+        let b = buckets.client_quota(QuotaType::ConnectionCreation, &key, 1.0);
         let img = img_with_quota()
             .entity(vec![QuotaEntityInput::ip(Some("localhost"))])
             .key("connection_creation_rate")
@@ -334,10 +335,10 @@ mod tests {
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(rx, Arc::clone(&buckets), shutdown.clone()));
 
-        let mut rate = b.byte_rate();
+        let mut rate = b.bound();
         for _ in 0..200 {
-            rate = b.byte_rate();
-            if rate == bucket_rate(3.0) {
+            rate = b.bound();
+            if (rate - 3.0).abs() < 1.0e-9 {
                 break;
             }
             time::sleep(Duration::from_millis(25)).await;
@@ -345,7 +346,7 @@ mod tests {
         shutdown.cancel();
         task.await.expect("the refresh task stops on cancellation");
 
-        assert!(rate == bucket_rate(3.0));
+        assert!((rate - 3.0).abs() < 1.0e-9);
     }
 
     /// A resolver a test scripts: it fails its first `failures` lookups and then
@@ -388,7 +389,7 @@ mod tests {
     /// address `resolver` answers, made at the rate 1.
     struct Running {
         images: watch::Sender<Arc<MetadataImage>>,
-        bucket: Arc<TokenBucket>,
+        bucket: Arc<ClientQuota>,
         shutdown: CancellationToken,
         task: JoinHandle<()>,
     }
@@ -397,7 +398,7 @@ mod tests {
         fn start(image: Arc<MetadataImage>, resolver: &Arc<Resolver>) -> Self {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("ip".into(), Some(resolver.address.to_string()))];
-            let bucket = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
+            let bucket = buckets.client_quota(QuotaType::ConnectionCreation, &key, 1.0);
             let (images, rx) = watch::channel(image);
             let shutdown = CancellationToken::new();
             let resolver = Arc::clone(resolver);
@@ -445,18 +446,11 @@ mod tests {
         // (how long to let the clock run, then what to expect)
         for step in [500, 1_000, 2_000, 600_000] {
             time::sleep(Duration::from_millis(step)).await;
-            seen.push((resolver.calls(), running.bucket.byte_rate()));
+            seen.push((resolver.calls(), running.bucket.bound()));
         }
         running.stop().await;
 
-        assert2::check!(
-            seen == vec![
-                (1, bucket_rate(0.0)),
-                (2, bucket_rate(0.0)),
-                (3, bucket_rate(3.0)),
-                (3, bucket_rate(3.0)),
-            ]
-        );
+        assert2::check!(seen == vec![(1, 0.0), (2, 0.0), (3, 3.0), (3, 3.0),]);
     }
 
     /// Images that arrive while a lookup runs, or while its name waits out a
@@ -520,7 +514,7 @@ mod tests {
         assert2::check!((first, while_gone, put_back) == (1, 1, 2));
     }
 
-    /// An image change sets a byte-rate bucket to the configured rate,
+    /// An image change bounds a byte-rate quota at the configured rate,
     /// fractional part included: Kafka holds the quota as a double, and
     /// neither rounds it to a whole byte per second nor to no limit.
     #[test]
@@ -571,7 +565,7 @@ mod tests {
             want,
         } in cases
         {
-            let AliceBucket { buckets, bucket: b } =
+            let AliceBucket { buckets, quota } =
                 alice_bucket().quota_type(quota_type).rate(1024.0).call();
 
             let img = img_with_quota()
@@ -579,8 +573,8 @@ mod tests {
                 .value(rate)
                 .call();
             refresh_buckets(&img, &buckets);
-            actual.push((quota_type, rate.to_string(), b.byte_rate()));
-            expected.push((quota_type, rate.to_string(), bucket_rate(want)));
+            actual.push((quota_type, rate.to_string(), quota.bound()));
+            expected.push((quota_type, rate.to_string(), want));
         }
         assert!(actual == expected);
     }
@@ -637,7 +631,7 @@ mod tests {
         ];
         for (label, key, before, after, expected) in cases {
             let buckets = QuotaBuckets::new();
-            let bucket = buckets.get_or_create(
+            let quota = buckets.client_quota(
                 QuotaType::Produce,
                 &key,
                 configured_rate(
@@ -651,23 +645,28 @@ mod tests {
 
             refresh_buckets(&image_with_quotas(after), &buckets);
 
-            assert2::check!(bucket.byte_rate() == bucket_rate(expected), "{label}");
+            assert2::check!((label, quota.bound()) == (label, expected));
         }
     }
 
-    /// Re-applying a rate finer than the bucket stores does not reset the
-    /// bucket: a reset refills it to its burst, which would hand a drained
-    /// client a fresh window on every image change.
+    /// A refresh keeps the traffic a client quota measured, whether the rate
+    /// changed or not, as Kafka's `updateQuotaMetricConfigs` keeps the
+    /// sensor's samples. 15 000 bytes at 1000 B/s are 1500 B/s over the
+    /// padded 10 s window: a 5 s throttle at the same rate, none at
+    /// 2000 B/s, and 5010 bytes more there are 2001 B/s, a 5 ms throttle.
     #[test]
-    fn refresh_does_not_refill_a_bucket_whose_rate_is_unchanged() {
-        let rate = 0.123_456_7;
-        let buckets = Arc::new(QuotaBuckets::with_window(krabka_units::secs(10)));
+    fn refresh_keeps_the_measured_traffic() {
+        let (_, buckets) = manual_buckets();
         let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-        let b = buckets.get_or_create(QuotaType::Produce, &key, rate);
-        let drained = b.try_consume(5);
+        let quota = buckets.client_quota(QuotaType::Produce, &key, 1_000.0);
+        let burst = quota.record(15_000);
 
-        refresh_buckets(&img_with_quota().value(rate).call(), &buckets);
+        refresh_buckets(&img_with_quota().value(1_000.0).call(), &buckets);
+        let unchanged = quota.record(0);
+        refresh_buckets(&img_with_quota().value(2_000.0).call(), &buckets);
+        let raised = quota.record(0);
+        let more = quota.record(5_010);
 
-        assert!((drained, b.try_consume(1)) == (1, 0));
+        check!((burst, unchanged, raised, more) == (secs(5), secs(5), millis(0), millis(5)));
     }
 }

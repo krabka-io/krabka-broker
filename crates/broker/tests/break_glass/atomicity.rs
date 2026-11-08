@@ -90,18 +90,8 @@ struct AtomicTransition {
 
 #[fixture]
 fn atomic() -> AtomicTransition {
-    // Start this scenario with fresh inputs and observations.
-
     AtomicTransition {
-        cluster: None,
-        alice: None,
-        id: None,
-        image: None,
-        from: 0,
-        held: None,
-        transition: None,
-        result: None,
-        batches: Vec::new(),
+        ..AtomicTransition::default()
     }
 }
 

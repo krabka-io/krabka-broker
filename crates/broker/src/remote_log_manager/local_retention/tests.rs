@@ -450,7 +450,7 @@ async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
 
     // The active segment breached the window as well, so the pass rolled
     // it for the next copy.
-    krabka_macros::evicted_local_segments!(assert, removed, exports, &partition);
+    krabka_broker_macros::evicted_local_segments!(assert, removed, exports, &partition);
 }
 
 #[tokio::test]
@@ -476,7 +476,7 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
         })
         .await;
 
-    krabka_macros::evicted_local_segments!(check, removed, exports, &partition);
+    krabka_broker_macros::evicted_local_segments!(check, removed, exports, &partition);
 }
 
 /// A tiered topic whose producers stamp records far in the future keeps

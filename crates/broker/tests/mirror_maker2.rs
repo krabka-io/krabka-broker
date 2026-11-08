@@ -1013,8 +1013,6 @@ struct Migration {
 }
 #[fixture]
 fn migration() -> Migration {
-    // Start this scenario with fresh inputs and observations.
-
     Migration {
         broker: None,
         directory: None,
@@ -1289,12 +1287,8 @@ mod tests {
     }
     #[fixture]
     fn records() -> RecordLines {
-        // Start this scenario with fresh inputs and observations.
-
         RecordLines {
-            source: Vec::new(),
-            lines: Vec::new(),
-            parsed: Vec::new(),
+            ..RecordLines::default()
         }
     }
     #[given("the migration fixture's keyed and headered records")]
@@ -1362,11 +1356,8 @@ mod tests {
     }
     #[fixture]
     fn topics() -> TopicRoles {
-        // Start this scenario with fresh inputs and observations.
-
         TopicRoles {
-            names: Vec::new(),
-            roles: Vec::new(),
+            ..TopicRoles::default()
         }
     }
     #[given("the target has topic names")]
@@ -1406,8 +1397,6 @@ mod tests {
     }
     #[fixture]
     fn report() -> ToolReport {
-        // Start this scenario with fresh inputs and observations.
-
         ToolReport {
             text: String::new(),
             partitions: Slot::default(),
@@ -1471,11 +1460,8 @@ mod tests {
     }
     #[fixture]
     fn logs() -> LogSummary {
-        // Start this scenario with fresh inputs and observations.
-
         LogSummary {
-            log: String::new(),
-            excerpt: None,
+            ..LogSummary::default()
         }
     }
     #[given(
@@ -1542,12 +1528,8 @@ mod tests {
     }
     #[fixture]
     fn docker() -> DockerReadings {
-        // Start this scenario with fresh inputs and observations.
-
         DockerReadings {
-            renderings: Vec::new(),
-            states: Vec::new(),
-            gateways: Vec::new(),
+            ..DockerReadings::default()
         }
     }
     #[given("Docker inspect prints these container or network outputs")]

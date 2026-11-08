@@ -601,6 +601,7 @@ fn rows_for(rows: &[OffsetRow], group: &str) -> Vec<OffsetRow> {
 
 // --------------------------------------------------------------------- the suite
 
+#[derive(Default)]
 struct FormattedOffsets {
     cluster: Option<Cluster>,
     classic_commit: Option<i64>,
@@ -611,15 +612,8 @@ struct FormattedOffsets {
 }
 #[rstest::fixture]
 fn formatter() -> FormattedOffsets {
-    // Start this scenario with fresh inputs and observations.
-
     FormattedOffsets {
-        cluster: None,
-        classic_commit: None,
-        next_commit: None,
-        metadata: Vec::new(),
-        offsets: Vec::new(),
-        processed: 0,
+        ..FormattedOffsets::default()
     }
 }
 #[rstest_bdd_macros::given(

@@ -98,6 +98,7 @@ async fn send_api_versions(
 
 async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
+#[derive(Default)]
 struct SoftwareIdentity {
     broker: Option<BootedBroker>,
     name: String,
@@ -108,14 +109,8 @@ struct SoftwareIdentity {
 
 #[fixture]
 fn software() -> SoftwareIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     SoftwareIdentity {
-        broker: None,
-        name: String::new(),
-        version: String::new(),
-        response: None,
-        metrics: None,
+        ..SoftwareIdentity::default()
     }
 }
 

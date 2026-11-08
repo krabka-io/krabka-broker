@@ -38,9 +38,7 @@ pub(super) fn pending_offset_entries(
     partition: &Partition,
     producer_id: krabka_log::ProducerId,
 ) -> Result<CommittedOffsets, BrokerError> {
-    let log = partition.log.lock().map_err(|_| {
-        BrokerError::Replication("offsets log lock poisoned while applying txn marker".into())
-    })?;
+    let log = partition.lock_log()?;
     scan_pending_offset_entries(&log, producer_id)
 }
 

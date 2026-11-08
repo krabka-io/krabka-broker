@@ -556,8 +556,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn shared_placement() -> SharedPlacement {
-        // Start this scenario with fresh inputs and observations.
-        SharedPlacement::default()
+        SharedPlacement {
+            ..SharedPlacement::default()
+        }
     }
 
     #[when("the Share simple assignor balances eligible partitions and retains prior ownership")]

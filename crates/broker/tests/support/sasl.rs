@@ -40,18 +40,6 @@ impl Default for ScramIterations {
     fn default() -> Self { Self(4096) }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct ScramUpsertionSetup {
-    #[default("alice".into())]
-    pub name: String,
-    pub mechanism: ScramAlgorithm,
-    pub iterations: ScramIterations,
-    #[default(bytes::Bytes::from(vec![0u8; 16]))]
-    pub salt: bytes::Bytes,
-    #[default(bytes::Bytes::from(vec![0u8; 64]))]
-    pub salted_password: bytes::Bytes,
-}
-
 #[bon::builder]
 pub fn scram_upsertion(
     #[builder(default = "alice" . into ())] name: String,
@@ -60,19 +48,12 @@ pub fn scram_upsertion(
     #[builder(default = bytes :: Bytes :: from (vec ! [0u8 ; 16]))] salt: bytes::Bytes,
     #[builder(default = bytes :: Bytes :: from (vec ! [0u8 ; 64]))] salted_password: bytes::Bytes,
 ) -> ScramCredentialUpsertion {
-    let setup = ScramUpsertionSetup {
+    ScramCredentialUpsertion {
         name,
-        mechanism,
-        iterations,
+        mechanism: mechanism.wire_code(),
+        iterations: iterations.0,
         salt,
         salted_password,
-    };
-    ScramCredentialUpsertion {
-        name: setup.name,
-        mechanism: setup.mechanism.wire_code(),
-        iterations: setup.iterations.0,
-        salt: setup.salt,
-        salted_password: setup.salted_password,
         ..Default::default()
     }
 }
@@ -172,17 +153,6 @@ impl Default for HashIterations {
     fn default() -> Self { Self(4096) }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct ScramCredentialSetup {
-    #[default("alice".into())]
-    pub user: String,
-    #[default(alice_password().into_bytes())]
-    pub password: Vec<u8>,
-    #[default(SaslMechanism::ScramSha512)]
-    pub mechanism: SaslMechanism,
-    pub iterations: HashIterations,
-}
-
 /// Seed the metadata image with the configured SCRAM credential.
 ///
 /// # Panics
@@ -195,20 +165,13 @@ pub async fn provision_scram(
     #[builder(default = SaslMechanism :: ScramSha512)] mechanism: SaslMechanism,
     #[builder(into, default)] iterations: HashIterations,
 ) {
-    let setup = ScramCredentialSetup {
-        user,
-        password,
-        mechanism,
-        iterations,
-    };
-    let credential =
-        krabka_security::hash_scram_password(&setup.password, setup.mechanism, setup.iterations.0)
-            .expect("hash the SCRAM password");
+    let credential = krabka_security::hash_scram_password(&password, mechanism, iterations.0)
+        .expect("hash the SCRAM password");
     broker
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
             krabka_metadata::ScramCredentialRecord {
-                user: setup.user,
-                mechanism: setup.mechanism,
+                user,
+                mechanism,
                 salt: credential.salt,
                 stored_key: credential.stored_key,
                 server_key: credential.server_key,
@@ -237,8 +200,10 @@ pub async fn start_single_broker_plaintext() -> (BrokerHandle, TempDir, SocketAd
     start_plaintext_configured(|_| {}).await
 }
 
-/// Retain the directory and apply authorization before creating the broker-start future.
-fn start_configured_users(
+/// Start a PLAIN fixture with `users`, after `configure` adjusts its config.
+/// Retain the directory and apply authorization before creating the
+/// broker-start future.
+pub fn start_configured_users(
     super_user: &str,
     users: &[(&str, &str)],
     configure: impl FnOnce(&mut BrokerConfig),

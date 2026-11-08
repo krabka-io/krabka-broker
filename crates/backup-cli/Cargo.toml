@@ -33,6 +33,8 @@ krabka-audit = { workspace = true }
 krabka-client-admin = { version = "0.8.0" }
 # The client security policy, and the timeout an admin call ends with.
 krabka-client-core = { version = "0.8.0" }
+# `epoch_ms`, the clock a capture directory is named by.
+krabka-log = { version = "1.1.5", path = "../log" }
 # The archive the capture is written to is the archive `krabka restore` reads,
 # so the backend mapping is the object-store layer the restore uses, not the
 # broker's TOML config: a backup runs beside a broker, and a restore runs when

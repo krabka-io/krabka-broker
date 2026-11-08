@@ -20,7 +20,7 @@ use {
     assert2::assert,
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, NodeId, TopicRecord},
-    std::{sync::atomic, time::Duration},
+    std::time::Duration,
     tokio::{sync::Notify, task, time},
 };
 
@@ -79,7 +79,7 @@ async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     let partitions = Arc::new(PartitionRegistry::new());
     let release_writer = Arc::new(Notify::new());
     let partition = gated_state_partition(dir.path(), &release_writer);
-    partition.current_leader.store(1, atomic::Ordering::Release);
+    partition.test_set_leader(1);
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),

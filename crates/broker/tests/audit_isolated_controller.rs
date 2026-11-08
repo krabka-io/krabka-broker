@@ -21,6 +21,7 @@ use {
     krabka_broker::{BrokerConfig, BrokerHandle},
     tokio::net::TcpListener,
 };
+#[derive(Default)]
 struct IsolatedAudit {
     controller_config: Option<BrokerConfig>,
     broker_config: Option<BrokerConfig>,
@@ -32,16 +33,8 @@ struct IsolatedAudit {
 }
 #[rstest::fixture]
 fn isolated_audit() -> IsolatedAudit {
-    // Start this scenario with fresh inputs and observations.
-
     IsolatedAudit {
-        controller_config: None,
-        broker_config: None,
-        clients: Vec::new(),
-        controllers: Vec::new(),
-        directories: Vec::new(),
-        controller: None,
-        broker: None,
+        ..IsolatedAudit::default()
     }
 }
 #[rstest_bdd_macros::given(

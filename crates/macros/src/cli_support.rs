@@ -124,18 +124,6 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
     })
 }
 
-pub fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(input)?;
-    let assertion = duration_parse_assertion();
-    Ok(moxy::template! {
-        fn {{ name }}(cases: &[(&str, Option<i64>)]) {
-            for &(raw, expected) in cases {
-                {{ assertion }}
-            }
-        }
-    })
-}
-
 fn duration_parse_assertion() -> TokenStream {
     moxy::template! {
         ::assert2::check!(parse_time(raw).ok().map(::krabka_units::Time::millis_i64) == expected, "{raw}");
@@ -275,18 +263,6 @@ pub fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseErr
             ::std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
             ::std::fs::write(rlmm.join("snapshot"), b"rlmm snapshot bytes").expect("write the rlmm snapshot");
             log_dir
-        }
-    })
-}
-
-pub fn format_directories_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let name = name(input)?;
-    Ok(moxy::template! {
-        fn {{ name }}() -> (::tempfile::TempDir, ::std::path::PathBuf, ::std::path::PathBuf) {
-            let dir = ::tempfile::tempdir().expect("tempdir");
-            let metadata = dir.path().join("meta");
-            let data = dir.path().join("data");
-            (dir, metadata, data)
         }
     })
 }

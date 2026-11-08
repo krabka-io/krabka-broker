@@ -19,7 +19,7 @@ use {
     },
 };
 
-krabka_macros::rebuild_reconciliation_group! {
+krabka_broker_macros::rebuild_reconciliation_group! {
     /// Rebuilds a real `GroupState` from the projection, so that the next real
     /// call behaves exactly as it does in a live run.
     ///

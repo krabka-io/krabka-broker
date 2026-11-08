@@ -35,6 +35,7 @@ async fn boot_with_audited_topic(directory: &Path, request: CreateTopicsRequest)
         .await;
     AuditedBoot { broker, client }
 }
+#[derive(Default)]
 struct AuditChain {
     key_directory: Option<tempfile::TempDir>,
     directory: Option<tempfile::TempDir>,
@@ -45,15 +46,8 @@ struct AuditChain {
 }
 #[rstest::fixture]
 fn audit_chain() -> AuditChain {
-    // Start this scenario with fresh inputs and observations.
-
     AuditChain {
-        key_directory: None,
-        directory: None,
-        signed: None,
-        restarted: None,
-        baseline: None,
-        sequences: None,
+        ..AuditChain::default()
     }
 }
 #[rstest_bdd_macros::given(

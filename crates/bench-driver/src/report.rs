@@ -1262,8 +1262,6 @@ mod tests {
 
     #[rstest::fixture]
     fn failover_gate() -> FailoverGateScenario {
-        // Start this scenario with fresh inputs and observations.
-
         FailoverGateScenario {
             directory: tempdir().expect("failover report directory"),
             krabka: fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)),

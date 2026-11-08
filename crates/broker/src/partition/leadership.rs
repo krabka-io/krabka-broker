@@ -15,7 +15,7 @@ use {
     krabka_log::Log,
     std::{
         future::Future,
-        sync::{Arc, PoisonError, atomic::Ordering},
+        sync::{Arc, atomic::Ordering},
     },
     tokio::sync::{OwnedRwLockReadGuard, RwLockWriteGuard},
 };
@@ -179,7 +179,8 @@ impl Partition {
     /// term.
     ///
     /// # Errors
-    /// Returns the checkpoint's error when the epoch cannot be recorded. A
+    /// Returns the checkpoint's error when the epoch cannot be recorded, and
+    /// [`BrokerError::PartitionWriterDied`] when the log mutex is poisoned. A
     /// changed target is then not published, as a failed diskless promotion
     /// is not.
     pub(crate) async fn install_local_leadership(
@@ -197,7 +198,7 @@ impl Partition {
             // in-flight Produce requests, which hold read guards too.
             let target = self.replication_target.read().await;
             if Self::target_matches(&target, topic_id, local_node, epoch) {
-                let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut log = self.lock_log()?;
                 return assign_leader_epoch_start(&mut log, epoch);
             }
         }
@@ -230,7 +231,7 @@ impl Partition {
         // of the log, so the producer state read here is the state at the log
         // end where the new epoch starts.
         let prepared = {
-            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut log = self.lock_log()?;
             assign_leader_epoch_start(&mut log, epoch).map(|()| log.recovered_producers())
         };
         producer_state
@@ -247,6 +248,10 @@ impl Partition {
     /// Produce admission also checks `current_leader`, so it cannot observe
     /// the metadata promotion until `prepare` and producer-state recovery have
     /// completed successfully.
+    ///
+    /// # Errors
+    /// Returns `prepare`'s error, or [`BrokerError::PartitionWriterDied`] when
+    /// the log mutex is poisoned. The new role is then not published.
     pub(crate) async fn install_replication_target_after_log_prepare<T, F>(
         &self,
         topic_id: Option<uuid::Uuid>,
@@ -281,7 +286,7 @@ impl Partition {
         F: Future<Output = ()>,
     {
         let prepared = {
-            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut log = self.lock_log()?;
             prepare(&mut log)?
         };
         after_prepare(prepared).await;
@@ -297,8 +302,8 @@ impl Partition {
         new_leader: u64,
         new_epoch: i32,
     ) {
-        let prev_leader = self.current_leader.swap(new_leader, Ordering::AcqRel);
-        let prev_epoch = self.current_leader_epoch.swap(new_epoch, Ordering::AcqRel);
+        let prev_leader = self.leader_slot.node.swap(new_leader, Ordering::AcqRel);
+        let prev_epoch = self.leader_slot.epoch.swap(new_epoch, Ordering::AcqRel);
         if let Some(topic_id) = topic_id {
             target.topic_id = Some(topic_id);
         }
@@ -345,7 +350,7 @@ impl Partition {
     /// [`Self::fetch_leader_epoch_fence`] and
     /// [`Self::list_offsets_leader_epoch_fence`].
     fn check_leader_epoch(&self, request_epoch: i32) -> Option<(i16, i32)> {
-        let current = self.current_leader_epoch.load(Ordering::Acquire);
+        let current = self.leader_epoch().get();
         if request_epoch == current {
             return None;
         }
@@ -376,7 +381,7 @@ impl Partition {
     /// `current_leader_epoch = -2` with `FENCED_LEADER_EPOCH` while Fetch v11
     /// serves that same request its records.
     pub(crate) fn list_offsets_leader_epoch_fence(&self, request_epoch: i32) -> Option<(i16, i32)> {
-        let current = self.current_leader_epoch.load(Ordering::Acquire);
+        let current = self.leader_epoch().get();
         match krabka_verified::list_offsets_epoch_decision(request_epoch, current) {
             krabka_verified::ListOffsetsEpochDecision::Proceed => None,
             krabka_verified::ListOffsetsEpochDecision::Fenced => {
@@ -389,13 +394,53 @@ impl Partition {
         }
     }
 
-    /// Test-only: directly set the partition's `current_leader_epoch`
-    /// and do not use the supervisor's metadata-image-driven path.
+    /// The leader the metadata image names for this partition.
+    #[must_use]
+    pub fn leader(&self) -> krabka_ids::NodeId {
+        krabka_ids::NodeId(self.leader_slot.node.load(Ordering::Acquire))
+    }
+
+    /// [`Self::leader`], read with `Relaxed` ordering. The tiering, diskless
+    /// flush and delivery sweeps read it this way, because they use it only
+    /// to pick which partitions to work on.
+    #[must_use]
+    pub fn leader_relaxed(&self) -> krabka_ids::NodeId {
+        krabka_ids::NodeId(self.leader_slot.node.load(Ordering::Relaxed))
+    }
+
+    /// The leader epoch the metadata image names for this partition.
+    #[must_use]
+    pub fn leader_epoch(&self) -> krabka_ids::LeaderEpoch {
+        krabka_ids::LeaderEpoch(self.leader_slot.epoch.load(Ordering::Acquire))
+    }
+
+    /// Whether `node` leads this partition at `epoch`. The epoch is read only
+    /// when `node` is the leader.
+    #[must_use]
+    pub fn is_leader_at(
+        &self,
+        node: impl Into<krabka_ids::NodeId>,
+        epoch: impl Into<krabka_ids::LeaderEpoch>,
+    ) -> bool {
+        self.leader() == node.into() && self.leader_epoch() == epoch.into()
+    }
+
+    /// Test-only: directly set the partition's leader and do not use the
+    /// supervisor's metadata-image-driven path.
+    #[cfg(test)]
+    pub fn test_set_leader(&self, node: impl Into<krabka_ids::NodeId>) {
+        self.leader_slot
+            .node
+            .store(node.into().get(), Ordering::Release);
+    }
+
+    /// Test-only: directly set the partition's leader epoch and do not use
+    /// the supervisor's metadata-image-driven path.
     /// `tests/leader_epoch.rs` uses this to simulate split-brain with a
     /// forced epoch bump mid-Produce.
     #[cfg(any(test, feature = "test-helpers"))]
     pub fn test_set_leader_epoch(&self, epoch: i32) {
-        self.current_leader_epoch.store(epoch, Ordering::Release);
+        self.leader_slot.epoch.store(epoch, Ordering::Release);
     }
 }
 
@@ -507,14 +552,8 @@ mod tests {
 
             p.install_leader_change(leader, epoch).await;
 
-            assert!(
-                p.current_leader.load(Ordering::Acquire) == leader,
-                "case ({leader}, {epoch})"
-            );
-            assert!(
-                p.current_leader_epoch.load(Ordering::Acquire) == epoch,
-                "case ({leader}, {epoch})"
-            );
+            assert!(p.leader() == leader, "case ({leader}, {epoch})");
+            assert!(p.leader_epoch() == epoch, "case ({leader}, {epoch})");
             let st = p.replica_state.lock().await.clone();
             assert!(st.per_follower.is_empty(), "case ({leader}, {epoch})");
             assert!(
@@ -596,14 +635,8 @@ mod tests {
                 }
             }
             assert!(epoch_history(&partition) == expected, "{name}");
-            assert!(
-                partition.current_leader.load(Ordering::Acquire) == 1,
-                "{name}"
-            );
-            assert!(
-                Some(partition.current_leader_epoch.load(Ordering::Acquire)) == led,
-                "{name}"
-            );
+            assert!(partition.leader() == 1, "{name}");
+            assert!(Some(partition.leader_epoch().get()) == led, "{name}");
         }
     }
 
@@ -672,8 +705,8 @@ mod tests {
                     leader_epoch: krabka_metadata::LeaderEpoch(4),
                 }
         );
-        assert!(partition.current_leader.load(Ordering::Acquire) == 2);
-        assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 4);
+        assert!(partition.leader() == 2);
+        assert!(partition.leader_epoch() == 4);
     }
 
     #[derive(Default)]
@@ -759,6 +792,6 @@ mod tests {
 
         p.test_set_leader_epoch(6);
 
-        assert!(p.current_leader_epoch.load(Ordering::Acquire) == 6);
+        assert!(p.leader_epoch() == 6);
     }
 }

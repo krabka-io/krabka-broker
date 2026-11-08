@@ -79,6 +79,7 @@ pub async fn drive_inter_broker_client_then_apiversions(
     Ok(())
 }
 
+#[derive(Default)]
 struct OutboundAuthentication {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -88,13 +89,8 @@ struct OutboundAuthentication {
 
 #[fixture]
 fn outbound() -> OutboundAuthentication {
-    // Start this scenario with fresh inputs and observations.
-
     OutboundAuthentication {
-        broker: None,
-        directory: None,
-        client: None,
-        result: None,
+        ..OutboundAuthentication::default()
     }
 }
 

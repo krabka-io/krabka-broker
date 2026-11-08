@@ -22,10 +22,14 @@ async fn fixture(isr: &[u64]) -> Fixture {
     let dir = tempdir().expect("tempdir");
     let log = open_default_log(dir.path());
     let (tx, rx) = mpsc::channel(1);
-    let observed = observed_writer(dir.path(), log, rx, WriterOptions {
-        replica_state: replica_with_isr(isr).await,
-        ..Default::default()
-    });
+    let observed = observed_writer(
+        dir.path(),
+        log,
+        rx,
+        WriterOptions::builder()
+            .replica_state(replica_with_isr(isr).await)
+            .build(),
+    );
     Fixture {
         _dir: dir,
         tx,

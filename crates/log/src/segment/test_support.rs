@@ -169,14 +169,6 @@ pub(super) fn test_batch_at(off: Offset) -> RecordBatch {
     single_record_batch(off.0, 1_000, Bytes::from(format!("v{}", off.0)))
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct SeededSegmentSetup<'a> {
-    pub offset: Offset,
-    pub batches: &'a [SampleBatchSetup],
-    #[default(DENSE_INDEX)]
-    pub index_interval: ByteSize,
-}
-
 #[bon::builder]
 pub(super) fn seeded_segment(
     dir: &Path,
@@ -184,13 +176,8 @@ pub(super) fn seeded_segment(
     #[builder(default)] batches: &'_ [SampleBatchSetup],
     #[builder(default = DENSE_INDEX)] index_interval: ByteSize,
 ) -> Segment {
-    let setup = SeededSegmentSetup {
-        offset,
-        batches,
-        index_interval,
-    };
-    let mut segment = Segment::create(dir, setup.offset).unwrap();
-    for &batch in setup.batches {
+    let mut segment = Segment::create(dir, offset).unwrap();
+    for &batch in batches {
         segment
             .append(
                 &sample_batch()
@@ -198,7 +185,7 @@ pub(super) fn seeded_segment(
                     .records(batch.records.0)
                     .timestamp(batch.timestamp.0)
                     .call(),
-                setup.index_interval,
+                index_interval,
             )
             .unwrap();
     }
@@ -211,17 +198,12 @@ pub(super) fn seeded_fixture(
     #[builder(default)] batches: &'_ [SampleBatchSetup],
     #[builder(default = DENSE_INDEX)] index_interval: ByteSize,
 ) -> TempSegment {
-    let setup = SeededSegmentSetup {
-        offset,
-        batches,
-        index_interval,
-    };
     let dir = tempdir().unwrap();
     let segment = seeded_segment()
         .dir(dir.path())
-        .offset(setup.offset)
-        .batches(setup.batches)
-        .index_interval(setup.index_interval)
+        .offset(offset)
+        .batches(batches)
+        .index_interval(index_interval)
         .call();
     TempSegment { dir, segment }
 }

@@ -41,23 +41,6 @@ pub(super) fn topic(name: &str, topic_id: uuid::Uuid) -> MetadataRecord {
 
 pub(super) use crate::test_support::open_partition as fixture_partition;
 
-/// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
-/// Each `(follower, age)` in `stale_followers` has not fetched from this
-/// leader and last caught up `age` ago.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct IsrSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    #[default(&[NodeId(1), NodeId(2)])]
-    pub isr: &'a [NodeId],
-    #[default(&[NodeId(1), NodeId(2)])]
-    pub replicas: &'a [NodeId],
-    #[default(NodeId(1))]
-    pub leader: NodeId,
-    pub leader_epoch: LeaderEpoch,
-    pub partition_epoch: PartitionEpoch,
-}
-
 /// A follower that was last caught up `caught_up_age` ago.
 #[derive(Clone, Copy)]
 pub(super) struct StaleFollower {
@@ -65,6 +48,9 @@ pub(super) struct StaleFollower {
     pub caught_up_age: Duration,
 }
 
+/// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
+/// Each `(follower, age)` in `stale_followers` has not fetched from this
+/// leader and last caught up `age` ago.
 pub(super) async fn set_replica_state(
     part: &Partition,
     record: MetadataRecord,
@@ -106,22 +92,6 @@ pub(super) fn partition(
     #[builder(into, default)] leader_epoch: LeaderEpoch,
     #[builder(into, default)] partition_epoch: PartitionEpoch,
 ) -> MetadataRecord {
-    let setup = IsrSetup {
-        topic,
-        isr,
-        replicas,
-        leader,
-        leader_epoch,
-        partition_epoch,
-    };
-    let IsrSetup {
-        topic,
-        isr,
-        replicas,
-        leader,
-        leader_epoch,
-        partition_epoch,
-    } = setup;
     MetadataRecord::V1Partition(PartitionRecord {
         topic: topic.to_owned(),
         partition: 0,

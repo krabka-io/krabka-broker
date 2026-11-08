@@ -263,7 +263,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(principal,peer,ctx);user ["alice"];context [context];};
+        krabka_broker_macros::request_test_identity! {bind(principal,peer,ctx);user ["alice"];context [context];};
         sync_group_validation.response = Some(
             handle(
                 &broker,
@@ -369,7 +369,7 @@ mod tests {
             dir: _dir,
         } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             context [context];
@@ -383,7 +383,7 @@ mod tests {
             .await
             .expect("SyncGroup");
 
-        let expected = krabka_macros::unthrottled_wire!(SyncGroupResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(SyncGroupResponse {
             error_code: codes::GROUP_AUTHORIZATION_FAILED,
             protocol_type: None,
             protocol_name: None,
@@ -396,11 +396,11 @@ mod tests {
     #[tokio::test]
     async fn handle_success_preserves_assignment_and_kip559_protocol_fields() {
         let version = sync_group_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
         };
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["alice"];
             context [context];
@@ -424,7 +424,7 @@ mod tests {
             .await
             .expect("SyncGroup");
 
-        let expected = krabka_macros::unthrottled_wire!(SyncGroupResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(SyncGroupResponse {
             error_code: codes::NONE,
             protocol_type: Some(PROTOCOL_TYPE.into()),
             protocol_name: Some(PROTOCOL_NAME.into()),

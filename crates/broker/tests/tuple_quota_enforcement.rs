@@ -111,11 +111,11 @@ async fn assign_tuple_quota(tuple_quota: &mut TupleQuota) {
                 vec![("producer_byte_rate".into(), 1024.0, false)],
             )],
             &QuotaAlterSetup {
-                authentication: PlainAuthenticationSetup {
-                    client_id: CLIENT_ID,
-                    user: "admin",
-                    password: tuple_quota.admin_password.as_bytes().to_vec(),
-                },
+                authentication: PlainAuthenticationSetup::builder()
+                    .client_id(CLIENT_ID)
+                    .user("admin")
+                    .password(tuple_quota.admin_password.as_bytes())
+                    .build(),
                 ..Default::default()
             },
         )

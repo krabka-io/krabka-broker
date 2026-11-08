@@ -4,12 +4,12 @@
 //! stays free of I/O. This mirrors the JWKS-refresher pattern.
 
 use {
+    crate::listener_tls::ensure_crypto_provider,
     async_trait::async_trait,
     krabka_security::{
         IntrospectionClient, IntrospectionError, JwksTrustError, build_client_config_from_pem,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    rustls::crypto::aws_lc_rs,
     std::{fmt, fmt::Formatter, path::Path, sync::Arc},
 };
 
@@ -66,20 +66,8 @@ impl ReqwestIntrospectionClient {
         tls_trust: Option<&Path>,
         timeout: Time,
     ) -> Result<Arc<dyn IntrospectionClient>, BuildError> {
-        // `file_config::FileConfig::apply_to` constructs this client
-        // before `Broker::start` runs, so the rustls CryptoProvider that
-        // `Broker::start` installs at line ~783 isn't there yet when
-        // `build_client_config_from_pem` reaches into
-        // `rustls::ClientConfig::builder()` → `CryptoProvider::get_default()`
-        // and panics with "Could not automatically determine the
-        // process-level CryptoProvider from Rustls crate features."
-        // (Both the `aws-lc-rs` and `ring` rustls features end up in the
-        // dep graph, so the `auto-determine` heuristic refuses to pick
-        // one.) Install idempotently here so the introspection client
-        // works from any entry point — the `let _ =` swallows
-        // `AlreadySet` when a sibling caller (notably `Broker::start`)
-        // won the race.
-        let _ = aws_lc_rs::default_provider().install_default();
+        // `FileConfig::apply_to` builds this client before the broker starts.
+        ensure_crypto_provider();
 
         let mut builder = reqwest::Client::builder().timeout(timeout.to_std());
         if let Some(path) = tls_trust {
@@ -198,15 +186,6 @@ mod tests {
     #[derive(Clone, Copy)]
     struct HttpStatusCode(u16);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct HttpsResponseSetup {
-        #[default("{}")]
-        introspect_body: &'static str,
-        #[default(HttpStatusCode(200))]
-        introspect_status: HttpStatusCode,
-        userinfo_body: Option<&'static str>,
-    }
-
     /// A running HTTPS server, its trust bundle and the requests it saw.
     struct HttpsServer {
         addr: SocketAddr,
@@ -221,16 +200,6 @@ mod tests {
         #[builder(into, default = HttpStatusCode (200))] introspect_status: HttpStatusCode,
         userinfo_body: Option<&'static str>,
     ) -> HttpsServer {
-        let setup = HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        };
-        let HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        } = setup;
         let introspect_status = introspect_status.0;
         let observed = Arc::new(ObservedRequests::default());
         let observed_in_task = sync::Arc::clone(&observed);
@@ -359,20 +328,15 @@ mod tests {
         userinfo_body: Option<&'static str>,
         client: HttpsClientSetup<'_>,
     ) -> HttpsFixture {
-        let response = HttpsResponseSetup {
-            introspect_body,
-            introspect_status,
-            userinfo_body,
-        };
         let HttpsServer {
             addr,
             shutdown,
             ca_path,
             observed,
         } = serve_https()
-            .introspect_body(response.introspect_body)
-            .introspect_status(response.introspect_status)
-            .maybe_userinfo_body(response.userinfo_body)
+            .introspect_body(introspect_body)
+            .introspect_status(introspect_status)
+            .maybe_userinfo_body(userinfo_body)
             .call()
             .await;
         HttpsFixture {
@@ -556,7 +520,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _ = aws_lc_rs::default_provider().install_default();
+        ensure_crypto_provider();
         let EcdsaPair { cert, .. } = ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
         fs::write(&ca_path, cert.pem()).unwrap();

@@ -32,8 +32,6 @@ struct ControllerRange {
 
 #[fixture]
 fn range() -> ControllerRange {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerRange {
         kind: None,
         api: None,

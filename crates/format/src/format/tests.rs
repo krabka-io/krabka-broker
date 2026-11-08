@@ -628,14 +628,6 @@ const UNREADABLE: &[u8] = b"version=one\n";
 
 /// The argv of a run under `root`: `--metadata-log-dir` when `metadata` names
 /// one, a `--log-dir` for each of `log_dirs`, `--node-id 1`, and then `extra`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct FormatArgvSetup<'a> {
-    metadata: Option<&'a str>,
-    #[default(&["a"])]
-    log_dirs: &'a [&'a str],
-    extra: &'a [&'a str],
-}
-
 #[bon::builder]
 fn argv_under(
     root: &Path,
@@ -643,16 +635,6 @@ fn argv_under(
     #[builder(default = & ["a"])] log_dirs: &'_ [&'_ str],
     #[builder(default)] extra: &'_ [&'_ str],
 ) -> Vec<String> {
-    let setup = FormatArgvSetup {
-        metadata,
-        log_dirs,
-        extra,
-    };
-    let FormatArgvSetup {
-        metadata,
-        log_dirs,
-        extra,
-    } = setup;
     let mut argv = vec!["krabka-format".to_owned()];
     if let Some(dir) = metadata {
         argv.push("--metadata-log-dir".to_owned());
@@ -815,4 +797,9 @@ fn fresh_argv(extra: &[&str]) -> FreshArgv {
     FreshArgv { dir, argv }
 }
 
-krabka_macros::format_directories_fixture!(metadata_and_data_directories);
+fn metadata_and_data_directories() -> (tempfile::TempDir, path::PathBuf, path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let metadata = dir.path().join("meta");
+    let data = dir.path().join("data");
+    (dir, metadata, data)
+}

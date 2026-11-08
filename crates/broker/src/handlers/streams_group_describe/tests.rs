@@ -66,7 +66,7 @@ async fn grant(
 
 #[tokio::test]
 async fn disabled_feature_returns_requested_group_error_rows() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };
@@ -74,7 +74,7 @@ async fn disabled_feature_returns_requested_group_error_rows() {
 
     let resp = describe(&broker, &["g-disabled-a", "g-disabled-b"]).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("g-disabled-a", codes::UNSUPPORTED_VERSION),
             error_group("g-disabled-b", codes::UNSUPPORTED_VERSION),
@@ -86,7 +86,7 @@ async fn disabled_feature_returns_requested_group_error_rows() {
 
 #[tokio::test]
 async fn enabled_missing_group_returns_not_found_rows() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };
@@ -94,7 +94,7 @@ async fn enabled_missing_group_returns_not_found_rows() {
 
     let resp = describe(&broker, &["missing-a", "missing-b"]).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("missing-a", codes::GROUP_ID_NOT_FOUND),
             error_group("missing-b", codes::GROUP_ID_NOT_FOUND),
@@ -114,7 +114,7 @@ async fn enabled_missing_group_returns_not_found_rows() {
 )]
 #[test_macro(tokio::test)]
 async fn empty_group_id_is_invalid_and_comes_ahead_of_the_coordinator_rows(leads: bool) {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };
@@ -125,7 +125,7 @@ async fn empty_group_id_is_invalid_and_comes_ahead_of_the_coordinator_rows(leads
 
     let resp = describe(&broker, &["missing-a", ""]).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("", codes::INVALID_GROUP_ID),
             error_group("missing-a", codes::GROUP_ID_NOT_FOUND),
@@ -137,7 +137,7 @@ async fn empty_group_id_is_invalid_and_comes_ahead_of_the_coordinator_rows(leads
 
 #[tokio::test]
 async fn closed_streams_actor_returns_load_in_progress_row() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };
@@ -161,7 +161,7 @@ async fn closed_streams_actor_returns_load_in_progress_row() {
 
     let resp = describe(&broker, &["stopped"]).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![error_group("stopped", codes::COORDINATOR_LOAD_IN_PROGRESS)],
     });
     assert!(resp == expected);
@@ -175,7 +175,7 @@ async fn closed_streams_actor_returns_load_in_progress_row() {
 async fn disabled_protocol_answers_every_requested_group_with_unsupported_version() {
     let cases: [&[&str]; 2] = [&["solo"], &["g-a", "g-b", "g-c"]];
     for group_ids in cases {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(true)];
         };
@@ -184,7 +184,7 @@ async fn disabled_protocol_answers_every_requested_group_with_unsupported_versio
 
         let resp = describe(&broker, group_ids).await;
 
-        let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+        let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
             groups: group_ids
                 .iter()
                 .map(|gid| error_group(gid, codes::UNSUPPORTED_VERSION))
@@ -201,7 +201,7 @@ async fn disabled_protocol_answers_every_requested_group_with_unsupported_versio
 /// the protocol is off.
 #[tokio::test]
 async fn protocol_gate_runs_before_the_group_acl_check() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with_authorizer(Arc::new(DenyAll))];
     };
@@ -211,7 +211,7 @@ async fn protocol_gate_runs_before_the_group_acl_check() {
 
     let resp = describe_as(&broker, &alice, &["g1"], false).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![error_group("g1", codes::UNSUPPORTED_VERSION)],
     });
     assert!(resp == expected);
@@ -224,7 +224,7 @@ async fn protocol_gate_runs_before_the_group_acl_check() {
 #[tokio::test]
 async fn denied_group_rows_sort_first_regardless_of_request_order() {
     let empty_acls = HashSet::new();
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(empty_acls)))];
     };
@@ -242,7 +242,7 @@ async fn denied_group_rows_sort_first_regardless_of_request_order() {
     // Requested in ["allowed", "denied"] order; "denied" has no ACL grant.
     let resp = describe_as(&broker, &alice, &["allowed", "denied"], false).await;
 
-    let expected = krabka_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
+    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("denied", codes::GROUP_AUTHORIZATION_FAILED),
             error_group("allowed", codes::GROUP_ID_NOT_FOUND),
@@ -258,7 +258,7 @@ async fn denied_group_rows_sort_first_regardless_of_request_order() {
 /// only an authorized topic is unaffected.
 #[tokio::test]
 async fn topology_topic_denied_for_describe_hides_only_that_group() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new())))];
     };
@@ -332,7 +332,7 @@ async fn topology_topic_denied_for_describe_hides_only_that_group() {
 #[tokio::test]
 async fn include_authorized_operations_fills_the_bitfield_only_on_opt_in() {
     let authorizer = Arc::new(AllowAllAuthorizer);
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with_authorizer(Arc::<AllowAllAuthorizer>::clone(&authorizer))];
     };
@@ -552,7 +552,7 @@ async fn empty_group_is_empty_and_another_group_type_is_not_found() {
         },
     };
 
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };
@@ -618,7 +618,7 @@ async fn empty_group_is_empty_and_another_group_type_is_not_found() {
 /// error row carries neither at any version.
 #[tokio::test]
 async fn version_1_names_the_assignor_and_the_topology_description_status() {
-    krabka_macros::broker_test_setup! {
+    krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(true)];
     };

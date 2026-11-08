@@ -21,17 +21,6 @@ fn tp() -> TopicIdPartition {
 
 fn seg_id(id: Uuid) -> RemoteLogSegmentId { RemoteLogSegmentId::new(tp(), id) }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct AddSegmentSetup {
-    #[default(Uuid::from_u128(1))]
-    id: Uuid,
-    #[default(Offset(0))]
-    start: Offset,
-    #[default(Offset(99))]
-    end: Offset,
-    custom: Option<CustomMetadata>,
-}
-
 #[bon::builder]
 fn add(
     #[builder(default = Uuid :: from_u128 (1))] id: Uuid,
@@ -39,18 +28,6 @@ fn add(
     #[builder(into, default = Offset (99))] end: Offset,
     #[builder(into)] custom: Option<CustomMetadata>,
 ) -> RemoteLogSegmentMetadata {
-    let setup = AddSegmentSetup {
-        id,
-        start,
-        end,
-        custom,
-    };
-    let AddSegmentSetup {
-        id,
-        start,
-        end,
-        custom,
-    } = setup;
     let start = start.0;
     let end = end.0;
     let mut md = RemoteLogSegmentMetadata::new(

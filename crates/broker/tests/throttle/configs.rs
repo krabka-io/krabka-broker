@@ -42,11 +42,14 @@ pub async fn drive_incremental_alter_configs(
     pass: &str,
     resources: ConfigResources,
 ) -> i16 {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass.as_bytes()).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass.as_bytes())
+            .build(),
+    )
     .await
     .expect("SASL authenticate for IncrementalAlterConfigs");
     incremental_alter_configs_on(&mut stream, resources).await
@@ -82,11 +85,14 @@ pub async fn drive_describe_configs(
         ..Default::default()
     };
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass.as_bytes()).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass.as_bytes())
+            .build(),
+    )
     .await
     .expect("SASL authenticate for DescribeConfigs");
     let mut body = BytesMut::new();

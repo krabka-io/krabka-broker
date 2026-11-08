@@ -7,7 +7,7 @@
 use {
     super::storage::storage_failure_error,
     crate::{
-        blocking::run_page_cache_io,
+        blocking::{OnPoison, run_page_cache_io},
         error::BrokerError,
         partition::{AppendOrigin, AppendedBatch, ProduceData, ProducerAppendCheck},
         time_util::now_ms,
@@ -384,6 +384,7 @@ async fn run_group_append(
     };
     run_page_cache_io(
         log,
+        OnPoison::Recover,
         |log| !match &verbatim {
             Some(batch) => log.verbatim_append_may_block(batch),
             None => append_may_block(log, footprint),

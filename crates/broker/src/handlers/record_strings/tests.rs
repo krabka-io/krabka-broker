@@ -93,7 +93,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             protocols: vec![JoinGroupRequestProtocol::default()],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id], "protocol type" => required[protocol_type], "protocol name" => required[protocols[0].name] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id], "protocol type" => required[protocol_type], "protocol name" => required[protocols[0].name] },
     );
     check_request(
         sync_group_request::MAX_VERSION,
@@ -101,12 +101,12 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             assignments: vec![SyncGroupRequestAssignment::default()],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id], "protocol type" => optional[protocol_type], "protocol name" => optional[protocol_name], "assigned member id" => required[assignments[0].member_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id], "protocol type" => optional[protocol_type], "protocol name" => optional[protocol_name], "assigned member id" => required[assignments[0].member_id] },
     );
     check_request(
         heartbeat_request::MAX_VERSION,
         &HeartbeatRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[group_instance_id] },
     );
     check_request(
         leave_group_request::MAX_VERSION,
@@ -114,7 +114,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             members: vec![MemberIdentity::default()],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[members[0].member_id], "instance id" => optional[members[0].group_instance_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[members[0].member_id], "instance id" => optional[members[0].group_instance_id] },
     );
 
     // The last version of each that names its topics: the next one names them by
@@ -128,7 +128,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             }],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { offsets; },
+        krabka_broker_macros::string_mutations! { offsets; },
     );
     check_request(
         5,
@@ -139,7 +139,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             }],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { offsets; "transactional id" => required[transactional_id] },
+        krabka_broker_macros::string_mutations! { offsets; "transactional id" => required[transactional_id] },
     );
 }
 
@@ -148,17 +148,17 @@ fn a_group_heartbeat_with_an_id_over_32767_bytes_is_refused() {
     check_request(
         consumer_group_heartbeat_request::MAX_VERSION,
         &ConsumerGroupHeartbeatRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[instance_id], "topic regex" => optional[subscribed_topic_regex] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[instance_id], "topic regex" => optional[subscribed_topic_regex] },
     );
     check_request(
         share_group_heartbeat_request::MAX_VERSION,
         &ShareGroupHeartbeatRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id] },
     );
     check_request(
         streams_group_heartbeat_request::MAX_VERSION,
         &StreamsGroupHeartbeatRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[instance_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id], "member id" => required[member_id], "instance id" => optional[instance_id] },
     );
 }
 
@@ -170,32 +170,32 @@ fn a_state_request_with_an_id_over_32767_bytes_is_refused() {
     check_request(
         initialize_share_group_state_request::MAX_VERSION,
         &InitializeShareGroupStateRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id] },
     );
     check_request(
         read_share_group_state_request::MAX_VERSION,
         &ReadShareGroupStateRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id] },
     );
     check_request(
         read_share_group_state_summary_request::MAX_VERSION,
         &ReadShareGroupStateSummaryRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id] },
     );
     check_request(
         write_share_group_state_request::MAX_VERSION,
         &WriteShareGroupStateRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id] },
     );
     check_request(
         delete_share_group_state_request::MAX_VERSION,
         &DeleteShareGroupStateRequest::default(),
-        krabka_macros::string_mutations! { "group id" => required[group_id] },
+        krabka_broker_macros::string_mutations! { "group id" => required[group_id] },
     );
     check_request(
         init_producer_id_request::MAX_VERSION,
         &InitProducerIdRequest::default(),
-        krabka_macros::string_mutations! { "transactional id" => optional[transactional_id] },
+        krabka_broker_macros::string_mutations! { "transactional id" => optional[transactional_id] },
     );
 }
 
@@ -216,7 +216,7 @@ fn the_string_bound_counts_utf8_bytes_instead_of_characters(suffix: &str, accept
 fn a_group_admin_request_with_a_name_over_32767_bytes_is_refused() {
     macro_rules! share_group_offset_fields {
         () => {
-            krabka_macros::string_mutations! {
+            krabka_broker_macros::string_mutations! {
                 "group id" => required[group_id],
                 "topic name" => required[topics[0].topic_name]
             }
@@ -229,7 +229,7 @@ fn a_group_admin_request_with_a_name_over_32767_bytes_is_refused() {
             groups_names: vec![String::new()],
             ..Default::default()
         },
-        krabka_macros::string_mutations! { "group name" => required[groups_names[0]] },
+        krabka_broker_macros::string_mutations! { "group name" => required[groups_names[0]] },
     );
     check_request(
         alter_share_group_offsets_request::MAX_VERSION,

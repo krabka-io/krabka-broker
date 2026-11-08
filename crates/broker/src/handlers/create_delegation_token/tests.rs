@@ -67,17 +67,6 @@ fn self_mint_request() -> CreateDelegationTokenRequest {
 /// The response a refusal carries: `code`, both principals, and `timestamp`
 /// in all three timestamp fields (`-1` on the broker, `0` from the
 /// controller).
-#[derive(krabka_macros::FieldDefaults)]
-struct TokenRefusalSetup {
-    code: KafkaErrorCode,
-    #[default(user("alice"))]
-    owner: KafkaPrincipal,
-    #[default(user("alice"))]
-    requester: KafkaPrincipal,
-    #[default(UnixMillis(-1))]
-    timestamp: UnixMillis,
-}
-
 #[bon::builder]
 fn refusal(
     #[builder(into, default)] code: KafkaErrorCode,
@@ -85,21 +74,15 @@ fn refusal(
     #[builder(default = user ("alice"))] requester: KafkaPrincipal,
     #[builder(into, default = UnixMillis (- 1))] timestamp: UnixMillis,
 ) -> CreateDelegationTokenResponse {
-    let setup = TokenRefusalSetup {
-        code,
-        owner,
-        requester,
-        timestamp,
-    };
     CreateDelegationTokenResponse {
-        error_code: setup.code.0,
-        principal_type: setup.owner.principal_type,
-        principal_name: setup.owner.name,
-        token_requester_principal_type: setup.requester.principal_type,
-        token_requester_principal_name: setup.requester.name,
-        issue_timestamp_ms: setup.timestamp.0,
-        expiry_timestamp_ms: setup.timestamp.0,
-        max_timestamp_ms: setup.timestamp.0,
+        error_code: code.0,
+        principal_type: owner.principal_type,
+        principal_name: owner.name,
+        token_requester_principal_type: requester.principal_type,
+        token_requester_principal_name: requester.name,
+        issue_timestamp_ms: timestamp.0,
+        expiry_timestamp_ms: timestamp.0,
+        max_timestamp_ms: timestamp.0,
         ..Default::default()
     }
 }

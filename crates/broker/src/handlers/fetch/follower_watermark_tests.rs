@@ -167,7 +167,7 @@ fn request(topic: &str, case: Case) -> FetchRequest {
 
 pub(super) async fn fetch(broker: &BrokerHandle, request: &FetchRequest) -> FetchResponse {
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["replicator"];
         client ["fetch-follower"];

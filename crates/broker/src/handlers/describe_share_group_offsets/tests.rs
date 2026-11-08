@@ -87,7 +87,7 @@ async fn describe_share_offsets_request(
         .expect("started broker")
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
+    krabka_broker_macros::request_test_identity! { bind(principal, peer, ctx); user ["alice"]; client ["admin-client"]; };
     share_offsets_description.response = Some(
         handle(
             &broker,

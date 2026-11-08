@@ -44,6 +44,7 @@ fn without_replica_progress(mut resp: DescribeQuorumResponse) -> DescribeQuorumR
     resp
 }
 
+#[derive(Default)]
 struct QuorumDiscovery {
     response: Option<DescribeQuorumResponse>,
     baseline: Option<DescribeQuorumResponse>,
@@ -52,12 +53,8 @@ struct QuorumDiscovery {
 
 #[fixture]
 fn quorum() -> QuorumDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     QuorumDiscovery {
-        response: None,
-        baseline: None,
-        leader: None,
+        ..QuorumDiscovery::default()
     }
 }
 

@@ -86,11 +86,8 @@ impl AdminCluster {
 
 #[fixture]
 pub fn admin() -> AdminCluster {
-    // Start this scenario with fresh inputs and observations.
-
     AdminCluster {
-        cluster: Vec::new(),
-        client: None,
+        ..AdminCluster::default()
     }
 }
 

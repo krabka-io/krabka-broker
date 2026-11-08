@@ -40,11 +40,8 @@ use {
         encoding::EncodeLabelSet,
         metrics::family::{Family, MetricConstructor},
     },
-    std::{
-        collections::BTreeSet,
-        env, fs, hash,
-        path::{Path, PathBuf},
-    },
+    std::{collections::BTreeSet, env, fs, hash, path::PathBuf},
+    support::repository::repo_root,
 };
 
 mod support;
@@ -60,16 +57,6 @@ const BODY_FILE: &str = "docs/operations/metrics-body.txt";
 
 /// Environment variable naming a path to write the fresh body to.
 const BODY_OUT_ENV: &str = "KRABKA_METRICS_BODY_OUT";
-
-/// The repository root, under Cargo and under Bazel.
-fn repo_root() -> PathBuf {
-    let crate_dir = support::manifest_dir();
-    crate_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/broker sits two levels below the repository root")
-        .to_path_buf()
-}
 
 /// `body` with the sample lines of every counter and gauge family sorted.
 ///
@@ -631,6 +618,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, scenarios, then, when},
 };
+#[derive(Default)]
 struct RegistryContract {
     metrics: Option<BrokerMetrics>,
     body: Option<String>,
@@ -640,14 +628,8 @@ struct RegistryContract {
 }
 #[fixture]
 fn contract() -> RegistryContract {
-    // Start this scenario with fresh inputs and observations.
-
     RegistryContract {
-        metrics: None,
-        body: None,
-        documents: Vec::new(),
-        checked_in: None,
-        snapshot_path: None,
+        ..RegistryContract::default()
     }
 }
 #[given("a fresh broker metric registry has one placeholder label set in every registered family")]
@@ -680,7 +662,7 @@ async fn expose(contract: &mut RegistryContract) {
         .metrics
         .as_ref()
         .expect("all metric families seeded");
-    krabka_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
+    krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; expect("registry encodes"));
     contract.body = Some(canonical(&body));
 }
 #[then(
@@ -748,6 +730,7 @@ async fn every_dashboard_and_rule_series_is_one_the_registry_exports(contract: R
 #[tokio::test]
 async fn checked_in_body_matches_a_fresh_registry(contract: RegistryContract) { drop(contract); }
 
+#[derive(Default)]
 struct MetricReading {
     input: String,
     names: Option<BTreeSet<String>>,
@@ -755,12 +738,8 @@ struct MetricReading {
 }
 #[fixture]
 fn reading() -> MetricReading {
-    // Start this scenario with fresh inputs and observations.
-
     MetricReading {
-        input: String::new(),
-        names: None,
-        canonical: None,
+        ..MetricReading::default()
     }
 }
 #[given("a metric exposition or query has the text")]

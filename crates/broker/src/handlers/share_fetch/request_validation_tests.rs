@@ -46,7 +46,7 @@ const LOCK_TIMEOUT_MS: i32 = 30_000;
 #[derive(Debug)]
 struct ReadOneGroup;
 
-krabka_macros::test_authorizer!(ReadOneGroup, request; {
+krabka_broker_macros::test_authorizer!(ReadOneGroup, request; {
     if request.resource_type == ResourceType::Group
         && request.operation == AclOperation::Read
         && request.resource_name != READABLE
@@ -155,7 +155,7 @@ async fn handle_share_request_ids(share_request_identity: &mut ShareRequestIdent
         .unwrap()
         .broker
         .broker_arc_for_test();
-    krabka_macros::request_test_identity! {bind(user,address,ctx);user ["share-consumer"];client ["share-client"];};
+    krabka_broker_macros::request_test_identity! {bind(user,address,ctx);user ["share-consumer"];client ["share-client"];};
     let fetch_version = share_fetch_response::MAX_VERSION;
     let acknowledge_version = share_acknowledge_response::MAX_VERSION;
     let fetch = ShareFetchRequest {
@@ -232,7 +232,7 @@ async fn group_and_member_ids_are_checked_in_kafka_order(
 async fn a_member_the_group_does_not_know_still_fetches() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
-    krabka_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
+    krabka_broker_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
     let version = share_fetch_response::MAX_VERSION;
     let _actor = shared.group_coordinator.get_or_create_share(READABLE);
 

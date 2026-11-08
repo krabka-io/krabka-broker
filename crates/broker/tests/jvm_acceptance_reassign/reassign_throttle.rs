@@ -13,6 +13,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     std::process::Output,
 };
+#[derive(Default)]
 struct ThrottledMove {
     cluster: Option<RegisteredCluster>,
     admin: Option<ClientPropsFile>,
@@ -29,21 +30,8 @@ struct ThrottledMove {
 }
 #[fixture]
 fn movement() -> ThrottledMove {
-    // Start this scenario with fresh inputs and observations.
-
     ThrottledMove {
-        cluster: None,
-        admin: None,
-        admin_mount: String::new(),
-        topic: String::new(),
-        initial: Vec::new(),
-        staying: None,
-        new_node: None,
-        plan: None,
-        plan_mount: String::new(),
-        executed: None,
-        described: None,
-        verified: None,
+        ..ThrottledMove::default()
     }
 }
 #[given(

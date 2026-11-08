@@ -98,7 +98,7 @@ fn authorization_request<'a>(
     }
 }
 
-krabka_macros::named_acl_gates!(
+krabka_broker_macros::named_acl_gates!(
     group_read_denied: Group(Read, group_id),
     group_delete_denied: Group(Delete, group_id),
     /// The `Describe` gate on `Group(group_id)`, the twin of [`group_read_denied`].
@@ -172,7 +172,7 @@ fn topics_decided<'a>(
 /// denies to `ctx`'s principal.
 ///
 /// A name the caller never passed is absent, so a lookup reads it as allowed.
-#[krabka_macros::topic_filter(Deny)]
+#[krabka_broker_macros::topic_filter(Deny)]
 pub fn denied_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
@@ -186,7 +186,7 @@ pub fn denied_topics<'a>(
 /// allows to `ctx`'s principal, the twin of [`denied_topics`].
 ///
 /// A name the caller never passed is absent, so a lookup reads it as denied.
-#[krabka_macros::topic_filter(Allow)]
+#[krabka_broker_macros::topic_filter(Allow)]
 pub fn allowed_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
@@ -224,20 +224,10 @@ pub fn subscribed_names_describe_denied(
     .is_empty()
 }
 
-/// Subscription denial code shared by consumer and share heartbeats.
-pub fn subscribed_names_refusal(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    names: Option<&[String]>,
-) -> Option<i16> {
-    subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
-        .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
-}
-
-/// Build a whole-heartbeat refusal when any subscribed topic is not
-/// `Describe`-authorized. Call before coordinator routing so that routing
-/// errors cannot mask the topic authorization failure or reveal topic data.
+/// Build a whole-heartbeat `TOPIC_AUTHORIZATION_FAILED` refusal when any
+/// subscribed topic is not `Describe`-authorized. Call before coordinator
+/// routing so that routing errors cannot mask the topic authorization failure
+/// or reveal topic data.
 pub fn subscribed_names_response<Response>(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
@@ -245,7 +235,9 @@ pub fn subscribed_names_response<Response>(
     names: Option<&[String]>,
     make_response: impl FnOnce(i16) -> Response,
 ) -> Option<Response> {
-    subscribed_names_refusal(broker, image, ctx, names).map(make_response)
+    subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
+        .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
+        .map(make_response)
 }
 
 /// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)` as the

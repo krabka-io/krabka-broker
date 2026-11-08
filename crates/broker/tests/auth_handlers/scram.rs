@@ -207,8 +207,11 @@ pub async fn scram_authenticate(
         .call()
         .await?;
 
-    let (client_first, client) =
-        krabka_macros::scram_client_first!(setup.user, setup.password.as_str(), setup.mechanism)?;
+    let (client_first, client) = krabka_broker_macros::scram_client_first!(
+        setup.user,
+        setup.password.as_str(),
+        setup.mechanism
+    )?;
     corr.0 += 1;
     let first = sasl_authenticate_on()
         .stream(stream)
@@ -311,6 +314,7 @@ async fn scram_fixture(mechanism: SaslMechanism) -> RetainedBroker {
     RetainedBroker { log_dir, handle }
 }
 
+#[derive(Default)]
 struct ScramAuthentication {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -325,18 +329,8 @@ struct ScramAuthentication {
 
 #[fixture]
 fn authentication() -> ScramAuthentication {
-    // Start this scenario with fresh inputs and observations.
-
     ScramAuthentication {
-        broker: None,
-        directory: None,
-        mechanism: None,
-        password: String::new(),
-        stream: None,
-        result: None,
-        response: None,
-        final_without_proof: None,
-        bytes_read: None,
+        ..ScramAuthentication::default()
     }
 }
 
@@ -533,7 +527,7 @@ async fn prepared_scram_final(authentication: &mut ScramAuthentication) {
         .call()
         .await
         .unwrap();
-    let (client_first, client) = krabka_macros::scram_client_first!(
+    let (client_first, client) = krabka_broker_macros::scram_client_first!(
         "alice",
         alice_password().as_str(),
         SaslMechanism::ScramSha256

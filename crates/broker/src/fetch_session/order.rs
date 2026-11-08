@@ -249,8 +249,6 @@ mod tests {
 
     #[rstest::fixture]
     fn session_eviction() -> SessionEviction {
-        // Start this scenario with fresh inputs and observations.
-
         SessionEviction {
             order: SessionOrder::new(),
             previous_second: 0,

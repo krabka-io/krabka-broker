@@ -56,7 +56,7 @@ pub fn controller_write_code(error: &RaftError, otherwise: i16) -> i16 {
 /// `ControllerApis.handleControllerRegistration` and
 /// `ControllerApis.handleAlterClientQuotas` hand to
 /// `RequestHandlerHelper.handleError`.
-pub const NOT_CONTROLLER_MESSAGE: &str = "This is not the correct controller for this cluster.";
+pub const NOT_CONTROLLER_MESSAGE: &str = codes::default_message(codes::NOT_CONTROLLER);
 
 /// The message of Kafka's `ControllerExceptions.newWrongControllerException`
 /// for a controller write that failed with `error`, or `None` when `error` is

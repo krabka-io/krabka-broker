@@ -126,10 +126,14 @@ fn start_runtime_watchers(
     let fetch_sessions = Arc::new(FetchSessionCache::new(
         config.max_incremental_fetch_session_cache_slots,
     ));
-    // KIP-13's `quota.window.num` * `quota.window.size.seconds`: the window a
-    // client's byte rate is averaged over, which is also the burst a bucket
-    // allows before it throttles (#418).
-    let quota_buckets = Arc::new(QuotaBuckets::with_window(config.quota_window));
+    // KIP-13's `quota.window.num` samples of `quota.window.size.seconds`: the
+    // window every client quota and `connection_creation_rate` is measured
+    // over (#418).
+    let quota_buckets = Arc::new(
+        QuotaBuckets::configured()
+            .client_quota_window(config.client_quota_window())
+            .call(),
+    );
     tokio::spawn(run_quota_refresh(
         controller.watch_image(),
         Arc::clone(&quota_buckets),

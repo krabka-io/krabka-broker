@@ -20,7 +20,7 @@ use {
     assert2::{assert, check},
     krabka_protocol::records::RecordBatch,
     krabka_verified::transaction::init_producer_id_identity_decision,
-    std::{path::Path, sync::atomic::Ordering},
+    std::path::Path,
 };
 
 const TID: &str = "tid-moved";
@@ -425,8 +425,8 @@ async fn readiness_refresh_waits_for_the_installed_local_leader_epoch() {
     assert!(coordinator.load_status(P0).await == Some(LoadStatus::Pending));
 
     let partition = partitions.get(bootstrap::TOPIC, P0).unwrap();
-    partition.current_leader.store(1, Ordering::Release);
-    partition.current_leader_epoch.store(7, Ordering::Release);
+    partition.test_set_leader(1);
+    partition.test_set_leader_epoch(7);
     coordinator
         .refresh_ready_leader_partitions(&image)
         .await

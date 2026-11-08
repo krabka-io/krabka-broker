@@ -883,7 +883,7 @@ mod wire_tests {
     /// `previous_broker_epoch` as its proof, and return what the partition
     /// looks like afterwards.
     async fn restart(version: i16, offer: Offer, seed: Vec<MetadataRecord>) -> Restarted {
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker_with_authorizer(Arc::new(fixture_authorizers::AllowAllAuthorizer))];
         };
@@ -924,7 +924,7 @@ mod wire_tests {
             previous_broker_epoch,
             ..Default::default()
         };
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["broker"];
             client ["broker-client"];
@@ -1004,7 +1004,7 @@ mod wire_tests {
             ),
         ];
 
-        krabka_macros::broker_test_setup! {
+        krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker_with_authorizer(Arc::new(fixture_authorizers::AllowAllAuthorizer))];
         };
@@ -1032,7 +1032,7 @@ mod wire_tests {
             ..Default::default()
         };
         drop(image);
-        krabka_macros::request_test_identity! {
+        krabka_broker_macros::request_test_identity! {
             bind(principal, peer, ctx);
             user ["broker"];
             client ["broker-client"];

@@ -143,7 +143,7 @@ mod tests {
 
     const VERSION: i16 = list_partition_reassignments_response::MAX_VERSION;
 
-    krabka_macros::wire_codec_helpers! {
+    krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];
     }
 
@@ -153,7 +153,7 @@ mod tests {
     };
 
     fn expected_empty_partition(partition_index: i32) -> OngoingPartitionReassignment {
-        krabka_macros::tagged_wire!(OngoingPartitionReassignment {
+        krabka_broker_macros::tagged_wire!(OngoingPartitionReassignment {
             partition_index,
             replicas: vec![],
             adding_replicas: vec![],
@@ -182,10 +182,12 @@ mod tests {
                     partition_indexes: vec![],
                     ..Default::default()
                 }]),
-                expected_topics: vec![krabka_macros::tagged_wire!(OngoingTopicReassignment {
-                    name: "orders-add".to_owned(),
-                    partitions: vec![],
-                })],
+                expected_topics: vec![krabka_broker_macros::tagged_wire!(
+                    OngoingTopicReassignment {
+                        name: "orders-add".to_owned(),
+                        partitions: vec![],
+                    }
+                )],
             },
             Case {
                 name: "requested topic and partition indexes are echoed with empty replicas",
@@ -194,10 +196,12 @@ mod tests {
                     partition_indexes: vec![0, 1],
                     ..Default::default()
                 }]),
-                expected_topics: vec![krabka_macros::tagged_wire!(OngoingTopicReassignment {
-                    name: "orders-add".to_owned(),
-                    partitions: vec![expected_empty_partition(0), expected_empty_partition(1),],
-                })],
+                expected_topics: vec![krabka_broker_macros::tagged_wire!(
+                    OngoingTopicReassignment {
+                        name: "orders-add".to_owned(),
+                        partitions: vec![expected_empty_partition(0), expected_empty_partition(1),],
+                    }
+                )],
             },
             Case {
                 name: "multiple requested topics are all echoed",
@@ -214,11 +218,11 @@ mod tests {
                     },
                 ]),
                 expected_topics: vec![
-                    krabka_macros::tagged_wire!(OngoingTopicReassignment {
+                    krabka_broker_macros::tagged_wire!(OngoingTopicReassignment {
                         name: "orders-add".to_owned(),
                         partitions: vec![expected_empty_partition(0)],
                     }),
-                    krabka_macros::tagged_wire!(OngoingTopicReassignment {
+                    krabka_broker_macros::tagged_wire!(OngoingTopicReassignment {
                         name: "orders-remove".to_owned(),
                         partitions: vec![expected_empty_partition(2)],
                     }),
@@ -227,7 +231,7 @@ mod tests {
         ];
 
         for case in cases {
-            krabka_macros::broker_test_setup! {
+            krabka_broker_macros::broker_test_setup! {
                 bind(broker_handle, _dir, broker, ctx);
                 boot [start_broker] deny_all;
                 user ["alice"];
@@ -243,11 +247,12 @@ mod tests {
                 &ctx,
             );
 
-            let expected = krabka_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("list-reassignment denied".to_owned()),
-                topics: case.expected_topics,
-            });
+            let expected =
+                krabka_broker_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
+                    error_code: CLUSTER_AUTHORIZATION_FAILED,
+                    error_message: Some("list-reassignment denied".to_owned()),
+                    topics: case.expected_topics,
+                });
             assert!(resp == expected, "case `{}`: {resp:?}", case.name);
             broker_handle.shutdown().await;
         }
@@ -343,7 +348,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(ctx);user ["admin"];};
+        krabka_broker_macros::request_test_identity! {bind(ctx);user ["admin"];};
         reassignment_listing.response = Some(handle(
             &broker,
             reassignment_listing.request.as_ref().unwrap(),
@@ -365,11 +370,11 @@ mod tests {
                 .split(';')
                 .map(|entry| {
                     let (name, indexes) = entry.split_once(':').unwrap();
-                    krabka_macros::tagged_wire!(OngoingTopicReassignment {
+                    krabka_broker_macros::tagged_wire!(OngoingTopicReassignment {
                         name: name.into(),
                         partitions: indexes
                             .split(',')
-                            .map(|index| krabka_macros::tagged_wire!(
+                            .map(|index| krabka_broker_macros::tagged_wire!(
                                 OngoingPartitionReassignment {
                                     partition_index: index.parse().unwrap(),
                                     replicas: vec![1, 2, 3],
@@ -384,7 +389,7 @@ mod tests {
         };
         assert2::check!(
             reassignment_listing.response.as_ref().unwrap()
-                == &krabka_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
+                == &krabka_broker_macros::unthrottled_wire!(ListPartitionReassignmentsResponse {
                     error_code: 0,
                     error_message: None,
                     topics

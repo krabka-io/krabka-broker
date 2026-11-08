@@ -63,6 +63,7 @@ fn committed_log_timestamp(dir: &Path) -> i64 {
 }
 
 use rstest_bdd_macros::{given, then, when};
+#[derive(Default)]
 struct JvmCheckpoint {
     image: Option<MetadataImage>,
     timestamp: Option<i64>,
@@ -74,16 +75,8 @@ struct JvmCheckpoint {
 }
 #[rstest::fixture]
 fn checkpoint() -> JvmCheckpoint {
-    // Start this scenario with fresh inputs and observations.
-
     JvmCheckpoint {
-        image: None,
-        timestamp: None,
-        directory: None,
-        dump: None,
-        dump_text: None,
-        shell: None,
-        shell_text: None,
+        ..JvmCheckpoint::default()
     }
 }
 #[given(

@@ -103,7 +103,7 @@ pub fn stamp_unset<'a, R: ErrorRow + 'a>(
     }
 }
 
-krabka_macros::response_errors! {
+krabka_broker_macros::response_errors! {
     response {
         ListBarrierCutsResponse,
         AddRaftVoterResponse,

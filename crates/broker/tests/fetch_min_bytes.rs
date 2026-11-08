@@ -41,12 +41,8 @@ struct FetchFloor {
 
 #[fixture]
 fn floor() -> FetchFloor {
-    // Start this scenario with fresh inputs and observations.
-
     FetchFloor {
-        broker: None,
-        topic: None,
-        observed: None,
+        ..FetchFloor::default()
     }
 }
 

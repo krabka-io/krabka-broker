@@ -216,6 +216,7 @@ use {
     rstest_bdd_macros::{given, then, when},
 };
 
+#[derive(Default)]
 struct DiskScenario {
     stable: Option<StableSim>,
     follower: Option<NodeId>,
@@ -223,11 +224,8 @@ struct DiskScenario {
 
 #[fixture]
 fn disk() -> DiskScenario {
-    // Start this scenario with fresh inputs and observations.
-
     DiskScenario {
-        stable: None,
-        follower: None,
+        ..DiskScenario::default()
     }
 }
 

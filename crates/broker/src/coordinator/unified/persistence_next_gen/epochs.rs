@@ -23,7 +23,7 @@
 //! tagged-field trailer, the single `0` byte whose absence is what makes
 //! Kafka's reader underflow.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "ConsumerGroupMetadataValue")]
 pub struct GroupMetadataValue {
     pub epoch: i32,
@@ -32,7 +32,7 @@ pub struct GroupMetadataValue {
     pub metadata_hash: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_broker_macros::FlexibleEpochValue)]
 #[epoch_value(record = "ConsumerGroupTargetAssignmentMetadataValue")]
 pub struct TargetAssignmentMetadataValue {
     pub assignment_epoch: i32,
@@ -81,8 +81,9 @@ mod tests {
     type ConsumerEpochCompatibility = KafkaRecordRoundTrip<ConsumerEpochRecord>;
     #[rstest::fixture]
     fn epochs() -> ConsumerEpochCompatibility {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerEpochCompatibility::default()
+        ConsumerEpochCompatibility {
+            ..ConsumerEpochCompatibility::default()
+        }
     }
     #[given("the consumer group epoch is {epoch} with metadata hash {hash}")]
     fn group_epoch_input(epochs: &mut ConsumerEpochCompatibility, epoch: i32, hash: i64) {

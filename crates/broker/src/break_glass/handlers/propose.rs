@@ -38,7 +38,7 @@ use {
 /// The `ttl_ms` value that asks for the configured lifetime.
 pub const TTL_CONFIGURED: i64 = 0;
 
-#[krabka_macros::extension_wire(
+#[krabka_broker_macros::extension_wire(
     name = "handle_propose_break_glass",
     api = "ProposeBreakGlass",
     level = "info"

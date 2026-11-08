@@ -265,6 +265,7 @@ mod tests {
     /// value behind its two-byte length, and no headers.
     const LARGE: usize = 1_007;
 
+    #[derive(Default)]
     struct TimestampLookupScenario {
         bytes: Vec<u8>,
         floor: i64,
@@ -274,14 +275,8 @@ mod tests {
     }
     #[rstest::fixture]
     fn timestamp_lookup() -> TimestampLookupScenario {
-        // Start this scenario with fresh inputs and observations.
-
         TimestampLookupScenario {
-            bytes: Vec::new(),
-            floor: 0,
-            timestamp: 0,
-            limit: None,
-            found: None,
+            ..TimestampLookupScenario::default()
         }
     }
     #[rstest_bdd_macros::given(

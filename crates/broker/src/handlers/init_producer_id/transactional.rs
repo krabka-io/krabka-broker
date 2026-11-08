@@ -13,6 +13,7 @@ use {
     crate::{
         codes,
         error::BrokerError,
+        time_util,
         txn::{
             coordinator::{
                 TxnCoordinator,
@@ -24,7 +25,6 @@ use {
             },
             marker::MarkerType,
             state::{TxnEntry, TxnState},
-            util::now_millis,
             version::TxnVersion,
         },
     },
@@ -79,7 +79,7 @@ pub(super) async fn handle_transactional(
     coord: &Arc<TxnCoordinator>,
     init: TransactionalInit<'_>,
 ) -> Result<InitProducerIdResponse, BrokerError> {
-    let now_ms = now_millis();
+    let now_ms = time_util::now_ms();
     let Some(existing) = coord.get(init.tid) else {
         return allocate_fresh(coord, &init, now_ms).await;
     };
@@ -343,7 +343,7 @@ async fn complete_fenced_abort(
         TxnState::CompleteAbort,
         identity,
         request_pid,
-        now_millis(),
+        time_util::now_ms(),
     );
     // The entry stays locked until the completion is written.
     let written = coord
@@ -789,16 +789,6 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct InitCallCount(usize);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ConcurrentInitSetup {
-        #[default("tid")]
-        tid: &'static str,
-        identity: InitIdentity,
-        scheduling: InitScheduling,
-        #[default(InitCallCount(2))]
-        count: InitCallCount,
-    }
-
     #[bon::builder]
     async fn spawn_inits(
         coordinator: &Arc<TxnCoordinator>,
@@ -807,19 +797,13 @@ mod tests {
         #[builder(default)] scheduling: InitScheduling,
         #[builder(into, default = InitCallCount (2))] count: InitCallCount,
     ) -> Vec<JoinHandle<Result<InitProducerIdResponse, BrokerError>>> {
-        let setup = ConcurrentInitSetup {
-            tid,
-            identity,
-            scheduling,
-            count,
-        };
         let mut calls = Vec::new();
-        for _ in 0..setup.count.0 {
+        for _ in 0..count.0 {
             let coordinator = Arc::clone(coordinator);
             calls.push(tokio::spawn(async move {
-                init_verified(&coordinator, setup.tid, setup.identity).await
+                init_verified(&coordinator, tid, identity).await
             }));
-            if matches!(setup.scheduling, InitScheduling::YieldAfterEach) {
+            if matches!(scheduling, InitScheduling::YieldAfterEach) {
                 task::yield_now().await;
             }
         }
@@ -1995,7 +1979,7 @@ mod tests {
             &mut completed,
             TxnState::CompleteAbort,
             identity,
-            now_millis(),
+            time_util::now_ms(),
         );
         seed(&coordinator, completed).await;
 

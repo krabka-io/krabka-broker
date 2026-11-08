@@ -138,15 +138,6 @@ pub enum BatchTransaction {
 }
 
 /// The producer headers and record count needed by transaction-version probes.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct TransactionProbeBatchSetup {
-    pub producer: ProducerIdentity,
-    pub sequence: ProducerSequence,
-    #[default(ProbeRecordCount(1))]
-    pub records: ProbeRecordCount,
-    pub transaction: BatchTransaction,
-}
-
 #[bon::builder]
 pub fn transaction_probe_batch(
     #[builder(default)] producer: ProducerIdentity,
@@ -154,22 +145,16 @@ pub fn transaction_probe_batch(
     #[builder(into, default = ProbeRecordCount (1))] records: ProbeRecordCount,
     #[builder(default)] transaction: BatchTransaction,
 ) -> RecordBatch {
-    let setup = TransactionProbeBatchSetup {
-        producer,
-        sequence,
-        records,
-        transaction,
-    };
     RecordBatch {
         attributes: Attributes::default()
-            .with_transactional(setup.transaction == BatchTransaction::Transactional),
-        producer_id: setup.producer.id.0,
-        producer_epoch: setup.producer.epoch.0,
-        base_sequence: setup.sequence.0,
-        last_offset_delta: setup.records.0 - 1,
+            .with_transactional(transaction == BatchTransaction::Transactional),
+        producer_id: producer.id.0,
+        producer_epoch: producer.epoch.0,
+        base_sequence: sequence.0,
+        last_offset_delta: records.0 - 1,
         max_timestamp: 1,
         ..batch_from_records(
-            (0..setup.records.0)
+            (0..records.0)
                 .map(|offset| value_record(offset, Some(Bytes::from_static(b"v"))))
                 .collect(),
         )

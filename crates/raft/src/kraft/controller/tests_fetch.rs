@@ -1644,9 +1644,9 @@ struct RefetchDecision {
 }
 #[rstest::fixture]
 fn refetch() -> RefetchDecision {
-    // Start this scenario with fresh inputs and observations.
-
-    RefetchDecision::default()
+    RefetchDecision {
+        ..RefetchDecision::default()
+    }
 }
 #[given("a replica follows node {leader} at epoch 5")]
 fn followed_leader(refetch: &mut RefetchDecision, leader: String) {

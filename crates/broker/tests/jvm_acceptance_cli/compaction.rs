@@ -24,6 +24,7 @@ use {
 const TOPIC: &str = "compacted-jvm";
 const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
 
+#[derive(Default)]
 struct CompactedTopic {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -33,13 +34,8 @@ struct CompactedTopic {
 
 #[fixture]
 fn compacted() -> CompactedTopic {
-    // Start this scenario with fresh inputs and observations.
-
     CompactedTopic {
-        broker: None,
-        directory: None,
-        producer: None,
-        consumer: None,
+        ..CompactedTopic::default()
     }
 }
 

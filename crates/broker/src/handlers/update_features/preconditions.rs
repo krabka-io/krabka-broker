@@ -169,8 +169,6 @@ mod tests {
 
     #[rstest::fixture]
     fn feature_compatibility() -> FeatureCompatibilityContract {
-        // Start this scenario with fresh inputs and observations.
-
         FeatureCompatibilityContract {
             range: DISABLED,
             level: 0,

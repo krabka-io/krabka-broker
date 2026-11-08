@@ -20,6 +20,7 @@ use {
 };
 const TOPIC: &str = "krabka-quorum-itest";
 const CLIENT_PORTS: [u16; 3] = [9192, 9292, 9392];
+#[derive(Default)]
 struct QuorumExchange {
     cluster: Vec<(BrokerHandle, TempDir)>,
     retired_directory: Option<TempDir>,
@@ -29,14 +30,8 @@ struct QuorumExchange {
 }
 #[rstest::fixture]
 fn quorum() -> QuorumExchange {
-    // Start this scenario with fresh inputs and observations.
-
     QuorumExchange {
-        cluster: Vec::new(),
-        retired_directory: None,
-        produced: None,
-        consumed: None,
-        listed: None,
+        ..QuorumExchange::default()
     }
 }
 #[rstest_bdd_macros::given(

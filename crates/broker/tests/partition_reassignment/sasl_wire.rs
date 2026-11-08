@@ -27,11 +27,14 @@ pub async fn drive_alter_reassignments_sasl_plain(
     pass: &str,
     rows: Vec<(&str, i32, Option<Vec<i32>>)>,
 ) -> Vec<(String, Vec<(i32, i16)>)> {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass.as_bytes()).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass.as_bytes())
+            .build(),
+    )
     .await
     .expect("SASL authenticate for AlterPartitionReassignments");
     alter_reassignments_on(&mut stream, rows).await

@@ -462,7 +462,7 @@ pub(super) fn leave_written_consumer_group(
     false
 }
 
-#[krabka_macros::flush_group_records(group [&state.group_id]; encode [pending.to_batch(&state.group_id, now_ms)];)]
+#[krabka_broker_macros::flush_group_records(group [&state.group_id]; encode [pending.to_batch(&state.group_id, now_ms)];)]
 pub(super) async fn flush_pending(
     state: &mut GroupState,
     pending: PendingRecords,
@@ -836,8 +836,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn subscription_record() -> MemberSubscriptionRecord {
-        // Start this scenario with fresh inputs and observations.
-        MemberSubscriptionRecord::default()
+        MemberSubscriptionRecord {
+            ..MemberSubscriptionRecord::default()
+        }
     }
     #[given("member m1 subscribes by name to b a and c without a regex")]
     fn unordered_member_topics(subscription_record: &mut MemberSubscriptionRecord) {

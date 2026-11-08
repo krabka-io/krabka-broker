@@ -34,7 +34,7 @@ use {
     krabka_log::{LogError, Offset},
     krabka_protocol::{owned::share_fetch_response::PartitionData, records::RecordsPayload},
     std::{
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::{Duration, Instant},
     },
     tokio::sync::Mutex,
@@ -201,11 +201,7 @@ async fn grow_readable_window(
     // tiered partition (KIP-405) the offsets below the local log start are in
     // the remote tier, and the acquire step classifies them from the batches
     // it reads there.
-    let log_start = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .local_log_start_offset();
+    let log_start = partition.lock_log()?.local_log_start_offset();
     let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;
@@ -360,7 +356,7 @@ async fn apply_piggybacked_acks(
         )
     });
     let code = mgr
-        .apply_durably(group, p.topic_id, p.partition_index, cell, st, |st| {
+        .apply_durably(share_key(group, p), cell, st, |st| {
             apply_acknowledgements(st, &application, batches)
         })
         .await;
@@ -578,13 +574,13 @@ async fn acquire_partition(
     // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
     // and answers UNKNOWN_TOPIC_OR_PARTITION for a share partition that no
     // earlier fetch on this broker loaded.
-    if has_acks && mgr.cached(group, p.topic_id, p.partition_index).is_none() {
+    if has_acks && mgr.cached(share_key(group, p)).is_none() {
         p.out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
         has_acks = false;
     }
     // A failed state read fails the partition and caches nothing, as
     // Kafka's `SharePartitionManager.handleInitializationException` does.
-    let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
+    let cell = match mgr.get_or_load(share_key(group, p)).await {
         Ok(cell) => cell,
         Err(code) => {
             if has_acks {
@@ -1204,7 +1200,7 @@ mod tests {
         // the next write of that state is fenced.
         let cell = shared
             .share_partition_leaders
-            .peek_for_test(group, key, 0)
+            .peek_for_test(ShareKeyRef::new(group, key, 0))
             .expect("the fetch cached the share partition");
         let state_epoch = {
             let mut st = cell.lock().await;
@@ -1215,9 +1211,7 @@ mod tests {
             .share_coordinator
             .initialize(
                 &shared.controller.current_image(),
-                group,
-                key,
-                0,
+                ShareKeyRef::new(group, key, 0),
                 state_epoch + 1,
                 Offset(0),
             )
@@ -1241,7 +1235,7 @@ mod tests {
         .await;
         let cached = shared
             .share_partition_leaders
-            .peek_for_test(group, key, 0)
+            .peek_for_test(ShareKeyRef::new(group, key, 0))
             .is_some();
         let next = fetch(3, Vec::new(), false).await;
 

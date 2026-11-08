@@ -15,16 +15,34 @@ use {
         metrics::BrokerMetrics,
         time_util::now_ms,
     },
-    krabka_log::Offset,
+    krabka_log::{Log, Offset},
     krabka_protocol::records::RecordBatch,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path},
     std::{
-        sync::{Arc, PoisonError},
+        sync::{Arc, MutexGuard},
         time::Duration,
     },
     uuid::Uuid,
 };
+
+/// Locks `partition`'s log for this flush, or warns and answers `None` when
+/// its mutex is poisoned. The flush then leaves the partition out rather than
+/// read or trim what a panicked task left half-written.
+fn lock_log_or_skip(partition: &FlushPartition) -> Option<MutexGuard<'_, Log>> {
+    partition
+        .handle
+        .lock_log()
+        .inspect_err(|error| {
+            tracing::warn!(
+                topic = %partition.handle.topic,
+                partition = partition.handle.index.get(),
+                %error,
+                "diskless flusher: skipping a partition whose log mutex is poisoned"
+            );
+        })
+        .ok()
+}
 
 pub struct FlushTarget {
     pub object_store: Arc<dyn ObjectStore>,
@@ -102,11 +120,9 @@ async fn build_object(
             .await
             .flushed_frontier(partition.topic_id, partition.handle.index.get());
         let raw = {
-            let log = partition
-                .handle
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let Some(log) = lock_log_or_skip(partition) else {
+                continue;
+            };
             let start = start.unwrap_or_else(|| log.log_start_offset().0);
             metrics.record_diskless_wal_projection_lag(
                 partition.topic_id,
@@ -210,13 +226,11 @@ async fn trim_flushed(
                 partition.high_watermark.0.saturating_sub(frontier),
             );
             if let Some(lag) = config.trim_safety_lag {
-                let current_start = partition
-                    .handle
-                    .log
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .log_start_offset()
-                    .0;
+                let Some(current_start) =
+                    lock_log_or_skip(partition).map(|log| log.log_start_offset().0)
+                else {
+                    continue;
+                };
                 let decision = krabka_verified::diskless_trim_decision(
                     frontier,
                     partition.high_watermark.0,
@@ -590,7 +604,7 @@ mod tests {
         .await
         .unwrap();
 
-        krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(!body.contains(&topic_id.to_string()));
     }
 
@@ -628,7 +642,7 @@ mod tests {
         assert!(error.to_string().contains("diskless wal put"));
         assert!(!index.cache().lock().await.reserved_objects().is_empty());
 
-        krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
+        krabka_broker_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
     }
 

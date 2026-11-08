@@ -367,6 +367,7 @@ use {
     rstest_bdd_macros::{given, then, when},
 };
 
+#[derive(Default)]
 struct VoteDecode {
     body: Option<Bytes>,
     decoded: Option<PeerRequest>,
@@ -374,11 +375,8 @@ struct VoteDecode {
 
 #[fixture]
 fn vote() -> VoteDecode {
-    // Start this scenario with fresh inputs and observations.
-
     VoteDecode {
-        body: None,
-        decoded: None,
+        ..VoteDecode::default()
     }
 }
 
@@ -406,6 +404,7 @@ fn decoded_cluster_id(vote: &VoteDecode, cluster_id: String) {
     assert!(*decoded == Some(cluster_id.parse().expect("the feature names a UUID")));
 }
 
+#[derive(Default)]
 struct SingletonRequest {
     peer: Option<PeerRequest>,
     encoded: Option<Bytes>,
@@ -416,14 +415,8 @@ struct SingletonRequest {
 
 #[fixture]
 fn singleton() -> SingletonRequest {
-    // Start this scenario with fresh inputs and observations.
-
     SingletonRequest {
-        peer: None,
-        encoded: None,
-        begin: None,
-        end: None,
-        v0_end: None,
+        ..SingletonRequest::default()
     }
 }
 

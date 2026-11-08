@@ -66,7 +66,7 @@ const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 50;
 
 use {
-    crate::support::topics::CreateTopicSetup,
+    crate::support::topics::configured_topic_request,
     support::{StartedBroker, share::coordinator_key as share_coordinator_key, start_host_broker},
 };
 async fn connect() -> Client {
@@ -81,10 +81,11 @@ async fn connect() -> Client {
 /// Creates `topic` with 1 partition and waits until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str) -> uuid::Uuid {
-    support::client::create_led_topic(broker, client, CreateTopicSetup {
-        topic,
-        ..Default::default()
-    })
+    support::client::create_led_topic(
+        broker,
+        client,
+        configured_topic_request().topic(topic).call(),
+    )
     .await;
     support::share::topic_id(broker, topic)
 }
@@ -216,6 +217,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ShareWorkflow {
     broker: Option<StartedBroker>,
     client: Option<Client>,
@@ -226,15 +228,8 @@ struct ShareWorkflow {
 }
 #[fixture]
 fn share() -> ShareWorkflow {
-    // Start this scenario with fresh inputs and observations.
-
     ShareWorkflow {
-        broker: None,
-        client: None,
-        topic: String::new(),
-        group: String::new(),
-        consumed: None,
-        administration: None,
+        ..ShareWorkflow::default()
     }
 }
 #[given("share topic {topic} for group {group} contains values {values}")]

@@ -76,8 +76,6 @@ struct SnapshotCodec {
 
 #[fixture]
 fn codec() -> SnapshotCodec {
-    // Start this scenario with fresh inputs and observations.
-
     SnapshotCodec {
         cluster_id: Uuid::nil(),
         topic: None,
@@ -187,8 +185,6 @@ struct SnapshotRecovery {
 
 #[fixture]
 fn recovery() -> SnapshotRecovery {
-    // Start this scenario with fresh inputs and observations.
-
     SnapshotRecovery {
         directory: None,
         cluster_id: Uuid::nil(),

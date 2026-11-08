@@ -8,7 +8,10 @@
 //! host name that a controller bound to a wildcard address advertises.
 
 use {
-    crate::host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
+    crate::{
+        controller_endpoint::CONTROLLER_LISTENER_NAME,
+        host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
+    },
     krabka_protocol::{
         owned::add_raft_voter_request::{AddRaftVoterRequest, Listener},
         primitives::uuid::Uuid,
@@ -21,7 +24,7 @@ use {
 /// [`crate::host_port::advertised_host`] decides.
 pub(super) fn controller_listener(bound: SocketAddr) -> Listener {
     Listener {
-        name: "CONTROLLER".to_owned(),
+        name: CONTROLLER_LISTENER_NAME.to_owned(),
         host: advertised_host(bound.ip(), local_host_name),
         port: bound.port(),
         ..Default::default()
@@ -55,7 +58,7 @@ pub(super) fn advertised_controller_listener(
         return controller_listener(bound);
     };
     Listener {
-        name: "CONTROLLER".to_owned(),
+        name: CONTROLLER_LISTENER_NAME.to_owned(),
         host,
         port,
         ..Default::default()
@@ -73,16 +76,19 @@ pub(super) fn select_bootstrap_server(
         .map(String::as_str)
 }
 
-/// Where a join request goes, and where that server came from.
-pub(super) struct JoinTarget {
+/// Where a request to the controller quorum goes, and where that server came
+/// from.
+pub(super) struct ControllerTarget {
     /// The `<host>:<port>` to dial.
     pub(super) server: String,
     /// Whether `server` is a bootstrap server rather than the current leader.
     pub(super) from_bootstrap: bool,
 }
 
-/// The controller endpoint that a join request goes to: the current leader's
-/// `CONTROLLER` endpoint, or a bootstrap server while no leader is known.
+/// The controller endpoint that a voter request goes to, `AddRaftVoter` from
+/// the join loop or `UpdateRaftVoter` from the advertisement loop: the current
+/// leader's `CONTROLLER` endpoint, its first endpoint when it has none of that
+/// name, or a bootstrap server while the leader's endpoints are not known.
 ///
 /// Kafka's observer sends `AddRaftVoter` to the leader that it fetches from
 /// (`KafkaRaftClient.maybeSendAddVoterRequest` uses `state.leaderNode`). A
@@ -91,13 +97,13 @@ pub(super) struct JoinTarget {
 /// join, so a join that always dialed it would never finish.
 ///
 /// `attempt` rotates across the bootstrap servers, and
-/// [`JoinTarget::from_bootstrap`] says whether the target is a bootstrap
+/// [`ControllerTarget::from_bootstrap`] says whether the target is a bootstrap
 /// server. `None` when no leader is known and there is no bootstrap server.
-pub(super) fn join_target(
+pub(super) fn controller_target(
     quorum: &krabka_raft::QuorumState,
     bootstrap_servers: &[String],
     attempt: usize,
-) -> Option<JoinTarget> {
+) -> Option<ControllerTarget> {
     let leader_endpoint = quorum
         .current_leader
         .and_then(|leader| quorum.voter_nodes.get(&leader))
@@ -105,18 +111,18 @@ pub(super) fn join_target(
             leader
                 .endpoints
                 .iter()
-                .find(|endpoint| endpoint.name.eq_ignore_ascii_case("CONTROLLER"))
+                .find(|endpoint| endpoint.name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
                 .or_else(|| leader.endpoints.first())
         });
     leader_endpoint.map_or_else(
         || {
-            select_bootstrap_server(bootstrap_servers, attempt).map(|server| JoinTarget {
+            select_bootstrap_server(bootstrap_servers, attempt).map(|server| ControllerTarget {
                 server: server.to_owned(),
                 from_bootstrap: true,
             })
         },
         |endpoint| {
-            Some(JoinTarget {
+            Some(ControllerTarget {
                 server: format!("{}:{}", endpoint.host, endpoint.port),
                 from_bootstrap: false,
             })
@@ -214,6 +220,24 @@ mod tests {
                 ],
             },
         ])
+    }
+
+    /// A leader whose controller endpoint is named in lower case, after an
+    /// endpoint with another name.
+    fn lowercase_controller_quorum() -> krabka_raft::QuorumState {
+        quorum(Some(1), &[Voter {
+            id: 1,
+            endpoints: &[
+                Endpoint {
+                    name: "REPLICATION",
+                    port: 9101,
+                },
+                Endpoint {
+                    name: "controller",
+                    port: 9201,
+                },
+            ],
+        }])
     }
 
     fn leader_without_controller_quorum() -> krabka_raft::QuorumState {
@@ -319,6 +343,12 @@ mod tests {
             0,
             ("127.0.0.1:9002", false),
         },
+        leader_with_lower_case_controller_endpoint = {
+            "the leader names its controller endpoint in lower case",
+            lowercase_controller_quorum(),
+            0,
+            ("127.0.0.1:9201", false),
+        },
         leader_without_controller_endpoint = {
             "the leader has no CONTROLLER endpoint",
             leader_without_controller_quorum(),
@@ -338,7 +368,7 @@ mod tests {
             ("127.0.0.1:9001", true),
         },
     )]
-    fn a_join_goes_to_the_known_leader_and_to_a_bootstrap_server_otherwise(
+    fn a_voter_request_goes_to_the_known_leader_and_to_a_bootstrap_server_otherwise(
         case: &str,
         quorum: krabka_raft::QuorumState,
         attempt: usize,
@@ -348,11 +378,18 @@ mod tests {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let target = join_target(&quorum, &bootstrap, attempt).unwrap();
+        let target = controller_target(&quorum, &bootstrap, attempt).unwrap();
         assert2::assert!(
             (target.server.as_str(), target.from_bootstrap) == expected,
             "{case}"
         );
+    }
+
+    /// With no leader known and no bootstrap server there is nowhere to send
+    /// the request.
+    #[test]
+    fn no_target_without_a_leader_or_a_bootstrap_server() {
+        assert!(controller_target(&two_voter_quorum(None), &[], 0).is_none());
     }
 
     #[test]

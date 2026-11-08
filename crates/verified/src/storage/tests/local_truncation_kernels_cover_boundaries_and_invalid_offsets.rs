@@ -67,6 +67,7 @@ use {
     rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
+#[derive(Default)]
 struct RemoteLifecycles {
     segments: Option<[RemoteSegmentLifecycle; 4]>,
     partitions: Option<[Option<RemotePartitionDeleteLifecycle>; 4]>,
@@ -76,13 +77,8 @@ struct RemoteLifecycles {
 
 #[fixture]
 fn lifecycle() -> RemoteLifecycles {
-    // Start this scenario with fresh inputs and observations.
-
     RemoteLifecycles {
-        segments: None,
-        partitions: None,
-        segment_transitions: None,
-        partition_transitions: None,
+        ..RemoteLifecycles::default()
     }
 }
 

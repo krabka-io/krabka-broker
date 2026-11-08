@@ -19,7 +19,7 @@ use {
         coordinator::unified::{
             actor::GroupActorMessage,
             group::{GroupOffsets, OffsetEntry, OffsetFetchMember, OffsetFetchSelection},
-            streams::actor::validate_streams_group_offset_fetch,
+            streams::actor::commit_validation::validate_streams_group_offset_fetch,
         },
         handlers::group_actor_error_code,
         task_util::ask,
@@ -91,5 +91,5 @@ pub(super) fn committed_topics<T>(
 
 // The two wire shapes carry identical committed and invalid-offset fields.
 // Missing rows carry offset/epoch -1 and an empty metadata string, never null.
-krabka_macros::offset_fetch_rows! { wire::OffsetFetchResponsePartition { missing: missing_legacy_row, stable: stable_legacy_row }
+krabka_broker_macros::offset_fetch_rows! { wire::OffsetFetchResponsePartition { missing: missing_legacy_row, stable: stable_legacy_row }
 wire::OffsetFetchResponsePartitions { missing: missing_group_row, stable: stable_group_row } }

@@ -25,9 +25,9 @@ struct VoteInterpretation {
 }
 #[rstest::fixture]
 fn interpretation() -> VoteInterpretation {
-    // Start this scenario with fresh inputs and observations.
-
-    VoteInterpretation::default()
+    VoteInterpretation {
+        ..VoteInterpretation::default()
+    }
 }
 fn response_leader(value: &str) -> Option<NodeId> {
     if value == "none" {

@@ -65,6 +65,7 @@ struct IncidentActors {
     carol: Client,
     cluster_id: String,
 }
+#[derive(Default)]
 struct FreezeMetrics {
     cluster: Option<Cluster>,
     actors: Option<IncidentActors>,
@@ -78,18 +79,8 @@ struct FreezeMetrics {
 }
 #[rstest::fixture]
 fn freeze_metrics() -> FreezeMetrics {
-    // Start this scenario with fresh inputs and observations.
-
     FreezeMetrics {
-        cluster: None,
-        actors: None,
-        set_at: None,
-        freeze: None,
-        proposal: None,
-        approvals: Vec::new(),
-        created: None,
-        deleted: None,
-        refusal_before: None,
+        ..FreezeMetrics::default()
     }
 }
 #[rstest_bdd_macros::given(

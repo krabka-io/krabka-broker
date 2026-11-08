@@ -220,8 +220,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn negotiation() -> ProtocolNegotiation {
-        // Start this scenario with fresh inputs and observations.
-        ProtocolNegotiation::default()
+        ProtocolNegotiation {
+            ..ProtocolNegotiation::default()
+        }
     }
     #[given("the classic group is {state} with existing consumer protocol support")]
     fn classic_protocol_group(negotiation: &mut ProtocolNegotiation, state: String) {

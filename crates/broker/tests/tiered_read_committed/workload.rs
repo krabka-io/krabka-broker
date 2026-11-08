@@ -8,7 +8,7 @@
 
 use {
     crate::support::{
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::batch_from_records,
         transaction_wire::{
             add_partition_request, coordinator_loading, initialized_identity, partition_added,
@@ -237,11 +237,12 @@ impl Writes<'_> {
         }
         let request = ProduceRequest {
             transactional_id,
-            ..batch_request(batch, SinglePartitionProduceSetup {
-                topic: self.topic.into(),
-                topic_id: self.topic_id,
-                ..SinglePartitionProduceSetup::replicated()
-            })
+            ..single_partition_produce()
+                .records(batch)
+                .topic(self.topic)
+                .topic_id(self.topic_id)
+                .acknowledgements(ProduceAcknowledgements::AllReplicas)
+                .call()
         };
         let response = settled_produce(self.client, request, SETTLE).await;
         let row = &response.responses[0].partition_responses[0];

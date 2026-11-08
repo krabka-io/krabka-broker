@@ -60,7 +60,7 @@ use {
 
 /// `Errors.REQUEST_TIMED_OUT.message()`, the answer of a write the controller
 /// did not admit before the deadline.
-const REQUEST_TIMED_OUT_MESSAGE: &str = "The request timed out.";
+const REQUEST_TIMED_OUT_MESSAGE: &str = codes::default_message(codes::REQUEST_TIMED_OUT);
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that is not the
 /// active controller, `leader` being the leader the refusal redirected to.
@@ -170,7 +170,7 @@ pub async fn answer(
     if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return top_level_error(
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            "Cluster authorization failed.",
+            codes::default_message(codes::CLUSTER_AUTHORIZATION_FAILED),
         );
     }
 

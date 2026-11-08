@@ -5,6 +5,7 @@ use {
     rstest_bdd_macros::{DataTableRow, given, then, when},
 };
 
+#[derive(Default)]
 struct IsrController {
     watermark_facts: Option<HighWatermarkFacts>,
     replicas: Vec<HwmReplica>,
@@ -17,16 +18,8 @@ struct IsrController {
 
 #[fixture]
 fn controller() -> IsrController {
-    // Start this scenario with fresh inputs and observations.
-
     IsrController {
-        watermark_facts: None,
-        replicas: Vec::new(),
-        watermark: None,
-        current_leader_epoch: 0,
-        current_partition_epoch: 0,
-        alteration: None,
-        admission: None,
+        ..IsrController::default()
     }
 }
 

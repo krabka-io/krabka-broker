@@ -170,7 +170,7 @@ pub struct StreamsGroupTopologyValue {
     pub subtopologies: Vec<StoredSubtopology>,
 }
 
-#[krabka_macros::flexible_value(record = "StreamsGroupTopologyValue")]
+#[krabka_broker_macros::flexible_value(record = "StreamsGroupTopologyValue")]
 impl StreamsGroupTopologyValue {
     fn encode_fields(&self, buf: &mut BytesMut) -> Result<(), BrokerError> {
         buf.put_i32(self.epoch);
@@ -243,8 +243,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupTopologyValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "topology epoch 1 has subtopology 0 reading s and changelog c with replication factor 3"

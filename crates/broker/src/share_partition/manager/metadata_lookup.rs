@@ -7,10 +7,7 @@
 //! step and because they are the only methods here that read metadata rather
 //! than acquisition state.
 
-use {
-    super::SharePartitionLeaderManager, crate::handlers::LeaderHint, krabka_ids::PartitionIndex,
-    std::sync::atomic::Ordering,
-};
+use {super::SharePartitionLeaderManager, crate::handlers::LeaderHint, krabka_ids::PartitionIndex};
 
 impl SharePartitionLeaderManager {
     /// Resolves the leader hint for `(topic_id, partition)`.
@@ -71,7 +68,7 @@ impl SharePartitionLeaderManager {
         };
         self.partitions
             .get(topic, PartitionIndex(partition))
-            .map_or(0, |p| p.current_leader_epoch.load(Ordering::Acquire))
+            .map_or(0, |p| p.leader_epoch().get())
     }
 }
 

@@ -616,8 +616,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn trunk_advertisement() -> TrunkAdvertisement {
-        // Start this scenario with fresh inputs and observations.
-        TrunkAdvertisement::default()
+        TrunkAdvertisement {
+            ..TrunkAdvertisement::default()
+        }
     }
     #[given("the controller router serves UnregisterController and unstable APIs are {enabled}")]
     fn trunk_policy(trunk_advertisement: &mut TrunkAdvertisement, enabled: bool) {
@@ -720,8 +721,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn feature_advertisement() -> FeatureAdvertisement {
-        // Start this scenario with fresh inputs and observations.
-        FeatureAdvertisement::default()
+        FeatureAdvertisement {
+            ..FeatureAdvertisement::default()
+        }
     }
     fn advertised_levels(text: &str) -> Vec<(&str, i16)> {
         if text == "none" {

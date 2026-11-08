@@ -11,7 +11,9 @@ use {
         },
         log_dir::partition_dir,
         partition_registry::PartitionRegistry,
-        test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},
+        test_support::{
+            FakeMetadataSource, STANDALONE_TOPIC, StorageMode, spawn_standalone_partition,
+        },
     },
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig},
@@ -65,22 +67,24 @@ pub fn topic_records(topic: &str, partitions: i32, leader: NodeId) -> Vec<Metada
 }
 
 /// Open a real partition with a live writer, and register it.
+#[bon::builder]
 pub fn open_partition(
-    registry: &PartitionRegistry,
-    dir: &Path,
-    setup: StandalonePartitionSetup<'_>,
+    #[builder(start_fn)] registry: &PartitionRegistry,
+    #[builder(start_fn)] dir: &Path,
+    #[builder(default = STANDALONE_TOPIC)] topic: &str,
+    #[builder(into, default)] partition: PartitionIndex,
+    #[builder(default)] storage: StorageMode,
 ) {
-    let topic = setup.topic;
-    let index = setup.partition;
+    let index = partition;
     let partition_dir = partition_dir(dir, topic, index.0);
     fs::create_dir_all(&partition_dir).expect("create the partition directory");
     let log = Log::open(&partition_dir, LogConfig::default()).expect("open the log");
     let partition = spawn_standalone_partition()
         .log_dir(dir)
         .log(log)
-        .topic(setup.topic)
-        .partition(setup.partition)
-        .storage(setup.storage)
+        .topic(topic)
+        .partition(index)
+        .storage(storage)
         .call();
     registry.insert(topic.into(), index, partition);
 }

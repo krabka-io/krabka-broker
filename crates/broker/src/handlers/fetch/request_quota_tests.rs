@@ -26,12 +26,13 @@ const LONG_POLL_MS: i32 = 500;
 /// A `request_percentage` so small that any handler time exceeds it.
 const STARVED_REQUEST_PERCENTAGE: f64 = 0.0001;
 
-/// A broker whose quota window is one second long: a bucket holds one second
-/// of its rate.
+/// A broker whose client quotas keep two samples of one second. Kafka's
+/// `Rate` measures a new client over `quota.window.num - 1` samples, so a
+/// quota lets it spend one second of its rate before it throttles.
 async fn start() -> HandlerStartedBroker {
     start_broker_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
-        config.quota_window = secs(1);
+        config.quota_window = secs(2);
         config.quota_throttle_max = secs(1);
     })
     .await
@@ -44,8 +45,8 @@ struct Outcome {
 }
 
 /// A long poll of `LONG_POLL_MS` on an empty partition, by a user whose
-/// `request_percentage` bucket holds a tenth of a second of handler time. The
-/// wait is ten times what the bucket holds, so charging it would throttle the
+/// `request_percentage` quota allows a new client a tenth of a second of
+/// handler time. The wait is five times that, so charging it would throttle the
 /// fetch; the handler's own work is far less. A starved quota still throttles
 /// the same fetch, so the quota is charged at all.
 #[tokio::test]

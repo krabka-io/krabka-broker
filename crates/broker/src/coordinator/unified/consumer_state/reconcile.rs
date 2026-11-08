@@ -592,17 +592,6 @@ mod tests {
         pending: Vec<PartitionIndex>,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct HeldSetup<'a> {
-        #[default(MemberEpoch(5))]
-        epoch: MemberEpoch,
-        #[default(MemberAssignmentState::Stable)]
-        state: MemberAssignmentState,
-        #[default(&[PartitionIndex(0), PartitionIndex(1)])]
-        assigned: &'a [PartitionIndex],
-        pending: &'a [PartitionIndex],
-    }
-
     #[bon::builder]
     fn held(
         #[builder(into, default = MemberEpoch (5))] epoch: MemberEpoch,
@@ -611,18 +600,6 @@ mod tests {
         assigned: &'_ [PartitionIndex],
         #[builder(default)] pending: &'_ [PartitionIndex],
     ) -> Held {
-        let setup = HeldSetup {
-            epoch,
-            state,
-            assigned,
-            pending,
-        };
-        let HeldSetup {
-            epoch,
-            state,
-            assigned,
-            pending,
-        } = setup;
         Held {
             epoch,
             state,
@@ -959,15 +936,6 @@ mod tests {
         pending: Partitions,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ShapeSetup<'a> {
-        epochs: MemberEpochs,
-        #[default(MemberAssignmentState::Stable)]
-        state: MemberAssignmentState,
-        assigned: &'a [TopicParts<'a>],
-        pending: &'a [TopicParts<'a>],
-    }
-
     fn revoking_current_epoch(pending: &[TopicParts<'_>]) -> Shape {
         shape()
             .epochs(MemberEpochs {
@@ -987,18 +955,6 @@ mod tests {
         #[builder(default)] assigned: &'_ [TopicParts<'_>],
         #[builder(default)] pending: &'_ [TopicParts<'_>],
     ) -> Shape {
-        let setup = ShapeSetup {
-            epochs,
-            state,
-            assigned,
-            pending,
-        };
-        let ShapeSetup {
-            epochs,
-            state,
-            assigned,
-            pending,
-        } = setup;
         Shape {
             epoch: epochs.current.0,
             previous_epoch: epochs.previous.0,
@@ -1062,23 +1018,15 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct WaitingSubscriptionSetup {
-        #[default("unreleased member waiting")]
-        name: &'static str,
-        history: MemberEpochs,
-    }
-
     #[bon::builder]
     fn waiting_subscription_row(
         #[builder(default = "unreleased member waiting")] name: &'static str,
         #[builder(default)] history: MemberEpochs,
     ) -> SubscriptionRow {
-        let setup = WaitingSubscriptionSetup { name, history };
         SubscriptionRow {
-            name: setup.name,
+            name,
             before: shape()
-                .epochs(setup.history)
+                .epochs(history)
                 .state(MemberAssignmentState::UnreleasedPartitions)
                 .assigned(&[T_PARTITION_0])
                 .call(),

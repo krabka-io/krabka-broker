@@ -17,6 +17,7 @@ use {
     tokio::sync::MutexGuard,
 };
 
+#[derive(Default)]
 struct DirectoryReport {
     port_ownership: Option<MutexGuard<'static, ()>>,
     broker: Option<BrokerHandle>,
@@ -26,14 +27,8 @@ struct DirectoryReport {
 }
 #[fixture]
 fn directories() -> DirectoryReport {
-    // Start this scenario with fresh inputs and observations.
-
     DirectoryReport {
-        port_ownership: None,
-        broker: None,
-        primary: None,
-        extra: None,
-        stdout: None,
+        ..DirectoryReport::default()
     }
 }
 

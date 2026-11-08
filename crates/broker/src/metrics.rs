@@ -15,7 +15,7 @@
 //! — operators compute rates with `rate()` at scrape time.
 
 use {
-    krabka_macros::RegisterMetrics,
+    krabka_broker_macros::RegisterMetrics,
     prometheus_client::{
         metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
         registry::Registry,

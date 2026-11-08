@@ -28,7 +28,7 @@ use {
     krabka_verified::FetchReader,
     std::{
         collections::HashSet,
-        sync::{Arc, PoisonError, atomic},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -275,8 +275,7 @@ fn installed_leader_refusal(
     required_leader: Option<krabka_metadata::NodeId>,
 ) -> Option<PartitionData> {
     let node_id = required_leader?;
-    (partition.current_leader.load(atomic::Ordering::Acquire) != node_id.0)
-        .then(|| not_leader_row(image, topic, partition_index))
+    (partition.leader() != node_id.0).then(|| not_leader_row(image, topic, partition_index))
 }
 
 /// The `NOT_LEADER_OR_FOLLOWER` row of a refused leader check, naming the
@@ -388,7 +387,15 @@ pub(super) async fn apply_epoch_checks(
         return false;
     }
     let (log_start_offset, established_log_start, found_epoch, end_offset) = {
-        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+        // A poisoned log answers the row `NOT_LEADER_OR_FOLLOWER` and reads
+        // nothing a panicked task left half-written.
+        let log = match partition.lock_log() {
+            Ok(log) => log,
+            Err(error) => {
+                *output = refused_read(partition_index, codes::from_broker_error(&error));
+                return true;
+            }
+        };
         let (found_epoch, end_offset) = log.epoch_checkpoint().epoch_and_offset_for(
             LeaderEpoch(request.last_fetched_epoch),
             log.log_end_offset(),
@@ -465,12 +472,13 @@ pub(super) async fn apply_epoch_checks(
     // above. Only this rare row needs the high watermark, so the check takes
     // the replica-state lock here and not on every fetch of every partition.
     let high_watermark = partition.high_watermark().await;
-    let last_stable_offset = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .last_stable_offset(high_watermark)
-        .min(high_watermark);
+    let last_stable_offset = match partition.last_stable_offset(high_watermark) {
+        Ok(last_stable_offset) => last_stable_offset.min(high_watermark),
+        Err(error) => {
+            *output = refused_read(partition_index, codes::from_broker_error(&error));
+            return true;
+        }
+    };
     output.error_code = codes::NONE;
     output.high_watermark = high_watermark.0;
     output.last_stable_offset = last_stable_offset.0;
@@ -733,7 +741,7 @@ pub(super) async fn plan_partition_read(
     // only on the leader.
     let leader_partition = partition
         .as_ref()
-        .filter(|partition| partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0);
+        .filter(|partition| partition.leader() == node_id.0);
     if !context.reader.is_follower()
         && let Some(leader_partition) = leader_partition
     {
@@ -753,7 +761,15 @@ pub(super) async fn plan_partition_read(
             // it answers at once with empty records at the live bounds
             // instead of also parking this broker's copy of the request in
             // the fetch purgatory.
-            LiveOffsets::of(leader_partition).await.report(&mut output);
+            match LiveOffsets::of(leader_partition).await {
+                Ok(live) => live.report(&mut output),
+                Err(error) => {
+                    return answered(refused_read(
+                        request.partition,
+                        codes::from_broker_error(&error),
+                    ));
+                }
+            }
             output.error_code = codes::NONE;
             output.records = Some(RecordsPayload::Raw(bytes::Bytes::new()));
             return PlannedRead {

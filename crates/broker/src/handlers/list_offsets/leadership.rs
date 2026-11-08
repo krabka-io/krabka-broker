@@ -37,7 +37,7 @@ use {
         broker::Broker, codes, log_dir_status::LogDirRegistry, partition::Partition,
         partition_registry::PartitionRegistry,
     },
-    std::sync::{Arc, atomic::Ordering},
+    std::sync::Arc,
 };
 
 /// Kafka's `ListOffsetsRequest.DEBUGGING_REPLICA_ID`: the one `replica_id`
@@ -96,7 +96,7 @@ pub(super) fn resolve_leadership(
 
     let installed_leader = local
         .as_ref()
-        .is_some_and(|partition| partition.current_leader.load(Ordering::Acquire) == node_id.0);
+        .is_some_and(|partition| partition.leader() == node_id.0);
     let leads = installed_leader && record.leader == node_id;
     if !leads && replica_id != DEBUGGING_REPLICA_ID {
         return Err(codes::NOT_LEADER_OR_FOLLOWER);
@@ -173,13 +173,6 @@ mod tests {
         Leader,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct HostedPartitionSetup {
-        #[default(krabka_audit::NodeId(1))]
-        image_leader: krabka_audit::NodeId,
-        role: InstalledRole,
-    }
-
     /// A hosted partition with the image and registry that name it, and the
     /// directory that holds its log.
     struct HostedFixture {
@@ -194,12 +187,11 @@ mod tests {
         #[builder(into, default = krabka_audit :: NodeId (1))] image_leader: krabka_audit::NodeId,
         #[builder(default)] role: InstalledRole,
     ) -> HostedFixture {
-        let setup = HostedPartitionSetup { image_leader, role };
         let dir = tempfile::tempdir().expect("tempdir");
-        let image = image_with_topic("orders", setup.image_leader.0);
+        let image = image_with_topic("orders", image_leader.0);
         let partitions = PartitionRegistry::new();
         let partition = local_partition(dir.path());
-        if matches!(setup.role, InstalledRole::Leader) {
+        if matches!(role, InstalledRole::Leader) {
             partition.install_leader_change(1, 0).await;
         }
         partitions.insert(

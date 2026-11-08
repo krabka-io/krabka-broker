@@ -47,6 +47,7 @@ fn metadata_version(api_versions: &ApiVersionsResponse) -> i16 {
         .max_version_level
 }
 
+#[derive(Default)]
 struct FeatureFinalization {
     broker: Option<support::InProcess>,
     update: Option<UpdateFeaturesResponse>,
@@ -74,13 +75,8 @@ impl FeatureFinalization {
 }
 #[rstest::fixture]
 fn finalization() -> FeatureFinalization {
-    // Start this scenario with fresh inputs and observations.
-
     FeatureFinalization {
-        broker: None,
-        update: None,
-        versions: None,
-        baseline: None,
+        ..FeatureFinalization::default()
     }
 }
 #[rstest_bdd_macros::given("unstable feature versions are enabled {enabled}")]

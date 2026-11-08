@@ -377,11 +377,15 @@ fn compacting_writer() -> CompactingWriter {
     let producer_state = Arc::new(ProducerState::new());
     let replica_state = Arc::new(sync::Mutex::new(ReplicaState::new()));
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
-        replica_state: Arc::clone(&replica_state),
-        producer_state: Arc::clone(&producer_state),
-        ..Default::default()
-    });
+    let writer = spawn_writer(
+        dir.path(),
+        Arc::clone(&log),
+        rx,
+        WriterOptions::builder()
+            .replica_state(Arc::clone(&replica_state))
+            .producer_state(Arc::clone(&producer_state))
+            .build(),
+    );
     CompactingWriter {
         dir,
         log,

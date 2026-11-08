@@ -30,8 +30,8 @@ use {
 /// Exactly one of `storage_dir` (local filesystem), `[remote_storage.s3]`
 /// (S3-compatible object store), or `[remote_storage.gcs]` (native Google
 /// Cloud Storage) should be set. Setting more than one errors at load time.
-#[krabka_macros::human_units]
-#[krabka_macros::config_table(strict)]
+#[krabka_broker_macros::human_units]
+#[krabka_broker_macros::config_table(strict)]
 pub struct FileRemoteStorageConfig {
     /// Root directory for the local `LocalTieredStorage` backend.
     pub storage_dir: Option<String>,
@@ -87,7 +87,7 @@ pub struct FileRemoteStorageConfig {
 
 /// TOML shape of `[remote_storage.kafka_metadata]`. Maps to
 /// [`crate::config::KafkaRlmmConfig`].
-#[krabka_macros::human_units]
+#[krabka_broker_macros::human_units]
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FileKafkaRlmmConfig {

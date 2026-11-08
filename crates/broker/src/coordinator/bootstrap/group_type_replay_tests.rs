@@ -120,9 +120,9 @@ struct GroupTypeLoad {
 }
 #[rstest::fixture]
 fn group_type_load() -> GroupTypeLoad {
-    // Start this scenario with fresh inputs and observations.
-
-    GroupTypeLoad::default()
+    GroupTypeLoad {
+        ..GroupTypeLoad::default()
+    }
 }
 #[given("the coordinator log contains group g records {records}")]
 fn persisted_group_types(group_type_load: &mut GroupTypeLoad, records: String) {

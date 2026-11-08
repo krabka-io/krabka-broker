@@ -399,7 +399,7 @@ mod tests {
         } in cases
         {
             let image =
-                krabka_macros::reassignment_fields! { assignment { assignment } builder { img() } }
+                krabka_broker_macros::reassignment_fields! { assignment { assignment } builder { img() } }
                     .call();
             let l = liveness(&[1, 2, 3, 4]).await;
 
@@ -606,7 +606,7 @@ mod tests {
         ];
         for (case, assignment, alive) in cases {
             let img =
-                krabka_macros::reassignment_fields! { assignment { assignment } builder { img() } }
+                krabka_broker_macros::reassignment_fields! { assignment { assignment } builder { img() } }
                     .call();
             let l = liveness(&alive).await;
             let updates = compute_reassignment_progress(&img, &l).await;

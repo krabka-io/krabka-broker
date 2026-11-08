@@ -27,6 +27,7 @@ use {
     tokio::time,
 };
 
+#[derive(Default)]
 struct MovingReplica {
     cluster: Option<RegisteredCluster>,
     props: Option<ClientPropsFile>,
@@ -41,19 +42,8 @@ struct MovingReplica {
 }
 #[rstest::fixture]
 fn moving() -> MovingReplica {
-    // Start this scenario with fresh inputs and observations.
-
     MovingReplica {
-        cluster: None,
-        props: None,
-        plan: None,
-        admin_mount: String::new(),
-        json_mount: String::new(),
-        topic: String::new(),
-        staying: 0,
-        added: 0,
-        removing: None,
-        verify: None,
+        ..MovingReplica::default()
     }
 }
 #[rstest_bdd_macros::given("a replicated SASL topic {topic} contains record before-reassignment")]
@@ -284,6 +274,7 @@ fn assert_generated_plan_is_usable(
     }
 }
 
+#[derive(Default)]
 struct GeneratedPlans {
     comparison: Option<OracleComparison>,
     topic: String,
@@ -292,13 +283,8 @@ struct GeneratedPlans {
 }
 #[rstest::fixture]
 fn generated() -> GeneratedPlans {
-    // Start this scenario with fresh inputs and observations.
-
     GeneratedPlans {
-        comparison: None,
-        topic: String::new(),
-        partitions: 0,
-        outputs: Vec::new(),
+        ..GeneratedPlans::default()
     }
 }
 #[rstest_bdd_macros::given(

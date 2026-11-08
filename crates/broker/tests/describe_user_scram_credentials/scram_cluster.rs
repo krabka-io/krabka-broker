@@ -103,6 +103,7 @@ use {
     std::time::{SystemTime, UNIX_EPOCH},
 };
 pub type ScramUserRows = Vec<(String, i16, Vec<(i8, i32)>)>;
+#[derive(Default)]
 pub struct ScramDescriptions {
     pub broker: Option<BrokerHandle>,
     pub directory: Option<TempDir>,
@@ -132,14 +133,8 @@ impl ScramDescriptions {
 }
 #[rstest::fixture]
 pub fn scram() -> ScramDescriptions {
-    // Start this scenario with fresh inputs and observations.
-
     ScramDescriptions {
-        broker: None,
-        directory: None,
-        principal: String::new(),
-        password: String::new(),
-        response: None,
+        ..ScramDescriptions::default()
     }
 }
 #[rstest_bdd_macros::given("admin is a super user authenticated with its test password")]

@@ -14,11 +14,11 @@ use {
 
 pub(super) const VERSION: i16 = 0;
 
-krabka_macros::assignment_dirs_fixture!(assignment_request);
+krabka_broker_macros::assignment_dirs_fixture!(assignment_request);
 
 pub(super) use assignment_request as request;
 
-krabka_macros::wire_codec_helpers! {
+krabka_broker_macros::wire_codec_helpers! {
     pub(super) decode_response(AssignReplicasToDirsResponse);
     version [VERSION];
 }
@@ -39,7 +39,7 @@ pub(super) async fn handle_allowed(
     broker: &Broker,
     req: AssignReplicasToDirsRequest,
 ) -> Result<AssignReplicasToDirsResponse, BrokerError> {
-    krabka_macros::request_test_identity! {
+    krabka_broker_macros::request_test_identity! {
         bind(user, address, ctx);
         user ["ANONYMOUS"];
         client ["assign-replicas-test"];

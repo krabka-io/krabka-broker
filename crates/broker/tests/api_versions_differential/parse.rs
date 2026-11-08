@@ -193,6 +193,7 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
         }
     }
 
+    #[derive(Default)]
     struct ToolOutput {
         output: String,
         parsed: Option<Result<Vec<ParsedRow>, ParseError>>,
@@ -201,12 +202,8 @@ host.docker.internal:41551 (id: 1 rack: null isFenced: false) -> (
 
     #[fixture]
     fn output() -> ToolOutput {
-        // Start this scenario with fresh inputs and observations.
-
         ToolOutput {
-            output: String::new(),
-            parsed: None,
-            ranges: None,
+            ..ToolOutput::default()
         }
     }
 

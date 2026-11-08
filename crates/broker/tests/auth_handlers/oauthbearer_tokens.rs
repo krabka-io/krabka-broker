@@ -150,6 +150,7 @@ async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure(bearer: Beare
         .await;
 }
 
+#[derive(Default)]
 struct BearerTokenScenario {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -163,17 +164,8 @@ struct BearerTokenScenario {
 
 #[fixture]
 fn bearer() -> BearerTokenScenario {
-    // Start this scenario with fresh inputs and observations.
-
     BearerTokenScenario {
-        broker: None,
-        directory: None,
-        signing_key: None,
-        token: None,
-        session: None,
-        initial_response: None,
-        final_response: None,
-        metadata: None,
+        ..BearerTokenScenario::default()
     }
 }
 

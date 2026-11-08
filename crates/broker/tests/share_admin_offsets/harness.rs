@@ -94,9 +94,9 @@ pub async fn leave(client: &Client, group: &str, member_id: &str) {
     assert!(resp.error_code == 0, "leave failed: {:?}", resp.error_code);
 }
 
-krabka_macros::share_first_fetch!(fetch_until_acquired, Initial);
+krabka_broker_macros::share_first_fetch!(fetch_until_acquired, Initial);
 
-krabka_macros::share_consumption_driver!(
+krabka_broker_macros::share_consumption_driver!(
     initialize_consumption,
     join,
     |broker, client, member, epoch, tid| [wait_for_share_init(broker, "g1", tid, 0)]

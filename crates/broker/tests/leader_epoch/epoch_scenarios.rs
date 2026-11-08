@@ -5,7 +5,7 @@ use {
         support::{
             client::connect_client,
             fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
-            produce::{SinglePartitionProduceSetup, batch_request},
+            produce::single_partition_produce,
         },
     },
     assert2::{assert, check},
@@ -35,8 +35,6 @@ pub struct EpochBoundary {
 }
 #[fixture]
 pub fn epoch() -> EpochBoundary {
-    // Start this scenario with fresh inputs and observations.
-
     EpochBoundary {
         broker: None,
         directory: None,
@@ -63,11 +61,13 @@ async fn append_record(epoch: &EpochBoundary, value: &str) {
         .client
         .as_ref()
         .expect("epoch topic created")
-        .send(batch_request(record(value), SinglePartitionProduceSetup {
-            topic: epoch.topic.clone(),
-            topic_id: epoch.id,
-            ..Default::default()
-        }))
+        .send(
+            single_partition_produce()
+                .records(record(value))
+                .topic(epoch.topic.clone())
+                .topic_id(epoch.id)
+                .call(),
+        )
         .await
         .expect("produce");
 }

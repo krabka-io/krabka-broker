@@ -81,7 +81,7 @@ mod security;
 
 pub use self::security::PlainCredentials;
 
-krabka_macros::broker_config! {
+krabka_broker_macros::broker_config! {
     #[derive(krabka_macros::FieldDefaults)]
     pub struct BrokerConfig {
         // tuning.
@@ -238,10 +238,10 @@ krabka_macros::broker_config! {
         /// Operator-triggered recovery deadline.
         #[default(secs(25))]
         pub operator_recovery_deadline: Time,
-        /// Maximum request-quota throttle delay (default 1 s), bounding how long one response over `request_percentage` mutes a client. Equivalent to Kafka's `ClientRequestQuotaManager.maxThrottleTimeMs`, one `quota.window.size.seconds`. Byte-rate and controller-mutation throttles are not bounded.
+        /// Length of one client-quota sample (default 1 s), Kafka's `quota.window.size.seconds`. The `producer_byte_rate`, `consumer_byte_rate` and `request_percentage` quotas sample in samples this long, and it is also the maximum request-quota throttle delay, Kafka's `ClientRequestQuotaManager.maxThrottleTimeMs`, bounding how long one response over `request_percentage` mutes a client. Byte-rate and controller-mutation throttles are not bounded.
         #[default(secs(1))]
         pub quota_throttle_max: Time,
-        /// Time window sizing the byte-rate quota token bucket burst capacity (default 11 s). Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`.
+        /// Whole sampled window of the client quotas (default 11 s), Kafka's `quota.window.num * quota.window.size.seconds`. The quotas keep `quota_window / quota_throttle_max` samples, rounded and at least one, and a new client is measured as if it had been quiet for all but one of them. The KIP-612 `connection_creation_rate` of each `ip` entity is measured over the same window.
         #[default(DEFAULT_QUOTA_WINDOW)]
         pub quota_window: Time,
         /// Time window sizing the KIP-599 controller-mutation token bucket burst capacity (default 11 s): the bucket holds `window x controller_mutation_rate` tokens. Equivalent to Kafka's `controller.quota.window.num * controller.quota.window.size.seconds`.

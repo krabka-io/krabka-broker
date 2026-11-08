@@ -385,15 +385,6 @@ pub struct BarrierMarkerSetup<'a> {
     pub epoch: BarrierEpoch,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct HostileBarrierSetup<'a> {
-    pub marker: BarrierMarkerSetup<'a>,
-    #[default(ProducerId(1000))]
-    pub producer: ProducerId,
-    #[default(ProducerEpoch(2))]
-    pub producer_epoch: ProducerEpoch,
-}
-
 /// Build a barrier-marker value: `(version=0: i16, group: string,
 /// epoch: i64, triggered_at: i64)` big-endian, where a string is an `i16`
 /// byte length and then UTF-8 bytes.
@@ -443,17 +434,12 @@ pub fn barrier_marker_from_producer(
     #[builder(into, default = ProducerId (1000))] producer: ProducerId,
     #[builder(into, default = ProducerEpoch (2))] producer_epoch: ProducerEpoch,
 ) -> RecordBatch {
-    let setup = HostileBarrierSetup {
-        marker,
-        producer,
-        producer_epoch,
-    };
     RecordBatch {
-        producer_id: setup.producer.0,
-        producer_epoch: setup.producer_epoch.0,
+        producer_id: producer.0,
+        producer_epoch: producer_epoch.0,
         ..barrier_marker()
-            .group(setup.marker.group)
-            .epoch(setup.marker.epoch.0)
+            .group(marker.group)
+            .epoch(marker.epoch.0)
             .call()
     }
 }

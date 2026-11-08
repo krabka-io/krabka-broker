@@ -15,8 +15,8 @@ use {
             client::create_configured_topic,
             fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
             offsets::{list_offset_partition, single_partition_list_offsets},
-            produce::{SinglePartitionProduceSetup, send_batch},
-            topics::CreateTopicSetup,
+            produce::{BatchSender as _, single_partition_produce},
+            topics::configured_topic_request,
         },
     },
     assert2::assert,
@@ -35,11 +35,13 @@ use {
 const VISIBILITY_DEADLINE: Duration = Duration::from_secs(30);
 
 pub async fn create_topic(client: &Client, topic: &str, mode: Mode) {
-    create_configured_topic(client, CreateTopicSetup {
-        topic,
-        configs: &[("delivery.mode", mode.value)],
-        ..Default::default()
-    })
+    create_configured_topic(
+        client,
+        configured_topic_request()
+            .topic(topic)
+            .configs(&[("delivery.mode", mode.value)])
+            .call(),
+    )
     .await;
 }
 
@@ -74,12 +76,15 @@ pub async fn ready_topic(broker: &BrokerHandle, client: &Client, topic: &str, mo
 }
 
 pub async fn produce(client: &Client, topic: &str, topic_id: Uuid, batch: RecordBatch) {
-    let response = send_batch(&client, batch, SinglePartitionProduceSetup {
-        topic: topic.to_owned(),
-        topic_id,
-        ..Default::default()
-    })
-    .await;
+    let response = client
+        .send_produce_request(
+            single_partition_produce()
+                .records(batch)
+                .topic(topic.to_owned())
+                .topic_id(topic_id)
+                .call(),
+        )
+        .await;
     let written = response
         .responses
         .first()

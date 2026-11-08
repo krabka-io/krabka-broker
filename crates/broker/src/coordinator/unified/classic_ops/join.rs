@@ -1164,8 +1164,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn member_bootstrap() -> MemberIdBootstrap {
-        // Start this scenario with fresh inputs and observations.
-        MemberIdBootstrap::default()
+        MemberIdBootstrap {
+            ..MemberIdBootstrap::default()
+        }
     }
     #[given("a JoinGroup request has member {member} and instance {instance}")]
     fn join_identity(member_bootstrap: &mut MemberIdBootstrap, member: String, instance: String) {

@@ -233,6 +233,7 @@ mod tests {
         super::*,
         crate::{
             codes,
+            listener_tls::ensure_crypto_provider,
             network::client::InterBrokerClient,
             test_support::broker_registration,
             txn::handlers::{
@@ -248,7 +249,6 @@ mod tests {
             WritableTxnMarkerPartitionResult, WritableTxnMarkerResult, WritableTxnMarkerTopicResult,
         },
         krabka_security::ListenerProtocol,
-        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider,
     };
 
     fn marker_response(codes_by_partition: &[PartitionAnswer]) -> WriteTxnMarkersResponse {
@@ -522,7 +522,7 @@ mod tests {
             },
         };
 
-        let _ = default_provider().install_default();
+        ensure_crypto_provider();
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await

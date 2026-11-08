@@ -49,6 +49,7 @@ use {
 mod support;
 
 type RoutingCluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+#[derive(Default)]
 struct Routing {
     guard: Option<MutexGuard<'static, ()>>,
     cluster: RoutingCluster,
@@ -62,18 +63,8 @@ struct Routing {
 }
 #[rstest::fixture]
 fn routing() -> Routing {
-    // Start this scenario with fresh inputs and observations.
-
     Routing {
-        guard: None,
-        cluster: Vec::new(),
-        bootstrap: String::new(),
-        topic: String::new(),
-        producer: None,
-        non_bootstrap: Vec::new(),
-        acknowledgements: Vec::new(),
-        seen: HashSet::new(),
-        seen_partitions: HashMap::new(),
+        ..Routing::default()
     }
 }
 #[rstest_bdd_macros::given(

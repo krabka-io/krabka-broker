@@ -701,7 +701,7 @@ mod tests {
         for (listener, host, port) in cases {
             assert!(
                 project_broker(&rec, listener)
-                    == Some(krabka_macros::tagged_wire!(MetadataResponseBroker {
+                    == Some(krabka_broker_macros::tagged_wire!(MetadataResponseBroker {
                         node_id: 7,
                         host: host.to_owned(),
                         port,
@@ -778,7 +778,7 @@ mod tests {
             .unwrap()
             .broker
             .broker_arc_for_test();
-        krabka_macros::request_test_identity! {bind(p,peer,ctx);user ["describer"];client ["metadata-client"];};
+        krabka_broker_macros::request_test_identity! {bind(p,peer,ctx);user ["describer"];client ["metadata-client"];};
         metadata_cluster_id.response = Some(
             handle(&broker, MetadataRequest::default(), 9, &ctx)
                 .await

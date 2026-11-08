@@ -532,8 +532,6 @@ mod tests {
 
     #[rstest::fixture]
     fn settings() -> ProducerSettings {
-        // Start this scenario with fresh inputs and observations.
-
         ProducerSettings {
             stack: Stack::Krabka,
             regex: String::new(),
@@ -649,6 +647,7 @@ mod tests {
         ],
     );
 
+    #[derive(Default)]
     struct YamlScenario {
         source: String,
         decoded: Option<Result<Scenario, String>>,
@@ -659,14 +658,8 @@ mod tests {
 
     #[rstest::fixture]
     fn yaml_scenario() -> YamlScenario {
-        // Start this scenario with fresh inputs and observations.
-
         YamlScenario {
-            source: String::new(),
-            decoded: None,
-            original: None,
-            encoded: String::new(),
-            round_trip: None,
+            ..YamlScenario::default()
         }
     }
 
@@ -837,6 +830,7 @@ mod tests {
         check!(yaml_scenario.round_trip == yaml_scenario.original);
     }
 
+    #[derive(Default)]
     struct RunDocument {
         original: Option<RunOutput>,
         encoded: String,
@@ -845,13 +839,8 @@ mod tests {
     }
     #[rstest::fixture]
     fn run_document() -> RunDocument {
-        // Start this scenario with fresh inputs and observations.
-
         RunDocument {
-            original: None,
-            encoded: String::new(),
-            decoded: None,
-            value: None,
+            ..RunDocument::default()
         }
     }
     #[rstest_bdd_macros::given(

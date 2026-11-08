@@ -16,6 +16,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct ConsoleExchange {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -31,19 +32,8 @@ struct ConsoleExchange {
 
 #[fixture]
 fn console() -> ConsoleExchange {
-    // Start this scenario with fresh inputs and observations.
-
     ConsoleExchange {
-        broker: None,
-        directory: None,
-        topic: String::new(),
-        values: Vec::new(),
-        produced: None,
-        partitions: Vec::new(),
-        consumed: None,
-        printed_record: None,
-        timestamp: None,
-        resolved: String::new(),
+        ..ConsoleExchange::default()
     }
 }
 

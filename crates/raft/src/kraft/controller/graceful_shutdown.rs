@@ -84,6 +84,7 @@ mod tests {
         rstest_bdd_macros::{given, then, when},
     };
 
+    #[derive(Default)]
     struct ShutdownWindow {
         fetch_timeout: Option<Time>,
         window: Option<Duration>,
@@ -91,11 +92,8 @@ mod tests {
 
     #[fixture]
     fn shutdown() -> ShutdownWindow {
-        // Start this scenario with fresh inputs and observations.
-
         ShutdownWindow {
-            fetch_timeout: None,
-            window: None,
+            ..ShutdownWindow::default()
         }
     }
 

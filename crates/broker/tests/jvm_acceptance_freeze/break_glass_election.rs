@@ -12,6 +12,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ProtectedElection {
     broker: Option<JvmBroker>,
     properties: Option<ClientPropsFile>,
@@ -20,13 +21,8 @@ struct ProtectedElection {
 }
 #[fixture]
 fn election() -> ProtectedElection {
-    // Start this scenario with fresh inputs and observations.
-
     ProtectedElection {
-        broker: None,
-        properties: None,
-        result: None,
-        approvals: None,
+        ..ProtectedElection::default()
     }
 }
 #[given(

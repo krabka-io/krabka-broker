@@ -55,11 +55,14 @@ pub async fn drive_create_topics_sasl(
         .timeout(30_000)
         .call();
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: (pass.as_bytes()).to_vec(),
-    })
+    let mut stream = kafka_wire::sasl_plain_authenticate(
+        addr,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .user(user)
+            .password(pass.as_bytes())
+            .build(),
+    )
     .await
     .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();
@@ -104,11 +107,11 @@ pub async fn drive_delete_topics_sasl(
         ..Default::default()
     };
 
-    let auth_setup = PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        user,
-        password: pass.as_bytes().to_vec(),
-    };
+    let auth_setup = PlainAuthenticationSetup::builder()
+        .client_id(CLIENT_ID)
+        .user(user)
+        .password(pass.as_bytes())
+        .build();
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, &auth_setup)
         .await
         .expect("SASL authenticate for DeleteTopics");

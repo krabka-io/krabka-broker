@@ -93,7 +93,7 @@ macro_rules! raw_request_handler {
         $request:ident, $binding:ident, $broker:ident, $version:ident, $correlation:ident,
         $req_bytes:ident, $ctx:ident, $context:ident, $body:tt
     ) => {
-        #[krabka_macros::decode_dispatch(request = $request, binding($binding))]
+        #[krabka_broker_macros::decode_dispatch(request = $request, binding($binding))]
         pub fn handle(
             $broker: &Broker,
             $version: ApiVersion,
@@ -103,7 +103,7 @@ macro_rules! raw_request_handler {
         ) -> DispatchResult $body
     };
     ($request:ident, $binding:ident, $broker:ident, $version:ident, $req_bytes:ident, $ctx:ident, $body:tt) => {
-        #[krabka_macros::decode_dispatch(request = $request, binding($binding))]
+        #[krabka_broker_macros::decode_dispatch(request = $request, binding($binding))]
         pub async fn handle(
             $broker: &Broker,
             $version: ApiVersion,

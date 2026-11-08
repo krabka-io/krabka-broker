@@ -38,7 +38,6 @@ krabka-units = { workspace = true }
 krabka-protocol = { version = "0.8.0", default-features = false }
 prometheus-client = { workspace = true }
 refined_type = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 stateright = { workspace = true }

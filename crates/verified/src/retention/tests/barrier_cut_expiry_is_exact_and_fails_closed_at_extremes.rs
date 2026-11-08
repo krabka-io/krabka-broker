@@ -19,8 +19,6 @@ struct RetentionPasses {
 
 #[fixture]
 fn retention() -> RetentionPasses {
-    // Start this scenario with fresh inputs and observations.
-
     RetentionPasses {
         barrier_expired: None,
         ..RetentionPasses::default()

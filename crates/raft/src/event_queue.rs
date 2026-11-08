@@ -173,6 +173,7 @@ mod tests {
         tokio::time::{Duration, Instant, advance},
     };
 
+    #[derive(Default)]
     struct MeteredTurn {
         recorder: Option<Arc<RecordingEventQueue>>,
         meter: Option<EventQueueMeter>,
@@ -182,13 +183,8 @@ mod tests {
 
     #[fixture]
     fn turn() -> MeteredTurn {
-        // Start this scenario with fresh inputs and observations.
-
         MeteredTurn {
-            recorder: None,
-            meter: None,
-            arrival: None,
-            measurements: None,
+            ..MeteredTurn::default()
         }
     }
 

@@ -26,6 +26,7 @@ use {
     },
 };
 
+#[derive(Default)]
 struct AclProvisioning {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -35,14 +36,8 @@ struct AclProvisioning {
 }
 #[rstest::fixture]
 fn acls() -> AclProvisioning {
-    // Start this scenario with fresh inputs and observations.
-
     AclProvisioning {
-        directory: None,
-        broker: None,
-        created: None,
-        described: None,
-        deleted: None,
+        ..AclProvisioning::default()
     }
 }
 #[rstest_bdd_macros::given("a super user admin on the SASL listener")]
@@ -145,10 +140,13 @@ async fn acl_unprivileged_create(acls: &mut AclProvisioning) {
         ],
         ..Default::default()
     };
-    let resp = drive_create_acls_as_plain(addr, req, &PlainAuthenticationSetup {
-        client_id: CLIENT_ID,
-        ..Default::default()
-    })
+    let resp = drive_create_acls_as_plain(
+        addr,
+        req,
+        &PlainAuthenticationSetup::builder()
+            .client_id(CLIENT_ID)
+            .build(),
+    )
     .await
     .expect("CreateAcls request must round-trip even when denied");
     acls.created = Some(resp);

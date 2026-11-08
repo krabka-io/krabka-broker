@@ -1,14 +1,5 @@
 //! Shared utilities for the transaction subsystem.
 
-krabka_macros::epoch_millis_fn!(
-/// Returns the current wall-clock time in milliseconds since the Unix epoch.
-///
-/// Transaction handlers use this to stamp `last_update_ms` on `TxnEntry`.
-#[inline]
-pub(crate) fn now_millis,
-0
-);
-
 /// A producer's id and the epoch it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProducerIdentity {

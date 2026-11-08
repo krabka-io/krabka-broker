@@ -29,8 +29,6 @@ struct DisplayScenario {
 
 #[rstest::fixture]
 fn display() -> DisplayScenario {
-    // Start this scenario with fresh inputs and observations.
-
     DisplayScenario {
         cluster: ClusterId(0),
         directory: DirectoryId(0),
@@ -91,8 +89,6 @@ struct CodecScenario {
 
 #[rstest::fixture]
 fn codec() -> CodecScenario {
-    // Start this scenario with fresh inputs and observations.
-
     CodecScenario {
         cluster: ClusterId(0),
         directory: DirectoryId(0),

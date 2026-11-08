@@ -41,7 +41,7 @@ mod jvm_acceptance;
 mod support;
 
 use {
-    crate::support::{ContainerInput, jvm_docker_command, topics::CreateTopicSetup},
+    crate::support::{ContainerInput, jvm_docker_command, topics::configured_topic_request},
     assert2::{assert, check},
     jvm_acceptance::{
         KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image, start_host_broker,
@@ -71,7 +71,7 @@ const DELAY_MS: i64 = 30_000;
 /// The probe's own report of what a stock JVM client saw.
 ///
 /// The Java side only measures and prints; every assertion is made here.
-const PROBE_JAVA: &str = krabka_macros::java_string_producer_source!(
+const PROBE_JAVA: &str = krabka_broker_macros::java_string_producer_source!(
     r#"
 import java.time.Duration;
 import java.util.Collections;
@@ -167,11 +167,13 @@ async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
     let client =
         support::client::connect_with_context(bootstrap, None, "client for the host listener")
             .await;
-    support::client::create_configured_topic(&client, CreateTopicSetup {
-        topic,
-        configs: &[("delivery.mode", mode)],
-        ..Default::default()
-    })
+    support::client::create_configured_topic(
+        &client,
+        configured_topic_request()
+            .topic(topic)
+            .configs(&[("delivery.mode", mode)])
+            .call(),
+    )
     .await;
 }
 
@@ -278,6 +280,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ScheduledDelivery {
     broker: Option<BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -286,13 +289,8 @@ struct ScheduledDelivery {
 }
 #[fixture]
 fn delivery() -> ScheduledDelivery {
-    // Start this scenario with fresh inputs and observations.
-
     ScheduledDelivery {
-        broker: None,
-        directory: None,
-        probe: None,
-        consumed: None,
+        ..ScheduledDelivery::default()
     }
 }
 #[given("one broker hosts a scheduled topic and an immediate delivery control topic")]

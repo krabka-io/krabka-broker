@@ -878,26 +878,16 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct IpQuotaSetup<'a> {
-        ip: Option<&'a str>,
-        #[default("connection_creation_rate")]
-        key: &'a str,
-        #[default(QuotaValue(1.0))]
-        value: QuotaValue,
-    }
-
     #[bon::builder]
     fn rec_ip(
         ip: Option<&'_ str>,
         #[builder(default = "connection_creation_rate")] key: &'_ str,
         #[builder(into, default = QuotaValue (1.0))] value: QuotaValue,
     ) -> ClientQuotaRecord {
-        let setup = IpQuotaSetup { ip, key, value };
         rec()
-            .entity(vec![QuotaEntityInput::ip(setup.ip)])
-            .key(setup.key)
-            .value(setup.value)
+            .entity(vec![QuotaEntityInput::ip(ip)])
+            .key(key)
+            .value(value)
             .call()
     }
 

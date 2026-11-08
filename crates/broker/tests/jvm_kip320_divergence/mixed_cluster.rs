@@ -285,18 +285,6 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 #[derive(Clone, Copy)]
 pub struct PartitionEpochDelta(pub i32);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct SingleLeaderSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    #[default(krabka_broker::NodeId(1))]
-    pub leader: krabka_broker::NodeId,
-    #[default(krabka_metadata::LeaderEpoch(0))]
-    pub epoch: krabka_metadata::LeaderEpoch,
-    #[default(PartitionEpochDelta(1))]
-    pub partition_epoch_delta: PartitionEpochDelta,
-}
-
 #[bon::builder]
 pub fn single_leader_record(
     previous: &krabka_metadata::PartitionRecord,
@@ -306,23 +294,17 @@ pub fn single_leader_record(
     epoch: krabka_metadata::LeaderEpoch,
     #[builder(into, default = PartitionEpochDelta (1))] partition_epoch_delta: PartitionEpochDelta,
 ) -> krabka_metadata::PartitionRecord {
-    let setup = SingleLeaderSetup {
-        topic,
-        leader,
-        epoch,
-        partition_epoch_delta,
-    };
     krabka_metadata::PartitionRecord {
-        topic: setup.topic.to_owned(),
+        topic: topic.to_owned(),
         partition: 0,
-        leader: setup.leader,
+        leader,
         replicas: previous.replicas.clone(),
-        isr: vec![setup.leader],
-        leader_epoch: setup.epoch,
+        isr: vec![leader],
+        leader_epoch: epoch,
         adding_replicas: vec![],
         removing_replicas: vec![],
         directories: previous.directories.clone(),
-        partition_epoch: previous.partition_epoch + setup.partition_epoch_delta.0,
+        partition_epoch: previous.partition_epoch + partition_epoch_delta.0,
     }
 }
 

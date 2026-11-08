@@ -288,17 +288,10 @@ mod tests {
     /// The same three-offset entry seeds retry, mutation and disk-round-trip cases.
     fn retry_entry() -> AbortedTxn { aborted_txn().bounds(Offset(5)..=Offset(7)).stable(8).call() }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct RangedIndexSetup<'a> {
-        #[default("00.txnindex")]
-        name: &'a str,
-    }
-
     /// One transaction covers offsets 10 through 20 for fetch-boundary checks.
     #[bon::builder]
     fn ranged_index(#[builder(default = "00.txnindex")] name: &'_ str) -> IndexFixture<TxnIndex> {
-        let setup = RangedIndexSetup { name };
-        populated_index(setup.name, &[aborted_txn()
+        populated_index(name, &[aborted_txn()
             .producer(1)
             .bounds(Offset(10)..=Offset(20))
             .stable(21)

@@ -55,7 +55,7 @@ const CLUSTER_METADATA_TOPIC: &str = "__cluster_metadata";
 /// `authorizeClusterOperation(request, CLUSTER_ACTION)` first, and a denial
 /// becomes `FetchSnapshotRequest.getErrorResponse`: a top-level
 /// `CLUSTER_AUTHORIZATION_FAILED` and no topics.
-#[krabka_macros::decode_dispatch(request = FetchSnapshotRequest, binding(req))]
+#[krabka_broker_macros::decode_dispatch(request = FetchSnapshotRequest, binding(req))]
 pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
@@ -344,7 +344,7 @@ mod tests {
                 other => panic!("unknown snapshot request field {other}"),
             }
         }
-        krabka_macros::request_test_identity! { bind(principal, address, ctx); user ["admin"]; client ["snapshot-test"]; };
+        krabka_broker_macros::request_test_identity! { bind(principal, address, ctx); user ["admin"]; client ["snapshot-test"]; };
         let version = fetch_snapshot_response::MAX_VERSION;
         let bytes = super::handle(&broker, version, &encode_request(&req, version), &ctx)
             .await

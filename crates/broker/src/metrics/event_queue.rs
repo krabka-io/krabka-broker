@@ -88,8 +88,6 @@ mod tests {
 
     #[rstest::fixture]
     fn controller_queue_metrics() -> ControllerQueueMetrics {
-        // Start this scenario with fresh inputs and observations.
-
         ControllerQueueMetrics {
             metrics: BrokerMetrics::new(),
             scrape: None,

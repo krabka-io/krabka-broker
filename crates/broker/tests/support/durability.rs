@@ -29,14 +29,6 @@ pub struct ReplicatedTopicSetup<'a> {
     pub replicas: TopicReplicationFactor,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct TopicReplicasSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    #[default(TopicReplicationFactor(1))]
-    pub replicas: TopicReplicationFactor,
-}
-
 /// Boot registered brokers and create a topic on the first `rf` replicas.
 ///
 /// # Panics
@@ -89,13 +81,10 @@ pub async fn create_topic_on_replicas(
     #[builder(default = "t")] topic: &'_ str,
     #[builder(default = TopicReplicationFactor(1))] replicas: TopicReplicationFactor,
 ) {
-    let setup = TopicReplicasSetup { topic, replicas };
     let client = connect_client(bootstrap.to_owned(), None).await;
-    let replicas: Vec<i32> = (1..=i32::from(setup.replicas.0)).collect();
+    let replicas: Vec<i32> = (1..=i32::from(replicas.0)).collect();
     let resp = client
-        .send(create_topic_request(super::topic_on(setup.topic, &[
-            &replicas,
-        ])))
+        .send(create_topic_request(super::topic_on(topic, &[&replicas])))
         .await
         .expect("CreateTopics");
     assert!(
@@ -106,7 +95,7 @@ pub async fn create_topic_on_replicas(
     // metadata record, but the supervisor's reconcile loop materializes
     // the partition locally asynchronously. Wait until it appears so
     // subsequent Produce/Fetch don't race the materialization.
-    broker.wait_until_partition_present(setup.topic, 0).await;
+    broker.wait_until_partition_present(topic, 0).await;
 }
 
 pub async fn produce_batch(

@@ -253,7 +253,7 @@ fn target_member_value(
     })
 }
 
-#[krabka_macros::flush_group_records(group [&actor.state.group_id]; encode [pending.into_batch(&actor.state.group_id, now_ms)];)]
+#[krabka_broker_macros::flush_group_records(group [&actor.state.group_id]; encode [pending.into_batch(&actor.state.group_id, now_ms)];)]
 async fn flush_pending(
     actor: &ActorState,
     pending: PendingStreamsRecords,
@@ -292,7 +292,7 @@ pub(super) async fn reconcile_and_flush(
 /// for a respawned actor. The result matches what bootstrap replay produces.
 pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     let state = &actor.state;
-    krabka_macros::snapshot_member_maps! { state;
+    krabka_broker_macros::snapshot_member_maps! { state;
         members, current_per_member, target_per_member;
         member_metadata_value, current_assignment_value; |mid, m| {
             if let Some(tv) = target_member_value(state, mid) {
@@ -346,7 +346,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
         m.topology_epoch = meta.topology_epoch;
         state.members.insert(mid, m);
     }
-    krabka_macros::hydrate_member_epochs!(state, seed; m, cur {
+    krabka_broker_macros::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state.into();
             m.active_epochs = replayed_active_epochs(
                 &state.group_id,

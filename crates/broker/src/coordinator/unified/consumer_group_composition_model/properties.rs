@@ -25,13 +25,13 @@ impl Model for CgcModel {
     type Action = CgcAction;
     type State = CgcState;
 
-    krabka_macros::reconciliation_next_state! {
+    krabka_broker_macros::reconciliation_next_state! {
         fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State>
         [action = CgcAction, lookup = member, rebuild = rebuild_group, check = assert_epoch_monotonic, project = project]
         { setup { let committed = committed_map(last); } actions { CgcAction::Commit(id, part, kind) => return do_commit(last, &id, part, kind), } project { &committed } }
     }
 
-    krabka_macros::reconciliation_actions! {
+    krabka_broker_macros::reconciliation_actions! {
         fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>)
         [action = CgcAction, lookup = member, member = m]
         {
@@ -49,7 +49,7 @@ impl Model for CgcModel {
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        krabka_macros::model_properties! { CgcState;
+        krabka_broker_macros::model_properties! { CgcState;
         // HEADLINE: no two members ever simultaneously own the same partition
         // (the real reconciliation's withholding — re-verified in the composed
         // context, with offset traffic interleaved).

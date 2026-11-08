@@ -45,7 +45,7 @@ const MAX_IO_SLICES: usize = 64;
 
 /// The inline bytes of an op. File regions are excluded by the vectored-path selector and contribute no inline bytes.
 fn inline_bytes(op: &WriteOp) -> &[u8] {
-    krabka_macros::sendfile_match! { match op {
+    krabka_broker_macros::sendfile_match! { match op {
         WriteOp::Inline(bytes) => bytes.as_ref(),
         WriteOp::File(_) => &[],
     }}
@@ -147,7 +147,7 @@ where
     // fetch response cost four sends and as many wakeups at the reader.
     let mut coalesced = Vec::new();
     for op in iter::once(first).chain(ops) {
-        krabka_macros::sendfile_match! { match op {
+        krabka_broker_macros::sendfile_match! { match op {
             WriteOp::Inline(b) => {
                 if b.len() < COALESCE_BELOW {
                     coalesced.extend_from_slice(&b);
@@ -358,13 +358,15 @@ mod tests {
     mod sendfile_tests {
         use {
             super::*,
-            crate::network::{
-                fetch_writer::{resolve_records_sendfile, test_support::file_payload},
-                test_support::tcp_pair,
+            crate::{
+                listener_tls::ensure_crypto_provider,
+                network::{
+                    fetch_writer::{resolve_records_sendfile, test_support::file_payload},
+                    test_support::tcp_pair,
+                },
             },
             bytes::Bytes,
             krabka_protocol::records::RecordsPayload,
-            rustls::crypto::aws_lc_rs,
             std::{
                 io::Result,
                 pin::Pin,
@@ -464,7 +466,7 @@ mod tests {
         }
 
         impl AsyncWrite for NoSendfileStream {
-            krabka_macros::async_write_delegate!(tuple);
+            krabka_broker_macros::async_write_delegate!(tuple);
 
             fn poll_write(
                 mut self: Pin<&mut Self>,
@@ -507,7 +509,7 @@ mod tests {
             // also exercises the kTLS RX path on the server side.
             const REQ: &[u8] = b"fetch-request";
 
-            let _ = aws_lc_rs::default_provider().install_default();
+            ensure_crypto_provider();
 
             // Records large enough to span several TLS records + partial writes.
             let mut records = Vec::new();

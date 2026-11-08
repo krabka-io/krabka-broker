@@ -22,8 +22,6 @@ struct ClusterDiscovery {
 
 #[fixture]
 fn discovery() -> ClusterDiscovery {
-    // Start this scenario with fresh inputs and observations.
-
     ClusterDiscovery {
         request: DescribeClusterRequest::default(),
         response: None,

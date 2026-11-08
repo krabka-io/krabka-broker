@@ -212,8 +212,6 @@ mod tests {
 
     #[fixture]
     fn output() -> GroupToolOutput {
-        // Start this scenario with fresh inputs and observations.
-
         GroupToolOutput {
             stdout: String::new(),
             reset_tables: Vec::new(),

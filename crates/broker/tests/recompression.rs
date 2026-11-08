@@ -21,9 +21,10 @@ use {
     crate::support::{
         discovery::named_topic_metadata,
         fetch::single_partition_fetch,
-        produce::{SinglePartitionProduceSetup, batch_request},
+        produce::{ProduceAcknowledgements, single_partition_produce},
         records::{batch_from_records, value_record},
         topics,
+        wire::HeaderEncoding,
     },
     assert2::{assert, check},
     bytes::Bytes,
@@ -77,14 +78,15 @@ async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &st
         ..Default::default()
     };
     let version: i16 = 7;
-    let (_, r) = kafka_wire::request_once::<_, CreateTopicsResponse>(
-        addr,
-        &req,
-        (19, version),
-        CLIENT_ID,
-        (1, true),
-    )
-    .await;
+    let (_, r): (usize, CreateTopicsResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(19)
+        .version(version)
+        .client_id(CLIENT_ID)
+        .header(HeaderEncoding::Flexible)
+        .call()
+        .await;
     assert!(
         r.topics[0].error_code == 0,
         "CreateTopics must succeed for compression.type={codec}: {:?}",
@@ -95,14 +97,15 @@ async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &st
 async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
     let req = named_topic_metadata(topic);
     let version: i16 = 12;
-    let (_, r) = kafka_wire::request_once::<_, MetadataResponse>(
-        addr,
-        &req,
-        (3, version),
-        CLIENT_ID,
-        (1, true),
-    )
-    .await;
+    let (_, r): (usize, MetadataResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(3)
+        .version(version)
+        .client_id(CLIENT_ID)
+        .header(HeaderEncoding::Flexible)
+        .call()
+        .await;
     r.topics
         .iter()
         .find(|t| t.name.as_deref() == Some(topic))
@@ -115,20 +118,22 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
         attributes: Attributes::default().with_compression(CompressionType::Gzip),
         ..batch_from_records(vec![value_record(0, Some(Bytes::copy_from_slice(value)))])
     };
-    let req = batch_request(batch, SinglePartitionProduceSetup {
-        topic: (topic).into(),
-        topic_id,
-        ..SinglePartitionProduceSetup::replicated()
-    });
+    let req = single_partition_produce()
+        .records(batch)
+        .topic(topic)
+        .topic_id(topic_id)
+        .acknowledgements(ProduceAcknowledgements::AllReplicas)
+        .call();
     let version: i16 = 9;
-    let (_, r) = kafka_wire::request_once::<_, ProduceResponse>(
-        addr,
-        &req,
-        (0, version),
-        CLIENT_ID,
-        (1, true),
-    )
-    .await;
+    let (_, r): (usize, ProduceResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(0)
+        .version(version)
+        .client_id(CLIENT_ID)
+        .header(HeaderEncoding::Flexible)
+        .call()
+        .await;
     let part = &r.responses[0].partition_responses[0];
     assert!(part.error_code == 0, "Produce must succeed: {part:?}");
 }
@@ -142,14 +147,15 @@ async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Rec
             .call()
     };
     let version: i16 = 12;
-    let (_, r) = kafka_wire::request_once::<_, FetchResponse>(
-        addr,
-        &req,
-        (1, version),
-        CLIENT_ID,
-        (1, true),
-    )
-    .await;
+    let (_, r): (usize, FetchResponse) = kafka_wire::request_once()
+        .addr(addr)
+        .request(&req)
+        .api_key(1)
+        .version(version)
+        .client_id(CLIENT_ID)
+        .header(HeaderEncoding::Flexible)
+        .call()
+        .await;
     let part = &r.responses[0].partitions[0];
     assert!(part.error_code == 0, "Fetch error: {}", part.error_code);
     part.records

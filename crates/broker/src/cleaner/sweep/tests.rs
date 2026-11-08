@@ -18,7 +18,7 @@ use {
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, PatternType},
-    std::{fs, io::Error, iter, path::PathBuf, sync::atomic::Ordering},
+    std::{fs, io::Error, iter, path::PathBuf},
     tempfile::TempDir,
 };
 
@@ -584,7 +584,7 @@ async fn a_partition_this_broker_stops_hosting_leaves_the_uncleanable_set() {
 
     // Another broker takes the leadership. The replica stays here, so the
     // cleaner still owes it a pass and the gauge still counts it.
-    partition.current_leader.store(8, Ordering::Relaxed);
+    partition.test_set_leader(8);
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
     check!(
         metrics.log_cleaner_uncleanable_partitions.get() == 1,

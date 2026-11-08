@@ -143,6 +143,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
 };
 
+#[derive(Default)]
 struct LoggerAdministration {
     broker: Option<StartedBroker>,
     all: Option<Output>,
@@ -154,16 +155,8 @@ struct LoggerAdministration {
 }
 #[fixture]
 fn logger() -> LoggerAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     LoggerAdministration {
-        broker: None,
-        all: None,
-        described: None,
-        altered: None,
-        after_alter: None,
-        deleted: None,
-        after_delete: None,
+        ..LoggerAdministration::default()
     }
 }
 #[given("a registered broker starts with its default INFO logger level")]

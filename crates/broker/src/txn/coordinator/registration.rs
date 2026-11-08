@@ -11,9 +11,10 @@ use {
             CONCURRENT_TRANSACTIONS, COORDINATOR_LOAD_IN_PROGRESS, INVALID_PRODUCER_EPOCH,
             INVALID_PRODUCER_ID_MAPPING, INVALID_REQUEST, NONE, NOT_COORDINATOR, PRODUCER_FENCED,
         },
+        time_util,
         txn::{
             state::{TopicPartition, TxnEntry, TxnState},
-            util::{PRODUCER_FENCED_MIN_VERSION, now_millis},
+            util::PRODUCER_FENCED_MIN_VERSION,
             version::TxnVersion,
         },
     },
@@ -115,7 +116,7 @@ impl TxnCoordinator {
         let snapshot = stage_registration(
             &entry,
             partitions,
-            now_millis(),
+            time_util::now_ms(),
             TxnVersion::for_add_partitions_to_txn(version).level(),
         );
 

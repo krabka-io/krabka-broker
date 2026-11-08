@@ -18,6 +18,7 @@ use {
         create_topics_response::CreateTopicsResponse, fetch_response::FetchResponse,
     },
 };
+#[derive(Default)]
 struct DeniedAuditRequest {
     broker: Option<support::InProcess>,
     creation: Option<CreateTopicsResponse>,
@@ -25,12 +26,8 @@ struct DeniedAuditRequest {
 }
 #[rstest::fixture]
 fn denied_audit() -> DeniedAuditRequest {
-    // Start this scenario with fresh inputs and observations.
-
     DeniedAuditRequest {
-        broker: None,
-        creation: None,
-        fetch: None,
+        ..DeniedAuditRequest::default()
     }
 }
 #[rstest_bdd_macros::given("a broker whose authorizer denies every operation")]

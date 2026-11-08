@@ -21,6 +21,7 @@ const PREFIX: &str = "team-";
 const TOPIC_OK: &str = "team-foo";
 const TOPIC_DENIED: &str = "other-foo";
 const GROUP: &str = "cg-prefixed";
+#[derive(Default)]
 struct PrefixAuthorization {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -30,14 +31,8 @@ struct PrefixAuthorization {
 }
 #[rstest::fixture]
 fn authorization() -> PrefixAuthorization {
-    // Start this scenario with fresh inputs and observations.
-
     PrefixAuthorization {
-        broker: None,
-        directory: None,
-        client: None,
-        allowed: None,
-        denied: None,
+        ..PrefixAuthorization::default()
     }
 }
 #[rstest_bdd_macros::given(

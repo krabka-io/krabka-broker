@@ -14,7 +14,9 @@ use {
     super::{
         AutoJoinParams,
         outcome::log_join_outcome,
-        request::{advertised_controller_listener, build_add_raft_voter_request, join_target},
+        request::{
+            advertised_controller_listener, build_add_raft_voter_request, controller_target,
+        },
         rpc::{send_add_raft_voter, send_remove_raft_voter},
     },
     krabka_protocol::{
@@ -86,7 +88,8 @@ async fn join(params: AutoJoinParams) {
             return;
         }
 
-        let Some(target) = join_target(&controller.quorum_state(), &bootstrap_servers, next_server)
+        let Some(target) =
+            controller_target(&controller.quorum_state(), &bootstrap_servers, next_server)
         else {
             tracing::warn!(
                 node_id = self_id.0,

@@ -52,8 +52,6 @@ struct OffsetIdentity {
 
 #[fixture]
 fn offsets() -> OffsetIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     OffsetIdentity {
         broker: None,
         group: String::new(),
