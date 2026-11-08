@@ -354,8 +354,8 @@ mod tests {
             coordinator::{
                 test_support::default_coordinator,
                 unified::{
-                    ImageMetadataProvider, group::CoordinatorGroup,
-                    offsets_log::fake::InMemoryOffsetsLog,
+                    GroupSeed, GroupType, ImageMetadataProvider, ShareGroupSeed, StreamsGroupSeed,
+                    group::CoordinatorGroup, offsets_log::fake::InMemoryOffsetsLog,
                 },
             },
             handlers::{
@@ -482,6 +482,58 @@ mod tests {
         unload_partition(&coordinator, &image, PartitionIndex(0)).await;
 
         check!(!coordinator.holds_respawn_seed("billing"));
+    }
+
+    /// Losing the offsets partition drops every per-group entry the
+    /// coordinator holds for the partition's groups, whichever map alone
+    /// names a group: live actors, the type lock, replayed and cached seeds,
+    /// and respawn seeds. Each map holds its own group id here, so a map the
+    /// unload forgot to search would keep its entry.
+    #[tokio::test]
+    async fn unloading_a_partition_empties_every_per_group_map_of_its_groups() {
+        let OffsetsPartitionCoordinator {
+            coordinator, image, ..
+        } = coordinator_of_the_offsets_partition();
+        let _classic = coordinator.get_or_create_classic("classic-actor");
+        coordinator.mark_share("share-actor");
+        let _share = coordinator.get_or_create_share("share-actor");
+        let _streams = coordinator.get_or_create_streams("streams-actor");
+        coordinator
+            .group_types
+            .insert("typed".into(), GroupType::NextGen);
+        coordinator
+            .seeds
+            .insert("consumer-seed".into(), GroupSeed::default());
+        coordinator
+            .seeds_cache
+            .insert("consumer-cached".into(), GroupSeed::default());
+        coordinator.leave_respawn_seed(CoordinatorGroup::new_classic("respawn"));
+        coordinator
+            .share_seeds
+            .insert("share-seed".into(), ShareGroupSeed::default());
+        coordinator
+            .share_seeds_cache
+            .insert("share-cached".into(), ShareGroupSeed::default());
+        coordinator
+            .streams_seeds
+            .insert("streams-seed".into(), StreamsGroupSeed::default());
+        coordinator
+            .streams_seeds_cache
+            .insert("streams-cached".into(), StreamsGroupSeed::default());
+
+        unload_partition(&coordinator, &image, PartitionIndex(0)).await;
+
+        check!(coordinator.groups.is_empty());
+        check!(coordinator.share_groups.is_empty());
+        check!(coordinator.streams_groups.is_empty());
+        check!(coordinator.group_types.is_empty());
+        check!(coordinator.seeds.is_empty());
+        check!(coordinator.seeds_cache.is_empty());
+        check!(coordinator.respawn_seeds.is_empty());
+        check!(coordinator.share_seeds.is_empty());
+        check!(coordinator.share_seeds_cache.is_empty());
+        check!(coordinator.streams_seeds.is_empty());
+        check!(coordinator.streams_seeds_cache.is_empty());
     }
 
     /// Losing the offsets partition of a share group makes this broker stop
