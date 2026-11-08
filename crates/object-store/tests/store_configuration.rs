@@ -289,11 +289,7 @@ fn setting_is(
     assert2::assert!(setting.value_in(resolved) == value);
 }
 
-// `@inprogress` scenarios document known defects. `krabka_bdd::scenarios!`
-// leaves them out of its step check by default but still runs them, so
-// `tags` leaves them out of the run too.
 krabka_bdd::scenarios!(
     "tests/features/store_configuration",
-    tags = "not @formulated and not @inprogress",
     fixtures = [store_configuration_scenario: StoreConfigurationScenario]
 );

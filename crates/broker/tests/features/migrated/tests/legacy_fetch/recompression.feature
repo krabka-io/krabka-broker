@@ -1,6 +1,10 @@
 Feature: Compression compatibility for legacy Fetch consumers
-  Scenario: A legacy consumer receives a snappy rewrite of modern zstd records
-    Given a modern topic holds fifty zstd-compressed records with distinct boundary keys
-    When a Fetch v3 consumer reads the zstd-compressed modern batch
-    Then the legacy wrapper advertises snappy compression codec two
-    And all fifty records decode with boundary keys key-0000 and key-0049
+  Scenario: A legacy consumer gets UNSUPPORTED_COMPRESSION_TYPE for a partition of zstd records
+    Given a modern topic holds fifty zstd-compressed records
+    When a Fetch v3 consumer reads the zstd-compressed partition from its start
+    Then the partition reports UNSUPPORTED_COMPRESSION_TYPE with an empty record set
+
+  Scenario: A legacy consumer receives the records written before the first zstd batch
+    Given a modern topic holds an uncompressed record followed by fifty zstd-compressed records
+    When a Fetch v3 consumer reads the mixed partition from its start
+    Then the partition succeeds with only the uncompressed record

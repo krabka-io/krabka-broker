@@ -581,7 +581,11 @@ async fn acquire_partition(
     let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
         Ok(cell) => cell,
         Err(code) => {
-            fail_partition(p, has_acks, code);
+            if has_acks {
+                fail_share_row_and_ack(p, code);
+            } else {
+                fail_share_row(p, code);
+            }
             return;
         }
     };
@@ -591,7 +595,7 @@ async fn acquire_partition(
     if has_acks
         && let Err(code) = apply_piggybacked_acks(context, pass.now, p, &cell, &mut st).await
     {
-        fail_partition(p, true, code);
+        fail_share_row_and_ack(p, code);
         return;
     }
 
@@ -620,7 +624,7 @@ async fn acquire_partition(
     // read again, and no records are acquired from it.
     if broker.log_dir_status.is_offline(&part.log_dir.load()) {
         persist_best_effort(mgr, group, p, &cell, &mut st).await;
-        fail_partition(p, false, codes::KAFKA_STORAGE_ERROR);
+        fail_share_row(p, codes::KAFKA_STORAGE_ERROR);
         return;
     }
     let upper = read_upper_bound(&part, read_committed).await;
@@ -690,7 +694,7 @@ async fn acquire_partition(
                 "share-partition log read failed"
             );
             persist_best_effort(mgr, group, p, &cell, &mut st).await;
-            fail_partition(p, false, code);
+            fail_share_row(p, code);
             return;
         }
     };
@@ -707,17 +711,13 @@ async fn acquire_partition(
         .await;
     drop(st);
     match persisted {
-        Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
+        Err(code) if fences_the_partition(code) => fail_share_row(p, code),
         _ => match append_records(&mut p.out, fresh) {
             Ok(bytes) => {
                 pass.total.records += acquired_count;
                 pass.total.bytes += bytes;
             }
-            Err(err) => fail_partition(
-                p,
-                false,
-                local_read_failure(&part, &err, &broker.log_dir_status),
-            ),
+            Err(err) => fail_share_row(p, local_read_failure(&part, &err, &broker.log_dir_status)),
         },
     }
 }
@@ -766,21 +766,24 @@ fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, 
     Ok(added_len)
 }
 
-/// Fails one partition row with a share-partition error, and leaves it out of
-/// any later acquire pass.
+/// Fails one partition row's fetch half with a share-partition error, and
+/// leaves the row out of any later acquire pass.
 ///
-/// The fetch error goes on a row of the share session, and the acknowledge
-/// error on a row that carried acknowledgements.
-fn fail_partition(p: &mut PendingPartition, has_acks: bool, code: i16) {
+/// The error goes on the row only if the row is part of the share session.
+fn fail_share_row(p: &mut PendingPartition, code: i16) {
     p.out.records = None;
     p.out.acquired_records.clear();
     if p.fetchable {
         p.out.error_code = code;
     }
-    if has_acks {
-        p.out.acknowledge_error_code = code;
-    }
     p.leadable = false;
+}
+
+/// [`fail_share_row`], and also fails the acknowledgements the row carried
+/// with the same error.
+fn fail_share_row_and_ack(p: &mut PendingPartition, code: i16) {
+    fail_share_row(p, code);
+    p.out.acknowledge_error_code = code;
 }
 
 #[cfg(test)]

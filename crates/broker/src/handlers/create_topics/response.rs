@@ -8,8 +8,7 @@ use {
         broker::Broker,
         codes,
         handlers::{RequestContext, audit_admin_success, audit_resource},
-        metrics::QuotaType,
-        quota::throttle_time_ms,
+        quota::{QuotaType, throttle_time_ms},
     },
     krabka_protocol::owned::{
         create_topics_response::{

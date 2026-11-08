@@ -165,7 +165,7 @@ The verdict goes to stdout and the diagnostics go to stderr, so a script can rea
 |---------|-----------|---------------|
 | `OK: N manifests over M partition(s), …` | 0 | The chain is continuous, every signature is valid, and every object is present. One line per partition follows, and it names the tip for the next `--expect-head`. |
 | `OK: empty archive` | 0 | Nothing to verify. |
-| `TAMPER DETECTED at KEY (seq N)` | 1 | A manifest was rewritten, reordered, or removed, or an object does not match what its manifest records. |
+| `TAMPER DETECTED at KEY (seq N)` | 1 | A manifest was rewritten, reordered, or removed, a manifest object the listing named is missing or oversized, or an object does not match what its manifest records. |
 | `HEAD MISMATCH: expected X, archive tip Y` | 1 | The chain is internally perfect but stops short of the head the run was given. This is what tail truncation looks like. |
 | `ORPHAN OBJECTS: N object(s) with no manifest` | 0, or 1 under `--strict-orphans` | An object that no manifest names makes no integrity claim. Reported either way, and counted on the `OK:` line. |
 | `INCOMPLETE ATTESTATION: chain restarted N time(s)` | 1 | The chain has holes between epochs. Use a topic-backed RLMM, or accept them with `--allow-epoch-restarts`. |

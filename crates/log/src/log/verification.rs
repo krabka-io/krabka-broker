@@ -89,9 +89,12 @@ impl Log {
     /// `producer_epoch`. Kafka's `UnifiedLog.hasOngoingTransaction`.
     #[must_use]
     pub fn has_ongoing_transaction(&self, producer_id: ProducerId, producer_epoch: i16) -> bool {
-        self.producer_state.get(&producer_id).is_some_and(|entry| {
-            entry.current_txn_first_offset.is_some() && entry.producer_epoch == producer_epoch
-        })
+        self.producers
+            .entries
+            .get(&producer_id)
+            .is_some_and(|entry| {
+                entry.current_txn_first_offset.is_some() && entry.producer_epoch == producer_epoch
+            })
     }
 
     /// Start a verification for a transactional batch, and return its guard.
@@ -120,7 +123,8 @@ impl Log {
             ..
         } = batch;
         if self
-            .producer_state
+            .producers
+            .entries
             .get(&producer_id)
             .is_some_and(|entry| producer_epoch < entry.producer_epoch)
         {
@@ -129,10 +133,12 @@ impl Log {
         if self.has_ongoing_transaction(producer_id, producer_epoch) {
             return Ok(VerificationGuard::SENTINEL);
         }
-        self.verification_states
+        self.producers
+            .verifications
             .retain(|_, state| now_ms.saturating_sub(state.created_ms) < expiration_ms);
         let state = self
-            .verification_states
+            .producers
+            .verifications
             .entry(producer_id)
             .or_insert_with(|| VerificationState {
                 guard: VerificationGuard::next(),
@@ -171,7 +177,7 @@ impl Log {
         if batch.producer_id.get() < 0 || batch.is_control {
             return Ok(());
         }
-        let entry = self.producer_state.get(&batch.producer_id);
+        let entry = self.producers.entries.get(&batch.producer_id);
         if !batch.is_transactional {
             return if entry.is_some_and(|entry| entry.current_txn_first_offset.is_some()) {
                 Err(TransactionAppendRefusal::InvalidTransactionState)
@@ -186,7 +192,8 @@ impl Log {
             return Err(TransactionAppendRefusal::StaleProducerEpoch);
         }
         let Some(state) = self
-            .verification_states
+            .producers
+            .verifications
             .get(&batch.producer_id)
             .filter(|state| state.guard.verifies(presented))
         else {
@@ -226,12 +233,8 @@ impl Log {
         if producer_id.get() < 0 {
             return None;
         }
-        self.producer_state.get(&producer_id)?.find_duplicate_batch(
-            self.earlier_batches
-                .get(&producer_id)
-                .into_iter()
-                .flatten()
-                .copied(),
+        self.producers.find_duplicate_batch(
+            producer_id,
             producer_epoch,
             (base_sequence, last_offset_delta),
         )
@@ -249,13 +252,14 @@ impl Log {
         is_control: bool,
     ) {
         let next_transaction_started =
-            self.verification_states
+            self.producers
+                .verifications
                 .get(&producer_id)
                 .is_some_and(|state| {
                     state.supports_epoch_bump && is_control && producer_epoch == state.epoch
                 });
         if !next_transaction_started {
-            self.verification_states.remove(&producer_id);
+            self.producers.verifications.remove(&producer_id);
         }
     }
 }

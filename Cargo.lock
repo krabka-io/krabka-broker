@@ -3705,6 +3705,7 @@ dependencies = [
  "futures-util",
  "hex",
  "krabka-audit",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-format",
@@ -3715,7 +3716,6 @@ dependencies = [
  "krabka-raft",
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
- "krabka-security",
  "krabka-units 0.8.0",
  "object_store",
  "rstest",
@@ -3744,6 +3744,7 @@ dependencies = [
  "clap",
  "krabka-bdd",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-log",
@@ -3765,15 +3766,18 @@ name = "krabka-bdd"
 version = "1.1.5"
 dependencies = [
  "assert2",
+ "bon",
  "futures-util",
  "inventory",
  "krabka-bdd-macros",
  "krabka-bdd-model",
+ "qubit-clock",
  "rstest",
  "rstest-bdd",
  "rstest-bdd-macros",
  "rust-embed",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3959,6 +3963,21 @@ dependencies = [
  "yare",
  "zerocopy",
  "zlib-rs",
+]
+
+[[package]]
+name = "krabka-cli-connection"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "clap",
+ "krabka-client-core",
+ "krabka-format",
+ "krabka-security",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "yare",
 ]
 
 [[package]]
@@ -4154,6 +4173,7 @@ dependencies = [
  "krabka-audit",
  "krabka-bdd",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-core",
  "krabka-macros",
  "krabka-protocol",
@@ -4575,6 +4595,7 @@ dependencies = [
  "krabka-audit",
  "krabka-backup",
  "krabka-broker",
+ "krabka-cli-connection",
  "krabka-client-admin",
  "krabka-client-consumer",
  "krabka-client-core",

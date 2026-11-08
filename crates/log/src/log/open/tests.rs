@@ -16,7 +16,7 @@ use {
         },
         log_start_offset_checkpoint::{read, write},
         name::producer_snapshot_path,
-        producer_snapshot::LoadedSnapshot,
+        producer_snapshot::{LoadedSnapshot, ProducerSnapshotEntry},
         test_support::open_log,
     },
     assert2::{assert, check},
@@ -29,6 +29,24 @@ use {
     },
     tempfile::tempdir,
 };
+
+/// The batches, and their encoded bytes, that one pending-stamp rebuild read.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PendingStampRecoveryStats {
+    batches: usize,
+    bytes: usize,
+}
+
+/// Rebuild `log`'s pending stamp ranges and count the work the walk did.
+fn rebuild_pending_stamp_ranges_counting(log: &mut Log) -> PendingStampRecoveryStats {
+    let mut stats = PendingStampRecoveryStats::default();
+    log.rebuild_pending_stamp_ranges(|batch| {
+        stats.batches = stats.batches.saturating_add(1);
+        stats.bytes = stats.bytes.saturating_add(batch.encoded_batch_len());
+    })
+    .unwrap();
+    stats
+}
 
 #[test]
 fn open_empty_dir_creates_first_segment() {
@@ -501,7 +519,7 @@ fn pending_stamp_recovery_visits_only_the_surviving_transaction_suffix() {
     }
 
     let mut reopened = Log::open(dir.path(), config).unwrap();
-    let stats = reopened.rebuild_pending_stamp_ranges().unwrap();
+    let stats = rebuild_pending_stamp_ranges_counting(&mut reopened);
     check!(
         stats
             == PendingStampRecoveryStats {
@@ -577,7 +595,7 @@ fn pending_stamp_recovery_keeps_a_batch_covering_the_local_floor() {
     let mut reopened = open_log(dir.path());
     check!(reopened.local_log_start_offset() == Offset(1));
     check!(reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)));
-    let stats = reopened.rebuild_pending_stamp_ranges().unwrap();
+    let stats = rebuild_pending_stamp_ranges_counting(&mut reopened);
     check!(stats.batches == 1);
     check!(
         reopened.pending_stamp_ranges.get(&ProducerId(1000))

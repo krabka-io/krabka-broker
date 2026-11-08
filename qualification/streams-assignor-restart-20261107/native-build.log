@@ -1,0 +1,92 @@
+    Updating crates.io index
+warning: patch `krabka-admin-ui v0.4.3 (https://github.com/krabka-io/krabka-cli?rev=b39dc88d0da3792db02ad62469b45f4fe312ea75#b39dc88d)` was not used in the crate graph
+warning: patch `krabka-app-sdk v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph
+warning: patch `krabka-blockstore v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-cli v0.4.3 (https://github.com/krabka-io/krabka-cli?rev=b39dc88d0da3792db02ad62469b45f4fe312ea75#b39dc88d)` was not used in the crate graph
+warning: patch `krabka-client-coordination v0.8.0 (https://github.com/krabka-io/krabka-client-rs?rev=00cbdc4e9c6cb5ec35f6811431461e584649f11f#00cbdc4e)` was not used in the crate graph
+warning: patch `krabka-client-streams v0.4.1 (https://github.com/krabka-io/krabka-streams-rs?rev=44afe9b6936eddaaef9eff85f22c9f11fa9056b5#44afe9b6)` was not used in the crate graph
+warning: patch `krabka-connect v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph
+warning: patch `krabka-connect-derive v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph
+warning: patch `krabka-connect-postgres v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph
+warning: patch `krabka-connect-worker v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph
+warning: patch `krabka-gateway v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph
+warning: patch `krabka-hlc v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph
+warning: patch `krabka-integration v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-kafka-tap v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph
+warning: patch `krabka-logql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-metrics v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-metrics-service v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-o11y-verified v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-observability v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-operator v0.5.0 (https://github.com/krabka-io/krabka-operator?rev=b409b564a8f744be7cc87634e194b6249ed9b5b1#b409b564)` was not used in the crate graph
+warning: patch `krabka-pprof v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-profiles v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-promql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-protocol-codegen v0.8.0 (https://github.com/krabka-io/krabka-protocol?rev=a4edab3e6e4baea89ee4d000e3db71060228e66a#a4edab3e)` was not used in the crate graph
+warning: patch `krabka-query-frontend v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-rebalancer v0.4.3 (https://github.com/krabka-io/krabka-rebalancer?rev=9df7a58ec6f0e78b582e7d69c60b208a9c73644e#9df7a58e)` was not used in the crate graph
+warning: patch `krabka-replicator v0.4.1 (https://github.com/krabka-io/krabka-connect?rev=ecd5fd77656bc24addb087e714477b9201053a28#ecd5fd77)` was not used in the crate graph
+warning: patch `krabka-sdk-conformance v0.5.0 (https://github.com/krabka-io/krabka-gateway?rev=49870fd8e5f708274ff69a3e64a092844e2f8809#49870fd8)` was not used in the crate graph
+warning: patch `krabka-traceql v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+warning: patch `krabka-traces v0.4.0 (https://github.com/krabka-io/krabka-o11y?rev=c6643b232c4ead91079fc649b98fa9fa72f2d288#c6643b23)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+ Downloading crates ...
+  Downloaded moxy-ast v0.5.6
+  Downloaded moxy-template v0.5.6
+  Downloaded moxy-fmt v0.5.6
+  Downloaded crc32c v0.6.9
+  Downloaded moxy-diagnostic v0.5.6
+  Downloaded moxy-macros v0.5.6
+  Downloaded moxy v0.5.5
+  Downloaded moxy-build v0.5.6
+  Downloaded moxy-token v0.5.6
+   Compiling moxy-build v0.5.6
+   Compiling krabka-macros v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/macros)
+   Compiling itertools v0.10.5
+   Compiling krabka-verified v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/verified)
+   Compiling getrandom v0.3.4
+   Compiling tempfile v3.27.0
+   Compiling krabka-logfmt v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/logfmt)
+   Compiling crc32c v0.6.9
+   Compiling krabka-broker v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/broker)
+   Compiling krabka-java-regex v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/java-regex)
+   Compiling krabka-records-legacy v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/records-legacy)
+   Compiling moxy-token v0.5.6
+   Compiling moxy-diagnostic v0.5.6
+   Compiling rusty-fork v0.3.1
+   Compiling proptest v1.12.0
+   Compiling prost-build v0.12.6
+   Compiling prost-derive v0.14.4
+   Compiling moxy-ast v0.5.6
+   Compiling pprof v0.15.0
+   Compiling prost v0.14.4
+   Compiling prost-types v0.14.4
+   Compiling tonic-prost v0.14.6
+   Compiling opentelemetry-proto v0.33.1
+   Compiling tonic-types v0.14.6
+   Compiling protox-parse v0.9.0
+   Compiling prost-reflect v0.16.5
+   Compiling protox-parse v0.10.0
+   Compiling moxy-fmt v0.5.6
+   Compiling opentelemetry-otlp v0.33.1
+   Compiling moxy-template v0.5.6
+   Compiling moxy-macros v0.5.6
+   Compiling moxy v0.5.5
+   Compiling krabka-schema-serde v0.4.3 (https://github.com/krabka-io/krabka-schema-registry?rev=ac4fe56eb1543df7c947393df2b9e893367e79ae#ac4fe56e)
+   Compiling krabka-object-store v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/object-store)
+   Compiling krabka-telemetry v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/telemetry)
+   Compiling krabka-bench-driver v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/bench-driver)
+   Compiling krabka-audit v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/audit)
+   Compiling krabka-kraft-core v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/kraft-core)
+   Compiling krabka-log v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/log)
+   Compiling krabka-authz v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/authz)
+   Compiling krabka-throttle v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/throttle)
+   Compiling krabka-remote-storage v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/remote-storage)
+   Compiling krabka-remote-storage-topic v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/remote-storage-topic)
+   Compiling krabka-raft v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/raft)
+   Compiling krabka-format v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/format)
+   Compiling krabka-restore v1.1.5 (/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/crates/restore)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 19s

@@ -61,7 +61,6 @@ fn cut_is_epoch(barrier: &BarrierScenario, epoch: i64) {
 krabka_bdd::scenarios!(
     "tests/features/cut_triggering",
     fixtures = [barrier: BarrierScenario],
-    tags = "not @inprogress",
     runtime = "tokio-multi-thread",
     workers = 4,
 );

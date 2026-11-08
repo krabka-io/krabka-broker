@@ -1,0 +1,84 @@
+{
+  "qualification_pass": true,
+  "scope": "single-broker clean restart, persisted empty Streams group with unavailable custom assignor override; no active-member restart or RF3 claim",
+  "baseline_revision": "c51d444b3c290b307bb9cb43b2f4faed9344a603",
+  "runtime_source_changes": false,
+  "native_binary_path": "/home/matt/.openclaw/workspace/coordinator/.private/kafka44-parity-assignor-next/.run/streams_fault_broker-measured",
+  "native_binary_sha256": "4099d2cca69599dff92fcd04f402eb11b998d8b005e234243b6f0c33fb54dc37",
+  "oracle_image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "oracle_runtime_version": "4.4.0",
+  "oracle_runtime_commit": "1156b2752aaa28ea",
+  "codec_jar_sha256": "9e4514622675f9b24c83373d0d5b35dd7a4dba34bad69762fe90a9e54cfb71de",
+  "source_sha256": {
+    "tools/kafka44/StreamsAssignorRestart.java": "c5e70abd4312fee45f6dd87d6138d566bb68002afcf681d25b0f16c6374170f2",
+    "tools/kafka44/StreamsAssignorWire.java": "8c6c26deee1e876a77222e07711cc8156fa135486d35073f8196337e35b2f11a",
+    "tools/kafka44/StreamsPositive.java": "d84434d9ba57781879bcf1d91fb1858ef739c643a7083a4250947d4e94e643a9",
+    "tools/kafka44/ProtocolScenarios.java": "182f4eae3728475289b0255614af76a61f0f501c784afaf938ef6ead7f964dbe",
+    "tools/kafka44/AssignorPlugin.java": "16fe10551064fc80803fa172e2f54d95a3a89b16f31d94f03874498b4e706f53",
+    "crates/broker/examples/streams_fault_broker.rs": "d8fd0973da360344f234fab3491134c4e3554e6b8d855d21b4b765c52705e09f",
+    "crates/broker/examples/fixtures/streams_assignors.rs": "f88bf84f5d6510d37f256150a572941654cecaa69f7948ab8d31eac94f6600a5"
+  },
+  "scenario_rows": {
+    "oracle": {
+      "prepare": [
+        "SCENARIO\ttarget-last-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tprepared-empty-group\tPASS"
+      ],
+      "verify": [
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\ttarget-sticky-c\tPASS",
+        "SCENARIO\tcooperative-owner-c\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tunavailable-persisted-name-falls-back\tPASS",
+        "SCENARIO\tpersisted-override-sticky\tPASS",
+        "SCENARIO\trepair-override-after-restart\tPASS"
+      ]
+    },
+    "native": {
+      "prepare": [
+        "SCENARIO\ttarget-last-b\tPASS",
+        "SCENARIO\tcooperative-owner-b\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tprepared-empty-group\tPASS"
+      ],
+      "verify": [
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\ttarget-sticky-c\tPASS",
+        "SCENARIO\tcooperative-owner-c\tPASS",
+        "SCENARIO\tpersisted-override-last\tPASS",
+        "SCENARIO\tunavailable-persisted-name-falls-back\tPASS",
+        "SCENARIO\tpersisted-override-sticky\tPASS",
+        "SCENARIO\trepair-override-after-restart\tPASS"
+      ]
+    }
+  },
+  "artifacts_sha256": {
+    "qualification/streams-assignor-restart-20261107/broker-after.properties": "db67bd682d7468859a363b794433e931bdadfe5d1d8ac7d891946d020eac5918",
+    "qualification/streams-assignor-restart-20261107/broker-before.properties": "29d95e181bedce8411d62b62f313dc1e87c81de67ef7825bd70c8e66bbc4b6a9",
+    "qualification/streams-assignor-restart-20261107/native-after-server.log": "c66d697624e0cbb9ba1c9417206c8ea814a1c682226ac9f3c49ec307a620eb5f",
+    "qualification/streams-assignor-restart-20261107/native-before-server.log": "80dcf8001f82bd26ff37079dfea8cf504d3cf8fa1f36cbbf1651e744e4cc357b",
+    "qualification/streams-assignor-restart-20261107/native-prepare.log": "c710fe1a5542c217cea3a52d4a379c5ea21e084495e2ecdd10f28d1ee3210a3b",
+    "qualification/streams-assignor-restart-20261107/native-verify.log": "f94baf10725ab1efeebac9b24ec483432e1f5a38fb871a08a85919782c14927c",
+    "qualification/streams-assignor-restart-20261107/oracle-prepare.log": "d7884bf9deee484247a3a04d1b99b08af844b85083942339244f4039de6c8c56",
+    "qualification/streams-assignor-restart-20261107/oracle-server-excerpt.log": "bb4311ba45aad13eae896c9468a25f7df72bb948c090898b9ab2d574adce6724",
+    "qualification/streams-assignor-restart-20261107/oracle-verify.log": "c7591e070208a0b2ee1bce1b094071a132334e0a3db2b2f512f70b2a9c20bf2b",
+    "qualification/streams-assignor-restart-20261107/native-build.log": "416815eca2f72b0fca66eb47055d35f922ed7a0f01437d63644369fb086f653c"
+  },
+  "unmeasured": [
+    "active-member restart and assignment reconciliation after plugin removal",
+    "RF3 coordinator movement",
+    "combined custom-callback ACL denial",
+    "invalid output at wire boundary",
+    "plugin JVM ABI support in native broker",
+    "crash/power-loss durability"
+  ],
+  "checks": {
+    "native_build": "TMPDIR=$RUN/tmp CARGO_TARGET_DIR=/home/matt/.openclaw/workspace/coordinator/.private/streams-delete-legacy-target cargo build -p krabka-broker --example streams_fault_broker (exit 0)",
+    "java_compile": "javac -cp $LIBS/* -d $RUN/classes tools/kafka44/{ProtocolScenarios,StreamsPositive,StreamsAssignorWire,AssignorPlugin,StreamsAssignorRestart}.java (exit 0)",
+    "probes": "StreamsAssignorRestart 127.0.0.1:{64940,64944} next3 {prepare,verify}: all four exit 0",
+    "scenario_comparison": "exact ordered SCENARIO rows equal, four prepare + seven verify per broker",
+    "diff_check": "git diff --check: exit 0"
+  }
+}

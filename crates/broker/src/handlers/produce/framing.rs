@@ -6,7 +6,7 @@
 //! of materializing owned records for the whole request.
 
 use {
-    crate::error::BrokerError,
+    crate::{error::BrokerError, handlers::batch_headers::LOG_OVERHEAD},
     bytes::Bytes,
     krabka_protocol::{
         Decode, ProtocolError,
@@ -145,9 +145,6 @@ fn any_v2_batch_transactional(buf: &[u8]) -> bool {
 /// Offset of the magic byte in a v2 batch header. Only magic 2 carries the
 /// `batch_length` layout this walk reads.
 const MAGIC_OFFSET: usize = 16;
-/// Bytes of `base_offset` and `batch_length` that precede what `batch_length`
-/// itself counts. Kafka calls the pair `Records.LOG_OVERHEAD`.
-const LOG_OVERHEAD: usize = 12;
 /// Bytes in a complete v2 batch header.
 pub(super) const V2_HEADER_LEN: usize = 61;
 

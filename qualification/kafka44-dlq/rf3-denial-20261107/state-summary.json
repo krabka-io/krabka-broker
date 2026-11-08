@@ -1,0 +1,194 @@
+{
+  "oracle-node1-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "oracle-node2-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "oracle-node3-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "oracle-node1-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "oracle-node2-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "oracle-node3-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node1-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node2-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node3-state-final-before.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node1-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node2-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  },
+  "native-node3-state-final-after.txt": {
+    "state_sequence": [
+      3,
+      4
+    ],
+    "final_startOffset": 0,
+    "final_deliveryCompleteCount": 1,
+    "final_batches": [
+      {
+        "firstOffset": 0,
+        "lastOffset": 0,
+        "deliveryState": 4,
+        "deliveryCount": 1
+      }
+    ]
+  }
+}

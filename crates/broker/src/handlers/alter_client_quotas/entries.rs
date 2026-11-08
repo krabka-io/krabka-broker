@@ -3,26 +3,16 @@
 //!
 //! This is a port of Kafka's `ClientQuotaControlManager.alterClientQuotas`:
 //! the same checks, in the same order, with the same `INVALID_REQUEST`
-//! messages. The quota keys and the entity types are the vocabulary of that
-//! validation, so they live here beside the checks that use them.
+//! messages. The entity types are the vocabulary of that validation, so they
+//! live here beside the checks that use them. The quota keys are
+//! [`QuotaType`]'s, which names each one by its config key.
 
 use {
-    crate::codes::INVALID_REQUEST,
+    crate::{codes::INVALID_REQUEST, quota::QuotaType},
     krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity},
     krabka_protocol::owned::alter_client_quotas_request::EntryData,
     std::collections::{BTreeMap, HashMap},
 };
-
-/// Quota key: produce-side bandwidth cap in bytes/sec (KIP-13).
-const PRODUCER_BYTE_RATE_KEY: &str = "producer_byte_rate";
-/// Quota key: fetch-side bandwidth cap in bytes/sec (KIP-13).
-const CONSUMER_BYTE_RATE_KEY: &str = "consumer_byte_rate";
-/// Quota key: request-handler time cap as a percentage of one thread (KIP-124).
-const REQUEST_PERCENTAGE_KEY: &str = "request_percentage";
-/// Quota key: per-IP connection creation rate (KIP-612).
-const CONNECTION_CREATION_RATE_KEY: &str = "connection_creation_rate";
-/// Quota key: controller mutation rate for topic/partition creation and deletion (KIP-599).
-const CONTROLLER_MUTATION_RATE_KEY: &str = "controller_mutation_rate";
 
 /// The `ConfigDef` type Kafka's `QuotaConfig` gives a quota key. It decides
 /// the range and fraction checks a new value goes through.
@@ -35,7 +25,7 @@ enum QuotaValueType {
 
 /// One quota key of an entity type's key set, with its `ConfigDef` type.
 struct QuotaKey {
-    name: &'static str,
+    quota_type: QuotaType,
     value_type: QuotaValueType,
 }
 
@@ -43,26 +33,26 @@ struct QuotaKey {
 /// `client-id` entity accepts.
 const USER_AND_CLIENT_KEYS: &[QuotaKey] = &[
     QuotaKey {
-        name: PRODUCER_BYTE_RATE_KEY,
+        quota_type: QuotaType::Produce,
         value_type: QuotaValueType::Long,
     },
     QuotaKey {
-        name: CONSUMER_BYTE_RATE_KEY,
+        quota_type: QuotaType::Fetch,
         value_type: QuotaValueType::Long,
     },
     QuotaKey {
-        name: REQUEST_PERCENTAGE_KEY,
+        quota_type: QuotaType::Request,
         value_type: QuotaValueType::Double,
     },
     QuotaKey {
-        name: CONTROLLER_MUTATION_RATE_KEY,
+        quota_type: QuotaType::ControllerMutation,
         value_type: QuotaValueType::Double,
     },
 ];
 
 /// `QuotaConfig.ipConfigs()`: the keys an `ip` entity accepts.
 const IP_KEYS: &[QuotaKey] = &[QuotaKey {
-    name: CONNECTION_CREATION_RATE_KEY,
+    quota_type: QuotaType::ConnectionCreation,
     value_type: QuotaValueType::Int,
 }];
 
@@ -289,7 +279,9 @@ fn config_keys_for_entity(
 /// value, and for an integral key a whole value inside the type's range. A
 /// `DOUBLE` key has no further check.
 fn validate_quota_key_value(keys: &[QuotaKey], key: &str, value: f64) -> Result<(), EntityError> {
-    let Some(&QuotaKey { value_type, .. }) = keys.iter().find(|known| known.name == key) else {
+    let Some(&QuotaKey { value_type, .. }) = QuotaType::from_config_key(key)
+        .and_then(|quota_type| keys.iter().find(|known| known.quota_type == quota_type))
+    else {
         return Err(invalid(format!("Invalid configuration key {key}")));
     };
     if value <= 0.0 {
