@@ -73,16 +73,19 @@ pub(super) fn select_bootstrap_server(
         .map(String::as_str)
 }
 
-/// Where a join request goes, and where that server came from.
-pub(super) struct JoinTarget {
+/// Where a request to the controller quorum goes, and where that server came
+/// from.
+pub(super) struct ControllerTarget {
     /// The `<host>:<port>` to dial.
     pub(super) server: String,
     /// Whether `server` is a bootstrap server rather than the current leader.
     pub(super) from_bootstrap: bool,
 }
 
-/// The controller endpoint that a join request goes to: the current leader's
-/// `CONTROLLER` endpoint, or a bootstrap server while no leader is known.
+/// The controller endpoint that a voter request goes to, `AddRaftVoter` from
+/// the join loop or `UpdateRaftVoter` from the advertisement loop: the current
+/// leader's `CONTROLLER` endpoint, its first endpoint when it has none of that
+/// name, or a bootstrap server while the leader's endpoints are not known.
 ///
 /// Kafka's observer sends `AddRaftVoter` to the leader that it fetches from
 /// (`KafkaRaftClient.maybeSendAddVoterRequest` uses `state.leaderNode`). A
@@ -91,13 +94,13 @@ pub(super) struct JoinTarget {
 /// join, so a join that always dialed it would never finish.
 ///
 /// `attempt` rotates across the bootstrap servers, and
-/// [`JoinTarget::from_bootstrap`] says whether the target is a bootstrap
+/// [`ControllerTarget::from_bootstrap`] says whether the target is a bootstrap
 /// server. `None` when no leader is known and there is no bootstrap server.
-pub(super) fn join_target(
+pub(super) fn controller_target(
     quorum: &krabka_raft::QuorumState,
     bootstrap_servers: &[String],
     attempt: usize,
-) -> Option<JoinTarget> {
+) -> Option<ControllerTarget> {
     let leader_endpoint = quorum
         .current_leader
         .and_then(|leader| quorum.voter_nodes.get(&leader))
@@ -110,13 +113,13 @@ pub(super) fn join_target(
         });
     leader_endpoint.map_or_else(
         || {
-            select_bootstrap_server(bootstrap_servers, attempt).map(|server| JoinTarget {
+            select_bootstrap_server(bootstrap_servers, attempt).map(|server| ControllerTarget {
                 server: server.to_owned(),
                 from_bootstrap: true,
             })
         },
         |endpoint| {
-            Some(JoinTarget {
+            Some(ControllerTarget {
                 server: format!("{}:{}", endpoint.host, endpoint.port),
                 from_bootstrap: false,
             })
@@ -372,7 +375,7 @@ mod tests {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let target = join_target(&quorum, &bootstrap, attempt).unwrap();
+        let target = controller_target(&quorum, &bootstrap, attempt).unwrap();
         assert2::assert!(
             (target.server.as_str(), target.from_bootstrap) == expected,
             "{case}"
@@ -383,7 +386,7 @@ mod tests {
     /// the request.
     #[test]
     fn no_target_without_a_leader_or_a_bootstrap_server() {
-        assert!(join_target(&two_voter_quorum(None), &[], 0).is_none());
+        assert!(controller_target(&two_voter_quorum(None), &[], 0).is_none());
     }
 
     #[test]
