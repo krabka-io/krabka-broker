@@ -118,8 +118,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupMemberMetadataValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share member c at host h in rack r subscribes to topic a")]
         fn prepared_value(stored_value: &mut EncodedValue) {

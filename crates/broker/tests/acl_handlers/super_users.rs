@@ -17,6 +17,7 @@ use {
     },
 };
 
+#[derive(Default)]
 struct SuperUserProvisioning {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -24,12 +25,8 @@ struct SuperUserProvisioning {
 }
 #[rstest::fixture]
 fn provisioning() -> SuperUserProvisioning {
-    // Start this scenario with fresh inputs and observations.
-
     SuperUserProvisioning {
-        directory: None,
-        broker: None,
-        response: None,
+        ..SuperUserProvisioning::default()
     }
 }
 #[rstest_bdd_macros::given(

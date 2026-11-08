@@ -756,8 +756,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn consumer_group() -> ConsumerBehavior {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerBehavior::default()
+        ConsumerBehavior {
+            ..ConsumerBehavior::default()
+        }
     }
     #[given(
         "a consumer group at epoch {epoch} target epoch {target} has member epoch {member_epoch} in state {state}"

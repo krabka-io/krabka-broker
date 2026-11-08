@@ -243,8 +243,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupTopologyValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "topology epoch 1 has subtopology 0 reading s and changelog c with replication factor 3"

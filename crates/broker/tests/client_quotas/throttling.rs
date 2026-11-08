@@ -216,6 +216,7 @@ async fn set_alice_quota(
 }
 
 use {crate::support::client::metric_value, krabka_metadata::AclOperation};
+#[derive(Default)]
 struct QuotaEnforcement {
     broker: Option<QuotaFixture>,
     topic: String,
@@ -240,18 +241,8 @@ impl QuotaEnforcement {
 }
 #[rstest::fixture]
 fn quota() -> QuotaEnforcement {
-    // Start this scenario with fresh inputs and observations.
-
     QuotaEnforcement {
-        broker: None,
-        topic: String::new(),
-        produced: None,
-        fetched: None,
-        stream: None,
-        offsets_baseline: None,
-        offsets_throttled: None,
-        versions_baseline: None,
-        versions_throttled: None,
+        ..QuotaEnforcement::default()
     }
 }
 #[rstest_bdd_macros::given("a SASL quota broker has super user admin and ordinary user alice")]

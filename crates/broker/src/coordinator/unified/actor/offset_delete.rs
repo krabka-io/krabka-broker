@@ -253,8 +253,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn deletion_guard() -> OffsetDeletionGuard {
-        // Start this scenario with fresh inputs and observations.
-        OffsetDeletionGuard::default()
+        OffsetDeletionGuard {
+            ..OffsetDeletionGuard::default()
+        }
     }
     #[given(
         "a classic group is {state} with protocol type {kind} selected protocol {selected} and member metadata"

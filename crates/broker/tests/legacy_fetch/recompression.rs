@@ -38,6 +38,7 @@ use {
 /// legacy message's timestamp.
 const PLAIN_TIMESTAMP: i64 = 1_700_000_000_000;
 
+#[derive(Default)]
 struct LegacyCompression {
     process: Option<InProcess>,
     response: Option<LegacyFetchResponse>,
@@ -45,11 +46,8 @@ struct LegacyCompression {
 
 #[fixture]
 fn compression() -> LegacyCompression {
-    // Start this scenario with fresh inputs and observations.
-
     LegacyCompression {
-        process: None,
-        response: None,
+        ..LegacyCompression::default()
     }
 }
 

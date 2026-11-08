@@ -237,8 +237,9 @@ mod tests {
             KafkaDecodedRecord<ShareGroupStatePartitionMetadataValue, BrokerError>;
         #[rstest::fixture]
         fn record() -> RecordCompatibility {
-            // Start this scenario with fresh inputs and observations.
-            RecordCompatibility::default()
+            RecordCompatibility {
+                ..RecordCompatibility::default()
+            }
         }
         #[given("a Share group has initialized orders partition 0 and is deleting carts")]
         fn native_record(record: &mut RecordCompatibility) {

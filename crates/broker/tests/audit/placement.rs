@@ -14,6 +14,7 @@ use {
     tokio::time,
 };
 
+#[derive(Default)]
 struct AuditPlacement {
     nodes: u64,
     min_isr: i32,
@@ -26,13 +27,8 @@ struct AuditPlacement {
 }
 #[rstest::fixture]
 fn placement() -> AuditPlacement {
-    // Start this scenario with fresh inputs and observations.
-
     AuditPlacement {
-        nodes: 0,
-        min_isr: 0,
-        poll_millis: 0,
-        cluster: Vec::new(),
+        ..AuditPlacement::default()
     }
 }
 #[rstest_bdd_macros::given(

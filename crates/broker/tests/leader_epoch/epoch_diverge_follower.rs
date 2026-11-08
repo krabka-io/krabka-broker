@@ -19,6 +19,7 @@ use {
     tokio::sync::MutexGuard,
 };
 type ReplicaCluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+#[derive(Default)]
 struct DivergentFollower {
     cluster: Option<ReplicaCluster>,
     permit: Option<MutexGuard<'static, ()>>,
@@ -28,14 +29,8 @@ struct DivergentFollower {
 }
 #[fixture]
 fn follower() -> DivergentFollower {
-    // Start this scenario with fresh inputs and observations.
-
     DivergentFollower {
-        cluster: None,
-        permit: None,
-        topic: String::new(),
-        follower: None,
-        divergent_end: None,
+        ..DivergentFollower::default()
     }
 }
 #[given(

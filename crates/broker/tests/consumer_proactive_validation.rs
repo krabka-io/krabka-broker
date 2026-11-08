@@ -140,6 +140,7 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
 }
 
 use krabka_client_consumer::{Consumer, ConsumerRecord};
+#[derive(Default)]
 struct ProactiveValidation {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -152,17 +153,8 @@ struct ProactiveValidation {
 }
 #[rstest::fixture]
 fn validation() -> ProactiveValidation {
-    // Start this scenario with fresh inputs and observations.
-
     ProactiveValidation {
-        directory: None,
-        broker: None,
-        bootstrap: String::new(),
-        initial_partition: None,
-        consumer: None,
-        before: None,
-        error: None,
-        delivered: Vec::new(),
+        ..ProactiveValidation::default()
     }
 }
 #[rstest_bdd_macros::given(

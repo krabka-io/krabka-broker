@@ -335,6 +335,7 @@ fn describe_topic_configs(bootstrap: &str, topic: &str) -> String {
 /// Create a one-partition topic through the JVM `kafka-topics` tool.
 fn create_topic(bootstrap: &str, topic: &str) { create_console_topic_at(bootstrap, topic); }
 
+#[derive(Default)]
 struct FileConnect {
     broker: Option<(BrokerHandle, TempDir)>,
     worker: Option<ConnectWorker>,
@@ -344,14 +345,8 @@ struct FileConnect {
 }
 #[rstest::fixture]
 fn connect() -> FileConnect {
-    // Start this scenario with fresh inputs and observations.
-
     FileConnect {
-        broker: None,
-        worker: None,
-        source: Vec::new(),
-        configured: Vec::new(),
-        stores: Vec::new(),
+        ..FileConnect::default()
     }
 }
 #[rstest_bdd_macros::given("a host broker exposes topic krabka-connect-file and this source file")]

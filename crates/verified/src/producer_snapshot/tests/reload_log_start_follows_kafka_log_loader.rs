@@ -25,8 +25,6 @@ struct SnapshotReload {
 
 #[fixture]
 fn reload() -> SnapshotReload {
-    // Start this scenario with fresh inputs and observations.
-
     SnapshotReload {
         range: None,
         ..SnapshotReload::default()

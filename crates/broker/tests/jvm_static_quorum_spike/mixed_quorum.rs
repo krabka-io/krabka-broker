@@ -36,8 +36,6 @@ struct MixedReplication {
 }
 #[rstest::fixture]
 fn mixed() -> MixedReplication {
-    // Start this scenario with fresh inputs and observations.
-
     MixedReplication {
         controllers: None,
         dirs: None,

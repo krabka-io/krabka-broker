@@ -781,8 +781,6 @@ mod tests {
 
     #[rstest::fixture]
     fn progress() -> FollowerProgress {
-        // Start this scenario with fresh inputs and observations.
-
         FollowerProgress {
             started: Instant::now(),
             state: None,

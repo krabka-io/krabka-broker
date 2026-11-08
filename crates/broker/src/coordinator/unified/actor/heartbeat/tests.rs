@@ -748,8 +748,9 @@ struct ConsumerIdentityBehavior {
 }
 #[rstest::fixture]
 fn consumer_identity() -> ConsumerIdentityBehavior {
-    // Start this scenario with fresh inputs and observations.
-    ConsumerIdentityBehavior::default()
+    ConsumerIdentityBehavior {
+        ..ConsumerIdentityBehavior::default()
+    }
 }
 #[derive(DataTableRow)]
 struct ExistingConsumerIdentity {
@@ -924,8 +925,6 @@ struct ClassicHeartbeatMigration {
 }
 #[rstest::fixture]
 fn classic_heartbeat_migration() -> ClassicHeartbeatMigration {
-    // Start this scenario with fresh inputs and observations.
-
     ClassicHeartbeatMigration::default()
 }
 #[given(

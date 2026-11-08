@@ -87,8 +87,6 @@ struct EpochCodecScenario {
 
 #[rstest::fixture]
 fn epoch_codec() -> EpochCodecScenario {
-    // Start this scenario with fresh inputs and observations.
-
     EpochCodecScenario {
         value: Value {
             assignment_epoch: 0,

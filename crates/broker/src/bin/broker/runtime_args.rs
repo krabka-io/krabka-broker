@@ -465,8 +465,6 @@ mod tests {
 
     #[rstest::fixture]
     fn message_limit_command() -> MessageLimitCommand {
-        // Start this scenario with fresh inputs and observations.
-
         MessageLimitCommand {
             _environment: env_guard(),
             value: String::new(),

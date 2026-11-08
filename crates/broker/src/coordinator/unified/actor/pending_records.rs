@@ -817,8 +817,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn durable_transition() -> DurableTransition {
-        // Start this scenario with fresh inputs and observations.
-        DurableTransition::default()
+        DurableTransition {
+            ..DurableTransition::default()
+        }
     }
     #[derive(rstest_bdd_macros::DataTableRow)]
     struct PendingLogRecord {

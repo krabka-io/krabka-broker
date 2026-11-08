@@ -151,8 +151,6 @@ mod tests {
 
     #[rstest::fixture]
     fn payload() -> PayloadScenario {
-        // Start this scenario with fresh inputs and observations.
-
         PayloadScenario {
             record: Bytes::new(),
             timestamp: None,

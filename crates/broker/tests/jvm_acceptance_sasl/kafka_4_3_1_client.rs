@@ -217,17 +217,15 @@ impl SaslPair {
     async fn shutdown(self) { self.broker.shutdown().await; }
 }
 
+#[derive(Default)]
 struct SaslLogins {
     pair: Option<SaslPair>,
     observed: Vec<Outcome>,
 }
 #[rstest::fixture]
 fn logins() -> SaslLogins {
-    // Start this scenario with fresh inputs and observations.
-
     SaslLogins {
-        pair: None,
-        observed: Vec::new(),
+        ..SaslLogins::default()
     }
 }
 #[rstest_bdd_macros::given(

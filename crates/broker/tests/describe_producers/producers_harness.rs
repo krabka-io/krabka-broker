@@ -97,6 +97,7 @@ use {
     },
     tempfile::TempDir,
 };
+#[derive(Default)]
 pub struct ProducerSnapshot {
     pub process: Option<support::InProcess>,
     pub cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
@@ -129,18 +130,8 @@ impl ProducerSnapshot {
 }
 #[rstest::fixture]
 pub fn snapshot() -> ProducerSnapshot {
-    // Start this scenario with fresh inputs and observations.
-
     ProducerSnapshot {
-        process: None,
-        cluster: Vec::new(),
-        connection: None,
-        response: None,
-        identities: Vec::new(),
-        transactional: None,
-        topic_id: None,
-        produced: None,
-        marker: None,
+        ..ProducerSnapshot::default()
     }
 }
 #[rstest_bdd_macros::given("a standalone broker is ready to inspect producer state")]

@@ -312,6 +312,7 @@ mod tests {
         }],
     };
 
+    #[derive(Default)]
     struct ReportScenario {
         oracle: String,
         krabka: Vec<ApiVersion>,
@@ -338,20 +339,8 @@ mod tests {
 
     #[fixture]
     fn report() -> ReportScenario {
-        // Start this scenario with fresh inputs and observations.
-
         ReportScenario {
-            oracle: String::new(),
-            krabka: Vec::new(),
-            kafka: Vec::new(),
-            intents: None,
-            listed_intents: Vec::new(),
-            outcome: None,
-            directory: None,
-            checked_in: None,
-            stored: None,
-            reloaded: None,
-            rebuilt: None,
+            ..ReportScenario::default()
         }
     }
 

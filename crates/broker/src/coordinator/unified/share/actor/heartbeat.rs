@@ -457,8 +457,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn share_heartbeat() -> ShareHeartbeatBehavior {
-        // Start this scenario with fresh inputs and observations.
-        ShareHeartbeatBehavior::default()
+        ShareHeartbeatBehavior {
+            ..ShareHeartbeatBehavior::default()
+        }
     }
     #[given(
         "Share group g subscribes to four-partition topic t with initialized partitions {initialized}"

@@ -606,8 +606,6 @@ mod tests {
 
     #[fixture]
     fn request() -> VoterRequests {
-        // Start this scenario with fresh inputs and observations.
-
         VoterRequests {
             quorum: None,
             add: None,

@@ -131,8 +131,6 @@ struct LargeFetch {
 
 #[rstest::fixture]
 fn large_fetch() -> LargeFetch {
-    // Start this scenario with fresh inputs and observations.
-
     LargeFetch {
         broker: None,
         topic: String::new(),

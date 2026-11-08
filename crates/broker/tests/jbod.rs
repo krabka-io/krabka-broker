@@ -58,6 +58,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     tempfile::TempDir,
 };
+#[derive(Default)]
 struct JbodPlacement {
     storage: Option<(BrokerHandle, TempDir, TempDir, SocketAddr)>,
     topic: String,
@@ -65,12 +66,8 @@ struct JbodPlacement {
 }
 #[fixture]
 fn placement() -> JbodPlacement {
-    // Start this scenario with fresh inputs and observations.
-
     JbodPlacement {
-        storage: None,
-        topic: String::new(),
-        report: None,
+        ..JbodPlacement::default()
     }
 }
 #[given("one broker uses two independent log directories")]

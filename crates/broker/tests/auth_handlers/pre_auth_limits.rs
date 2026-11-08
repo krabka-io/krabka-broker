@@ -300,6 +300,7 @@ async fn a_pre_auth_api_versions_carries_no_rebootstrap_check(limits: PreAuthent
         .await;
 }
 
+#[derive(Default)]
 struct PreAuthentication {
     broker: Option<BrokerHandle>,
     stream: Option<TcpStream>,
@@ -315,19 +316,8 @@ struct PreAuthentication {
 
 #[fixture]
 fn limits() -> PreAuthentication {
-    // Start this scenario with fresh inputs and observations.
-
     PreAuthentication {
-        broker: None,
-        stream: None,
-        versions: None,
-        metadata_request: Vec::new(),
-        metadata: None,
-        login: None,
-        minimum_delay: Duration::ZERO,
-        elapsed: None,
-        metrics: None,
-        stale_identity: None,
+        ..PreAuthentication::default()
     }
 }
 

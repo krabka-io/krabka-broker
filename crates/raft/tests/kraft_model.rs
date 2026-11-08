@@ -118,6 +118,7 @@ const MAX_DEPTH: usize = 60;
 // new leader lacked. The core now acts only on an answer from the leader it
 // follows, in its epoch, as the engine's fence and Kafka's
 // `maybeHandleCommonResponse` do, and the `always` properties hold again.
+#[derive(Default)]
 struct ModelScenario {
     model: Option<ConsensusModel>,
     checker: Option<Box<dyn Checker<ConsensusModel>>>,
@@ -125,11 +126,8 @@ struct ModelScenario {
 
 #[fixture]
 fn consensus_model() -> ModelScenario {
-    // Start this scenario with fresh inputs and observations.
-
     ModelScenario {
-        model: None,
-        checker: None,
+        ..ModelScenario::default()
     }
 }
 

@@ -129,8 +129,6 @@ struct CertificateRotation {
 
 #[fixture]
 fn rotation() -> CertificateRotation {
-    // Start this scenario with fresh inputs and observations.
-
     CertificateRotation {
         broker: None,
         directories: None,

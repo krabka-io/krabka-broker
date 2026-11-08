@@ -162,6 +162,7 @@ use {
     std::{collections::BTreeMap, io},
     tokio::net::TcpStream,
 };
+#[derive(Default)]
 pub struct TokenWorkflow {
     pub broker: Option<BrokerHandle>,
     pub directory: Option<TempDir>,
@@ -188,19 +189,8 @@ impl TokenWorkflow {
 }
 #[rstest::fixture]
 pub fn tokens() -> TokenWorkflow {
-    // Start this scenario with fresh inputs and observations.
-
     TokenWorkflow {
-        broker: None,
-        directory: None,
-        address: None,
-        sessions: BTreeMap::new(),
-        tokens: BTreeMap::new(),
-        created: None,
-        renewed: None,
-        expired: None,
-        described: None,
-        authenticated: None,
+        ..TokenWorkflow::default()
     }
 }
 #[rstest_bdd_macros::given(

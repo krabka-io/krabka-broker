@@ -205,6 +205,7 @@ enum ReferenceSource {
     TopicConfiguration,
     RaftSimulation,
 }
+#[derive(Default)]
 struct DocgenReference {
     source: Option<ReferenceSource>,
     schema: Option<serde_json::Value>,
@@ -214,14 +215,8 @@ struct DocgenReference {
 }
 #[rstest::fixture]
 fn reference() -> DocgenReference {
-    // Start this scenario with fresh inputs and observations.
-
     DocgenReference {
-        source: None,
-        schema: None,
-        apis: None,
-        docs: None,
-        traces: None,
+        ..DocgenReference::default()
     }
 }
 #[rstest_bdd_macros::given("docgen reads the {source} reference source")]

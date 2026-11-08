@@ -58,6 +58,7 @@ fn alter_request(topic: &str, value: &str) -> IncrementalAlterConfigsRequest {
         )])
         .call()
 }
+#[derive(Default)]
 struct PolicyScenario {
     cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
     client: Option<Client>,
@@ -93,13 +94,8 @@ impl PolicyScenario {
 
 #[fixture]
 fn policy() -> PolicyScenario {
-    // Start this scenario with fresh inputs and observations.
-
     PolicyScenario {
-        cluster: Vec::new(),
-        client: None,
-        created: None,
-        altered: None,
+        ..PolicyScenario::default()
     }
 }
 

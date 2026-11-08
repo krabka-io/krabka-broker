@@ -59,8 +59,6 @@ struct CompactedLog {
 
 #[fixture]
 fn compacted() -> CompactedLog {
-    // Start this scenario with fresh inputs and observations.
-
     CompactedLog {
         broker: None,
         directory: None,

@@ -26,8 +26,6 @@ struct ProducerSequences {
 
 #[fixture]
 fn sequences() -> ProducerSequences {
-    // Start this scenario with fresh inputs and observations.
-
     ProducerSequences {
         broker: None,
         directory: None,

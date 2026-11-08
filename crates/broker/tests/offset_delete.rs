@@ -91,6 +91,7 @@ async fn fetch_offset(p: &support::InProcess, group: &str, topic: &str, partitio
     resp.groups[0].topics[0].partitions[0].committed_offset
 }
 
+#[derive(Default)]
 struct OffsetDeletion {
     broker: Option<InProcess>,
     group: String,
@@ -102,15 +103,8 @@ struct OffsetDeletion {
 
 #[fixture]
 fn deletion() -> OffsetDeletion {
-    // Start this scenario with fresh inputs and observations.
-
     OffsetDeletion {
-        broker: None,
-        group: String::new(),
-        topic: String::new(),
-        response: None,
-        bootstrap: None,
-        subscriber: None,
+        ..OffsetDeletion::default()
     }
 }
 

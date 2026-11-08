@@ -215,6 +215,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     std::collections::BTreeMap,
 };
+#[derive(Default)]
 struct KeystoreUpdate {
     broker: Option<TlsBroker>,
     identities: BTreeMap<String, Identity>,
@@ -224,14 +225,8 @@ struct KeystoreUpdate {
 }
 #[fixture]
 fn keystores() -> KeystoreUpdate {
-    // Start this scenario with fresh inputs and observations.
-
     KeystoreUpdate {
-        broker: None,
-        identities: BTreeMap::new(),
-        paths: BTreeMap::new(),
-        response: None,
-        refusals: Vec::new(),
+        ..KeystoreUpdate::default()
     }
 }
 #[given(

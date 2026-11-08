@@ -250,8 +250,6 @@ struct DiskProjection {
 }
 #[rstest::fixture]
 fn disk() -> DiskProjection {
-    // Start this scenario with fresh inputs and observations.
-
     DiskProjection {
         broker: None,
         primary_id: uuid::Uuid::nil(),
@@ -441,6 +439,7 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
 }
 
 type FencingCluster = Vec<(BrokerHandle, krabka_broker::BrokerConfig, TempDir)>;
+#[derive(Default)]
 struct FencedProjection {
     cluster: FencingCluster,
     victim_index: usize,
@@ -452,16 +451,8 @@ struct FencedProjection {
 }
 #[rstest::fixture]
 fn fenced() -> FencedProjection {
-    // Start this scenario with fresh inputs and observations.
-
     FencedProjection {
-        cluster: Vec::new(),
-        victim_index: 0,
-        observer_index: 0,
-        victim_id: 0,
-        observer_addr: None,
-        victim_resources: None,
-        actual: Vec::new(),
+        ..FencedProjection::default()
     }
 }
 #[rstest_bdd_macros::given(

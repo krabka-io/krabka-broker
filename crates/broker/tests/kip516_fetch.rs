@@ -30,6 +30,7 @@ use krabka_protocol::{
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
+#[derive(Default)]
 struct FetchIdentity {
     broker: Option<InProcess>,
     ids: Vec<WireUuid>,
@@ -38,12 +39,8 @@ struct FetchIdentity {
 
 #[fixture]
 fn fetching() -> FetchIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     FetchIdentity {
-        broker: None,
-        ids: Vec::new(),
-        actual: Vec::new(),
+        ..FetchIdentity::default()
     }
 }
 

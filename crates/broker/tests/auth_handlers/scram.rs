@@ -311,6 +311,7 @@ async fn scram_fixture(mechanism: SaslMechanism) -> RetainedBroker {
     RetainedBroker { log_dir, handle }
 }
 
+#[derive(Default)]
 struct ScramAuthentication {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -325,18 +326,8 @@ struct ScramAuthentication {
 
 #[fixture]
 fn authentication() -> ScramAuthentication {
-    // Start this scenario with fresh inputs and observations.
-
     ScramAuthentication {
-        broker: None,
-        directory: None,
-        mechanism: None,
-        password: String::new(),
-        stream: None,
-        result: None,
-        response: None,
-        final_without_proof: None,
-        bytes_read: None,
+        ..ScramAuthentication::default()
     }
 }
 

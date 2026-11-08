@@ -179,6 +179,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct StreamsAdministration {
     broker: Option<StartedBroker>,
     client: Option<Client>,
@@ -190,16 +191,8 @@ struct StreamsAdministration {
 }
 #[fixture]
 fn streams() -> StreamsAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     StreamsAdministration {
-        broker: None,
-        client: None,
-        topic: String::new(),
-        group: String::new(),
-        member: String::new(),
-        heartbeat: None,
-        wire: None,
+        ..StreamsAdministration::default()
     }
 }
 #[given(

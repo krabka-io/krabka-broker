@@ -291,8 +291,6 @@ struct DirectoryFailure {
 
 #[rstest::fixture]
 fn directory_failure() -> DirectoryFailure {
-    // Start this scenario with fresh inputs and observations.
-
     DirectoryFailure {
         cluster: None,
         producer: None,

@@ -21,6 +21,7 @@ use {
 const TOPIC: &str = "foo";
 const BOB: &str = "bob";
 const BOB_PASS: &str = "bob-secret";
+#[derive(Default)]
 struct DeniedIdentity {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -29,13 +30,8 @@ struct DeniedIdentity {
 }
 #[rstest::fixture]
 fn denied() -> DeniedIdentity {
-    // Start this scenario with fresh inputs and observations.
-
     DeniedIdentity {
-        broker: None,
-        directory: None,
-        client: None,
-        result: None,
+        ..DeniedIdentity::default()
     }
 }
 #[rstest_bdd_macros::given(

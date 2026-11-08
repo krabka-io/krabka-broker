@@ -200,6 +200,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ExternalPolicy {
     server: Option<OpaFixture>,
     topic: String,
@@ -207,12 +208,8 @@ struct ExternalPolicy {
 }
 #[fixture]
 fn policy() -> ExternalPolicy {
-    // Start this scenario with fresh inputs and observations.
-
     ExternalPolicy {
-        server: None,
-        topic: String::new(),
-        response: None,
+        ..ExternalPolicy::default()
     }
 }
 #[given("OPA returns {decision} while the administrator creates topic {topic}")]

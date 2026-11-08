@@ -122,6 +122,7 @@ public final class ZombieProducer {
 //
 // Same multi-thread runtime caveat as the other multi-broker tests.
 const TOPIC: &str = "krabka-txn-itest";
+#[derive(Default)]
 struct TransactionIsolation {
     cluster: Vec<(BrokerHandle, TempDir)>,
     output: Option<Output>,
@@ -129,12 +130,8 @@ struct TransactionIsolation {
 }
 #[rstest::fixture]
 fn isolation() -> TransactionIsolation {
-    // Start this scenario with fresh inputs and observations.
-
     TransactionIsolation {
-        cluster: Vec::new(),
-        output: None,
-        consumed: Vec::new(),
+        ..TransactionIsolation::default()
     }
 }
 #[rstest_bdd_macros::given(

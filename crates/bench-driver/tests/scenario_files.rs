@@ -12,6 +12,7 @@ use {
     std::{error::Error, fs, path::PathBuf},
 };
 
+#[derive(Default)]
 struct BenchmarkScenario {
     paths: Vec<PathBuf>,
     loaded: Vec<Scenario>,
@@ -20,12 +21,8 @@ struct BenchmarkScenario {
 
 #[fixture]
 fn benchmark() -> BenchmarkScenario {
-    // Start this scenario with fresh inputs and observations.
-
     BenchmarkScenario {
-        paths: Vec::new(),
-        loaded: Vec::new(),
-        reparsed: Vec::new(),
+        ..BenchmarkScenario::default()
     }
 }
 

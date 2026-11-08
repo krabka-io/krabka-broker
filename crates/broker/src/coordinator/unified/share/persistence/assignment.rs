@@ -158,8 +158,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupTargetAssignmentMemberValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share target assignment assigns partition 3 of the all-one topic UUID")]
         fn prepared_value(stored_value: &mut EncodedValue) {
@@ -204,8 +205,9 @@ mod tests {
         type EncodedValue = EncodedRecord<ShareGroupCurrentMemberAssignmentValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given("a Share current assignment at epochs 5 and 4 has no assigned partitions")]
         fn prepared_value(stored_value: &mut EncodedValue) {

@@ -35,8 +35,6 @@ pub struct EpochBoundary {
 }
 #[fixture]
 pub fn epoch() -> EpochBoundary {
-    // Start this scenario with fresh inputs and observations.
-
     EpochBoundary {
         broker: None,
         directory: None,

@@ -39,8 +39,6 @@ struct BatchStorage {
 
 #[fixture]
 fn storage() -> BatchStorage {
-    // Start this scenario with fresh inputs and observations.
-
     BatchStorage {
         broker: None,
         directory: None,

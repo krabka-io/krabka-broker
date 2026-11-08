@@ -28,6 +28,7 @@ use {
     krabka_protocol::owned::{fetch_response::FetchResponse, produce_response::ProduceResponse},
 };
 
+#[derive(Default)]
 struct TopicDataAccess {
     broker: Option<krabka_broker::BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -36,13 +37,8 @@ struct TopicDataAccess {
 }
 #[rstest::fixture]
 fn data_access() -> TopicDataAccess {
-    // Start this scenario with fresh inputs and observations.
-
     TopicDataAccess {
-        broker: None,
-        directory: None,
-        produced: None,
-        fetched: None,
+        ..TopicDataAccess::default()
     }
 }
 #[rstest_bdd_macros::given("foo exists but alice has no topic grants")]

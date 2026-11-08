@@ -836,8 +836,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn subscription_record() -> MemberSubscriptionRecord {
-        // Start this scenario with fresh inputs and observations.
-        MemberSubscriptionRecord::default()
+        MemberSubscriptionRecord {
+            ..MemberSubscriptionRecord::default()
+        }
     }
     #[given("member m1 subscribes by name to b a and c without a regex")]
     fn unordered_member_topics(subscription_record: &mut MemberSubscriptionRecord) {

@@ -310,8 +310,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn streams_epochs() -> StreamsEpochCodec {
-        // Start this scenario with fresh inputs and observations.
-        StreamsEpochCodec::default()
+        StreamsEpochCodec {
+            ..StreamsEpochCodec::default()
+        }
     }
     #[given(
         "Streams group epoch 7 has validated topology {validated} configs {configs} stored description {stored} and failed description {failed}"

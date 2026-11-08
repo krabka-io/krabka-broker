@@ -85,8 +85,6 @@ struct TimestampPolicy {
 }
 #[fixture]
 fn timestamps() -> TimestampPolicy {
-    // Start this scenario with fresh inputs and observations.
-
     TimestampPolicy {
         process: None,
         topic: String::new(),

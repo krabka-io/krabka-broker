@@ -37,6 +37,7 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
     drop(producer);
 }
 
+#[derive(Default)]
 struct ConsumerSeeking {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -47,15 +48,8 @@ struct ConsumerSeeking {
 }
 #[rstest::fixture]
 fn seeking() -> ConsumerSeeking {
-    // Start this scenario with fresh inputs and observations.
-
     ConsumerSeeking {
-        directory: None,
-        broker: None,
-        consumer: None,
-        topic: String::new(),
-        seek: None,
-        offsets: None,
+        ..ConsumerSeeking::default()
     }
 }
 #[rstest_bdd_macros::given(

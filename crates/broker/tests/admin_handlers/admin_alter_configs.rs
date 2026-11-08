@@ -27,6 +27,7 @@ use {
     tokio::task,
 };
 
+#[derive(Default)]
 struct TopicSettings {
     name: String,
     altered: Option<AlterConfigsResponse>,
@@ -38,15 +39,8 @@ struct TopicSettings {
 
 #[fixture]
 fn settings() -> TopicSettings {
-    // Start this scenario with fresh inputs and observations.
-
     TopicSettings {
-        name: String::new(),
-        altered: None,
-        topic_id: None,
-        batch: None,
-        produced: None,
-        acknowledgements: String::new(),
+        ..TopicSettings::default()
     }
 }
 

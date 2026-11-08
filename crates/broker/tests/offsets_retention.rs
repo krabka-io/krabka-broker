@@ -92,6 +92,7 @@ async fn client_for(broker: &krabka_broker::BrokerHandle) -> Arc<Client> {
     )
 }
 
+#[derive(Default)]
 struct RetentionDescription {
     directory: Option<TempDir>,
     broker: Option<BrokerHandle>,
@@ -101,13 +102,8 @@ struct RetentionDescription {
 
 #[fixture]
 fn retention() -> RetentionDescription {
-    // Start this scenario with fresh inputs and observations.
-
     RetentionDescription {
-        directory: None,
-        broker: None,
-        client: None,
-        response: None,
+        ..RetentionDescription::default()
     }
 }
 
@@ -225,6 +221,7 @@ fn exact_entries(retention: &RetentionDescription, datatable: Vec<Vec<String>>) 
     check!(result.configs == expected_retention(datatable));
 }
 
+#[derive(Default)]
 struct DeadGroupSweep {
     directory: Option<TempDir>,
     broker: Option<BrokerHandle>,
@@ -236,15 +233,8 @@ struct DeadGroupSweep {
 
 #[fixture]
 fn sweep() -> DeadGroupSweep {
-    // Start this scenario with fresh inputs and observations.
-
     DeadGroupSweep {
-        directory: None,
-        broker: None,
-        client: None,
-        initial: None,
-        deleted: None,
-        final_listing: None,
+        ..DeadGroupSweep::default()
     }
 }
 

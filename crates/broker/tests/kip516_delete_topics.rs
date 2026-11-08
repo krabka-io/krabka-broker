@@ -24,8 +24,6 @@ struct DeleteById {
 
 #[fixture]
 fn deletion() -> DeleteById {
-    // Start this scenario with fresh inputs and observations.
-
     DeleteById {
         broker: None,
         requested_id: WireUuid::ZERO,

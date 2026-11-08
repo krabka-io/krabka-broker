@@ -50,6 +50,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
 };
 
+#[derive(Default)]
 struct SingleVoterTopic {
     directory: Option<TempDir>,
     controller: Option<ControllerHandle>,
@@ -60,14 +61,8 @@ struct SingleVoterTopic {
 
 #[fixture]
 fn node() -> SingleVoterTopic {
-    // Start this scenario with fresh inputs and observations.
-
     SingleVoterTopic {
-        directory: None,
-        controller: None,
-        topic: None,
-        name: None,
-        submission: None,
+        ..SingleVoterTopic::default()
     }
 }
 

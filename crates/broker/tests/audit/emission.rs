@@ -87,6 +87,7 @@ struct AdminMutationOutcome {
     operation: &'static str,
     error: i16,
 }
+#[derive(Default)]
 struct AuditEmission {
     plain: Option<support::InProcess>,
     topic: String,
@@ -102,20 +103,8 @@ struct AuditEmission {
 }
 #[rstest::fixture]
 fn emission() -> AuditEmission {
-    // Start this scenario with fresh inputs and observations.
-
     AuditEmission {
-        plain: None,
-        topic: String::new(),
-        user: String::new(),
-        metadata: None,
-        mutations: Vec::new(),
-        records: None,
-        sasl_broker: None,
-        directory: None,
-        bootstrap: String::new(),
-        reader: None,
-        bad_login: None,
+        ..AuditEmission::default()
     }
 }
 #[rstest_bdd_macros::given("a fresh broker with its audit partition initialized")]

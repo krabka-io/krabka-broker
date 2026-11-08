@@ -723,8 +723,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn regex_refresh() -> RegexRefresh {
-        // Start this scenario with fresh inputs and observations.
-        RegexRefresh::default()
+        RegexRefresh {
+            ..RegexRefresh::default()
+        }
     }
     #[given(
         "m1 uses a.* resolved at metadata version 5 with age {age} milliseconds and m2 previously uses {old}"

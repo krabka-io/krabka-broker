@@ -62,17 +62,15 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct DisabledAuthorization {
     comparison: Option<OracleComparison>,
     listings: Vec<(String, CliRun)>,
 }
 #[fixture]
 fn disabled() -> DisabledAuthorization {
-    // Start this scenario with fresh inputs and observations.
-
     DisabledAuthorization {
-        comparison: None,
-        listings: Vec::new(),
+        ..DisabledAuthorization::default()
     }
 }
 #[given("krabka and an Apache Kafka reference both have no configured authorizer")]

@@ -28,6 +28,7 @@ use {
     tokio::net::TcpStream,
 };
 
+#[derive(Default)]
 struct KerberosPeer {
     directory: Option<tempfile::TempDir>,
     broker: Option<krabka_broker::BrokerHandle>,
@@ -39,15 +40,8 @@ struct KerberosPeer {
 
 #[rstest::fixture]
 fn kerberos() -> KerberosPeer {
-    // Start this scenario with fresh inputs and observations.
-
     KerberosPeer {
-        directory: None,
-        broker: None,
-        stream: None,
-        credentials: None,
-        handshake: None,
-        authenticated: None,
+        ..KerberosPeer::default()
     }
 }
 

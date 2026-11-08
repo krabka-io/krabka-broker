@@ -241,8 +241,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn share_defaults() -> ShareDefaults {
-        // Start this scenario with fresh inputs and observations.
-        ShareDefaults::default()
+        ShareDefaults {
+            ..ShareDefaults::default()
+        }
     }
     #[given("a Share group has no dynamic configuration overrides")]
     fn no_share_overrides(share_defaults: &mut ShareDefaults) { share_defaults.overrides.clear(); }

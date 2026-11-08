@@ -271,8 +271,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn topology_push() -> TopologyPush {
-        // Start this scenario with fresh inputs and observations.
-        TopologyPush::default()
+        TopologyPush {
+            ..TopologyPush::default()
+        }
     }
     #[given(
         "a topology push has source processor and sink nodes plus a source-processor global store"

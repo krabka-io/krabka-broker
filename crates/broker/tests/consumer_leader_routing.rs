@@ -110,15 +110,8 @@ struct LeaderRouting {
 
 #[fixture]
 fn routing() -> LeaderRouting {
-    // Start this scenario with fresh inputs and observations.
-
     LeaderRouting {
-        guard: None,
-        cluster: Vec::new(),
-        bootstrap: String::new(),
-        topic: String::new(),
-        non_bootstrap_partitions: Vec::new(),
-        seen: None,
+        ..LeaderRouting::default()
     }
 }
 

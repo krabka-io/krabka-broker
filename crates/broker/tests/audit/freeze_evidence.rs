@@ -50,6 +50,7 @@ use {
     crate::freeze_workflow::ThawWorkflow, krabka_audit::VerifyReport, ring::error::Unspecified,
     serde_json::Value, tempfile::TempDir,
 };
+#[derive(Default)]
 struct FreezeEvidence {
     workflow: Option<ThawWorkflow>,
     records: Option<Vec<Value>>,
@@ -76,16 +77,8 @@ fn freeze_event(evidence: &FreezeEvidence) -> FreezeEvent<'_> {
 }
 #[rstest::fixture]
 fn evidence() -> FreezeEvidence {
-    // Start this scenario with fresh inputs and observations.
-
     FreezeEvidence {
-        workflow: None,
-        records: None,
-        sequences: None,
-        directory: None,
-        offline: None,
-        signature: None,
-        replayed_as_thaw: None,
+        ..FreezeEvidence::default()
     }
 }
 #[rstest_bdd_macros::given(

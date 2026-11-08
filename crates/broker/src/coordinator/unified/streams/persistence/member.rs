@@ -215,8 +215,9 @@ mod tests {
         type EncodedValue = EncodedRecord<StreamsGroupMemberMetadataValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a Streams member c at host h with process p endpoint e:8080 tag k=v timeout 1 and topology epoch 2"

@@ -212,8 +212,6 @@ struct StoredAclPattern {
 
 #[rstest::fixture]
 fn acl_pattern_query() -> AclPatternQuery {
-    // Start this scenario with fresh inputs and observations.
-
     AclPatternQuery {
         stored: Vec::new(),
         pattern: WIRE_ANY,

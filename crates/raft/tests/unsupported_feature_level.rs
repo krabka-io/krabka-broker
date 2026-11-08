@@ -177,8 +177,6 @@ struct FeatureRecovery {
 }
 #[rstest::fixture]
 fn recovery() -> FeatureRecovery {
-    // Start this scenario with fresh inputs and observations.
-
     FeatureRecovery {
         dir: TempDir::new().expect("metadata directory"),
         cluster: Uuid::new_v4(),

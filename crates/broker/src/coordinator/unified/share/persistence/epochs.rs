@@ -144,8 +144,9 @@ mod tests {
     type ShareEpochCompatibility = KafkaRecordRoundTrip<ShareEpochRecord>;
     #[rstest::fixture]
     fn epochs() -> ShareEpochCompatibility {
-        // Start this scenario with fresh inputs and observations.
-        ShareEpochCompatibility::default()
+        ShareEpochCompatibility {
+            ..ShareEpochCompatibility::default()
+        }
     }
     #[given("the Share group epoch is {epoch} with metadata hash {hash}")]
     fn group_epoch_input(epochs: &mut ShareEpochCompatibility, epoch: i32, hash: i64) {

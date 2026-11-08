@@ -158,6 +158,7 @@ use {
     rstest_bdd_macros::{given, scenario, then, when},
     tempfile::TempDir,
 };
+#[derive(Default)]
 struct MetricEndpoint {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -167,14 +168,8 @@ struct MetricEndpoint {
 }
 #[fixture]
 fn endpoint() -> MetricEndpoint {
-    // Start this scenario with fresh inputs and observations.
-
     MetricEndpoint {
-        broker: None,
-        directory: None,
-        body: None,
-        produced: None,
-        fetched: None,
+        ..MetricEndpoint::default()
     }
 }
 async fn start_endpoint(endpoint: &mut MetricEndpoint, directory: TempDir, config: BrokerConfig) {

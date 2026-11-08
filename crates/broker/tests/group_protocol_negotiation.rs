@@ -186,6 +186,7 @@ struct RacingMember {
     timeout_context: &'static str,
     join_context: &'static str,
 }
+#[derive(Default)]
 struct ProtocolNegotiation {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -203,16 +204,8 @@ impl ProtocolNegotiation {
 }
 #[rstest::fixture]
 fn negotiation() -> ProtocolNegotiation {
-    // Start this scenario with fresh inputs and observations.
-
     ProtocolNegotiation {
-        broker: None,
-        directory: None,
-        bootstrap: String::new(),
-        members: Vec::new(),
-        responses: Vec::new(),
-        clients: Vec::new(),
-        mismatch: None,
+        ..ProtocolNegotiation::default()
     }
 }
 #[rstest_bdd_macros::given("a classic group coordinator is ready")]

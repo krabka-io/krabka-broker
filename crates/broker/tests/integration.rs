@@ -101,6 +101,7 @@ fn timestamped_batch(entries: &[TimestampedValue<'_>]) -> RecordBatch {
     batch
 }
 
+#[derive(Default)]
 struct TimestampLookup {
     process: Option<InProcess>,
     responses: BTreeMap<i64, ListOffsetsResponse>,
@@ -108,11 +109,8 @@ struct TimestampLookup {
 
 #[fixture]
 fn timestamps() -> TimestampLookup {
-    // Start this scenario with fresh inputs and observations.
-
     TimestampLookup {
-        process: None,
-        responses: BTreeMap::new(),
+        ..TimestampLookup::default()
     }
 }
 
@@ -210,8 +208,6 @@ struct RpcLifecycle {
 
 #[fixture]
 fn lifecycle() -> RpcLifecycle {
-    // Start this scenario with fresh inputs and observations.
-
     RpcLifecycle {
         process: None,
         topic_id: Uuid::ZERO,
@@ -393,6 +389,7 @@ fn fetched_e2e(lifecycle: &RpcLifecycle) {
 
 krabka_macros::request_frame_fixture!(one_way_request);
 
+#[derive(Default)]
 struct OneWayProduce {
     process: Option<InProcess>,
     stream: Option<TcpStream>,
@@ -403,14 +400,8 @@ struct OneWayProduce {
 
 #[fixture]
 fn one_way() -> OneWayProduce {
-    // Start this scenario with fresh inputs and observations.
-
     OneWayProduce {
-        process: None,
-        stream: None,
-        readiness: None,
-        metadata_reply: Vec::new(),
-        latest: None,
+        ..OneWayProduce::default()
     }
 }
 
@@ -534,6 +525,7 @@ fn one_way_record_present(one_way: &OneWayProduce) {
     );
 }
 
+#[derive(Default)]
 struct DiskRecovery {
     directory: Option<TempDir>,
     broker: Option<BrokerHandle>,
@@ -543,13 +535,8 @@ struct DiskRecovery {
 
 #[fixture]
 fn recovery() -> DiskRecovery {
-    // Start this scenario with fresh inputs and observations.
-
     DiskRecovery {
-        directory: None,
-        broker: None,
-        created: None,
-        metadata: None,
+        ..DiskRecovery::default()
     }
 }
 

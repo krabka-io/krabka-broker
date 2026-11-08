@@ -210,15 +210,8 @@ struct DifferentialFetch {
 
 #[fixture]
 fn differential() -> DifferentialFetch {
-    // Start this scenario with fresh inputs and observations.
-
     DifferentialFetch {
-        oracle: None,
-        broker: None,
-        kafka_topic: None,
-        krabka_topic: None,
-        kafka: None,
-        krabka: None,
+        ..DifferentialFetch::default()
     }
 }
 

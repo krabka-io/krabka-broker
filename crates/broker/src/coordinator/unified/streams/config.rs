@@ -914,8 +914,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn streams_configuration() -> StreamsConfiguration {
-        // Start this scenario with fresh inputs and observations.
-        StreamsConfiguration::default()
+        StreamsConfiguration {
+            ..StreamsConfiguration::default()
+        }
     }
     #[given("no Streams group configuration values are overridden")]
     fn default_streams_overrides(streams_configuration: &mut StreamsConfiguration) {

@@ -94,8 +94,6 @@ struct LegacyConversion {
 
 #[fixture]
 fn conversion() -> LegacyConversion {
-    // Start this scenario with fresh inputs and observations.
-
     LegacyConversion {
         broker: None,
         topic: String::new(),

@@ -416,8 +416,6 @@ struct ElectionDraws {
 
 #[rstest::fixture]
 fn draws() -> ElectionDraws {
-    // Start this scenario with fresh inputs and observations.
-
     ElectionDraws {
         voters: Vec::new(),
         log: None,

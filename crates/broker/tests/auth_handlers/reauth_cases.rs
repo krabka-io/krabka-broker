@@ -130,6 +130,7 @@ struct AuthenticationRound {
     metadata: io::Result<MetadataResponse>,
 }
 
+#[derive(Default)]
 pub struct Reauthentication {
     session: Option<Session>,
     response: Option<io::Result<SaslAuthenticateResponse>>,
@@ -155,15 +156,8 @@ impl Reauthentication {
 
 #[fixture]
 pub fn reauthentication() -> Reauthentication {
-    // Start this scenario with fresh inputs and observations.
-
     Reauthentication {
-        session: None,
-        response: None,
-        handshake: None,
-        metadata: None,
-        bytes_read: None,
-        rounds: Vec::new(),
+        ..Reauthentication::default()
     }
 }
 

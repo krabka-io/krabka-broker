@@ -188,6 +188,7 @@ async fn assert_connection_closed(stream: &mut TcpStream) {
     assert!(is_closed(stream).await);
 }
 
+#[derive(Default)]
 struct IdleConnections {
     fixture: Option<Fixture>,
     pem_directory: Option<TempDir>,
@@ -198,15 +199,8 @@ struct IdleConnections {
 }
 #[rstest::fixture]
 fn idle_connections() -> IdleConnections {
-    // Start this scenario with fresh inputs and observations.
-
     IdleConnections {
-        fixture: None,
-        pem_directory: None,
-        stream: None,
-        wire: Vec::new(),
-        responses: Vec::new(),
-        correlation: None,
+        ..IdleConnections::default()
     }
 }
 #[rstest_bdd_macros::given(

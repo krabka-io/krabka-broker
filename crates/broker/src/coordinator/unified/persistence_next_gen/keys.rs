@@ -108,8 +108,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn consumer_key() -> ConsumerKeyEncoding {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerKeyEncoding::default()
+        ConsumerKeyEncoding {
+            ..ConsumerKeyEncoding::default()
+        }
     }
     #[given("a consumer {kind} key for group {group} and expression {expression}")]
     fn consumer_key_fields(

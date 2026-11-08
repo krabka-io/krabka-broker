@@ -256,8 +256,6 @@ struct TokenSession {
 
 #[fixture]
 fn lifetime() -> TokenSession {
-    // Start this scenario with fresh inputs and observations.
-
     TokenSession {
         broker: None,
         directory: None,

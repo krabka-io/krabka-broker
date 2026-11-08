@@ -174,8 +174,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn classic_commit() -> ClassicCommit {
-        // Start this scenario with fresh inputs and observations.
-        ClassicCommit::default()
+        ClassicCommit {
+            ..ClassicCommit::default()
+        }
     }
     #[given(
         "the classic group has m1 and m2 with static instance i1 pinned to m1 and state {state}"

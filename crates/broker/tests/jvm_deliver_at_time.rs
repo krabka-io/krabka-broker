@@ -280,6 +280,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ScheduledDelivery {
     broker: Option<BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -288,13 +289,8 @@ struct ScheduledDelivery {
 }
 #[fixture]
 fn delivery() -> ScheduledDelivery {
-    // Start this scenario with fresh inputs and observations.
-
     ScheduledDelivery {
-        broker: None,
-        directory: None,
-        probe: None,
-        consumed: None,
+        ..ScheduledDelivery::default()
     }
 }
 #[given("one broker hosts a scheduled topic and an immediate delivery control topic")]

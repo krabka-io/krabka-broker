@@ -245,8 +245,6 @@ struct TelemetrySession {
 
 #[fixture]
 fn telemetry() -> TelemetrySession {
-    // Start this scenario with fresh inputs and observations.
-
     TelemetrySession {
         broker: None,
         separate_client: None,

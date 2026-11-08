@@ -261,8 +261,9 @@ mod tests {
         type EncodedValue = KafkaEncodedRecord<MemberMetadataValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a consumer member i1 at client c1 subscribes to a and b with the uniform assignor and timeout 60000"

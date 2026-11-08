@@ -83,13 +83,8 @@ struct TopicCreation {
 
 #[fixture]
 fn topic() -> TopicCreation {
-    // Start this scenario with fresh inputs and observations.
-
     TopicCreation {
-        name: String::new(),
-        retention: String::new(),
-        created: None,
-        described: None,
+        ..TopicCreation::default()
     }
 }
 

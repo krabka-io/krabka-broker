@@ -111,6 +111,7 @@ async fn open_session(
         .expect("new session")
 }
 
+#[derive(Default)]
 struct FetchSessions {
     broker: Option<support::InProcess>,
     topic_id: Option<WireUuid>,
@@ -128,13 +129,8 @@ impl FetchSessions {
 }
 #[rstest::fixture]
 fn sessions() -> FetchSessions {
-    // Start this scenario with fresh inputs and observations.
-
     FetchSessions {
-        broker: None,
-        topic_id: None,
-        allocated_id: None,
-        response: None,
+        ..FetchSessions::default()
     }
 }
 #[rstest_bdd_macros::given("a fresh broker is ready for fetch session requests")]

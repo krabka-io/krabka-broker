@@ -44,11 +44,8 @@ struct GroupOracle {
 
 #[fixture]
 fn oracle() -> GroupOracle {
-    // Start this scenario with fresh inputs and observations.
-
     GroupOracle {
-        guard: None,
-        response: None,
+        ..GroupOracle::default()
     }
 }
 

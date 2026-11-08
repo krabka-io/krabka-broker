@@ -85,8 +85,9 @@ mod tests {
     type ShareMetadataKeyScenario = KafkaMetadataKey;
     #[rstest::fixture]
     fn input() -> ShareMetadataKeyScenario {
-        // Start this scenario with fresh inputs and observations.
-        ShareMetadataKeyScenario::default()
+        ShareMetadataKeyScenario {
+            ..ShareMetadataKeyScenario::default()
+        }
     }
     #[given("the Share compacted log record kind is {kind}")]
     fn metadata_record_kind(input: &mut ShareMetadataKeyScenario, kind: String) {

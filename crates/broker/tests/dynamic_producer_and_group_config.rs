@@ -210,6 +210,7 @@ fn partition_zero(topic_id: Uuid) -> TopicPartitions {
     }
 }
 
+#[derive(Default)]
 struct DynamicRuntime {
     broker: Option<support::InProcess>,
     client: Option<Client>,
@@ -263,22 +264,8 @@ impl DynamicRuntime {
 }
 #[rstest::fixture]
 fn runtime_config() -> DynamicRuntime {
-    // Start this scenario with fresh inputs and observations.
-
     DynamicRuntime {
-        broker: None,
-        client: None,
-        scope: None,
-        altered: None,
-        topic: String::new(),
-        producer: None,
-        producer_ids: None,
-        first_topic: None,
-        second_topic: None,
-        member: String::new(),
-        heartbeat: None,
-        joined_at: None,
-        elapsed: None,
+        ..DynamicRuntime::default()
     }
 }
 #[rstest_bdd_macros::given("a broker sweeps expired producers every 50 milliseconds")]

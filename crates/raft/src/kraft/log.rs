@@ -812,6 +812,7 @@ mod tests {
         rstest_bdd_macros::{given, scenarios, then, when},
     };
 
+    #[derive(Default)]
     struct EpochLog {
         fixture: Option<LogInDir>,
         answer: Option<LogOffsetMetadata>,
@@ -819,11 +820,8 @@ mod tests {
 
     #[fixture]
     fn epoch_log() -> EpochLog {
-        // Start this scenario with fresh inputs and observations.
-
         EpochLog {
-            fixture: None,
-            answer: None,
+            ..EpochLog::default()
         }
     }
 

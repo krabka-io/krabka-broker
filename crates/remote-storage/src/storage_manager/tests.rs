@@ -51,6 +51,7 @@ enum KafkaUuidObservation {
     Malformed,
 }
 
+#[derive(Default)]
 struct RemoteNameScenario {
     metadata: Option<RemoteLogSegmentMetadata>,
     kind: Option<IndexType>,
@@ -67,20 +68,8 @@ struct RemoteNameScenario {
 
 #[rstest::fixture]
 fn remote_names() -> RemoteNameScenario {
-    // Start this scenario with fresh inputs and observations.
-
     RemoteNameScenario {
-        metadata: None,
-        kind: None,
-        suffix: String::new(),
-        rendered_suffix: String::new(),
-        parsed_kind: None,
-        partition_name: String::new(),
-        segment_name: String::new(),
-        parsed_partition: None,
-        parsed_segment: None,
-        uuid_input: String::new(),
-        decoded_uuid: None,
+        ..RemoteNameScenario::default()
     }
 }
 

@@ -116,6 +116,7 @@ async fn tls_connect_without_client_cert(addr: SocketAddr) -> TlsStream<TcpStrea
         .expect("TLS handshake must succeed without a client certificate")
 }
 
+#[derive(Default)]
 struct AnonymousTokenRequest {
     broker: Option<StartedBroker>,
     protocol: Option<ListenerProtocol>,
@@ -123,12 +124,8 @@ struct AnonymousTokenRequest {
 }
 #[rstest::fixture]
 fn anonymous() -> AnonymousTokenRequest {
-    // Start this scenario with fresh inputs and observations.
-
     AnonymousTokenRequest {
-        broker: None,
-        protocol: None,
-        response: None,
+        ..AnonymousTokenRequest::default()
     }
 }
 #[rstest_bdd_macros::given(

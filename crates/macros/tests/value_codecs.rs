@@ -130,6 +130,7 @@ enum ShareValue {
     Update(Update),
 }
 
+#[derive(Default)]
 struct ShareCodecScenario {
     value: Option<ShareValue>,
     golden: Vec<u8>,
@@ -141,15 +142,8 @@ struct ShareCodecScenario {
 
 #[rstest::fixture]
 fn share_codec() -> ShareCodecScenario {
-    // Start this scenario with fresh inputs and observations.
-
     ShareCodecScenario {
-        value: None,
-        golden: Vec::new(),
-        encoded: Vec::new(),
-        decoded: None,
-        truncated: Vec::new(),
-        unsupported: None,
+        ..ShareCodecScenario::default()
     }
 }
 

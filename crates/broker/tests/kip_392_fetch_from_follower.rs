@@ -145,8 +145,6 @@ struct RackReads {
 
 #[rstest::fixture]
 fn rack_reads() -> RackReads {
-    // Start this scenario with fresh inputs and observations.
-
     RackReads {
         guard: None,
         cluster: Vec::new(),

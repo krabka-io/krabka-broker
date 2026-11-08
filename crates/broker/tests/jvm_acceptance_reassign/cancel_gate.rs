@@ -203,8 +203,6 @@ struct CancelPermission {
 }
 #[rstest::fixture]
 fn cancel() -> CancelPermission {
-    // Start this scenario with fresh inputs and observations.
-
     CancelPermission {
         handles: [None, None, None],
         configs: None,

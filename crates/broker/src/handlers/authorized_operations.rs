@@ -277,13 +277,8 @@ mod tests {
 
     #[rstest::fixture]
     fn authorization_contract() -> AuthorizationContract {
-        // Start this scenario with fresh inputs and observations.
-
         AuthorizationContract {
-            resource: None,
-            operation: None,
-            supported: None,
-            mask: None,
+            ..AuthorizationContract::default()
         }
     }
 

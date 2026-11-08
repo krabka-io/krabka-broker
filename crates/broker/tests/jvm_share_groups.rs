@@ -217,6 +217,7 @@ use {
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
 };
+#[derive(Default)]
 struct ShareWorkflow {
     broker: Option<StartedBroker>,
     client: Option<Client>,
@@ -227,15 +228,8 @@ struct ShareWorkflow {
 }
 #[fixture]
 fn share() -> ShareWorkflow {
-    // Start this scenario with fresh inputs and observations.
-
     ShareWorkflow {
-        broker: None,
-        client: None,
-        topic: String::new(),
-        group: String::new(),
-        consumed: None,
-        administration: None,
+        ..ShareWorkflow::default()
     }
 }
 #[given("share topic {topic} for group {group} contains values {values}")]

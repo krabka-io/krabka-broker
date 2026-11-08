@@ -28,8 +28,6 @@ struct LogTrim {
 
 #[fixture]
 fn trim() -> LogTrim {
-    // Start this scenario with fresh inputs and observations.
-
     LogTrim {
         directory: tempfile::tempdir().expect("log directory"),
         broker: None,

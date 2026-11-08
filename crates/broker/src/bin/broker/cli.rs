@@ -404,8 +404,6 @@ mod tests {
 
     #[rstest::fixture]
     fn cluster_id_command() -> ClusterIdCommand {
-        // Start this scenario with fresh inputs and observations.
-
         ClusterIdCommand {
             _environment: env_guard(),
             value: String::new(),

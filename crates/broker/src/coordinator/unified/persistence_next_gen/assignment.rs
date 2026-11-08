@@ -325,8 +325,9 @@ mod tests {
         type EncodedValue = EncodedRecord<TargetAssignmentMemberValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a consumer target assignment assigns partitions 0 and 1 of the all-one topic UUID"
@@ -378,8 +379,9 @@ mod tests {
         type RecordCompatibility = KafkaDecodedRecord<CurrentMemberAssignmentValue, BrokerError>;
         #[rstest::fixture]
         fn record() -> RecordCompatibility {
-            // Start this scenario with fresh inputs and observations.
-            RecordCompatibility::default()
+            RecordCompatibility {
+                ..RecordCompatibility::default()
+            }
         }
         #[given(
             "consumer member epochs 5 and 4 hold partitions 7 and 8 at assignment epochs 3 and 5 while partition 1 awaits revocation"
@@ -458,8 +460,9 @@ mod tests {
         }
         #[rstest::fixture]
         fn stored_state() -> StoredMemberState {
-            // Start this scenario with fresh inputs and observations.
-            StoredMemberState::default()
+            StoredMemberState {
+                ..StoredMemberState::default()
+            }
         }
         #[given("a consumer member state is stored with discriminant {code}")]
         fn consumer_state_code(stored_state: &mut StoredMemberState, code: i8) {

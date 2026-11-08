@@ -249,6 +249,7 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    #[derive(Default)]
     struct ScramIterationContract {
         upsertion: Option<ScramCredentialUpsertion>,
         authorized: bool,
@@ -258,13 +259,8 @@ mod tests {
 
     #[rstest::fixture]
     fn scram_iterations() -> ScramIterationContract {
-        // Start this scenario with fresh inputs and observations.
-
         ScramIterationContract {
-            upsertion: None,
-            authorized: false,
-            records: Vec::new(),
-            result: None,
+            ..ScramIterationContract::default()
         }
     }
 

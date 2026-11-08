@@ -438,6 +438,7 @@ async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can
     gate.broker.expect("a SASL gate broker").shutdown().await;
 }
 
+#[derive(Default)]
 struct SaslGate {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -453,19 +454,8 @@ struct SaslGate {
 
 #[fixture]
 fn gate() -> SaslGate {
-    // Start this scenario with fresh inputs and observations.
-
     SaslGate {
-        broker: None,
-        directory: None,
-        stream: None,
-        versions: None,
-        handshake: None,
-        read_result: None,
-        metadata: None,
-        mid_case: None,
-        mid_response: None,
-        elapsed: None,
+        ..SaslGate::default()
     }
 }
 

@@ -224,6 +224,7 @@ async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round(
     reauthentication.shutdown().await;
 }
 
+#[derive(Default)]
 struct PlainAuthentication {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -237,17 +238,8 @@ struct PlainAuthentication {
 
 #[fixture]
 fn authentication() -> PlainAuthentication {
-    // Start this scenario with fresh inputs and observations.
-
     PlainAuthentication {
-        broker: None,
-        directory: None,
-        password: Vec::new(),
-        stream: None,
-        result: None,
-        raw_result: None,
-        metrics: None,
-        bytes_read: None,
+        ..PlainAuthentication::default()
     }
 }
 

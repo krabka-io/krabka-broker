@@ -777,8 +777,9 @@ mod tests {
         }
         #[rstest::fixture]
         fn reconciliation() -> MemberReconciliation {
-            // Start this scenario with fresh inputs and observations.
-            MemberReconciliation::default()
+            MemberReconciliation {
+                ..MemberReconciliation::default()
+            }
         }
 
         #[when(

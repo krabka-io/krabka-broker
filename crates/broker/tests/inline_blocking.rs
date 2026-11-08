@@ -157,6 +157,7 @@ fn run_node(inline: bool) -> NodeRun {
     }
 }
 
+#[derive(Default)]
 struct BlockingScenario {
     inline: Option<bool>,
     observed: Option<NodeRun>,
@@ -164,11 +165,8 @@ struct BlockingScenario {
 
 #[fixture]
 fn blocking() -> BlockingScenario {
-    // Start this scenario with fresh inputs and observations.
-
     BlockingScenario {
-        inline: None,
-        observed: None,
+        ..BlockingScenario::default()
     }
 }
 

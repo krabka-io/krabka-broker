@@ -4,6 +4,7 @@ use {
     rstest_bdd_macros::{given, scenarios, then, when},
 };
 
+#[derive(Default)]
 struct FetchScenario {
     watermarks: Option<FetchWatermarks>,
     visibility: Option<FetchVisibility>,
@@ -11,11 +12,8 @@ struct FetchScenario {
 
 #[fixture]
 fn fetch() -> FetchScenario {
-    // Start this scenario with fresh inputs and observations.
-
     FetchScenario {
-        watermarks: None,
-        visibility: None,
+        ..FetchScenario::default()
     }
 }
 

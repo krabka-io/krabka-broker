@@ -137,8 +137,6 @@ mod tests {
 
     #[fixture]
     fn recovered() -> RecoveredFeatures {
-        // Start this scenario with fresh inputs and observations.
-
         RecoveredFeatures {
             image: None,
             unstable: None,

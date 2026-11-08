@@ -251,6 +251,7 @@ async fn post_upsertion_auth(
     drive_sasl_scram_session(addr, "alice", &alice_password(), mechanism).await
 }
 
+#[derive(Default)]
 struct ScramProvisioning {
     broker: Option<BrokerHandle>,
     directory: Option<TempDir>,
@@ -264,17 +265,8 @@ struct ScramProvisioning {
 
 #[fixture]
 fn provisioning() -> ScramProvisioning {
-    // Start this scenario with fresh inputs and observations.
-
     ScramProvisioning {
-        broker: None,
-        directory: None,
-        mechanism: None,
-        user: String::new(),
-        password: Vec::new(),
-        request: None,
-        response: None,
-        login: None,
+        ..ScramProvisioning::default()
     }
 }
 

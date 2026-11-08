@@ -394,8 +394,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn share_deletion() -> ShareDeletionBehavior {
-        // Start this scenario with fresh inputs and observations.
-        ShareDeletionBehavior::default()
+        ShareDeletionBehavior {
+            ..ShareDeletionBehavior::default()
+        }
     }
     #[given(
         "the Share coordinator has a persister {persister} and no brokers in its metadata image"

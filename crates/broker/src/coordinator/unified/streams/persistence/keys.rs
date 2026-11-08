@@ -161,8 +161,9 @@ mod tests {
     type StreamsMetadataKeyScenario = KafkaMetadataKey;
     #[rstest::fixture]
     fn input() -> StreamsMetadataKeyScenario {
-        // Start this scenario with fresh inputs and observations.
-        StreamsMetadataKeyScenario::default()
+        StreamsMetadataKeyScenario {
+            ..StreamsMetadataKeyScenario::default()
+        }
     }
     #[given("the Streams compacted log record kind is {kind}")]
     fn metadata_record_kind(input: &mut StreamsMetadataKeyScenario, kind: String) {

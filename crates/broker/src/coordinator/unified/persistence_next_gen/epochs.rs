@@ -81,8 +81,9 @@ mod tests {
     type ConsumerEpochCompatibility = KafkaRecordRoundTrip<ConsumerEpochRecord>;
     #[rstest::fixture]
     fn epochs() -> ConsumerEpochCompatibility {
-        // Start this scenario with fresh inputs and observations.
-        ConsumerEpochCompatibility::default()
+        ConsumerEpochCompatibility {
+            ..ConsumerEpochCompatibility::default()
+        }
     }
     #[given("the consumer group epoch is {epoch} with metadata hash {hash}")]
     fn group_epoch_input(epochs: &mut ConsumerEpochCompatibility, epoch: i32, hash: i64) {

@@ -19,6 +19,7 @@ use {
     std::{collections::BTreeMap, process::Output, slice},
 };
 
+#[derive(Default)]
 struct PreferredElection {
     cluster: Option<RegisteredCluster>,
     props: Option<ClientPropsFile>,
@@ -27,13 +28,8 @@ struct PreferredElection {
 }
 #[rstest::fixture]
 fn election() -> PreferredElection {
-    // Start this scenario with fresh inputs and observations.
-
     PreferredElection {
-        cluster: None,
-        props: None,
-        topic: String::new(),
-        output: None,
+        ..PreferredElection::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -222,6 +218,7 @@ const SELECTOR_PARTITIONS: i32 = 3;
 /// container the tool runs in.
 const ELECTION_JSON: &str = "/tmp/krabka-election.json";
 
+#[derive(Default)]
 struct SelectorElection {
     comparison: Option<OracleComparison>,
     partitions: Vec<TopicPartition>,
@@ -230,13 +227,8 @@ struct SelectorElection {
 }
 #[rstest::fixture]
 fn selectors() -> SelectorElection {
-    // Start this scenario with fresh inputs and observations.
-
     SelectorElection {
-        comparison: None,
-        partitions: Vec::new(),
-        by_file: Vec::new(),
-        by_all: Vec::new(),
+        ..SelectorElection::default()
     }
 }
 #[rstest_bdd_macros::given(

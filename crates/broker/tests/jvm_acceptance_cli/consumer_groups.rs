@@ -23,6 +23,7 @@ use {
     tempfile::TempDir,
 };
 
+#[derive(Default)]
 struct ConsoleAdministration {
     broker: Option<(BrokerHandle, TempDir)>,
     topic: String,
@@ -32,14 +33,8 @@ struct ConsoleAdministration {
 }
 #[rstest::fixture]
 fn console() -> ConsoleAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     ConsoleAdministration {
-        broker: None,
-        topic: String::new(),
-        group: String::new(),
-        output: None,
-        description: None,
+        ..ConsoleAdministration::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -324,6 +319,7 @@ fn expected_rows(group: &str, new_offset: i64) -> Vec<ResetRow> {
     }]
 }
 
+#[derive(Default)]
 struct OffsetAdministration {
     comparison: Option<OracleComparison>,
     dry_group: String,
@@ -336,17 +332,8 @@ struct OffsetAdministration {
 }
 #[rstest::fixture]
 fn resets() -> OffsetAdministration {
-    // Start this scenario with fresh inputs and observations.
-
     OffsetAdministration {
-        comparison: None,
-        dry_group: String::new(),
-        execute_group: String::new(),
-        file_group: String::new(),
-        dry: Vec::new(),
-        executed: Vec::new(),
-        exports: Vec::new(),
-        restored: Vec::new(),
+        ..OffsetAdministration::default()
     }
 }
 #[rstest_bdd_macros::given(
@@ -524,6 +511,7 @@ async fn reset_offsets_modes_match_apache_kafka(resets: OffsetAdministration) {
     drop(resets);
 }
 
+#[derive(Default)]
 struct GroupLifecycle {
     comparison: Option<OracleComparison>,
     live: String,
@@ -534,15 +522,8 @@ struct GroupLifecycle {
 }
 #[rstest::fixture]
 fn lifecycle() -> GroupLifecycle {
-    // Start this scenario with fresh inputs and observations.
-
     GroupLifecycle {
-        comparison: None,
-        live: String::new(),
-        empty: String::new(),
-        absent: String::new(),
-        live_runs: Vec::new(),
-        final_runs: Vec::new(),
+        ..GroupLifecycle::default()
     }
 }
 #[rstest_bdd_macros::given(

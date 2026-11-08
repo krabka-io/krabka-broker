@@ -58,6 +58,7 @@ async fn alice_metadata_fixture() -> AliceMetadataFixture {
     AliceMetadataFixture { handle, dir }
 }
 
+#[derive(Default)]
 struct ResourceAuthorization {
     broker: Option<krabka_broker::BrokerHandle>,
     directory: Option<tempfile::TempDir>,
@@ -67,14 +68,8 @@ struct ResourceAuthorization {
 }
 #[rstest::fixture]
 fn authorization() -> ResourceAuthorization {
-    // Start this scenario with fresh inputs and observations.
-
     ResourceAuthorization {
-        broker: None,
-        directory: None,
-        metadata: None,
-        joined: None,
-        initialized: None,
+        ..ResourceAuthorization::default()
     }
 }
 #[rstest_bdd_macros::given("topics t1 and t2 exist but alice may Describe only t1")]

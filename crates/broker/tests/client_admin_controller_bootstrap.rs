@@ -36,6 +36,7 @@ async fn describe_topic(
 }
 
 use krabka_client_admin::DescribeConfigsResults;
+#[derive(Default)]
 struct ControllerAdminRouting {
     broker: Option<StartedBroker>,
     admin: Option<AdminClient>,
@@ -47,16 +48,8 @@ struct ControllerAdminRouting {
 }
 #[rstest::fixture]
 fn routing() -> ControllerAdminRouting {
-    // Start this scenario with fresh inputs and observations.
-
     ControllerAdminRouting {
-        broker: None,
-        admin: None,
-        configs: None,
-        reconciliation: None,
-        quotas: None,
-        connection: None,
-        creations: None,
+        ..ControllerAdminRouting::default()
     }
 }
 #[rstest_bdd_macros::given("a broker serves separate data and controller endpoints")]

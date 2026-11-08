@@ -1031,8 +1031,9 @@ mod tests {
     }
     #[rstest::fixture]
     fn subscription_regex() -> SubscriptionRegex {
-        // Start this scenario with fresh inputs and observations.
-        SubscriptionRegex::default()
+        SubscriptionRegex {
+            ..SubscriptionRegex::default()
+        }
     }
     #[given("a member subscribes with regular expression {pattern}")]
     fn member_regex(subscription_regex: &mut SubscriptionRegex, pattern: String) {

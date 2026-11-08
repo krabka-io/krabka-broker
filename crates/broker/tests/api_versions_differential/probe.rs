@@ -110,8 +110,6 @@ mod tests {
     }
     #[rstest::fixture]
     fn probe() -> ProbeBudget {
-        // Start this scenario with fresh inputs and observations.
-
         ProbeBudget {
             child: None,
             status: rstest_bdd::Slot::default(),

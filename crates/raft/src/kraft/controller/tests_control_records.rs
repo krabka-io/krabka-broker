@@ -966,9 +966,9 @@ struct VoterAdmission {
 }
 #[rstest::fixture]
 fn admission() -> VoterAdmission {
-    // Start this scenario with fresh inputs and observations.
-
-    VoterAdmission::default()
+    VoterAdmission {
+        ..VoterAdmission::default()
+    }
 }
 
 #[given("a quorum leader at kraft version {version} with pending reconfiguration {pending}")]

@@ -417,8 +417,6 @@ mod authorize_by_resource_type {
 
     #[rstest::fixture]
     fn resource_authorization() -> ResourceAuthorizationScenario {
-        // Start this scenario with fresh inputs and observations.
-
         ResourceAuthorizationScenario {
             image: img(),
             decision: None,

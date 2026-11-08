@@ -273,6 +273,7 @@ enum Roles {
     Combined,
 }
 
+#[derive(Default)]
 struct ListenerDescription {
     roles: Option<Roles>,
     nodes: Vec<Node>,
@@ -284,15 +285,8 @@ struct ListenerDescription {
 
 #[fixture]
 fn listeners() -> ListenerDescription {
-    // Start this scenario with fresh inputs and observations.
-
     ListenerDescription {
-        roles: None,
-        nodes: Vec::new(),
-        described: 0,
-        dialed: Vec::new(),
-        expected: None,
-        observed: Vec::new(),
+        ..ListenerDescription::default()
     }
 }
 

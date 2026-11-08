@@ -183,6 +183,7 @@ async fn two_broker_sasl_plaintext_replication(replication: SaslReplication) {
     shutdown_cluster(replication.cluster).await;
 }
 
+#[derive(Default)]
 struct SaslReplication {
     cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>,
     topic_id: Option<Uuid>,
@@ -191,12 +192,8 @@ struct SaslReplication {
 
 #[fixture]
 fn replication() -> SaslReplication {
-    // Start this scenario with fresh inputs and observations.
-
     SaslReplication {
-        cluster: Vec::new(),
-        topic_id: None,
-        produced: None,
+        ..SaslReplication::default()
     }
 }
 

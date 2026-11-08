@@ -123,6 +123,7 @@ enum AuthorizedReply {
     Cluster(DescribeClusterResponse),
     Group(DescribeGroupsResponse),
 }
+#[derive(Default)]
 struct AuthorizedOperations {
     harness: Option<Harness>,
     metadata: Option<MetadataResponse>,
@@ -131,13 +132,8 @@ struct AuthorizedOperations {
 }
 #[rstest::fixture]
 fn operations() -> AuthorizedOperations {
-    // Start this scenario with fresh inputs and observations.
-
     AuthorizedOperations {
-        harness: None,
-        metadata: None,
-        resource: String::new(),
-        reply: None,
+        ..AuthorizedOperations::default()
     }
 }
 #[rstest_bdd_macros::given("the anonymous plaintext principal is a configured super user")]

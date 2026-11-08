@@ -118,6 +118,7 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct OffsetTimestampContract {
         position: String,
         timestamp: i64,
@@ -128,14 +129,8 @@ mod tests {
 
     #[rstest::fixture]
     fn offset_timestamp() -> OffsetTimestampContract {
-        // Start this scenario with fresh inputs and observations.
-
         OffsetTimestampContract {
-            position: String::new(),
-            timestamp: 0,
-            version: 0,
-            encoded: None,
-            classified: None,
+            ..OffsetTimestampContract::default()
         }
     }
 

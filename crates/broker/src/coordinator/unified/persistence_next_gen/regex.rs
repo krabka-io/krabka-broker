@@ -97,8 +97,9 @@ mod tests {
         type EncodedValue = EncodedRecord<RegularExpressionValue>;
         #[rstest::fixture]
         fn stored_value() -> EncodedValue {
-            // Start this scenario with fresh inputs and observations.
-            EncodedValue::default()
+            EncodedValue {
+                ..EncodedValue::default()
+            }
         }
         #[given(
             "a resolved expression contains topics a and bc at version 7 and timestamp 1700000000000"

@@ -248,6 +248,7 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
     struct CommandConfigScenario {
         operation: String,
         arguments: Vec<String>,
@@ -256,12 +257,8 @@ mod tests {
 
     #[rstest::fixture]
     fn command_config() -> CommandConfigScenario {
-        // Start this scenario with fresh inputs and observations.
-
         CommandConfigScenario {
-            operation: String::new(),
-            arguments: Vec::new(),
-            parsed: None,
+            ..CommandConfigScenario::default()
         }
     }
 

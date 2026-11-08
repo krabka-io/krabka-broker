@@ -117,8 +117,6 @@ struct LoggerConfiguration {
 }
 #[rstest::fixture]
 fn logger() -> LoggerConfiguration {
-    // Start this scenario with fresh inputs and observations.
-
     LoggerConfiguration {
         cluster: Vec::new(),
         client: None,

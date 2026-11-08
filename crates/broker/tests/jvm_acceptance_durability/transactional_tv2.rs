@@ -206,8 +206,6 @@ struct Tv2 {
 }
 #[rstest::fixture]
 fn tv2() -> Tv2 {
-    // Start this scenario with fresh inputs and observations.
-
     Tv2 {
         harness: None,
         output: None,

@@ -439,8 +439,6 @@ struct Forwarding {
 }
 #[fixture]
 fn forwarding() -> Forwarding {
-    // Start this scenario with fresh inputs and observations.
-
     Forwarding {
         server: None,
         stream: None,
