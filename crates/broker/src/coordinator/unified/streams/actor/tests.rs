@@ -697,11 +697,6 @@ enum TopologyStorage {
     StoreChangelog,
 }
 
-#[derive(Clone, Copy, Default)]
-struct SingleSubtopologySetup {
-    storage: TopologyStorage,
-}
-
 /// A topology with one subtopology `0` that reads `in` and, with a state store,
 /// keeps the changelog topic `store-changelog`.
 #[bon::builder]
@@ -711,13 +706,12 @@ fn one_subtopology(#[builder(default)] storage: TopologyStorage) -> Topology {
         streams_group_heartbeat_request::{Subtopology, Topology},
     };
 
-    let setup = SingleSubtopologySetup { storage };
     Topology {
         epoch: 1,
         subtopologies: vec![Subtopology {
             subtopology_id: "0".into(),
             source_topics: vec!["in".into()],
-            state_changelog_topics: if matches!(setup.storage, TopologyStorage::StoreChangelog) {
+            state_changelog_topics: if matches!(storage, TopologyStorage::StoreChangelog) {
                 vec![TopicInfo {
                     name: "store-changelog".into(),
                     ..Default::default()

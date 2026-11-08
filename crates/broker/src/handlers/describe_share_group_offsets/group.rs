@@ -219,18 +219,6 @@ mod tests {
         }
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct InitializedGroupSetup<'a> {
-        #[default("g3")]
-        group: &'a str,
-        #[default(uuid::Uuid::from_u128(1))]
-        orders: uuid::Uuid,
-        #[default(uuid::Uuid::from_u128(2))]
-        secret: uuid::Uuid,
-        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
-        secret_partitions: Vec<PartitionIndex>,
-    }
-
     #[bon::builder]
     fn replay_initialized_group(
         broker: &Broker,
@@ -240,18 +228,6 @@ mod tests {
         #[builder(default = vec ! [PartitionIndex (0) , PartitionIndex (1)])]
         secret_partitions: Vec<PartitionIndex>,
     ) {
-        let setup = InitializedGroupSetup {
-            group,
-            orders,
-            secret,
-            secret_partitions,
-        };
-        let InitializedGroupSetup {
-            group,
-            orders,
-            secret,
-            secret_partitions,
-        } = setup;
         broker
             .group_coordinator
             .replay_share_group_metadata(group, ShareGroupMetadataValue {

@@ -891,16 +891,6 @@ mod tests {
         Legacy,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ParsedSetup<'a> {
-        #[default(SASL_AUTHENTICATE_KEY)]
-        api_key: ApiKeyCode,
-        #[default(ParsedApiVersion(2))]
-        api_version: ParsedApiVersion,
-        body: &'a [u8],
-        encoding: BodyEncoding,
-    }
-
     #[bon::builder]
     fn parsed(
         #[builder(default = SASL_AUTHENTICATE_KEY)] api_key: ApiKeyCode,
@@ -908,18 +898,12 @@ mod tests {
         #[builder(default)] body: &'_ [u8],
         #[builder(default)] encoding: BodyEncoding,
     ) -> ParsedRequest<'_> {
-        let setup = ParsedSetup {
-            api_key,
-            api_version,
-            body,
-            encoding,
-        };
         ParsedRequest {
-            api_key: setup.api_key,
-            api_version: setup.api_version.0,
+            api_key,
+            api_version: api_version.0,
             correlation_id: 7,
-            body: setup.body,
-            body_flexible: matches!(setup.encoding, BodyEncoding::Flexible),
+            body,
+            body_flexible: matches!(encoding, BodyEncoding::Flexible),
             client_id: None,
         }
     }

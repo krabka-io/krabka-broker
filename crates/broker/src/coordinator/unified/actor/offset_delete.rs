@@ -187,16 +187,6 @@ mod tests {
         SubscribedTopics::Named(topics.iter().map(|s| (*s).to_owned()).collect())
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ClassicOffsetSetup<'a> {
-        #[default(ClassicGroupState::Empty)]
-        state: ClassicGroupState,
-        #[default(Some("consumer"))]
-        protocol_type: Option<&'a str>,
-        protocol_name: Option<&'a str>,
-        metadata: &'a [Bytes],
-    }
-
     #[bon::builder]
     fn classic(
         #[builder(default = ClassicGroupState :: Empty)] state: ClassicGroupState,
@@ -204,18 +194,6 @@ mod tests {
         protocol_name: Option<&'_ str>,
         #[builder(default)] metadata: &'_ [Bytes],
     ) -> ClassicState {
-        let setup = ClassicOffsetSetup {
-            state,
-            protocol_type,
-            protocol_name,
-            metadata,
-        };
-        let ClassicOffsetSetup {
-            state,
-            protocol_type,
-            protocol_name,
-            metadata,
-        } = setup;
         let mut g = ClassicState::new("g");
         g.state = state;
         g.protocol_type = protocol_type.map(String::from);

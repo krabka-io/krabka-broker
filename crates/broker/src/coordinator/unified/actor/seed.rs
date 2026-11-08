@@ -191,16 +191,6 @@ mod tests {
         state: MemberAssignmentState,
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct HostedClassicSetup {
-        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
-        target: Vec<PartitionIndex>,
-        current: HostedCurrentSetup,
-        #[default(vec![PartitionIndex(0), PartitionIndex(1)])]
-        assigned: Vec<PartitionIndex>,
-        pending: Vec<PartitionIndex>,
-    }
-
     #[bon::builder]
     fn hosted_classic_seed(
         #[builder(default = vec ! [PartitionIndex (0) , PartitionIndex (1)])] target: Vec<
@@ -212,22 +202,10 @@ mod tests {
         >,
         #[builder(default)] pending: Vec<PartitionIndex>,
     ) -> GroupSeed {
-        let setup = HostedClassicSetup {
-            target,
-            current,
-            assigned,
-            pending,
-        };
-        let HostedClassicSetup {
-            target,
-            current:
-                HostedCurrentSetup {
-                    epoch: member_epoch,
-                    state,
-                },
-            assigned,
-            pending,
-        } = setup;
+        let HostedCurrentSetup {
+            epoch: member_epoch,
+            state,
+        } = current;
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,

@@ -626,22 +626,15 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct RegexJoinSetup<'a> {
-        #[default("^orders-.*")]
-        pattern: &'a str,
-    }
-
     #[bon::builder]
     fn regex_join_request(
         #[builder(default = "^orders-.*")] pattern: &'_ str,
     ) -> ConsumerGroupHeartbeatRequest {
-        let setup = RegexJoinSetup { pattern };
         ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "m1".into(),
             member_epoch: 0,
-            subscribed_topic_regex: Some(setup.pattern.into()),
+            subscribed_topic_regex: Some(pattern.into()),
             rebalance_timeout_ms: 60_000,
             ..Default::default()
         }

@@ -36,18 +36,6 @@ const DEFAULT_LISTENERS: &str = "PLAINTEXT://:9092";
 const DEFAULT_PROTOCOL_MAP: &str =
     "SASL_SSL:SASL_SSL,PLAINTEXT:PLAINTEXT,SSL:SSL,SASL_PLAINTEXT:SASL_PLAINTEXT";
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ListenerSetup<'a> {
-    #[default("CLIENT")]
-    name: &'a str,
-    #[default("0.0.0.0:9092")]
-    bind: &'a str,
-    #[default("broker-1.example:9092")]
-    advertised: &'a str,
-    #[default(SaslSsl)]
-    protocol: ListenerProtocol,
-}
-
 #[bon::builder]
 fn listener(
     #[builder(default = "CLIENT")] name: &'_ str,
@@ -55,18 +43,6 @@ fn listener(
     #[builder(default = "broker-1.example:9092")] advertised: &'_ str,
     #[builder(default = SaslSsl)] protocol: ListenerProtocol,
 ) -> ListenerSpec {
-    let setup = ListenerSetup {
-        name,
-        bind,
-        advertised,
-        protocol,
-    };
-    let ListenerSetup {
-        name,
-        bind,
-        advertised,
-        protocol,
-    } = setup;
     ListenerSpec {
         name: name.to_owned(),
         bind_addr: bind.parse().expect("a socket address"),

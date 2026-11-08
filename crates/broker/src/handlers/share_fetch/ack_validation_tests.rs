@@ -176,16 +176,6 @@ async fn share_fetch(
         .await
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ValidationAcknowledgeSetup<'a> {
-    #[default(READER)]
-    user: &'a str,
-    #[default("ack-order")]
-    group: &'a str,
-    topic_id: WireUuid,
-    partition: AcknowledgementPartitionSetup,
-}
-
 #[bon::builder]
 async fn share_acknowledge(
     broker: &BrokerHandle,
@@ -194,22 +184,16 @@ async fn share_acknowledge(
     #[builder(default)] topic_id: WireUuid,
     #[builder(default)] partition: AcknowledgementPartitionSetup,
 ) -> ShareAcknowledgeResponse {
-    let setup = ValidationAcknowledgeSetup {
-        user,
-        group,
-        topic_id,
-        partition,
-    };
     let request = acknowledge_batches_request()
-        .group(setup.group)
-        .topic_id(setup.topic_id)
-        .partition(setup.partition)
+        .group(group)
+        .topic_id(topic_id)
+        .partition(partition)
         .call();
     share_acknowledge_wire()
         .broker(broker)
         .request(&request)
         .version(VERSION)
-        .user(setup.user)
+        .user(user)
         .call()
         .await
 }

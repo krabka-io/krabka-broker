@@ -249,14 +249,6 @@ pub fn fresh_ed25519_key() -> Ed25519KeyPair {
     Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8")
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct OperatorKeyFileSetup<'a> {
-    #[default("alice.pub")]
-    pub name: &'a str,
-    #[default("write public key")]
-    pub context: &'a str,
-}
-
 /// Stage an operator public key while returning the private signing pair to its owner.
 #[bon::builder]
 pub fn ed25519_public_key_file(
@@ -266,10 +258,9 @@ pub fn ed25519_public_key_file(
 ) -> (Ed25519KeyPair, PathBuf) {
     use ring::signature::KeyPair as _;
 
-    let setup = OperatorKeyFileSetup { name, context };
     let pair = fresh_ed25519_key();
-    let path = dir.join(setup.name);
-    fs::write(&path, pair.public_key().as_ref()).expect(setup.context);
+    let path = dir.join(name);
+    fs::write(&path, pair.public_key().as_ref()).expect(context);
     (pair, path)
 }
 
@@ -577,12 +568,6 @@ impl Default for RecordCount {
     fn default() -> Self { Self(1) }
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct RepeatedRecordsSetup {
-    pub count: RecordCount,
-    pub timestamp: UnixMillis,
-}
-
 #[derive(Clone, Copy)]
 struct RecordOffsetDelta(i32);
 
@@ -612,11 +597,7 @@ pub fn repeated_records_batch(
     #[builder(into, default)] count: RecordCount,
     #[builder(into, default)] timestamp: UnixMillis,
 ) -> RecordBatch {
-    let setup = RepeatedRecordsSetup { count, timestamp };
-    let RepeatedRecordsSetup {
-        count,
-        timestamp: timestamp_ms,
-    } = setup;
+    let timestamp_ms = timestamp;
     let records = (0..count.0)
         .map(|offset_delta| Record {
             attributes: 0,
@@ -730,20 +711,13 @@ pub fn topic_freeze_record(
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct FrozenTopicsImageSetup {
-    #[default(uuid::Uuid::from_u128(0x5150))]
-    pub cluster: uuid::Uuid,
-}
-
 /// One live DR-cutover freeze per scope, in the requested cluster image.
 #[bon::builder]
 pub fn frozen_topics_image(
     scopes: &[(&str, krabka_metadata::PatternType)],
     #[builder(default = uuid :: Uuid :: from_u128 (0x5150))] cluster: uuid::Uuid,
 ) -> MetadataImage {
-    let setup = FrozenTopicsImageSetup { cluster };
-    let mut image = MetadataImage::new(setup.cluster);
+    let mut image = MetadataImage::new(cluster);
     for &(scope, pattern_type) in scopes {
         image.apply(&krabka_metadata::MetadataRecord::V1TopicFreeze(
             topic_freeze_record()
@@ -969,44 +943,13 @@ pub struct IsrPartitionEpochs {
     pub partition: PartitionEpoch,
 }
 
-#[derive(Clone, Copy)]
-pub struct IsrProposalSetup<'a> {
-    pub topic_id: WireUuid,
-    pub broker: IsrBrokerIdentity,
-    pub partition: IsrPartitionEpochs,
-    pub new_isr: &'a [WireBrokerId],
-}
-
-impl Default for IsrProposalSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic_id: WireUuid::default(),
-            broker: IsrBrokerIdentity::default(),
-            partition: IsrPartitionEpochs::default(),
-            new_isr: &[WireBrokerId(1)],
-        }
-    }
-}
-
 #[bon::builder]
 pub fn alter_partition_request(
-    #[builder(default = IsrProposalSetup::default().topic_id)] topic_id: WireUuid,
-    #[builder(default = IsrProposalSetup::default().broker)] broker: IsrBrokerIdentity,
-    #[builder(default = IsrProposalSetup::default().partition)] partition: IsrPartitionEpochs,
-    #[builder(default = IsrProposalSetup::default().new_isr)] new_isr: &'_ [WireBrokerId],
+    #[builder(default = WireUuid::default())] topic_id: WireUuid,
+    #[builder(default = IsrBrokerIdentity::default())] broker: IsrBrokerIdentity,
+    #[builder(default = IsrPartitionEpochs::default())] partition: IsrPartitionEpochs,
+    #[builder(default = &[WireBrokerId(1)])] new_isr: &'_ [WireBrokerId],
 ) -> AlterPartitionRequest {
-    let setup = IsrProposalSetup {
-        topic_id,
-        broker,
-        partition,
-        new_isr,
-    };
-    let IsrProposalSetup {
-        topic_id,
-        broker,
-        partition,
-        new_isr,
-    } = setup;
     AlterPartitionRequest {
         broker_id: broker.id.0,
         broker_epoch: broker.epoch.0,
@@ -1023,22 +966,6 @@ pub fn alter_partition_request(
         }],
         ..Default::default()
     }
-}
-
-/// Identity of the seeded ELR partition; epochs still come from separate live snapshots.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct LiveIsrSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    #[default(WireUuid([9; 16]))]
-    pub topic_id: WireUuid,
-    #[default(krabka_metadata::LeaderEpoch(7))]
-    pub leader_epoch: krabka_metadata::LeaderEpoch,
-    /// v2 keeps the plain ISR list, avoiding the v3 broker-epoch eligibility extension.
-    #[default(krabka_ids::ApiVersion(2))]
-    pub version: krabka_ids::ApiVersion,
-    #[default(&[WireBrokerId(1)])]
-    pub new_isr: &'a [WireBrokerId],
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -1061,20 +988,6 @@ pub async fn propose_isr(
     #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
     #[builder(default)] response_check: IsrResponseCheck,
 ) -> AlterPartitionResponse {
-    let setup = LiveIsrSetup {
-        topic,
-        topic_id,
-        leader_epoch,
-        version,
-        new_isr,
-    };
-    let LiveIsrSetup {
-        topic,
-        topic_id,
-        leader_epoch,
-        version,
-        new_isr,
-    } = setup;
     let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
@@ -2020,11 +1933,6 @@ pub enum ShareApiSupport {
     Disabled,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct ShareBrokerSetup {
-    pub support: ShareApiSupport,
-}
-
 /// The broker-session timeout of a broker that [`start_broker_with`] starts.
 ///
 /// [`BrokerConfig::for_tests`] gives a broker two seconds to heartbeat, so the
@@ -2053,7 +1961,6 @@ pub async fn start_share_broker(
     authorizer: Arc<dyn Authorizer>,
     #[builder(default)] support: ShareApiSupport,
 ) -> StartedBroker {
-    let setup = ShareBrokerSetup { support };
     let StartedBroker {
         broker: handle,
         dir,
@@ -2063,7 +1970,7 @@ pub async fn start_share_broker(
     })
     .await;
     handle.wait_until_share_coordinator_ready().await;
-    if matches!(setup.support, ShareApiSupport::Disabled) {
+    if matches!(support, ShareApiSupport::Disabled) {
         finalize_share_version(&handle.broker_arc_for_test(), 0).await;
     }
     StartedBroker {
@@ -3024,16 +2931,10 @@ pub fn keyed_records_batch(
     batch
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct EmptyPayloadBatchSetup {
-    pub count: RecordCount,
-}
-
 /// An empty-payload fixture batch with the protocol's original default headers.
 #[bon::builder]
 pub fn default_records_batch(#[builder(into, default)] count: RecordCount) -> RecordBatch {
-    let setup = EmptyPayloadBatchSetup { count };
-    let n = setup.count.0;
+    let n = count.0;
     let mut batch = RecordBatch {
         last_offset_delta: n - 1,
         ..RecordBatch::default()
@@ -3194,16 +3095,6 @@ pub fn source_to_repartition() -> Subtopology {
 type TopicConfigOverrides = BTreeMap<String, String>;
 static NO_TOPIC_OVERRIDES: TopicConfigOverrides = TopicConfigOverrides::new();
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct DescribedCreationSetup<'a> {
-    #[default(krabka_metadata::NodeId(1))]
-    pub node: krabka_metadata::NodeId,
-    #[default("t")]
-    pub topic: &'a str,
-    #[default(&NO_TOPIC_OVERRIDES)]
-    pub overrides: &'a TopicConfigOverrides,
-}
-
 #[bon::builder]
 pub fn described_creation_configs(
     image: &krabka_metadata::MetadataImage,
@@ -3211,16 +3102,11 @@ pub fn described_creation_configs(
     #[builder(default = "t")] topic: &'_ str,
     #[builder(default = & NO_TOPIC_OVERRIDES)] overrides: &'_ TopicConfigOverrides,
 ) -> Vec<CreatableTopicConfigs> {
-    let setup = DescribedCreationSetup {
+    creatable_topic_configs(effective_topic_configs(
+        image,
         node,
         topic,
         overrides,
-    };
-    creatable_topic_configs(effective_topic_configs(
-        image,
-        setup.node,
-        setup.topic,
-        setup.overrides,
         UnstableApiVersions::Disabled,
         &BTreeMap::new(),
     ))
@@ -3319,39 +3205,23 @@ pub async fn expired_broker_fixture(
 }
 
 /// A controller voter, independent of broker registrations.
-pub struct VoterImageSetup {
-    pub node: krabka_ids::NodeId,
-    pub endpoints: Vec<krabka_metadata::VoterEndpoint>,
-}
-
-impl Default for VoterImageSetup {
-    fn default() -> Self {
-        Self {
-            node: krabka_ids::NodeId(1),
-            endpoints: vec![krabka_metadata::VoterEndpoint {
+#[bon::builder]
+pub fn voter_image(
+    #[builder(into, default = krabka_ids::NodeId(1))] node: krabka_ids::NodeId,
+    #[builder(default = vec![krabka_metadata::VoterEndpoint {
                 name: "CONTROLLER".to_owned(),
                 host: "127.0.0.1".to_owned(),
                 port: 9093,
-            }],
-        }
-    }
-}
-
-#[bon::builder]
-pub fn voter_image(
-    #[builder(into, default = VoterImageSetup::default().node)] node: krabka_ids::NodeId,
-    #[builder(default = VoterImageSetup::default().endpoints)] endpoints: Vec<
-        krabka_metadata::VoterEndpoint,
-    >,
+            }])]
+    endpoints: Vec<krabka_metadata::VoterEndpoint>,
 ) -> krabka_metadata::MetadataImage {
-    let setup = VoterImageSetup { node, endpoints };
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&krabka_metadata::MetadataRecord::V1Voters(
         krabka_metadata::VotersRecord {
             voters: krabka_metadata::VoterSet::from_voters([krabka_metadata::Voter {
-                id: setup.node,
+                id: node,
                 directory_id: uuid::Uuid::nil(),
-                endpoints: setup.endpoints,
+                endpoints,
                 kraft_version: krabka_metadata::KRaftVersionRange::default(),
             }]),
         },
@@ -3429,18 +3299,6 @@ pub async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicClock>) -
 
 use {krabka_metadata::NodeId as InSyncReplicaId, uuid::Uuid as ReplicaDirectory};
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct InSyncPartitionSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    #[default(krabka_metadata::LeaderEpoch(0))]
-    pub leader_epoch: krabka_metadata::LeaderEpoch,
-    #[default(vec![InSyncReplicaId(1), InSyncReplicaId(2)])]
-    pub replicas: Vec<InSyncReplicaId>,
-    pub directories: Vec<ReplicaDirectory>,
-}
-
 /// A fully in-sync assignment whose first replica leads, retaining exact directory slots.
 #[bon::builder]
 pub fn in_sync_partition(
@@ -3453,33 +3311,18 @@ pub fn in_sync_partition(
     >,
     #[builder(default)] directories: Vec<ReplicaDirectory>,
 ) -> PartitionRecord {
-    let setup = InSyncPartitionSetup {
-        topic,
-        partition,
-        leader_epoch,
-        replicas,
-        directories,
-    };
     PartitionRecord {
-        topic: setup.topic.to_owned(),
-        partition: setup.partition.0,
-        leader: setup.replicas[0],
-        isr: setup.replicas.clone(),
-        replicas: setup.replicas,
-        leader_epoch: setup.leader_epoch,
-        directories: setup.directories,
+        topic: topic.to_owned(),
+        partition: partition.0,
+        leader: replicas[0],
+        isr: replicas.clone(),
+        replicas,
+        leader_epoch,
+        directories,
         adding_replicas: vec![],
         removing_replicas: vec![],
         partition_epoch: 0,
     }
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct StreamsJoinSetup<'a> {
-    #[default("g")]
-    pub group_id: &'a str,
-    #[default("m1")]
-    pub member_id: &'a str,
 }
 
 /// A streams join reporting empty owned task sets and its complete topology.
@@ -3489,13 +3332,9 @@ pub fn streams_join_request(
     #[builder(default = "g")] group_id: &'_ str,
     #[builder(default = "m1")] member_id: &'_ str,
 ) -> StreamsGroupHeartbeatRequest {
-    let setup = StreamsJoinSetup {
-        group_id,
-        member_id,
-    };
     StreamsGroupHeartbeatRequest {
-        group_id: setup.group_id.into(),
-        member_id: setup.member_id.into(),
+        group_id: group_id.into(),
+        member_id: member_id.into(),
         member_epoch: 0,
         rebalance_timeout_ms: 1_000,
         active_tasks: Some(vec![]),

@@ -261,29 +261,16 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct QuotaComponentSetup<'a> {
-        #[default("user")]
-        entity_type: &'a str,
-        matching: QuotaNameMatch,
-        name: Option<&'a str>,
-    }
-
     #[bon::builder]
     fn comp(
         #[builder(default = "user")] entity_type: &'_ str,
         #[builder(default)] matching: QuotaNameMatch,
         name: Option<&'_ str>,
     ) -> ComponentData {
-        let setup = QuotaComponentSetup {
-            entity_type,
-            matching,
-            name,
-        };
         ComponentData {
-            entity_type: setup.entity_type.into(),
-            match_type: setup.matching.wire_code(),
-            match_: setup.name.map(Into::into),
+            entity_type: entity_type.into(),
+            match_type: matching.wire_code(),
+            match_: name.map(Into::into),
             ..Default::default()
         }
     }
@@ -310,24 +297,14 @@ mod tests {
             .collect()
     }
 
-    #[derive(Default)]
-    struct QuotaRequestSetup {
-        components: Vec<ComponentData>,
-        matching: QuotaEntityScope,
-    }
-
     #[bon::builder]
     fn request(
         #[builder(default)] components: Vec<ComponentData>,
         #[builder(default)] matching: QuotaEntityScope,
     ) -> DescribeClientQuotasRequest {
-        let setup = QuotaRequestSetup {
-            components,
-            matching,
-        };
         DescribeClientQuotasRequest {
-            components: setup.components,
-            strict: setup.matching == QuotaEntityScope::ExactTypes,
+            components,
+            strict: matching == QuotaEntityScope::ExactTypes,
             ..Default::default()
         }
     }

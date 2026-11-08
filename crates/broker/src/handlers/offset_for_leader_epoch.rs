@@ -497,18 +497,6 @@ mod tests {
         tokio::time,
     };
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct SeededEpochTopicSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(uuid::Uuid::from_u128(1))]
-        topic_id: uuid::Uuid,
-        #[default(NodeId(1))]
-        leader: NodeId,
-        #[default(LeaderEpoch(0))]
-        leader_epoch: LeaderEpoch,
-    }
-
     #[bon::builder]
     async fn seeded_topic(
         broker_handle: &BrokerHandle,
@@ -517,18 +505,6 @@ mod tests {
         #[builder(into, default = NodeId (1))] leader: NodeId,
         #[builder(into, default = LeaderEpoch (0))] leader_epoch: LeaderEpoch,
     ) -> Arc<Partition> {
-        let setup = SeededEpochTopicSetup {
-            topic,
-            topic_id,
-            leader,
-            leader_epoch,
-        };
-        let SeededEpochTopicSetup {
-            topic,
-            topic_id,
-            leader,
-            leader_epoch,
-        } = setup;
         seed_partition_replicas()
             .broker(broker_handle)
             .topic(topic)

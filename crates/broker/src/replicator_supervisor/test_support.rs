@@ -62,15 +62,6 @@ pub(super) enum SupervisorTopicIdentity {
     Specified(Uuid),
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct SupervisorTopicSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub identity: SupervisorTopicIdentity,
-    pub partitions: PartitionCount,
-    pub replication_factor: ReplicationFactor,
-}
-
 #[bon::builder]
 pub(super) fn topic_record(
     #[builder(default = "t")] topic: &'_ str,
@@ -78,20 +69,14 @@ pub(super) fn topic_record(
     #[builder(into, default)] partitions: PartitionCount,
     #[builder(into, default)] replication_factor: ReplicationFactor,
 ) -> MetadataRecord {
-    let setup = SupervisorTopicSetup {
-        topic,
-        identity,
-        partitions,
-        replication_factor,
-    };
     MetadataRecord::V1Topic(TopicRecord {
-        name: setup.topic.into(),
-        topic_id: match setup.identity {
+        name: topic.into(),
+        topic_id: match identity {
             SupervisorTopicIdentity::Fresh => Uuid::new_v4(),
             SupervisorTopicIdentity::Specified(id) => id,
         },
-        partitions: setup.partitions.0,
-        replication_factor: setup.replication_factor.0,
+        partitions: partitions.0,
+        replication_factor: replication_factor.0,
     })
 }
 

@@ -179,14 +179,6 @@ async fn check_trim_response(
     );
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RefusedTrimSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    #[default(KafkaErrorCode(codes::POLICY_VIOLATION))]
-    error: KafkaErrorCode,
-}
-
 #[bon::builder]
 async fn check_refused_trim(
     broker: &Broker,
@@ -194,26 +186,11 @@ async fn check_refused_trim(
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(into, default = KafkaErrorCode (codes :: POLICY_VIOLATION))] error: KafkaErrorCode,
 ) {
-    let setup = RefusedTrimSetup { topic, error };
-    let response = drive_trim(broker, ctx, request().topic(setup.topic).call()).await;
+    let response = drive_trim(broker, ctx, request().topic(topic).call()).await;
     assert!(
-        response.topics
-            == expected_trim_rows()
-                .topic(setup.topic)
-                .error(setup.error)
-                .call(),
+        response.topics == expected_trim_rows().topic(topic).error(error).call(),
         "{response:?}"
     );
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct TrimFrontierSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    offset: Offset,
-    low_watermark: Offset,
-    error: KafkaErrorCode,
-    frontier: Offset,
 }
 
 #[bon::builder]
@@ -227,21 +204,14 @@ async fn check_trim_frontier(
     #[builder(into, default)] error: KafkaErrorCode,
     #[builder(into, default)] frontier: Offset,
 ) {
-    let setup = TrimFrontierSetup {
-        topic,
-        offset,
-        low_watermark,
-        error,
-        frontier,
-    };
     let response = drive_trim(
         broker,
         ctx,
         request()
-            .topic(setup.topic)
+            .topic(topic)
             .partitions(&[TrimTarget {
                 index: PartitionIndex(0),
-                offset: setup.offset,
+                offset,
             }])
             .call(),
     )
@@ -249,17 +219,17 @@ async fn check_trim_frontier(
     check!(
         response.topics
             == expected_trim_rows()
-                .topic(setup.topic)
-                .low_watermark(setup.low_watermark)
-                .error(setup.error)
+                .topic(topic)
+                .low_watermark(low_watermark)
+                .error(error)
                 .call(),
         "{}",
-        setup.topic
+        topic
     );
     check!(
-        partition.log_start_offset().unwrap() == setup.frontier,
+        partition.log_start_offset().unwrap() == frontier,
         "{}",
-        setup.topic
+        topic
     );
 }
 
@@ -364,25 +334,11 @@ fn batch_at(activation_ms: i64, leader_epoch: i32) -> RecordBatch {
     }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct PendingBatchTopicSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    delivery_mode: Option<&'a str>,
-}
-
 /// A topic config key and the value it is set to.
 #[derive(Clone, Copy)]
 struct ConfigPair<'a> {
     name: &'a str,
     value: &'a str,
-}
-
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ConfiguredPendingBatchSetup<'a> {
-    #[default("orders")]
-    topic: &'a str,
-    configs: &'a [ConfigPair<'a>],
 }
 
 // Create `topic` with the given `delivery.mode`, then append one batch
@@ -395,14 +351,6 @@ async fn topic_holding_a_pending_batch(
     #[builder(default = "orders")] topic: &'_ str,
     delivery_mode: Option<&'_ str>,
 ) {
-    let setup = PendingBatchTopicSetup {
-        topic,
-        delivery_mode,
-    };
-    let PendingBatchTopicSetup {
-        topic,
-        delivery_mode,
-    } = setup;
     let configs: Vec<ConfigPair<'_>> = delivery_mode
         .map(|mode| ConfigPair {
             name: DELIVERY_MODE,
@@ -431,9 +379,6 @@ async fn topic_with_configs_holding_a_pending_batch(
 ) {
     use krabka_protocol::owned::create_topics_response;
 
-    let setup = ConfiguredPendingBatchSetup { topic, configs };
-
-    let ConfiguredPendingBatchSetup { topic, configs } = setup;
     let broker = broker_handle.broker_arc_for_test();
 
     let config = |key: &str| {
@@ -1111,15 +1056,6 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
 
 /// The row a `DeleteRecords` of `topic-0` to `offset` answers, with
 /// `timeout_ms`.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct DeleteToSetup<'a> {
-    #[default("delete-records-followers")]
-    topic: &'a str,
-    offset: Offset,
-    #[default(RequestTimeoutMillis(200))]
-    timeout: RequestTimeoutMillis,
-}
-
 #[bon::builder]
 async fn delete_to(
     broker: &Broker,
@@ -1127,22 +1063,17 @@ async fn delete_to(
     #[builder(into, default)] offset: Offset,
     #[builder(into, default = RequestTimeoutMillis (200))] timeout: RequestTimeoutMillis,
 ) -> Vec<DeleteRecordsTopicResult> {
-    let setup = DeleteToSetup {
-        topic,
-        offset,
-        timeout,
-    };
     krabka_macros::request_test_identity! {
         bind(admin, peer, ctx);
         user ["admin"];
     };
     let request = request()
-        .topic(setup.topic)
+        .topic(topic)
         .partitions(&[TrimTarget {
             index: PartitionIndex(0),
-            offset: setup.offset,
+            offset,
         }])
-        .timeout(setup.timeout)
+        .timeout(timeout)
         .call();
     drive(broker, &request, &ctx).await.topics
 }

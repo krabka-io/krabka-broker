@@ -407,17 +407,6 @@ async fn seed_topic_reference_group(broker_handle: &BrokerHandle) -> WireUuid {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OffsetFetchVersion(i16);
 
-#[derive(krabka_macros::FieldDefaults)]
-struct TopicReferenceSetup {
-    #[default(OffsetFetchVersion(9))]
-    version: OffsetFetchVersion,
-    #[default(TopicRef::KnownName)]
-    topic: TopicRef,
-    known_id: WireUuid,
-    #[default(no_offset_row(codes::NONE))]
-    partition: OffsetFetchResponsePartitions,
-}
-
 /// The request row for a topic reference and the response row it expects.
 struct TopicReferenceRows {
     request: OffsetFetchRequestTopics,
@@ -431,16 +420,10 @@ fn topic_reference_rows(
     #[builder(default)] known_id: WireUuid,
     #[builder(default = no_offset_row (codes :: NONE))] partition: OffsetFetchResponsePartitions,
 ) -> TopicReferenceRows {
-    let setup = TopicReferenceSetup {
-        version,
-        topic,
-        known_id,
-        partition,
-    };
-    let WireTopic { name, id: topic_id } = setup.topic.wire_reference(
+    let WireTopic { name, id: topic_id } = topic.wire_reference(
         WireTopic {
             name: KNOWN_NAME,
-            id: setup.known_id,
+            id: known_id,
         },
         WireTopic {
             name: UNKNOWN_NAME,
@@ -454,7 +437,7 @@ fn topic_reference_rows(
         ..Default::default()
     };
     // The wire carries the name at v8 and v9, and the id at v10.
-    let id_only = setup.version.0 >= 10;
+    let id_only = version.0 >= 10;
     let response = OffsetFetchResponseTopics {
         name: if id_only {
             String::new()
@@ -462,7 +445,7 @@ fn topic_reference_rows(
             name.to_owned()
         },
         topic_id: if id_only { topic_id } else { WireUuid::ZERO },
-        partitions: vec![setup.partition],
+        partitions: vec![partition],
         ..Default::default()
     };
     TopicReferenceRows { request, response }

@@ -1310,18 +1310,6 @@ mod tests {
     /// metadata manager, the way a previous leader's copy pass left it. The
     /// boundaries are the caller's, which is the point: the next leader's are
     /// its own.
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct FinishedSegmentSetup {
-        #[default(Uuid::from_u128(1))]
-        id: Uuid,
-        #[default(krabka_log::Offset(0))]
-        base: krabka_log::Offset,
-        #[default(krabka_log::Offset(99))]
-        last: krabka_log::Offset,
-        #[default(LeaderEpoch(0))]
-        epoch: LeaderEpoch,
-    }
-
     #[bon::builder]
     fn finished_segment(
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
@@ -1330,18 +1318,6 @@ mod tests {
         #[builder(into, default = krabka_log :: Offset (99))] last: krabka_log::Offset,
         #[builder(into, default = LeaderEpoch (0))] epoch: LeaderEpoch,
     ) {
-        let setup = FinishedSegmentSetup {
-            id,
-            base,
-            last,
-            epoch,
-        };
-        let FinishedSegmentSetup {
-            id,
-            base,
-            last,
-            epoch,
-        } = setup;
         let segment_id = RemoteLogSegmentId::new(tp(), id);
         let started = RemoteLogSegmentMetadata::new(
             segment_id.clone(),
@@ -1497,25 +1473,18 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct MisalignedExportSetup {
-        #[default([bytes(64); 3])]
-        sizes: [krabka_units::ByteSize; 3],
-    }
-
     /// The new leader's offset ranges straddle the old leader's segment boundary.
     #[bon::builder]
     fn misaligned_exports(
         #[builder(default = [bytes (64) ; 3])] sizes: [krabka_units::ByteSize; 3],
     ) -> Vec<SegmentExport> {
-        let setup = MisalignedExportSetup { sizes };
         [
             (Offset(0)..=Offset(49), UnixMillis(100)),
             (Offset(50)..=Offset(149), UnixMillis(200)),
             (Offset(150)..=Offset(249), UnixMillis(300)),
         ]
         .into_iter()
-        .zip(setup.sizes)
+        .zip(sizes)
         .map(|((bounds, timestamp), size)| {
             synth_export()
                 .bounds(bounds)

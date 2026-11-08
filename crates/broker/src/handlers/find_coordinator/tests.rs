@@ -31,15 +31,6 @@ use {
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct LookupKeyType(i8);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct LookupSetup<'a> {
-    #[default("g")]
-    key: &'a str,
-    key_type: LookupKeyType,
-    #[default(&["g"])]
-    keys: &'a [&'a str],
-}
-
 /// The response that a lookup at `version` must produce.
 struct VersionedResponse {
     version: krabka_ids::ApiVersion,
@@ -54,21 +45,16 @@ async fn check_lookup_versions(
     #[builder(default = & ["g"])] keys: &'_ [&'_ str],
     rows: Vec<VersionedResponse>,
 ) {
-    let setup = LookupSetup {
-        key,
-        key_type,
-        keys,
-    };
     for VersionedResponse {
         version,
         response: expected,
     } in rows
     {
         let request = FindCoordinatorRequest {
-            key: setup.key.into(),
-            key_type: setup.key_type.0,
+            key: key.into(),
+            key_type: key_type.0,
             coordinator_keys: if version.0 >= 4 {
-                setup.keys.iter().map(|key| (*key).into()).collect()
+                keys.iter().map(|key| (*key).into()).collect()
             } else {
                 vec![]
             },

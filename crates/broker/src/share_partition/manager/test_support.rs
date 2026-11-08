@@ -52,14 +52,6 @@ fn fake_source(image: Arc<MetadataImage>) -> Arc<dyn MetadataSource> {
 )]
 pub(super) struct SessionCapacity(pub usize);
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ManagerSetup {
-    #[default(SessionCapacity(BrokerConfig::default().share_session_cache_max_when_unlimited))]
-    capacity: SessionCapacity,
-    #[default(Arc::new(RecordingDlq::default()))]
-    dlq: Arc<dyn DlqSink>,
-}
-
 pub(super) fn manager() -> Arc<SharePartitionLeaderManager> {
     manager_over(
         fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil()))),
@@ -124,8 +116,6 @@ fn build(
     capacity: SessionCapacity,
     #[builder(default = Arc::new(RecordingDlq::default()))] dlq: Arc<dyn DlqSink>,
 ) -> Arc<SharePartitionLeaderManager> {
-    let setup = ManagerSetup { capacity, dlq };
-    let ManagerSetup { capacity, dlq } = setup;
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         Arc::clone(&reg),
@@ -163,15 +153,6 @@ pub struct TimedValues<'a> {
     pub values: &'a [&'static [u8]],
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct DataPartitionSetup<'a> {
-    #[default("t")]
-    pub topic: &'a str,
-    pub partition: PartitionIndex,
-    pub batches: Vec<TimedValues<'a>>,
-    pub high_watermark: Offset,
-}
-
 /// Append the selected batches, publish the high watermark, and register a real partition.
 #[bon::builder]
 pub async fn open_data_partition(
@@ -182,18 +163,6 @@ pub async fn open_data_partition(
     #[builder(default)] batches: Vec<TimedValues<'_>>,
     #[builder(into, default)] high_watermark: Offset,
 ) {
-    let setup = DataPartitionSetup {
-        topic,
-        partition,
-        batches,
-        high_watermark,
-    };
-    let DataPartitionSetup {
-        topic,
-        partition,
-        batches,
-        high_watermark,
-    } = setup;
     let part = open_partition()
         .log_dir(log_dir)
         .topic(topic)

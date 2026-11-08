@@ -265,13 +265,6 @@ enum BrokerFencing {
     Fenced,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RegistrationSetup {
-    #[default(NodeId(2))]
-    node_id: NodeId,
-    fencing: BrokerFencing,
-}
-
 /// A new registration of broker `node_id`. It carries no epoch (-1), and the
 /// controller stamps it with the offset that it commits at.
 #[bon::builder]
@@ -279,8 +272,6 @@ fn registration(
     #[builder(into, default = NodeId (2))] node_id: NodeId,
     #[builder(default)] fencing: BrokerFencing,
 ) -> MetadataRecord {
-    let setup = RegistrationSetup { node_id, fencing };
-    let RegistrationSetup { node_id, fencing } = setup;
     MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
         fenced: fencing == BrokerFencing::Fenced,
         broker_epoch: -1,
@@ -291,18 +282,6 @@ fn registration(
 }
 
 /// Partition `index` of topic `t`, replicated on brokers 1 and 2.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct UnregisterPartitionSetup<'a> {
-    index: krabka_ids::PartitionIndex,
-    #[default(NodeId(1))]
-    leader: NodeId,
-    #[default(&[NodeId(1), NodeId(2)])]
-    isr: &'a [NodeId],
-    #[default(krabka_metadata::LeaderEpoch(5))]
-    leader_epoch: krabka_metadata::LeaderEpoch,
-    partition_epoch: PartitionEpoch,
-}
-
 #[bon::builder]
 fn replicated_partition(
     #[builder(into, default)] index: krabka_ids::PartitionIndex,
@@ -312,20 +291,6 @@ fn replicated_partition(
     leader_epoch: krabka_metadata::LeaderEpoch,
     #[builder(into, default)] partition_epoch: PartitionEpoch,
 ) -> krabka_metadata::PartitionRecord {
-    let setup = UnregisterPartitionSetup {
-        index,
-        leader,
-        isr,
-        leader_epoch,
-        partition_epoch,
-    };
-    let UnregisterPartitionSetup {
-        index,
-        leader,
-        isr,
-        leader_epoch,
-        partition_epoch,
-    } = setup;
     krabka_metadata::PartitionRecord {
         isr: isr.to_vec(),
         leader_epoch,

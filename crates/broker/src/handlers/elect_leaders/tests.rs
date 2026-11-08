@@ -533,15 +533,6 @@ async fn handle_request(
     response.replica_election_results[0].partition_result[0].error_code
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct ElectionCaseSetup<'a> {
-    #[default(gated_config())]
-    config: BreakGlassConfig,
-    #[default(ElectionType::Unclean)]
-    election: ElectionType,
-    proposals: &'a [BreakGlassProposalRecord],
-}
-
 /// A running broker, the temporary directory that holds its data, and the row
 /// and records of an election it drove.
 struct ElectionFixture {
@@ -557,15 +548,9 @@ async fn election_fixture(
     #[builder(default = ElectionType :: Unclean)] election: ElectionType,
     #[builder(default)] proposals: &'_ [BreakGlassProposalRecord],
 ) -> ElectionFixture {
-    let setup = ElectionCaseSetup {
-        config,
-        election,
-        proposals,
-    };
-    let StartedBroker { handle, dir } = Box::pin(broker_with(setup.config)).await;
+    let StartedBroker { handle, dir } = Box::pin(broker_with(config)).await;
     let broker = handle.broker_arc_for_test();
-    let ElectionOutcome { row, records } =
-        elect(&broker, &image_with(setup.proposals), setup.election).await;
+    let ElectionOutcome { row, records } = elect(&broker, &image_with(proposals), election).await;
     ElectionFixture {
         handle,
         dir,

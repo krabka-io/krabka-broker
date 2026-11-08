@@ -79,29 +79,19 @@ pub enum CommitFixtureLeader {
     BrokerOneAtEpochZero,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct CommitPartitionSetup {
-    pub high_watermark: krabka_log::Offset,
-    pub leader: CommitFixtureLeader,
-}
-
 /// A real temporary partition with the requested commit frontier and its own notifier.
 #[bon::builder]
 pub async fn commit_partition(
     #[builder(into, default)] high_watermark: krabka_log::Offset,
     #[builder(default)] leader: CommitFixtureLeader,
 ) -> (Arc<Partition>, tempfile::TempDir, Arc<Notify>) {
-    let setup = CommitPartitionSetup {
-        high_watermark,
-        leader,
-    };
     let notify = Arc::new(Notify::new());
     let (partition, directory) = test_partition(Arc::clone(&notify));
     let partition = Arc::new(partition);
-    if matches!(setup.leader, CommitFixtureLeader::BrokerOneAtEpochZero) {
+    if matches!(leader, CommitFixtureLeader::BrokerOneAtEpochZero) {
         partition.install_leader_change(1, 0).await;
     }
-    partition.replica_state.lock().await.hw = setup.high_watermark;
+    partition.replica_state.lock().await.hw = high_watermark;
     (partition, directory, notify)
 }
 

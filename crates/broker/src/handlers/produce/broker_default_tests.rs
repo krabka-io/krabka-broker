@@ -41,17 +41,6 @@ async fn create_topic(broker: &BrokerHandle, name: &str) {
         .await;
 }
 
-/// One dynamic config override; default to a cluster-wide two-MiB message cap.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct BrokerConfigSetup<'a> {
-    #[default(DEFAULT_BROKER_CONFIG_NODE_ID)]
-    node: krabka_metadata::NodeId,
-    #[default("message.max.bytes")]
-    name: &'a str,
-    #[default("2097152")]
-    value: &'a str,
-}
-
 /// The stored value of one dynamic broker config, on `node` (the cluster
 /// default for [`DEFAULT_BROKER_CONFIG_NODE_ID`]).
 #[bon::builder]
@@ -61,8 +50,6 @@ async fn set_broker_config(
     #[builder(default = "message.max.bytes")] name: &'_ str,
     #[builder(default = "2097152")] value: &'_ str,
 ) {
-    let setup = BrokerConfigSetup { node, name, value };
-    let BrokerConfigSetup { node, name, value } = setup;
     broker
         .broker_arc_for_test()
         .controller

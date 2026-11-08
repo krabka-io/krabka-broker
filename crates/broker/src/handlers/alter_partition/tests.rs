@@ -37,13 +37,6 @@ krabka_macros::wire_codec_helpers! {
     test_context ["broker-client"];
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct EmptyAlterPartitionSetup {
-    #[default(krabka_ids::ApiVersion(alter_partition_response::MAX_VERSION))]
-    version: krabka_ids::ApiVersion,
-    expected: KafkaErrorCode,
-}
-
 #[bon::builder]
 async fn check_empty_alter_partition(
     broker: &Broker,
@@ -52,13 +45,12 @@ async fn check_empty_alter_partition(
     version: krabka_ids::ApiVersion,
     #[builder(into, default)] expected: KafkaErrorCode,
 ) {
-    let setup = EmptyAlterPartitionSetup { version, expected };
     let request = request_with_topics(broker, Vec::new());
-    let response = super::handle(broker, request, setup.version.0, ctx)
+    let response = super::handle(broker, request, version.0, ctx)
         .await
         .expect("handle");
     let expected = krabka_macros::unthrottled_wire!(AlterPartitionResponse {
-        error_code: setup.expected.0,
+        error_code: expected.0,
         topics: Vec::new(),
     });
     assert!(response == expected);

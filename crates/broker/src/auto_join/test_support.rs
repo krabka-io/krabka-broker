@@ -35,12 +35,6 @@ pub(super) enum ResponseHeaderMode {
     Flexible,
 }
 
-#[derive(Clone, Copy, Default)]
-pub(super) struct ResponseWireSetup {
-    pub version: krabka_ids::ApiVersion,
-    pub header: ResponseHeaderMode,
-}
-
 #[bon::builder]
 pub(super) async fn write_response(
     socket: &mut TcpStream,
@@ -49,12 +43,11 @@ pub(super) async fn write_response(
     #[builder(into, default)] version: krabka_ids::ApiVersion,
     #[builder(default)] header: ResponseHeaderMode,
 ) -> io::Result<()> {
-    let setup = ResponseWireSetup { version, header };
     let mut body = bytes::BytesMut::new();
     response
-        .encode(&mut body, setup.version.0)
+        .encode(&mut body, version.0)
         .expect("encode response");
-    let flexible = matches!(setup.header, ResponseHeaderMode::Flexible);
+    let flexible = matches!(header, ResponseHeaderMode::Flexible);
     let length =
         u32::try_from(4 + usize::from(flexible) + body.len()).expect("response length fits u32");
     let mut frame = Vec::new();

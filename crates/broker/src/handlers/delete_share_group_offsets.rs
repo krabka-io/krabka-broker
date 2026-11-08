@@ -396,21 +396,14 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ShareTopicsSetup<'a> {
-        #[default(&["t"])]
-        names: &'a [&'a str],
-    }
-
     #[bon::builder]
     async fn create_topics(
         broker_handle: &BrokerHandle,
         ctx: &RequestContext<'_>,
         #[builder(default = & ["t"])] names: &'_ [&'_ str],
     ) {
-        let setup = ShareTopicsSetup { names };
         let broker = broker_handle.broker_arc_for_test();
-        let topic_names = setup.names;
+        let topic_names = names;
         let version = create_topics_response::MAX_VERSION;
         let request = CreateTopicsRequest {
             topics: topic_names
@@ -460,12 +453,11 @@ mod tests {
         ctx: &RequestContext<'_>,
         #[builder(default = & ["t"])] names: &'_ [&'_ str],
     ) -> Arc<SharePersister> {
-        let setup = ShareTopicsSetup { names };
         let broker = handle.broker_arc_for_test();
         create_topics()
             .broker_handle(handle)
             .ctx(ctx)
-            .names(setup.names)
+            .names(names)
             .call()
             .await;
         lead_share_state_partitions(&broker).await;

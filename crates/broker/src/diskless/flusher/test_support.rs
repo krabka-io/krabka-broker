@@ -34,46 +34,14 @@ fn batch(count: i32) -> RecordBatch {
 
 pub(super) fn orders_partition(root: &Path) -> Arc<Partition> { test_partition().root(root).call() }
 
-#[derive(Clone, Copy)]
-pub(super) struct FlusherPartitionSetup<'a> {
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    pub storage: StorageMode,
-    pub leader: NodeId,
-}
-
-impl Default for FlusherPartitionSetup<'_> {
-    fn default() -> Self {
-        Self {
-            topic: "orders",
-            partition: krabka_ids::PartitionIndex(0),
-            storage: StorageMode::Diskless,
-            leader: NodeId(1),
-        }
-    }
-}
-
 #[bon::builder]
 pub(super) fn test_partition(
     root: &Path,
-    #[builder(default = FlusherPartitionSetup::default().topic)] topic: &'_ str,
-    #[builder(into, default = FlusherPartitionSetup::default().partition)]
-    partition: krabka_ids::PartitionIndex,
-    #[builder(default = FlusherPartitionSetup::default().storage)] storage: StorageMode,
-    #[builder(into, default = FlusherPartitionSetup::default().leader)] leader: NodeId,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default = krabka_ids::PartitionIndex(0))] partition: krabka_ids::PartitionIndex,
+    #[builder(default = StorageMode::Diskless)] storage: StorageMode,
+    #[builder(into, default = NodeId(1))] leader: NodeId,
 ) -> Arc<Partition> {
-    let setup = FlusherPartitionSetup {
-        topic,
-        partition,
-        storage,
-        leader,
-    };
-    let FlusherPartitionSetup {
-        topic,
-        partition,
-        storage,
-        leader,
-    } = setup;
     let partition_dir = root.join(format!("{topic}-{partition}"));
     fs::create_dir_all(&partition_dir).unwrap();
     let mut log = Log::open(&partition_dir, LogConfig::default()).unwrap();

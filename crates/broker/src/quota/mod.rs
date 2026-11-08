@@ -425,23 +425,14 @@ pub(crate) mod test_support {
             .call()
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    pub struct UserBucketSetup {
-        #[default(QuotaType::Produce)]
-        pub quota_type: QuotaType,
-        #[default(QuotaValue(0.0))]
-        pub rate: QuotaValue,
-    }
-
     #[bon::builder]
     pub fn alice_bucket(
         #[builder(default = QuotaType::Produce)] quota_type: QuotaType,
         #[builder(into, default = QuotaValue (0.0))] rate: QuotaValue,
     ) -> AliceBucket {
-        let setup = UserBucketSetup { quota_type, rate };
         let buckets = Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-        let quota = buckets.client_quota(setup.quota_type, &key, setup.rate.0);
+        let quota = buckets.client_quota(quota_type, &key, rate.0);
         AliceBucket { buckets, quota }
     }
 

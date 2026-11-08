@@ -242,25 +242,14 @@ mod tests {
         Include,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct GroupDescribeSetup<'a> {
-        #[default(&["classic-a"])]
-        groups: &'a [&'a str],
-        operations: OperationsDisclosure,
-    }
-
     #[bon::builder]
     fn request(
         #[builder(default = & ["classic-a"])] groups: &'_ [&'_ str],
         #[builder(default)] operations: OperationsDisclosure,
     ) -> DescribeGroupsRequest {
-        let setup = GroupDescribeSetup { groups, operations };
         DescribeGroupsRequest {
-            groups: setup.groups.iter().map(|g| (*g).to_owned()).collect(),
-            include_authorized_operations: matches!(
-                setup.operations,
-                OperationsDisclosure::Include
-            ),
+            groups: groups.iter().map(|g| (*g).to_owned()).collect(),
+            include_authorized_operations: matches!(operations, OperationsDisclosure::Include),
             ..Default::default()
         }
     }
@@ -329,16 +318,6 @@ mod tests {
     #[derive(Clone, Copy)]
     struct AuthorizedGroupOperations(i32);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct DeadGroupSetup<'a> {
-        #[default("never-seen")]
-        group: &'a str,
-        error: KafkaErrorCode,
-        message: Option<&'a str>,
-        #[default(AuthorizedGroupOperations(i32::MIN))]
-        operations: AuthorizedGroupOperations,
-    }
-
     #[bon::builder]
     fn dead(
         #[builder(default = "never-seen")] group: &'_ str,
@@ -347,17 +326,11 @@ mod tests {
         #[builder(into, default = AuthorizedGroupOperations (i32 :: MIN))]
         operations: AuthorizedGroupOperations,
     ) -> DescribedGroup {
-        let setup = DeadGroupSetup {
-            group,
-            error,
-            message,
-            operations,
-        };
         DescribedGroup {
             group_state: "Dead".into(),
-            error_message: setup.message.map(str::to_owned),
-            authorized_operations: setup.operations.0,
-            ..error_row(setup.group, setup.error)
+            error_message: message.map(str::to_owned),
+            authorized_operations: operations.0,
+            ..error_row(group, error)
         }
     }
 

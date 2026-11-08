@@ -1165,14 +1165,6 @@ mod tests {
     /// A local partition read planned against `Broker`'s "leader with no
     /// replication target installed" default, for a topic that already holds
     /// one appended batch at offset 0.
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct NonemptyPartitionSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(b"v")]
-        payload: &'static [u8],
-    }
-
     #[bon::builder]
     async fn nonempty_local_partition(
         broker: &Broker,
@@ -1180,8 +1172,6 @@ mod tests {
         #[builder(default = "orders")] topic: &'_ str,
         #[builder(default = b"v")] payload: &'static [u8],
     ) -> Arc<Partition> {
-        let setup = NonemptyPartitionSetup { topic, payload };
-        let NonemptyPartitionSetup { topic, payload } = setup;
         let part = spawn_fixture_partition(
             broker,
             dir,
@@ -2190,21 +2180,6 @@ mod tests {
     struct FetchMinimumBytes(usize);
     #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
     struct FetchWaitMillis(i32);
-    #[derive(Clone, Copy, Default)]
-    struct PollStateSetup {
-        minimum: FetchMinimumBytes,
-        wait: FetchWaitMillis,
-    }
-
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct BlockedPollSetup<'a> {
-        #[default(FetchMinimumBytes(4096))]
-        minimum: FetchMinimumBytes,
-        #[default(FetchWaitMillis(30_000))]
-        wait: FetchWaitMillis,
-        #[default("the long poll completes promptly")]
-        failure: &'a str,
-    }
 
     #[bon::builder]
     async fn check_blocked_poll_completes(
@@ -2215,23 +2190,18 @@ mod tests {
         #[builder(into, default = FetchWaitMillis (30_000))] wait: FetchWaitMillis,
         #[builder(default = "the long poll completes promptly")] failure: &'_ str,
     ) {
-        let setup = BlockedPollSetup {
-            minimum,
-            wait,
-            failure,
-        };
         let phases = RequestPhases::default();
         let mut state = state_for()
             .pending(pending)
-            .minimum(setup.minimum)
-            .wait(setup.wait)
+            .minimum(minimum)
+            .wait(wait)
             .call();
         time::timeout(
             Duration::from_secs(2),
             super::long_poll_then_reread(broker, pending, waits, &mut state, &phases),
         )
         .await
-        .expect(setup.failure);
+        .expect(failure);
     }
 
     /// A read budget with `sendfile` off.
@@ -2252,10 +2222,9 @@ mod tests {
         #[builder(into, default)] minimum: FetchMinimumBytes,
         #[builder(into, default)] wait: FetchWaitMillis,
     ) -> super::LongPollState {
-        let setup = PollStateSetup { minimum, wait };
         super::LongPollState {
-            min_bytes: setup.minimum.0,
-            max_wait_ms: setup.wait.0,
+            min_bytes: minimum.0,
+            max_wait_ms: wait.0,
             sendfile_capable: false,
             bytes: super::PartitionBytes::new(pending.len()),
             remaining_response_bytes: usize::MAX,

@@ -588,14 +588,6 @@ mod tests {
         Push(PushDecision),
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct TelemetryStepSetup {
-        #[default(Instant::now())]
-        now: Instant,
-        #[default(Step::Get)]
-        step: Step,
-    }
-
     #[bon::builder]
     fn run(
         m: &ClientMetricsManager,
@@ -604,10 +596,9 @@ mod tests {
         #[builder(default = Instant :: now ())] now: Instant,
         #[builder(default = Step :: Get)] step: Step,
     ) -> Outcome {
-        let setup = TelemetryStepSetup { now, step };
-        match setup.step {
-            Step::Get => Outcome::Get(m.get_subscription_at(img, attrs, setup.now)),
-            Step::Push(check) => Outcome::Push(m.authorize_push_at(img, attrs, check, setup.now)),
+        match step {
+            Step::Get => Outcome::Get(m.get_subscription_at(img, attrs, now)),
+            Step::Push(check) => Outcome::Push(m.authorize_push_at(img, attrs, check, now)),
         }
     }
 

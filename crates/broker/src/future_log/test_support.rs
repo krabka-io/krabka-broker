@@ -70,32 +70,14 @@ pub(super) fn append_records(part: &Arc<Partition>, setup: PartitionRecordsSetup
         .expect("append source records");
 }
 
-pub(super) struct FutureSourceSetup {
-    pub count: RecordCount,
-    pub stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
-}
-
-impl Default for FutureSourceSetup {
-    fn default() -> Self {
-        Self {
-            count: RecordCount(3),
-            stamp_source: None,
-        }
-    }
-}
-
 #[bon::builder]
 pub(super) fn source_partition(
     primary: &Path,
-    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    #[builder(into, default = RecordCount(3))] count: RecordCount,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 ) -> Arc<Partition> {
-    let setup = FutureSourceSetup {
-        count,
-        stamp_source,
-    };
     let part = fixture_partition(primary, "t", PartitionIndex(0));
-    if let Some(stamp_source) = setup.stamp_source {
+    if let Some(stamp_source) = stamp_source {
         part.log
             .lock()
             .expect("source log")
@@ -103,7 +85,7 @@ pub(super) fn source_partition(
             .expect("source stamp index");
     }
     append_records(&part, PartitionRecordsSetup {
-        count: setup.count,
+        count,
         ..Default::default()
     });
     part
@@ -118,19 +100,15 @@ pub(super) struct SourceFixture {
 
 #[bon::builder]
 pub(super) fn source_fixture(
-    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    #[builder(into, default = RecordCount(3))] count: RecordCount,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 ) -> SourceFixture {
-    let setup = FutureSourceSetup {
-        count,
-        stamp_source,
-    };
     let primary = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
     let partition = source_partition()
         .primary(primary.path())
-        .count(setup.count)
-        .maybe_stamp_source(setup.stamp_source)
+        .count(count)
+        .maybe_stamp_source(stamp_source)
         .call();
     SourceFixture {
         partition,
@@ -149,21 +127,15 @@ pub(super) struct RegisteredSourceFixture {
 #[bon::builder]
 pub(super) fn registered_source_fixture(
     primary: &Path,
-    #[builder(into, default = FutureSourceSetup::default().count)] count: RecordCount,
+    #[builder(into, default = RecordCount(3))] count: RecordCount,
     stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 ) -> RegisteredSourceFixture {
-    let setup = FutureSourceSetup {
-        count,
-        stamp_source,
-    };
-    let partitions = Arc::new(PartitionRegistry::with_stamp_source(
-        setup.stamp_source.clone(),
-    ));
+    let partitions = Arc::new(PartitionRegistry::with_stamp_source(stamp_source.clone()));
     let future_logs = Arc::new(super::FutureLogRegistry::default());
     let partition = source_partition()
         .primary(primary)
-        .count(setup.count)
-        .maybe_stamp_source(setup.stamp_source)
+        .count(count)
+        .maybe_stamp_source(stamp_source)
         .call();
     partitions.insert("t".into(), PartitionIndex(0), Arc::clone(&partition));
     RegisteredSourceFixture {
@@ -204,13 +176,6 @@ impl Default for RecordValueBytes {
     fn default() -> Self { Self(20) }
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct FutureRecordSetup {
-    pub value_size: RecordValueBytes,
-    #[default(krabka_ids::LeaderEpoch(1))]
-    pub leader_epoch: krabka_ids::LeaderEpoch,
-}
-
 pub(super) use append_epoch_batch as append_value_batch;
 
 /// Appends one repeated-value record at the selected leader epoch.
@@ -220,14 +185,10 @@ pub(super) fn append_epoch_batch(
     #[builder(into, default)] value_size: RecordValueBytes,
     #[builder(into, default = krabka_ids :: LeaderEpoch (1))] leader_epoch: krabka_ids::LeaderEpoch,
 ) {
-    let setup = FutureRecordSetup {
-        value_size,
-        leader_epoch,
-    };
     let mut batch = single_value_batch()
-        .leader_epoch(setup.leader_epoch.0)
+        .leader_epoch(leader_epoch.0)
         .timestamp_ms(1_700_000_000)
-        .value(Bytes::from(vec![b'x'; setup.value_size.0]))
+        .value(Bytes::from(vec![b'x'; value_size.0]))
         .call();
     part.log
         .lock()

@@ -314,15 +314,6 @@ fn heartbeat_interval_ms() -> i32 {
     .unwrap()
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct IdentityExpectationSetup<'a> {
-    #[default("m1")]
-    member_id: &'a str,
-    #[default(MemberEpoch(5))]
-    epoch: MemberEpoch,
-    partitions: Option<Vec<PartitionIndex>>,
-}
-
 #[bon::builder]
 fn identity_ok(
     #[builder(default = "m1")] member_id: &'_ str,
@@ -331,16 +322,6 @@ fn identity_ok(
 ) -> ConsumerGroupHeartbeatResponse {
     use krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions;
 
-    let setup = IdentityExpectationSetup {
-        member_id,
-        epoch,
-        partitions,
-    };
-    let IdentityExpectationSetup {
-        member_id,
-        epoch,
-        partitions,
-    } = setup;
     ConsumerGroupHeartbeatResponse {
         member_id: Some(member_id.into()),
         member_epoch: epoch.0,
@@ -362,16 +343,6 @@ fn identity_ok(
     }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct IdentityRequestSetup<'a> {
-    #[default("m1")]
-    member_id: &'a str,
-    instance_id: Option<&'a str>,
-    #[default(MemberEpoch(5))]
-    member_epoch: MemberEpoch,
-    owned: Option<Vec<PartitionIndex>>,
-}
-
 #[bon::builder]
 fn identity_request(
     #[builder(default = "m1")] member_id: &'_ str,
@@ -381,18 +352,6 @@ fn identity_request(
 ) -> ConsumerGroupHeartbeatRequest {
     use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
 
-    let setup = IdentityRequestSetup {
-        member_id,
-        instance_id,
-        member_epoch,
-        owned,
-    };
-    let IdentityRequestSetup {
-        member_id,
-        instance_id,
-        member_epoch,
-        owned,
-    } = setup;
     ConsumerGroupHeartbeatRequest {
         group_id: "g".into(),
         member_id: member_id.into(),

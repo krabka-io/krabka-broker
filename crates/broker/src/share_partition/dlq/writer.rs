@@ -678,14 +678,6 @@ mod tests {
     #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct RoundRecordCount(usize);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ProduceRoundSetup {
-        #[default(FixtureTopicId(1))]
-        id: FixtureTopicId,
-        #[default(RoundRecordCount(1))]
-        records: RoundRecordCount,
-    }
-
     /// The leader of a partition, and whether that broker is registered.
     struct TopicLeader {
         node: NodeId,
@@ -901,8 +893,6 @@ mod tests {
         #[builder(into, default = FixtureTopicId (1))] id: FixtureTopicId,
         #[builder(into, default = RoundRecordCount (1))] records: RoundRecordCount,
     ) -> Round {
-        let setup = ProduceRoundSetup { id, records };
-        let ProduceRoundSetup { id, records } = setup;
         let id = id.0;
         let records = records.0;
         let target = Target {
@@ -923,14 +913,6 @@ mod tests {
             ..Default::default()
         };
         Round { target, batch }
-    }
-
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct CoalescedWriteSetup {
-        #[default(RoundRecordCount(2))]
-        first_records: RoundRecordCount,
-        #[default(RoundRecordCount(1))]
-        second_records: RoundRecordCount,
     }
 
     struct CoalescedWrites {
@@ -962,18 +944,14 @@ mod tests {
         #[builder(into, default = RoundRecordCount (2))] first_records: RoundRecordCount,
         #[builder(into, default = RoundRecordCount (1))] second_records: RoundRecordCount,
     ) -> CoalescedWrites {
-        let setup = CoalescedWriteSetup {
-            first_records,
-            second_records,
-        };
         let Round {
             target: first,
             batch: first_batch,
-        } = round_of().records(setup.first_records).call();
+        } = round_of().records(first_records).call();
         let Round {
             target: second,
             batch: second_batch,
-        } = round_of().id(2).records(setup.second_records).call();
+        } = round_of().id(2).records(second_records).call();
         CoalescedWrites {
             sender: Coalescer::new(broker),
             metrics: BrokerMetrics::new(),

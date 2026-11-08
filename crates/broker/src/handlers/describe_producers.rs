@@ -375,15 +375,6 @@ mod tests {
         }
     }
 
-    #[derive(krabka_macros::FieldDefaults)]
-    struct EmptyProducerResponseSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        partition: krabka_ids::PartitionIndex,
-        error_code: KafkaErrorCode,
-        message: Option<String>,
-    }
-
     /// Independent wire oracle for a partition that exposes no producer state.
     #[bon::builder]
     fn empty_producer_response(
@@ -392,19 +383,13 @@ mod tests {
         #[builder(into, default)] error_code: KafkaErrorCode,
         message: Option<String>,
     ) -> DescribeProducersResponse {
-        let setup = EmptyProducerResponseSetup {
-            topic,
-            partition,
-            error_code,
-            message,
-        };
         DescribeProducersResponse {
             topics: vec![TopicResponse {
-                name: setup.topic.to_owned(),
+                name: topic.to_owned(),
                 partitions: vec![PartitionResponse {
-                    partition_index: setup.partition.0,
-                    error_code: setup.error_code.0,
-                    error_message: setup.message,
+                    partition_index: partition.0,
+                    error_code: error_code.0,
+                    error_message: message,
                     active_producers: Vec::new(),
                     ..Default::default()
                 }],
@@ -509,16 +494,6 @@ mod tests {
     /// Put `topic` with one partition on `replicas`, led by `leader`, in the
     /// metadata image. Return the partition once this broker hosts it in its
     /// role, or `None` when this broker is not a replica.
-    #[derive(krabka_macros::FieldDefaults)]
-    struct HostedProducerPartitionSetup<'a> {
-        #[default("orders")]
-        topic: &'a str,
-        #[default(krabka_metadata::NodeId(1))]
-        leader: krabka_metadata::NodeId,
-        #[default(vec![krabka_metadata::NodeId(1)])]
-        replicas: Vec<NodeId>,
-    }
-
     #[bon::builder]
     async fn seed_partition(
         broker: &Broker,
@@ -526,16 +501,6 @@ mod tests {
         #[builder(into, default = krabka_metadata :: NodeId (1))] leader: krabka_metadata::NodeId,
         #[builder(default = vec ! [krabka_metadata :: NodeId (1)])] replicas: Vec<NodeId>,
     ) -> Option<Arc<Partition>> {
-        let setup = HostedProducerPartitionSetup {
-            topic,
-            leader,
-            replicas,
-        };
-        let HostedProducerPartitionSetup {
-            topic,
-            leader,
-            replicas,
-        } = setup;
         let hosted = replicas.contains(&broker.config.node_id);
         broker
             .controller
@@ -590,20 +555,6 @@ mod tests {
     #[krabka_macros::test_scalar]
     struct ProducerCoordinatorEpoch(i32);
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ExpectedProducerSetup {
-        #[default(krabka_ids::ProducerId(7))]
-        producer_id: krabka_ids::ProducerId,
-        producer_epoch: ReportedProducerEpoch,
-        last_sequence: BatchSequence,
-        #[default(BatchTimestamp(1_000))]
-        last_timestamp: BatchTimestamp,
-        #[default(ProducerCoordinatorEpoch(-1))]
-        coordinator_epoch: ProducerCoordinatorEpoch,
-        #[default(krabka_log::Offset(-1))]
-        current_txn_start_offset: krabka_log::Offset,
-    }
-
     #[bon::builder]
     fn producer_row(
         #[builder(into, default = krabka_ids :: ProducerId (7))]
@@ -616,22 +567,6 @@ mod tests {
         #[builder(into, default = krabka_log :: Offset (- 1))]
         current_txn_start_offset: krabka_log::Offset,
     ) -> ProducerState {
-        let setup = ExpectedProducerSetup {
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_timestamp,
-            coordinator_epoch,
-            current_txn_start_offset,
-        };
-        let ExpectedProducerSetup {
-            producer_id,
-            producer_epoch,
-            last_sequence,
-            last_timestamp,
-            coordinator_epoch,
-            current_txn_start_offset,
-        } = setup;
         ProducerState {
             producer_id: producer_id.0,
             producer_epoch: producer_epoch.0,

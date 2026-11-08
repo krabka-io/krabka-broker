@@ -34,26 +34,18 @@ impl Default for RegisteredFeatureRanges {
     fn default() -> Self { Self(krabka_metadata::supported_feature_ranges()) }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-struct RemoteFeatureSetup {
-    #[default(NodeId(2))]
-    node_id: NodeId,
-    ranges: RegisteredFeatureRanges,
-}
-
 #[bon::builder]
 fn remote_feature_image(
     mut image: krabka_metadata::MetadataImage,
     #[builder(into, default = NodeId (2))] node_id: NodeId,
     #[builder(into, default)] ranges: RegisteredFeatureRanges,
 ) -> krabka_metadata::MetadataImage {
-    let setup = RemoteFeatureSetup { node_id, ranges };
     image.apply(&MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
             host: String::new(),
             port: 0,
-            features: setup.ranges.0,
-            ..broker_registration(setup.node_id)
+            features: ranges.0,
+            ..broker_registration(node_id)
         },
     ));
     image

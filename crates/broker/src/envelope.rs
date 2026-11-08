@@ -947,16 +947,6 @@ mod tests {
         Flexible,
     }
 
-    #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    struct ForwardedResponseSetup {
-        #[default(krabka_ids::ApiKey(19))]
-        api_key: krabka_ids::ApiKey,
-        api_version: krabka_ids::ApiVersion,
-        #[default(EmbeddedCorrelationId(0x0102_0304))]
-        correlation_id: EmbeddedCorrelationId,
-        encoding: ForwardedBodyEncoding,
-    }
-
     #[bon::builder]
     fn forwarded(
         #[builder(into, default = krabka_ids :: ApiKey (19))] api_key: krabka_ids::ApiKey,
@@ -965,19 +955,13 @@ mod tests {
         correlation_id: EmbeddedCorrelationId,
         #[builder(default)] encoding: ForwardedBodyEncoding,
     ) -> ForwardedRequest {
-        let setup = ForwardedResponseSetup {
-            api_key,
-            api_version,
-            correlation_id,
-            encoding,
-        };
         ForwardedRequest {
-            api_key: setup.api_key.0,
-            api_version: setup.api_version.0,
-            correlation_id: setup.correlation_id.0,
+            api_key: api_key.0,
+            api_version: api_version.0,
+            correlation_id: correlation_id.0,
             client_id: None,
             body: Bytes::new(),
-            body_flexible: matches!(setup.encoding, ForwardedBodyEncoding::Flexible),
+            body_flexible: matches!(encoding, ForwardedBodyEncoding::Flexible),
         }
     }
 

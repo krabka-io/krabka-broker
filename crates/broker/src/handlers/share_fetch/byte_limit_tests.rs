@@ -616,19 +616,6 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
 #[derive(Clone, Copy)]
 struct ShareResponseByteLimit(i32);
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct FetchPartitionsSetup<'a> {
-    #[default("g")]
-    group: &'a str,
-    #[default(ShareSessionEpoch(0))]
-    epoch: ShareSessionEpoch,
-    #[default(WireUuid::ZERO)]
-    topic_id: WireUuid,
-    partitions: TopicPartitionCount,
-    #[default(ShareResponseByteLimit(1 << 20))]
-    maximum: ShareResponseByteLimit,
-}
-
 #[bon::builder]
 fn fetch_partitions(
     #[builder(default = "g")] group: &'_ str,
@@ -637,20 +624,6 @@ fn fetch_partitions(
     #[builder(into, default)] partitions: TopicPartitionCount,
     #[builder(into, default = ShareResponseByteLimit (1 << 20))] maximum: ShareResponseByteLimit,
 ) -> ShareFetchRequest {
-    let setup = FetchPartitionsSetup {
-        group,
-        epoch,
-        topic_id,
-        partitions,
-        maximum,
-    };
-    let FetchPartitionsSetup {
-        group,
-        epoch,
-        topic_id,
-        partitions,
-        maximum,
-    } = setup;
     ShareFetchRequest {
         group_id: Some(group.into()),
         member_id: Some("member".into()),

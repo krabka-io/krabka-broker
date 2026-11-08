@@ -39,16 +39,6 @@ impl Default for ReassignmentTarget {
     fn default() -> Self { Self::Replicas(vec![ReplicaBrokerId(1), ReplicaBrokerId(2)]) }
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ReassignmentRequestSetup<'a> {
-    pub replication_factor_policy: ReplicationFactorPolicy,
-    #[default("orders")]
-    pub topic: &'a str,
-    #[default(krabka_ids::PartitionIndex(7))]
-    pub partition_index: krabka_ids::PartitionIndex,
-    pub target: ReassignmentTarget,
-}
-
 #[bon::builder]
 pub(super) fn request(
     #[builder(default)] replication_factor_policy: ReplicationFactorPolicy,
@@ -57,18 +47,6 @@ pub(super) fn request(
     partition_index: krabka_ids::PartitionIndex,
     #[builder(default)] target: ReassignmentTarget,
 ) -> AlterPartitionReassignmentsRequest {
-    let setup = ReassignmentRequestSetup {
-        replication_factor_policy,
-        topic,
-        partition_index,
-        target,
-    };
-    let ReassignmentRequestSetup {
-        replication_factor_policy,
-        topic,
-        partition_index,
-        target,
-    } = setup;
     AlterPartitionReassignmentsRequest {
         timeout_ms: 30_000,
         allow_replication_factor_change: replication_factor_policy
@@ -95,13 +73,6 @@ krabka_macros::wire_codec_helpers! {
     pub(super) test_context ["admin-client"];
 }
 
-/// A registered six-broker image with one partition in the supplied reassignment state.
-#[derive(Clone, krabka_macros::FieldDefaults)]
-pub(super) struct ReassignmentImageSetup<'a> {
-    pub assignment: ReassignmentSetup<'a>,
-    pub partition_epoch: PartitionEpoch,
-}
-
 /// The in-progress replacement of broker two by broker three.
 pub(super) fn pending_reassignment_image() -> MetadataImage {
     img_with()
@@ -113,19 +84,12 @@ pub(super) fn pending_reassignment_image() -> MetadataImage {
         .call()
 }
 
+/// A registered six-broker image with one partition in the supplied reassignment state.
 #[bon::builder]
 pub(super) fn img_with(
     #[builder(default)] assignment: ReassignmentSetup<'_>,
     #[builder(into, default)] partition_epoch: PartitionEpoch,
 ) -> MetadataImage {
-    let setup = ReassignmentImageSetup {
-        assignment,
-        partition_epoch,
-    };
-    let ReassignmentImageSetup {
-        assignment,
-        partition_epoch,
-    } = setup;
     let replica_count = assignment.replicas.len();
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     // Register brokers 1..=6 so validate_target accepts target lists.

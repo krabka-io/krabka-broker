@@ -730,16 +730,6 @@ enum RequestHeader {
     Flexible,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct EncodedFrameSetup {
-    #[default(krabka_ids::ApiKey(18))]
-    api_key: krabka_ids::ApiKey,
-    api_version: krabka_ids::ApiVersion,
-    #[default(FrameCorrelationId(1))]
-    correlation_id: FrameCorrelationId,
-    header: RequestHeader,
-}
-
 #[bon::builder]
 fn encoded_request_frame<T: krabka_protocol::Encode>(
     body: &T,
@@ -748,20 +738,14 @@ fn encoded_request_frame<T: krabka_protocol::Encode>(
     #[builder(into, default = FrameCorrelationId (1))] correlation_id: FrameCorrelationId,
     #[builder(default)] header: RequestHeader,
 ) -> bytes::Bytes {
-    let setup = EncodedFrameSetup {
-        api_key,
-        api_version,
-        correlation_id,
-        header,
-    };
-    let mut encoded = BytesMut::with_capacity(body.encoded_len(setup.api_version.0));
-    body.encode(&mut encoded, setup.api_version.0)
+    let mut encoded = BytesMut::with_capacity(body.encoded_len(api_version.0));
+    body.encode(&mut encoded, api_version.0)
         .expect("encode request body");
-    let tagged = matches!(setup.header, RequestHeader::Flexible).then_some(&[0][..]);
+    let tagged = matches!(header, RequestHeader::Flexible).then_some(&[0][..]);
     request_frame()
-        .api_key(setup.api_key)
-        .api_version(setup.api_version)
-        .correlation_id(setup.correlation_id)
+        .api_key(api_key)
+        .api_version(api_version)
+        .correlation_id(correlation_id)
         .maybe_tagged(tagged)
         .body(&encoded)
         .call()

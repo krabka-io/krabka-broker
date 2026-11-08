@@ -34,38 +34,24 @@ use {
     uuid::Uuid,
 };
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct ReassignableSeedSetup<'a> {
-    #[default(&[NodeId(1)])]
-    replicas: &'a [NodeId],
-    isr: Option<&'a [NodeId]>,
-    #[default(&[])]
-    adding: &'a [NodeId],
-}
-
 #[bon::builder]
 fn reassignable_seed_record(
     #[builder(default = & [NodeId (1)])] replicas: &'_ [NodeId],
     isr: Option<&'_ [NodeId]>,
     #[builder(default = & [])] adding: &'_ [NodeId],
 ) -> PartitionRecord {
-    let setup = ReassignableSeedSetup {
-        replicas,
-        isr,
-        adding,
-    };
     let mut record = PartitionRecord {
         leader_epoch: LeaderEpoch(3),
         partition_epoch: 11,
         ..replicated_partition()
             .partition(7)
-            .replicas(setup.replicas)
+            .replicas(replicas)
             .call()
     };
-    if let Some(isr) = setup.isr {
+    if let Some(isr) = isr {
         record.isr = isr.to_vec();
     }
-    record.adding_replicas = setup.adding.to_vec();
+    record.adding_replicas = adding.to_vec();
     record
 }
 

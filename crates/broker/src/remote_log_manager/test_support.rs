@@ -93,68 +93,31 @@ pub fn tier<'a>(
         .call()
 }
 
-/// Policies and resources for a test tier. Counter assertions override the shared metrics.
-#[derive(Clone, Copy)]
-pub struct TierSetup<'a> {
-    pub archive: ArchiveMode,
-    pub copy_timeout: krabka_units::Time,
-    pub unstable_api_versions: UnstableApiVersions,
-    pub metrics: &'a BrokerMetrics,
-    pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
-    pub copy_quota: &'a RlmQuotaManager,
-    pub copies_in_flight: &'a CopiesInFlight,
-}
-
-impl Default for TierSetup<'_> {
-    fn default() -> Self {
-        Self {
-            archive: ArchiveMode::Mutable,
-            copy_timeout: TEST_COPY_TIMEOUT,
-            unstable_api_versions: UnstableApiVersions::Disabled,
-            metrics: shared_test_metrics(),
-            index_cache: shared_test_index_cache(),
-            copy_quota: shared_test_copy_quota(),
-            copies_in_flight: shared_test_copies_in_flight(),
-        }
-    }
-}
-
 /// A tier borrowing its backends and the selected test resources.
 #[bon::builder]
 pub fn configured_tier<'a>(
     rsm: &'a Arc<dyn RemoteStorageManager>,
     rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
-    #[builder(default = TierSetup::default().archive)] archive: ArchiveMode,
-    #[builder(default = TierSetup::default().copy_timeout)] copy_timeout: krabka_units::Time,
-    #[builder(default = TierSetup::default().unstable_api_versions)]
-    unstable_api_versions: UnstableApiVersions,
-    #[builder(default = TierSetup::default().metrics)] metrics: &'a BrokerMetrics,
-    #[builder(default = TierSetup::default().index_cache)] index_cache: &'a Arc<
+    #[builder(default = ArchiveMode::Mutable)] archive: ArchiveMode,
+    #[builder(default = TEST_COPY_TIMEOUT)] copy_timeout: krabka_units::Time,
+    #[builder(default = UnstableApiVersions::Disabled)] unstable_api_versions: UnstableApiVersions,
+    #[builder(default = shared_test_metrics())] metrics: &'a BrokerMetrics,
+    #[builder(default = shared_test_index_cache())] index_cache: &'a Arc<
         krabka_remote_storage::RemoteIndexCache,
     >,
-    #[builder(default = TierSetup::default().copy_quota)] copy_quota: &'a RlmQuotaManager,
-    #[builder(default = TierSetup::default().copies_in_flight)]
-    copies_in_flight: &'a CopiesInFlight,
+    #[builder(default = shared_test_copy_quota())] copy_quota: &'a RlmQuotaManager,
+    #[builder(default = shared_test_copies_in_flight())] copies_in_flight: &'a CopiesInFlight,
 ) -> RemoteTier<'a> {
-    let setup = TierSetup {
+    RemoteTier {
         archive,
-        copy_timeout,
-        unstable_api_versions,
+        rsm,
+        rlmm,
         metrics,
         index_cache,
         copy_quota,
+        copy_timeout,
         copies_in_flight,
-    };
-    RemoteTier {
-        archive: setup.archive,
-        rsm,
-        rlmm,
-        metrics: setup.metrics,
-        index_cache: setup.index_cache,
-        copy_quota: setup.copy_quota,
-        unstable_api_versions: setup.unstable_api_versions,
-        copy_timeout: setup.copy_timeout,
-        copies_in_flight: setup.copies_in_flight,
+        unstable_api_versions,
     }
 }
 
@@ -413,32 +376,12 @@ pub fn leading_partition_over(index: PartitionIndex, log_dir: &Path, log: Log) -
 
 /// A sealed-segment export with no files behind it, whose file was last
 /// modified at its newest record's timestamp.
-#[derive(krabka_macros::FieldDefaults)]
-pub struct SegmentExportSetup {
-    #[default(Offset(0)..=Offset(9))]
-    pub bounds: RangeInclusive<Offset>,
-    #[default(UnixMillis(100))]
-    pub timestamp: UnixMillis,
-    #[default(bytes(64))]
-    pub size: ByteSize,
-}
-
 #[bon::builder]
 pub fn synth_export(
     #[builder(default = Offset (0) ..= Offset (9))] bounds: RangeInclusive<Offset>,
     #[builder(into, default = UnixMillis (100))] timestamp: UnixMillis,
     #[builder(default = bytes (64))] size: ByteSize,
 ) -> SegmentExport {
-    let setup = SegmentExportSetup {
-        bounds,
-        timestamp,
-        size,
-    };
-    let SegmentExportSetup {
-        bounds,
-        timestamp,
-        size,
-    } = setup;
     let (base_offset, last_offset) = bounds.into_inner();
     SegmentExport {
         base_offset,

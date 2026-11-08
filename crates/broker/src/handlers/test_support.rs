@@ -311,17 +311,6 @@ krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// A partition with the supplied leader and replicas, initially all in ISR.
 /// Callers keep differing ISR, epoch, directory, and reassignment values explicit.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ReplicatedPartitionSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    pub partition: krabka_ids::PartitionIndex,
-    #[default(&[krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)])]
-    pub replicas: &'a [krabka_metadata::NodeId],
-    #[default(krabka_metadata::NodeId(1))]
-    pub leader: krabka_metadata::NodeId,
-}
-
 #[bon::builder]
 pub fn replicated_partition(
     #[builder(default = "orders")] topic: &'_ str,
@@ -330,18 +319,6 @@ pub fn replicated_partition(
     #[builder(default = & [krabka_metadata :: NodeId (1) , krabka_metadata :: NodeId (2)])]
     replicas: &'_ [krabka_metadata::NodeId],
 ) -> krabka_metadata::PartitionRecord {
-    let setup = ReplicatedPartitionSetup {
-        topic,
-        partition,
-        replicas,
-        leader,
-    };
-    let ReplicatedPartitionSetup {
-        topic,
-        partition,
-        leader,
-        replicas,
-    } = setup;
     krabka_metadata::PartitionRecord {
         replicas: replicas.to_vec(),
         isr: replicas.to_vec(),
@@ -1019,16 +996,6 @@ pub async fn share_record_states(
         .collect()
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ClientTopicSetup<'a> {
-    #[default("admin-client")]
-    pub client_id: &'a str,
-    #[default("orders")]
-    pub name: &'a str,
-    #[default(TopicPartitionCount(1))]
-    pub partitions: TopicPartitionCount,
-}
-
 pub struct CreatedTopicResponse {
     pub client: krabka_client_core::Client,
     pub response: CreateTopicsResponse,
@@ -1124,16 +1091,6 @@ pub async fn create_topic(
     #[builder(default = "orders")] name: &'_ str,
     #[builder(into, default = TopicPartitionCount (1))] partitions: TopicPartitionCount,
 ) -> WireUuid {
-    let setup = ClientTopicSetup {
-        client_id,
-        name,
-        partitions,
-    };
-    let ClientTopicSetup {
-        client_id,
-        name,
-        partitions,
-    } = setup;
     let CreatedTopicResponse {
         client: _client,
         response: _response,
@@ -1165,15 +1122,6 @@ pub async fn create_topic(
 pub struct RecordCount(pub i32);
 
 /// Appends one v2 batch of `count` records through the v12 Produce handler.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct ProduceRecordsSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    pub partition_index: krabka_ids::PartitionIndex,
-    #[default(RecordCount(3))]
-    pub count: RecordCount,
-}
-
 #[bon::builder]
 pub async fn produce_records(
     broker: &BrokerHandle,
@@ -1181,16 +1129,6 @@ pub async fn produce_records(
     #[builder(into, default)] partition_index: krabka_ids::PartitionIndex,
     #[builder(into, default = RecordCount (3))] count: RecordCount,
 ) {
-    let setup = ProduceRecordsSetup {
-        topic,
-        partition_index,
-        count,
-    };
-    let ProduceRecordsSetup {
-        topic,
-        partition_index,
-        count,
-    } = setup;
     let request = ProduceRequest {
         acks: -1,
         timeout_ms: 5_000,
@@ -1253,18 +1191,6 @@ pub fn partition(
         .call()
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub struct PartitionSpawnSetup<'a> {
-    #[default("orders")]
-    pub topic: &'a str,
-    pub index: krabka_ids::PartitionIndex,
-    pub log_dir_status: LogDirRegistry,
-    #[default(Arc::new(ProducerState::new()))]
-    pub producer_state: Arc<ProducerState>,
-    pub storage: StorageMode,
-    pub log_config: krabka_log::LogConfig,
-}
-
 #[bon::builder]
 pub fn spawn_partition(
     root: &Path,
@@ -1275,22 +1201,6 @@ pub fn spawn_partition(
     #[builder(default)] storage: StorageMode,
     #[builder(default)] log_config: krabka_log::LogConfig,
 ) -> Arc<Partition> {
-    let setup = PartitionSpawnSetup {
-        topic,
-        index,
-        log_dir_status,
-        producer_state,
-        storage,
-        log_config,
-    };
-    let PartitionSpawnSetup {
-        topic,
-        index,
-        log_dir_status,
-        producer_state,
-        storage,
-        log_config,
-    } = setup;
     let partition_dir = partition_dir(root, topic, index.0);
     fs::create_dir_all(&partition_dir).expect("partition directory");
     spawn_broker_partition(
@@ -1623,16 +1533,6 @@ pub fn share_fetch_topics(
     }]
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub struct BrokerConfigMutationSetup<'a> {
-    #[default(krabka_metadata::NodeId(1))]
-    pub serving: krabka_metadata::NodeId,
-    #[default(&[])]
-    pub log_dirs: &'a [PathBuf],
-    #[default(UnstableApiVersions::Disabled)]
-    pub unstable: UnstableApiVersions,
-}
-
 #[bon::builder]
 pub fn broker_config_context<'a>(
     image: &'a krabka_metadata::MetadataImage,
@@ -1640,16 +1540,11 @@ pub fn broker_config_context<'a>(
     #[builder(default = & [])] log_dirs: &'a [PathBuf],
     #[builder(default = UnstableApiVersions :: Disabled)] unstable: UnstableApiVersions,
 ) -> BrokerConfigContext<'a> {
-    let setup = BrokerConfigMutationSetup {
+    BrokerConfigContext {
+        image,
         serving,
         log_dirs,
         unstable,
-    };
-    BrokerConfigContext {
-        image,
-        serving: setup.serving,
-        log_dirs: setup.log_dirs,
-        unstable: setup.unstable,
     }
 }
 

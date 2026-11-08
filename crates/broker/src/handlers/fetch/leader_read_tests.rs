@@ -142,32 +142,12 @@ async fn partition(
 /// A sessionless one-row fetch of partition 0 of `topic`. A follower fetches
 /// from the log end offset, which moves the high watermark when the leader
 /// records its progress. A consumer fetches from offset 0.
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct LeaderFetchSetup<'a> {
-    #[default(ApiVersion(12))]
-    version: ApiVersion,
-    #[default(Sender::Consumer)]
-    sender: Sender,
-    #[default("orders")]
-    topic: &'a str,
-}
-
 #[bon::builder]
 fn request(
     #[builder(into, default = ApiVersion (12))] version: ApiVersion,
     #[builder(default = Sender :: Consumer)] sender: Sender,
     #[builder(default = "orders")] topic: &'_ str,
 ) -> FetchRequest {
-    let setup = LeaderFetchSetup {
-        version,
-        sender,
-        topic,
-    };
-    let LeaderFetchSetup {
-        version,
-        sender,
-        topic,
-    } = setup;
     let (replica_id, current_leader_epoch, fetch_offset) = match sender {
         Sender::Follower {
             replica_id,

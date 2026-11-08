@@ -13,16 +13,6 @@ use {
 
 pub(super) fn acl_authorizer() -> SimpleAclAuthorizer { SimpleAclAuthorizer::new(HashSet::new()) }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct GroupAclSetup<'a> {
-    #[default("consumer-client")]
-    pub client_id: &'a str,
-    #[default("ANONYMOUS")]
-    pub principal: &'a str,
-    #[default("g")]
-    pub group: &'a str,
-}
-
 /// An anonymous group-read probe is denied against an empty authorizer and image.
 #[bon::builder]
 pub(super) fn check_group_read_denied(
@@ -30,22 +20,12 @@ pub(super) fn check_group_read_denied(
     #[builder(default = "ANONYMOUS")] principal: &'_ str,
     #[builder(default = "g")] group: &'_ str,
 ) {
-    let setup = GroupAclSetup {
-        client_id,
-        principal,
-        group,
-    };
     let authorizer = acl_authorizer();
     let image = MetadataImage::new(uuid::Uuid::nil());
-    let principal = make_principal(setup.principal);
+    let principal = make_principal(principal);
     let peer = peer();
-    let ctx = request_context(&principal, &peer, setup.client_id);
-    assert!(super::group_read_denied(
-        &authorizer,
-        &image,
-        &ctx,
-        setup.group
-    ));
+    let ctx = request_context(&principal, &peer, client_id);
+    assert!(super::group_read_denied(&authorizer, &image, &ctx, group));
 }
 
 /// An operation on a named resource, allowed to `User:alice` from any host.
@@ -148,17 +128,6 @@ use {
     krabka_raft::NodeId,
 };
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(super) struct GroupTopicSetup<'a> {
-    #[default("orders")]
-    pub name: &'a str,
-    pub topic_id: uuid::Uuid,
-    #[default(PartitionCount(2))]
-    pub partitions: PartitionCount,
-    #[default(NodeId(1))]
-    pub node: NodeId,
-}
-
 /// A `V1Topic` record plus one `V1Partition` per index, assigned to
 /// `node`. The KIP-631 wire framing does not carry `TopicRecord.partitions`
 /// -- a decoded `V1Topic` round-trips back at `partitions == 0`, and the
@@ -172,18 +141,6 @@ pub(super) fn topic_with_partitions(
     #[builder(into, default = PartitionCount (2))] partitions: PartitionCount,
     #[builder(into, default = NodeId (1))] node: NodeId,
 ) -> Vec<MetadataRecord> {
-    let setup = GroupTopicSetup {
-        name,
-        topic_id,
-        partitions,
-        node,
-    };
-    let GroupTopicSetup {
-        name,
-        topic_id,
-        partitions,
-        node,
-    } = setup;
     let mut records = vec![topic_record(name, topic_id, partitions)];
     records.extend((0..partitions.0).map(|partition| {
         MetadataRecord::V1Partition(single_replica_partition(
@@ -285,17 +242,6 @@ use {
     std::{net::SocketAddr, sync::Arc},
 };
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct StreamsTopologySetup<'a> {
-    #[default("g")]
-    pub group_id: &'a str,
-    #[default("m1")]
-    pub member_id: &'a str,
-    #[default("in")]
-    pub source_topic: &'a str,
-    pub state_changelog_topics: Vec<TopicInfo>,
-}
-
 #[bon::builder]
 pub(super) fn streams_request_with_topology(
     #[builder(default = "g")] group_id: &'_ str,
@@ -305,18 +251,6 @@ pub(super) fn streams_request_with_topology(
 ) -> StreamsGroupHeartbeatRequest {
     use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
 
-    let setup = StreamsTopologySetup {
-        group_id,
-        member_id,
-        source_topic,
-        state_changelog_topics,
-    };
-    let StreamsTopologySetup {
-        group_id,
-        member_id,
-        source_topic,
-        state_changelog_topics,
-    } = setup;
     streams_join_request()
         .topology(Topology {
             epoch: 1,

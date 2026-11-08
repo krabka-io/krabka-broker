@@ -3013,21 +3013,6 @@ pub(super) enum ConfigMutability {
     ReadOnly,
 }
 
-#[derive(krabka_macros::FieldDefaults)]
-pub(super) struct ExpectedConfigSetup<'a> {
-    #[default("retention.ms")]
-    pub name: &'a str,
-    #[default(Some("604800000"))]
-    pub value: Option<&'a str>,
-    pub mutability: ConfigMutability,
-    #[default(ConfigSourceCode(CONFIG_SOURCE_DEFAULT))]
-    pub source: ConfigSourceCode,
-    pub synonyms: Vec<DescribeConfigsSynonym>,
-    #[default(ConfigTypeCode(ConfigType::Long.wire()))]
-    pub config_type: ConfigTypeCode,
-    pub documentation: Option<String>,
-}
-
 #[bon::builder]
 pub(super) fn expected_config_entry(
     #[builder(default = "retention.ms")] name: &'_ str,
@@ -3039,24 +3024,6 @@ pub(super) fn expected_config_entry(
     config_type: ConfigTypeCode,
     documentation: Option<String>,
 ) -> DescribeConfigsResourceResult {
-    let setup = ExpectedConfigSetup {
-        name,
-        value,
-        mutability,
-        source,
-        synonyms,
-        config_type,
-        documentation,
-    };
-    let ExpectedConfigSetup {
-        name,
-        value,
-        mutability,
-        source,
-        synonyms,
-        config_type,
-        documentation,
-    } = setup;
     krabka_macros::tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_owned(),
         value: value.map(str::to_owned),

@@ -146,21 +146,6 @@ fn expected_configs(overrides: &[ConfigPair<'_>]) -> Vec<CreatableTopicConfigs> 
 }
 
 /// Independent expected response fields, including the config-disclosure outcome.
-#[derive(krabka_macros::FieldDefaults)]
-struct ExpectedTopicSetup<'a> {
-    #[default("orders")]
-    name: &'a str,
-    topic_id: ProtoUuid,
-    error_code: KafkaErrorCode,
-    error_message: Option<String>,
-    #[default(TopicPartitionCount(-1))]
-    num_partitions: TopicPartitionCount,
-    #[default(TopicReplicationFactor(-1))]
-    replication_factor: TopicReplicationFactor,
-    configs: Vec<CreatableTopicConfigs>,
-    topic_config_error_code: KafkaErrorCode,
-}
-
 #[bon::builder]
 fn expected_topic(
     #[builder(default = "orders")] name: &'_ str,
@@ -173,26 +158,6 @@ fn expected_topic(
     #[builder(default)] configs: Vec<CreatableTopicConfigs>,
     #[builder(into, default)] topic_config_error_code: KafkaErrorCode,
 ) -> CreatableTopicResult {
-    let setup = ExpectedTopicSetup {
-        name,
-        topic_id,
-        error_code,
-        error_message,
-        num_partitions,
-        replication_factor,
-        configs,
-        topic_config_error_code,
-    };
-    let ExpectedTopicSetup {
-        name,
-        topic_id,
-        error_code,
-        error_message,
-        num_partitions,
-        replication_factor,
-        configs,
-        topic_config_error_code,
-    } = setup;
     krabka_macros::tagged_wire!(CreatableTopicResult {
         name: name.into(),
         topic_id,

@@ -83,13 +83,6 @@ async fn drive(
         .expect("handle")
 }
 
-#[derive(Default)]
-struct PartitionRowsCaseSetup {
-    topics: Vec<CreatePartitionsTopic>,
-    mutation: PartitionMutation,
-    expected: Vec<CreatePartitionsTopicResult>,
-}
-
 /// Compare complete topic rows, using the supplied context or a fresh admin context.
 #[bon::builder]
 async fn check_topic_rows(
@@ -99,12 +92,7 @@ async fn check_topic_rows(
     #[builder(default)] mutation: PartitionMutation,
     #[builder(default)] expected: Vec<CreatePartitionsTopicResult>,
 ) {
-    let setup = PartitionRowsCaseSetup {
-        topics,
-        mutation,
-        expected,
-    };
-    let request = request(setup.topics, setup.mutation);
+    let request = request(topics, mutation);
     let response = if let Some(ctx) = ctx {
         drive(broker, &request, ctx).await
     } else {
@@ -112,7 +100,7 @@ async fn check_topic_rows(
         let address = peer();
         drive(broker, &request, &test_context(&admin, &address)).await
     };
-    let expected = expected_response(setup.expected);
+    let expected = expected_response(expected);
     assert!(response == expected);
 }
 
