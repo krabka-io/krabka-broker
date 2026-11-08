@@ -56,6 +56,13 @@ Either way the copy pass for that partition stops at the failed segment, so a
 broken tier costs one failed upload per partition per tick, not one per
 segment.
 
+Deletes are logged the same way: `ERROR` `the remote tier refused the delete`
+or `WARN` `the remote tier could not take the delete`. Remote retention stops
+at any failed delete and retries on its next pass. The cascade that
+`DeleteTopics` starts runs once: it stops at a refused delete, carries on past
+one the tier could not take, and leaves the partition `DeletePartitionStarted`
+if any segment is left.
+
 ## Diagnose
 
 1. **The object store.** Copy, fetch and delete all go through the same

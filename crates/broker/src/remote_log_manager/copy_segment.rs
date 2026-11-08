@@ -575,7 +575,9 @@ async fn delete_below_floor(
     debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
            end = copied.end_offset(), floor = floor.0,
            "remote-log-manager: copy finished below the established log start; deleting it");
-    delete_segment_metered(tier.delete_targets(), tp, broker_id, &current).await
+    delete_segment_metered(tier.delete_targets(), tp, broker_id, &current)
+        .await
+        .is_ok()
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.
