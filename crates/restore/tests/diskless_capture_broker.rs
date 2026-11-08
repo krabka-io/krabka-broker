@@ -25,6 +25,7 @@ use {
     krabka_backup::{
         archive::ArchiveArgs,
         capture::capture_key,
+        cli::CaptureSigningArgs,
         manifest::{DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, Manifest},
         run,
     },
@@ -32,6 +33,7 @@ use {
         Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId, RemoteStorageBackend,
         RlmmKind, testing,
     },
+    krabka_cli_connection::SecurityArgs,
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, CreateTopicSpec, TopicMutationOptions,
     },
@@ -308,10 +310,16 @@ async fn capture(bootstrap: &str) -> (TempDir, String) {
         local: Some(backup_root.path().to_path_buf()),
         ..ArchiveArgs::default()
     };
-    let id = run::capture(None, Some(bootstrap), &archive)
-        .await
-        .result
-        .expect("capture a cluster that has a diskless WAL index");
+    let id = run::capture_configured(
+        None,
+        Some(bootstrap),
+        &SecurityArgs::default(),
+        &CaptureSigningArgs::default(),
+        &archive,
+    )
+    .await
+    .result
+    .expect("capture a cluster that has a diskless WAL index");
     (backup_root, id)
 }
 

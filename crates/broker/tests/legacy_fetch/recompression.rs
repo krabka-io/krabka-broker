@@ -1,29 +1,42 @@
 //! Down-conversion of a zstd-compressed v2 batch, which the legacy
-//! `MessageSet` format cannot express and the broker therefore re-compresses
-//! as snappy.
+//! `MessageSet` format cannot express.
 //!
-//! The test reads the codec bits straight out of the wrapper message's
-//! attributes byte, so it pins the codec id (2) that a legacy consumer sees
-//! rather than only the decoded records.
+//! As in Kafka 3.9, the broker does not re-compress the batch with another
+//! codec. A partition whose first batch is zstd answers with
+//! `UNSUPPORTED_COMPRESSION_TYPE` and no records, which is Kafka's
+//! `FetchResponse.partitionResponse`. Kafka leaves that row's records null; the
+//! broker encodes every row with nothing to serve as an empty record set
+//! instead, because a null one drops sarama connections. A partition that holds convertible
+//! batches before the zstd batch answers with those batches alone, as Kafka's
+//! lazy down-conversion stops at the zstd batch.
+//!
+//! The module keeps its earlier name, `recompression`, because it still holds
+//! the compression scenarios of the legacy Fetch path.
 
 use {
     crate::{
         harness::{fetch_legacy_raw, legacy_bytes, produce_batch},
         support::{self, topics::create_named_topic_request},
     },
-    assert2::{assert, check},
+    assert2::assert,
     bytes::Bytes,
+    krabka_broker::codes,
     krabka_compression::CompressionType,
+    krabka_ids::Offset,
     krabka_protocol::{
         Decode,
         kafka_3_6_2::owned::fetch_response::FetchResponse as LegacyFetchResponse,
-        records::{Attributes, Record, RecordBatch},
+        records::{Attributes, Record, RecordBatch, RecordsPayload},
     },
-    krabka_records_legacy::decode_message_set,
+    krabka_records_legacy::{ParsedRecord, decode_message_set},
     rstest::fixture,
     rstest_bdd_macros::{given, scenario, then, when},
     support::InProcess,
 };
+
+/// The `CreateTime` of the uncompressed record, which Fetch v3 carries as the
+/// legacy message's timestamp.
+const PLAIN_TIMESTAMP: i64 = 1_700_000_000_000;
 
 struct LegacyCompression {
     process: Option<InProcess>,
@@ -40,16 +53,12 @@ fn compression() -> LegacyCompression {
     }
 }
 
-#[given("a modern topic holds fifty zstd-compressed records with distinct boundary keys")]
-async fn zstd_records(compression: &mut LegacyCompression) {
+/// Starts a legacy-enabled broker with one single-partition topic.
+async fn start_with_topic(topic: &str) -> InProcess {
     let process = support::start_legacy().await;
     let created = process
         .client
-        .send(
-            create_named_topic_request()
-                .name("legacy_fetch_zstd")
-                .call(),
-        )
+        .send(create_named_topic_request().name(topic).call())
         .await
         .expect("CreateTopics");
     assert!(
@@ -57,6 +66,10 @@ async fn zstd_records(compression: &mut LegacyCompression) {
         "CreateTopics error: {}",
         created.topics[0].error_code
     );
+    process
+}
+
+fn zstd_batch() -> RecordBatch {
     let records = (0_i32..50)
         .map(|index| Record {
             offset_delta: index,
@@ -68,76 +81,126 @@ async fn zstd_records(compression: &mut LegacyCompression) {
             ..Default::default()
         })
         .collect();
-    let batch = RecordBatch {
+    RecordBatch {
         attributes: Attributes::default().with_compression(CompressionType::Zstd),
         last_offset_delta: 49,
         records,
         ..Default::default()
-    };
-    produce_batch(process.broker.listen_addr(), "legacy_fetch_zstd", batch).await;
-    compression.process = Some(process);
+    }
 }
 
-#[when("a Fetch v3 consumer reads the zstd-compressed modern batch")]
-async fn fetch_zstd(compression: &mut LegacyCompression) {
+fn plain_batch() -> RecordBatch {
+    RecordBatch {
+        base_timestamp: PLAIN_TIMESTAMP,
+        max_timestamp: PLAIN_TIMESTAMP,
+        records: vec![Record {
+            key: Some(Bytes::from_static(b"plain-key")),
+            value: Some(Bytes::from_static(b"plain-value")),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+async fn fetch_v3(compression: &mut LegacyCompression, topic: &str) {
     let process = compression
         .process
         .as_ref()
-        .expect("zstd records were produced");
-    let body = fetch_legacy_raw(process.broker.listen_addr(), "legacy_fetch_zstd", 3).await;
+        .expect("the topic was produced to");
+    let body = fetch_legacy_raw(process.broker.listen_addr(), topic, 3).await;
     compression.response = Some(
         LegacyFetchResponse::decode(&mut body.as_slice(), 3)
             .expect("decode legacy Fetch v3 response"),
     );
 }
 
-fn converted_payload(compression: &LegacyCompression) -> Bytes {
+#[given("a modern topic holds fifty zstd-compressed records")]
+async fn zstd_records(compression: &mut LegacyCompression) {
+    let process = start_with_topic("legacy_fetch_zstd").await;
+    produce_batch(
+        process.broker.listen_addr(),
+        "legacy_fetch_zstd",
+        zstd_batch(),
+    )
+    .await;
+    compression.process = Some(process);
+}
+
+#[given("a modern topic holds an uncompressed record followed by fifty zstd-compressed records")]
+async fn mixed_records(compression: &mut LegacyCompression) {
+    let process = start_with_topic("legacy_fetch_mixed").await;
+    let addr = process.broker.listen_addr();
+    produce_batch(addr, "legacy_fetch_mixed", plain_batch()).await;
+    produce_batch(addr, "legacy_fetch_mixed", zstd_batch()).await;
+    compression.process = Some(process);
+}
+
+#[when("a Fetch v3 consumer reads the zstd-compressed partition from its start")]
+async fn fetch_zstd(compression: &mut LegacyCompression) {
+    fetch_v3(compression, "legacy_fetch_zstd").await;
+}
+
+#[when("a Fetch v3 consumer reads the mixed partition from its start")]
+async fn fetch_mixed(compression: &mut LegacyCompression) {
+    fetch_v3(compression, "legacy_fetch_mixed").await;
+}
+
+#[then("the partition reports UNSUPPORTED_COMPRESSION_TYPE with an empty record set")]
+fn unsupported_compression(compression: &LegacyCompression) {
     let response = compression.response.as_ref().expect("Fetch completed");
     let partition = &response.responses[0].partitions[0];
-    legacy_bytes(
+    assert!(
+        (partition.error_code, &partition.records)
+            == (
+                codes::UNSUPPORTED_COMPRESSION_TYPE,
+                &Some(RecordsPayload::Legacy(Bytes::new()))
+            ),
+        "expected UNSUPPORTED_COMPRESSION_TYPE with an empty record set"
+    );
+}
+
+#[then("the partition succeeds with only the uncompressed record")]
+fn only_plain_record(compression: &LegacyCompression) {
+    let response = compression.response.as_ref().expect("Fetch completed");
+    let partition = &response.responses[0].partitions[0];
+    let bytes = legacy_bytes(
         partition.error_code,
         partition.records.as_ref(),
         "Fetch v3 must return a Legacy MessageSet",
-    )
-}
-
-#[then("the legacy wrapper advertises snappy compression codec two")]
-fn snappy_wrapper(compression: &LegacyCompression) {
-    let bytes = converted_payload(compression);
+    );
+    let records =
+        decode_message_set(&mut bytes.as_ref(), bytes.len()).expect("decode legacy MessageSet");
     assert!(
-        bytes.len() > 17,
-        "expected nonempty legacy bytes, got len={}",
-        bytes.len()
-    );
-    let codec = bytes[17] & 0x07;
-    assert!(codec == 2, "expected snappy codec id two, got {codec}");
-}
-
-#[then("all fifty records decode with boundary keys key-0000 and key-0049")]
-fn compression_boundaries(compression: &LegacyCompression) {
-    let bytes = converted_payload(compression);
-    let records = decode_message_set(&mut bytes.as_ref(), bytes.len())
-        .expect("decode snappy-recompressed MessageSet");
-    assert!(
-        records.len() == 50,
-        "expected fifty records after snappy decompression"
-    );
-    check!(
-        records[0].key.as_deref() == Some(b"key-0000".as_ref()),
-        "first record key mismatch"
-    );
-    check!(
-        records[49].key.as_deref() == Some(b"key-0049".as_ref()),
-        "last record key mismatch"
+        records
+            == vec![ParsedRecord {
+                offset: Offset(0),
+                timestamp: Some(PLAIN_TIMESTAMP),
+                key: Some(Bytes::from_static(b"plain-key")),
+                value: Some(Bytes::from_static(b"plain-value")),
+            }]
     );
 }
 
 #[scenario(
     path = "tests/features/migrated/tests/legacy_fetch/recompression.feature",
-    name = "A legacy consumer receives a snappy rewrite of modern zstd records"
+    name = "A legacy consumer gets UNSUPPORTED_COMPRESSION_TYPE for a partition of zstd records"
 )]
 #[tokio::test]
-async fn fetch_v3_recompresses_zstd_as_snappy(compression: LegacyCompression) {
+async fn fetch_v3_refuses_zstd_partition(compression: LegacyCompression) {
+    compression
+        .process
+        .expect("a broker was started")
+        .broker
+        .shutdown()
+        .await;
+}
+
+#[scenario(
+    path = "tests/features/migrated/tests/legacy_fetch/recompression.feature",
+    name = "A legacy consumer receives the records written before the first zstd batch"
+)]
+#[tokio::test]
+async fn fetch_v3_stops_before_zstd_batch(compression: LegacyCompression) {
     compression
         .process
         .expect("a broker was started")

@@ -7,9 +7,9 @@
 //! a backup, and a failed rename puts that backup back.
 
 use {
-    crate::error::BrokerError,
+    crate::{error::BrokerError, wal::quorum::durable_file::replace_file_durably},
     krabka_kraft_core::NodeId,
-    std::{fs, io::Write as _, path::Path},
+    std::{fs, path::Path},
 };
 
 pub(super) const QUORUM_STATE_FILE: &str = "quorum-state.json";
@@ -130,47 +130,13 @@ pub(super) fn persist_quorum_membership(
             path.display()
         ))
     })?;
-    let temporary = path.with_extension("json.tmp");
-    let mut file = fs::File::create(&temporary)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    drop(file);
-
-    let backup = root.join(QUORUM_STATE_BACKUP_FILE);
-    if backup.exists() {
-        if path.exists() {
-            fs::remove_file(&backup)?;
-        } else {
-            fs::rename(&backup, &path)?;
-        }
-    }
-    if path.exists() {
-        fs::rename(&path, &backup)?;
-    }
-    if let Err(error) = fs::rename(&temporary, &path) {
-        restore_membership_backup(&backup, &path);
-        return Err(error.into());
-    }
-    if backup.exists() {
-        fs::remove_file(&backup)?;
-    }
-
-    // A durable file is not enough on filesystems where the rename itself is
-    // only stable after the parent directory is synced. Rust does not expose
-    // directory handles that can be flushed on Windows; the file sync above is
-    // the strongest portable guarantee there, matching `krabka-log`.
-    #[cfg(unix)]
-    fs::File::open(root)?.sync_all()?;
+    replace_file_durably(
+        &path,
+        &path.with_extension("json.tmp"),
+        &root.join(QUORUM_STATE_BACKUP_FILE),
+        &bytes,
+    )?;
     Ok(())
-}
-
-fn restore_membership_backup(backup: &Path, path: &Path) {
-    if matches!(
-        (backup.try_exists(), path.try_exists()),
-        (Ok(true), Ok(false))
-    ) {
-        let _ = fs::rename(backup, path);
-    }
 }
 
 #[cfg(test)]
@@ -272,25 +238,6 @@ mod tests {
         .unwrap();
 
         assert!(!load_or_prepare_quorum_membership(root.path(), &voter_ids).unwrap());
-    }
-
-    #[test]
-    fn quorum_membership_restore_only_uses_a_backup_when_the_primary_is_missing() {
-        let root = tempfile::tempdir().unwrap();
-        let primary = root.path().join(QUORUM_STATE_FILE);
-        let backup = root.path().join(QUORUM_STATE_BACKUP_FILE);
-        fs::write(&backup, b"backup-only").unwrap();
-
-        restore_membership_backup(&backup, &primary);
-
-        assert!(fs::read(&primary).unwrap() == b"backup-only");
-        assert!(!backup.exists());
-
-        fs::write(&primary, b"current").unwrap();
-        fs::write(&backup, b"stale-backup").unwrap();
-        restore_membership_backup(&backup, &primary);
-        assert!(fs::read(&primary).unwrap() == b"current");
-        assert!(fs::read(&backup).unwrap() == b"stale-backup");
     }
 
     /// The exact bytes a 1.x broker writes for voters `[0, 1, 2]`. A change

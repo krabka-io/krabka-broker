@@ -114,7 +114,7 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
                 == Cleaned {
                     log_start: 0,
                     first_segment: true,
-                    snapshots: vec![(first, 1)],
+                    snapshots: vec![SnapshotId::new(first, 1)],
                 },
             "{what}: one snapshot cleans nothing"
         );
@@ -122,13 +122,13 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
             Cleaned {
                 log_start: second,
                 first_segment: false,
-                snapshots: vec![(first, 1), (second, 1)],
+                snapshots: vec![SnapshotId::new(first, 1), SnapshotId::new(second, 1)],
             }
         } else {
             Cleaned {
                 log_start: 0,
                 first_segment: true,
-                snapshots: vec![(first, 1), (second, 1)],
+                snapshots: vec![SnapshotId::new(first, 1), SnapshotId::new(second, 1)],
             }
         };
         check!(cleaned(&engine) == want, "{what}");
@@ -148,12 +148,12 @@ fn a_later_cleaning_deletes_the_snapshot_an_earlier_one_kept() {
     for (name, id) in [("first", 1), ("second", 2), ("third", 3)] {
         commit_topic(&mut engine, name, id);
         engine.write_snapshot_and_clean().expect("snapshot");
-        ids.push((engine.log.hwm().0, 1));
+        ids.push(SnapshotId::new(engine.log.hwm().0, 1));
     }
     check!(
         cleaned(&engine)
             == Cleaned {
-                log_start: ids[2].0,
+                log_start: ids[2].end_offset,
                 first_segment: false,
                 snapshots: vec![ids[1], ids[2]],
             }

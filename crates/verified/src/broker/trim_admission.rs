@@ -165,8 +165,8 @@ pub fn effective_share_backlog_model(hwm: i64, spso: i64, log_start: i64) -> Int
         let difference = hwm@ - base;
         if difference <= 0 {
             0
-        } else if difference > 9223372036854775807 {
-            9223372036854775807
+        } else if difference > i64::MAX@ {
+            i64::MAX@
         } else {
             difference
         }

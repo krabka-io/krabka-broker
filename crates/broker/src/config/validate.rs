@@ -239,9 +239,9 @@ impl BrokerConfig {
     fn validate_groups(&self) -> Result<(), BrokerError> {
         let consumer = &self.next_gen_consumer_group;
         consumer.validate_assignors()?;
-        validate_group_bounds("consumer group", &group_timeout_bounds!(consumer))?;
-        validate_group_bounds("share group", &group_timeout_bounds!(&self.share_group))?;
-        validate_group_bounds("streams group", &group_timeout_bounds!(&self.streams_group))
+        group_timeout_bounds!(consumer).validate("consumer group")?;
+        group_timeout_bounds!(&self.share_group).validate("share group")?;
+        group_timeout_bounds!(&self.streams_group).validate("streams group")
     }
 
     /// The SASL mechanisms `listener` enables: its own, else the broker-wide
@@ -496,39 +496,40 @@ struct GroupTimeoutBounds {
     max_size: usize,
 }
 
-/// Checks `bounds` for the group kind `name` and reports the first bound it
-/// breaks, naming the group in the message.
-fn validate_group_bounds(name: &str, bounds: &GroupTimeoutBounds) -> Result<(), BrokerError> {
-    let invalid = |problem: &str| {
-        Err(BrokerError::InvalidRuntimeConfig(format!(
-            "{name} {problem}"
-        )))
-    };
-    if bounds.min_session_timeout.is_zero() {
-        return invalid("minimum session timeout must be positive");
+impl GroupTimeoutBounds {
+    /// Checks these bounds for the group kind `name` and reports the first
+    /// bound they break, naming the group in the message.
+    fn validate(&self, name: &str) -> Result<(), BrokerError> {
+        let invalid = |problem: &str| {
+            Err(BrokerError::InvalidRuntimeConfig(format!(
+                "{name} {problem}"
+            )))
+        };
+        if self.min_session_timeout.is_zero() {
+            return invalid("minimum session timeout must be positive");
+        }
+        if self.min_session_timeout > self.max_session_timeout {
+            return invalid("minimum session timeout exceeds maximum");
+        }
+        if !(self.min_session_timeout..=self.max_session_timeout).contains(&self.session_timeout) {
+            return invalid("session timeout is outside its bounds");
+        }
+        if self.min_heartbeat_interval.is_zero() {
+            return invalid("minimum heartbeat interval must be positive");
+        }
+        if self.min_heartbeat_interval > self.max_heartbeat_interval {
+            return invalid("minimum heartbeat interval exceeds maximum");
+        }
+        if !(self.min_heartbeat_interval..=self.max_heartbeat_interval)
+            .contains(&self.heartbeat_interval)
+        {
+            return invalid("heartbeat interval is outside its bounds");
+        }
+        if self.max_size == 0 {
+            return invalid("maximum size must be positive");
+        }
+        Ok(())
     }
-    if bounds.min_session_timeout > bounds.max_session_timeout {
-        return invalid("minimum session timeout exceeds maximum");
-    }
-    if !(bounds.min_session_timeout..=bounds.max_session_timeout).contains(&bounds.session_timeout)
-    {
-        return invalid("session timeout is outside its bounds");
-    }
-    if bounds.min_heartbeat_interval.is_zero() {
-        return invalid("minimum heartbeat interval must be positive");
-    }
-    if bounds.min_heartbeat_interval > bounds.max_heartbeat_interval {
-        return invalid("minimum heartbeat interval exceeds maximum");
-    }
-    if !(bounds.min_heartbeat_interval..=bounds.max_heartbeat_interval)
-        .contains(&bounds.heartbeat_interval)
-    {
-        return invalid("heartbeat interval is outside its bounds");
-    }
-    if bounds.max_size == 0 {
-        return invalid("maximum size must be positive");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1064,6 +1065,76 @@ mod tests {
                 invalidate: |c| c.next_gen_consumer_group.max_size = 0,
             },
         ]);
+    }
+
+    /// Valid bounds every case below breaks in one place.
+    fn valid_bounds() -> GroupTimeoutBounds {
+        GroupTimeoutBounds {
+            session_timeout: Duration::from_secs(30),
+            heartbeat_interval: Duration::from_secs(4),
+            min_session_timeout: Duration::from_secs(20),
+            max_session_timeout: Duration::from_secs(40),
+            min_heartbeat_interval: Duration::from_secs(2),
+            max_heartbeat_interval: Duration::from_secs(8),
+            max_size: 1,
+        }
+    }
+
+    /// Each broken relation yields one exact message for every group kind,
+    /// and the checks run in this order.
+    #[test]
+    fn each_group_kind_reports_each_broken_bound() {
+        type Break = fn(&mut GroupTimeoutBounds);
+        let breaks: [(Break, &str); 8] = [
+            (
+                |b| {
+                    b.min_session_timeout = Duration::ZERO;
+                    b.min_heartbeat_interval = Duration::ZERO;
+                },
+                "minimum session timeout must be positive",
+            ),
+            (
+                |b| b.min_session_timeout = Duration::from_secs(41),
+                "minimum session timeout exceeds maximum",
+            ),
+            (
+                |b| b.session_timeout = Duration::from_secs(19),
+                "session timeout is outside its bounds",
+            ),
+            (
+                |b| b.session_timeout = Duration::from_secs(41),
+                "session timeout is outside its bounds",
+            ),
+            (
+                |b| {
+                    b.min_heartbeat_interval = Duration::ZERO;
+                    b.max_size = 0;
+                },
+                "minimum heartbeat interval must be positive",
+            ),
+            (
+                |b| b.min_heartbeat_interval = Duration::from_secs(9),
+                "minimum heartbeat interval exceeds maximum",
+            ),
+            (
+                |b| b.heartbeat_interval = Duration::from_secs(9),
+                "heartbeat interval is outside its bounds",
+            ),
+            (|b| b.max_size = 0, "maximum size must be positive"),
+        ];
+        for kind in ["consumer group", "share group", "streams group"] {
+            assert!(let Ok(()) = valid_bounds().validate(kind));
+            for (break_bound, problem) in breaks {
+                let mut bounds = valid_bounds();
+                break_bound(&mut bounds);
+                match bounds.validate(kind) {
+                    Err(BrokerError::InvalidRuntimeConfig(message)) => {
+                        check!(message == format!("{kind} {problem}"));
+                    }
+                    other => panic!("{kind}: {problem}: got {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]

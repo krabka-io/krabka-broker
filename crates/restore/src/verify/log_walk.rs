@@ -5,7 +5,7 @@
 //! check below it consumes the `end_offset` this pass establishes.
 
 use {
-    super::offset_as_u64,
+    super::{batch_record_count, offset_as_u64},
     crate::{discover::SegmentInventory, error::RestoreError},
     krabka_ids::Offset,
     krabka_protocol::records::{RecordsError, validate_one_v2_batch},
@@ -103,8 +103,7 @@ pub(super) fn walk_log(
         minimum_base = next_base;
         end_offset = Some(Offset(next_base - 1));
         batches += 1;
-        records =
-            records.saturating_add(u64::try_from(header.records_count.get().max(0)).unwrap_or(0));
+        records = records.saturating_add(batch_record_count(header.records_count.get()));
         let timestamp = header.max_timestamp.get();
         if timestamp != -1 {
             max_timestamp_ms = max_timestamp_ms.max(timestamp);

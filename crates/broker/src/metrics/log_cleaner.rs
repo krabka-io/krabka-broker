@@ -43,7 +43,7 @@ impl BrokerMetrics {
         partition: i32,
         reason: CleanerFailureReason,
     ) {
-        record_failure(&self.log_cleaner_failures, topic, partition, reason);
+        self.record_failure(&self.log_cleaner_failures, topic, partition, reason);
     }
 
     /// Account one clean local-retention sweep (a full pass that failed no
@@ -63,7 +63,7 @@ impl BrokerMetrics {
         partition: i32,
         reason: CleanerFailureReason,
     ) {
-        record_failure(&self.log_retention_failures, topic, partition, reason);
+        self.record_failure(&self.log_retention_failures, topic, partition, reason);
     }
 
     /// Publish the count of partitions whose most recent compaction attempt
@@ -75,21 +75,41 @@ impl BrokerMetrics {
         self.log_cleaner_uncleanable_partitions
             .set(i64::try_from(count).unwrap_or(i64::MAX));
     }
-}
 
-fn record_failure(
-    family: &Family<CleanerFailureLabel, Counter>,
-    topic: &str,
-    partition: i32,
-    reason: CleanerFailureReason,
-) {
-    family
-        .get_or_create(&CleanerFailureLabel {
-            topic: Arc::from(topic),
-            partition,
-            reason,
-        })
-        .inc();
+    /// Counts one failure under `reason`, and tracks the partition so its
+    /// eviction reaches this series even when nothing else was recorded
+    /// for it.
+    fn record_failure(
+        &self,
+        family: &Family<CleanerFailureLabel, Counter>,
+        topic: &str,
+        partition: i32,
+        reason: CleanerFailureReason,
+    ) {
+        let topic: Arc<str> = Arc::from(topic);
+        family
+            .get_or_create(&CleanerFailureLabel {
+                topic: Arc::clone(&topic),
+                partition,
+                reason,
+            })
+            .inc();
+        self.track_partition_series(&PartitionLabel { topic, partition });
+    }
+
+    /// Drops the compaction and retention failure series of `label`, under
+    /// every reason.
+    pub(super) fn evict_failure_series(&self, label: &PartitionLabel) {
+        for family in [&self.log_cleaner_failures, &self.log_retention_failures] {
+            for reason in CleanerFailureReason::ALL {
+                family.remove(&CleanerFailureLabel {
+                    topic: Arc::clone(&label.topic),
+                    partition: label.partition,
+                    reason,
+                });
+            }
+        }
+    }
 }
 
 /// Compaction and retention classify failures identically for operator metrics.

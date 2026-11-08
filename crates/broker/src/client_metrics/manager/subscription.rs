@@ -5,7 +5,7 @@
 
 use {
     super::{ClientAttributes, ComputedSubscription},
-    crate::client_metrics::config::{self, ALL_METRICS, MatchRule},
+    crate::client_metrics::config::{self, ALL_METRICS, MatchRule, MatchSelector},
     krabka_java_regex::MatchError,
     krabka_metadata::MetadataImage,
     krabka_protocol::records::crc32c,
@@ -16,6 +16,23 @@ use {
     },
     uuid::Uuid,
 };
+
+/// A `match` selector of a subscription that the matcher could not test
+/// against a client: the search ran past the backtrack limit, or the input
+/// was one the matcher refuses.
+///
+/// Java's `Matcher.matches()` answers every such test, however slowly, so
+/// reading the failure as no match would hide the subscription from the
+/// client without a word. The request fails instead, as an SSL principal
+/// mapping rule past the limit fails the connection.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("subscription {subscription}: cannot test its {selector:?} selector: {source}")]
+pub struct SelectorError {
+    pub subscription: String,
+    pub selector: MatchSelector,
+    #[source]
+    pub source: MatchError,
+}
 
 /// One subscription's configs and the parts of them that matching reads,
 /// parsed when the subscription changes rather than once per client.
@@ -121,17 +138,13 @@ impl Subscriptions {
     ///
     /// # Errors
     ///
-    /// [`MatchError`] when a `match` pattern runs past the backtrack limit
-    /// against the client's attributes. Java answers such a pattern, so
-    /// reading the limit as no match would leave the client out of a
-    /// subscription Java may give it, and reading it as a match would add one
-    /// Java may not. The caller rejects the request instead, as the SSL
-    /// principal mapper rejects the name.
+    /// A [`SelectorError`] for the first `match` selector that the matcher
+    /// cannot test against `attrs`.
     pub(crate) fn compute(
         &self,
         attrs: &ClientAttributes,
         default_interval_ms: i32,
-    ) -> Result<ComputedSubscription, MatchError> {
+    ) -> Result<ComputedSubscription, SelectorError> {
         let mut matched_metrics: Vec<String> = Vec::new();
         let mut push_interval_ms = default_interval_ms;
         let mut any_star = false;
@@ -140,7 +153,7 @@ impl Subscriptions {
             let Some(rules) = &compiled.rules else {
                 continue;
             };
-            if !rules_match(rules, attrs)? {
+            if !selectors_match(&compiled.name, rules, attrs)? {
                 continue;
             }
             for m in &compiled.metrics {
@@ -182,16 +195,24 @@ pub fn compute_subscription(
 ) -> ComputedSubscription {
     Subscriptions::from_image(image)
         .compute(attrs, default_interval_ms)
-        .unwrap_or_else(|error| panic!("the subscriptions of the image give no answer: {error}"))
+        .expect("no selector of the test subscriptions fails to test")
 }
 
-/// Kafka's `ClientMetricsManager.isMatched`: every rule of a subscription
-/// matches. The rules are tested in the order the `match` config writes them,
-/// and the first that does not match ends the test, so a pattern after it is
-/// not run and cannot fail the request.
-fn rules_match(rules: &[MatchRule], attrs: &ClientAttributes) -> Result<bool, MatchError> {
+/// Whether every selector of subscription `name` matches `attrs`. Like
+/// Kafka's `ClientMetricsInstanceMetadata.isMatch`, it stops at the first
+/// selector that does not match.
+fn selectors_match(
+    name: &str,
+    rules: &[MatchRule],
+    attrs: &ClientAttributes,
+) -> Result<bool, SelectorError> {
     for rule in rules {
-        if !selector_matches(rule, attrs)? {
+        let matched = selector_matches(rule, attrs).map_err(|source| SelectorError {
+            subscription: name.to_owned(),
+            selector: rule.selector,
+            source,
+        })?;
+        if !matched {
             return Ok(false);
         }
     }
@@ -210,8 +231,7 @@ fn selector_matches(rule: &MatchRule, attrs: &ClientAttributes) -> Result<bool, 
         SourceAddress => (&attrs.source_address).into(),
         SourcePort => attrs.source_port.to_string().into(),
     };
-    // `JavaPattern::matches` is Kafka's full match. A search that runs past the
-    // backtrack limit is an error, which the caller rejects the request by.
+    // `JavaPattern::matches` is Kafka's full match.
     rule.pattern.matches(target.as_ref())
 }
 
@@ -483,7 +503,7 @@ mod tests {
         let unchanged = subscriptions.observe(&img);
         let computed = subscriptions
             .compute(&attrs(), config::INTERVAL_MS_DEFAULT)
-            .expect("the subscriptions give an answer");
+            .unwrap();
         check!((first, unchanged, subscriptions.compilations()) == (true, false, 2));
         let mut metrics = computed.metrics;
         metrics.sort();
@@ -496,7 +516,7 @@ mod tests {
         let changed = subscriptions.observe(&img);
         let computed = subscriptions
             .compute(&attrs(), config::INTERVAL_MS_DEFAULT)
-            .expect("the subscriptions give an answer");
+            .unwrap();
         check!((changed, subscriptions.compilations()) == (true, 3));
         let mut metrics = computed.metrics;
         metrics.sort();
@@ -531,57 +551,30 @@ mod tests {
         );
     }
 
-    /// A pattern that backtracks past the limit on 25 `x`. Java answers it,
-    /// slowly, with no match. A selector cannot hold `=`, which Kafka splits the
-    /// entry on, so the look-ahead is a negative one.
-    const SLOW_PATTERN: &str = "(x+x+)+(?!z)y";
-
-    fn slow_client() -> ClientAttributes {
-        ClientAttributes {
-            client_id: "x".repeat(25),
+    /// A selector that runs the matcher past its backtrack limit fails the
+    /// computation and names its subscription and selector, where it used to
+    /// read as no match.
+    #[test]
+    fn a_selector_past_the_backtrack_limit_names_its_subscription() {
+        let img = img_with("slow", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "match",
+                value: r"client_id=((x+x+)+)\2y",
+            },
+        ]);
+        let client = ClientAttributes {
+            client_id: "x".repeat(29),
             ..attrs()
-        }
-    }
-
-    /// A `match` pattern that runs past the backtrack limit gives no answer:
-    /// the client is neither left out of the subscription nor put in it.
-    #[test]
-    fn a_match_past_the_backtrack_limit_is_an_error() {
-        let img = img_with("slow", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "*",
-            },
-            ConfigEntry {
-                key: "match",
-                value: &format!("client_id={SLOW_PATTERN}"),
-            },
-        ]);
-        let subscriptions = Subscriptions::from_image(&img);
-        assert!(let Err(_) = subscriptions.compute(&slow_client(), config::INTERVAL_MS_DEFAULT));
-    }
-
-    /// A rule that does not match ends the test, so the slow pattern after it
-    /// never runs and the client is simply not subscribed.
-    #[test]
-    fn a_rule_that_does_not_match_stops_before_a_slow_pattern() {
-        let img = img_with("slow", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "*",
-            },
-            ConfigEntry {
-                key: "match",
-                value: &format!("client_software_name=other,client_id={SLOW_PATTERN}"),
-            },
-        ]);
-        let subscriptions = Subscriptions::from_image(&img);
-        assert!(
-            subscriptions.compute(&slow_client(), config::INTERVAL_MS_DEFAULT)
-                == Ok(ComputedSubscription {
-                    metrics: vec![],
-                    push_interval_ms: config::INTERVAL_MS_DEFAULT,
-                })
+        };
+        check!(
+            Subscriptions::from_image(&img)
+                .compute(&client, config::INTERVAL_MS_DEFAULT)
+                .map_err(|error| (error.subscription, error.selector))
+                == Err(("slow".to_owned(), MatchSelector::Id))
         );
     }
 

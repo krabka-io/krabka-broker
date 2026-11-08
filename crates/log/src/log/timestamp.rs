@@ -22,7 +22,7 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
     krabka_verified::timestamp::first_timestamp_index,
-    std::{fs, sync::PoisonError, time::SystemTime},
+    std::{fs, time::SystemTime},
 };
 
 /// How far a by-timestamp search goes.
@@ -133,11 +133,7 @@ impl Log {
     /// the first candidate segment as Kafka does.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
-        let scan_window = self
-            .config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .timestamp_scan_window;
+        let scan_window = self.config().timestamp_scan_window;
         // With no limit the scan has nothing to refuse.
         self.scan_offset_for_timestamp(
             target_ts,
@@ -199,7 +195,7 @@ impl Log {
 
     /// The scan window and the record limit of the log's current configuration.
     fn timestamp_scan_settings(&self) -> TimestampScanSettings {
-        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
+        let config = self.config();
         TimestampScanSettings {
             scan_window: config.timestamp_scan_window,
             limit: config.max_decompressed_record,

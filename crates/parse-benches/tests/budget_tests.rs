@@ -4,7 +4,7 @@
 
 use {
     krabka_parse_benches::{
-        Command,
+        Command, CommandReport, Outcome,
         budget::{BudgetVerdict, MetricVerdict, Rejection, Status, evaluate, judge},
         contract::{Budget, BudgetError, Contract, Metric, Mode, contract_digest},
         record::{
@@ -666,15 +666,15 @@ fn evaluate_artifacts(candidate: [Option<f64>; 5]) -> (bool, BudgetVerdict, Stri
     let contract = dir.path().join("regression-contract.json");
     fs::write(&contract, CONTRACT).unwrap();
     let record = dir.path().join("performance-record.json");
-    let (assembled, _) = run_command(&Command::Assemble {
+    let assembled = run_command(&Command::Assemble {
         artifact_dir: artifacts,
         output: record.clone(),
     })
     .unwrap();
-    assert2::assert!(assembled);
+    assert2::assert!(assembled.outcome == Outcome::Passed);
     let output = dir.path().join("verdict.json");
     let markdown = dir.path().join("performance-budget.md");
-    let (passed, _) = run_command(&Command::Evaluate {
+    let evaluated = run_command(&Command::Evaluate {
         record,
         contract,
         output: output.clone(),
@@ -682,7 +682,11 @@ fn evaluate_artifacts(candidate: [Option<f64>; 5]) -> (bool, BudgetVerdict, Stri
     })
     .unwrap();
     let verdict = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
-    (passed, verdict, fs::read_to_string(markdown).unwrap())
+    (
+        evaluated.outcome == Outcome::Passed,
+        verdict,
+        fs::read_to_string(markdown).unwrap(),
+    )
 }
 
 #[test]
@@ -723,8 +727,9 @@ fn check_contract_prints_the_digest_the_harness_records() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("contract.json");
     fs::write(&path, CHECKED_IN_CONTRACT).unwrap();
-    let (valid, message) = run_command(&Command::CheckContract { contract: path }).unwrap();
-    assert2::assert!(valid);
+    let CommandReport { outcome, message } =
+        run_command(&Command::CheckContract { contract: path }).unwrap();
+    assert2::assert!(outcome == Outcome::Passed);
     assert2::assert!(message.ends_with(&contract_digest(CHECKED_IN_CONTRACT.as_bytes())));
 }
 

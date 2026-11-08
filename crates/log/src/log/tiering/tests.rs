@@ -11,6 +11,7 @@ use {
             rolled_log, sample_batch, sample_batch_with_epoch, sample_log, stamped_rolling_log,
             test_log,
         },
+        log_start_offset_checkpoint,
         stamp_index::OffsetRange,
         test_support::{log_file_count, segmented_log},
     },
@@ -602,4 +603,147 @@ fn active_segment_export_ages_the_segment_the_way_retention_does(
             }),
         "{case_name}"
     );
+}
+
+/// A tiered log's global start as the remote log manager sees it: the
+/// start, whether somebody established it, and what the checkpoint holds.
+#[derive(Debug, PartialEq)]
+struct GlobalStart {
+    start: Offset,
+    established: Option<Offset>,
+    checkpointed: Option<Offset>,
+}
+
+impl GlobalStart {
+    fn of(log: &Log) -> Self {
+        Self {
+            start: log.log_start_offset(),
+            established: log.established_log_start(),
+            checkpointed: log_start_offset_checkpoint::read(log.dir()).unwrap(),
+        }
+    }
+
+    /// A start somebody established at `start` and wrote to the checkpoint.
+    fn established_at(start: Offset) -> Self {
+        Self {
+            start,
+            established: Some(start),
+            checkpointed: Some(start),
+        }
+    }
+}
+
+/// The two floors of a log whose first two sealed segments were evicted.
+#[derive(Clone, Copy)]
+struct Floors {
+    /// The established start under the local segments, or the start a reopen
+    /// inferred from them.
+    global: Offset,
+    local: Offset,
+}
+
+/// A log over `rolled_log` whose first two sealed segments are gone from
+/// disk. With `stale`, a start one past the first segment's base was
+/// established before the eviction: the state the crash window in
+/// `Partition::apply_log_config_overrides` leaves, where the checkpoint holds
+/// a start below segments local retention already deleted. Without it the log
+/// has no checkpoint.
+fn evicted_log(dir: &Path, config: &LogConfig, stale: bool) -> Log {
+    let mut log = rolled_log(dir, config);
+    let exports = log.tierable_segments();
+    if stale {
+        log.set_log_start_offset(exports[0].base_offset + 1)
+            .unwrap();
+    }
+    log.delete_local_segments_through(exports[1].last_offset + 1)
+        .unwrap();
+    log.sync().unwrap();
+    log
+}
+
+/// Kafka's `UnifiedLog.updateLogStartOffsetFromRemoteTier`: the remote log
+/// manager raises the global start to the lowest offset any tier still holds,
+/// and never lowers it. The local start caps the raise, because every offset
+/// from there on is on this disk. A start nobody established reads as 0, as
+/// Kafka's checkpoint does, so a remote start above 0 establishes it even
+/// below the segments a reopen inferred it from: those offsets are the
+/// archive's to serve.
+#[yare::parameterized(
+    a_stale_start_rises_to_the_local_start = { true, |f| f.local, |f| GlobalStart::established_at(f.local) },
+    a_stale_start_rises_to_what_the_archive_holds = { true, |f| f.global + 1, |f| GlobalStart::established_at(f.global + 1) },
+    a_raise_stops_at_the_local_start = { true, |f| f.local + 5, |f| GlobalStart::established_at(f.local) },
+    a_remote_start_at_the_floor_changes_nothing = { true, |f| f.global, |f| GlobalStart::established_at(f.global) },
+    an_inferred_start_takes_the_archive_s_start = { false, |f| f.local - 1, |f| GlobalStart::established_at(f.local - 1) },
+    an_inferred_start_over_an_empty_archive_is_established = { false, |f| f.local, |f| GlobalStart::established_at(f.local) },
+    an_archive_from_zero_leaves_an_inferred_start = { false, |_| Offset(0), |f| GlobalStart { start: f.local, established: None, checkpointed: None } },
+)]
+fn update_log_start_from_remote_tier_raises_to_what_some_tier_holds(
+    stale: bool,
+    remote_start: fn(Floors) -> Offset,
+    expected: fn(Floors) -> GlobalStart,
+) {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        remote_storage_enable: true,
+        ..LogConfig::default()
+    };
+    drop(evicted_log(dir.path(), &config, stale));
+    // The restart: a tiered open takes the checkpoint as it finds it.
+    let mut log = Log::open(dir.path(), config).unwrap();
+    let floors = Floors {
+        global: log.log_start_offset(),
+        local: log.local_log_start_offset(),
+    };
+
+    let reported = log
+        .update_log_start_from_remote_tier(log.reported_log_start(), remote_start(floors))
+        .unwrap();
+
+    check!((reported, GlobalStart::of(&log)) == (log.reported_log_start(), expected(floors)));
+}
+
+/// A log without remote storage has no remote tier to follow, as Kafka
+/// ignores the call with an error log, even with its start below the local
+/// segments.
+#[test]
+fn update_log_start_from_remote_tier_leaves_a_log_without_remote_storage_alone() {
+    let dir = tempdir().unwrap();
+    let mut log = evicted_log(dir.path(), &LogConfig::default(), true);
+    let before = GlobalStart::of(&log);
+    let local = log.local_log_start_offset();
+    check!(
+        before.start < local,
+        "the fixture leaves a start below the local segments"
+    );
+
+    let reported = log
+        .update_log_start_from_remote_tier(before.start, local)
+        .unwrap();
+
+    check!((reported, GlobalStart::of(&log)) == (before.start, before));
+}
+
+/// The caller measured the archive from the start the log reported then. A
+/// start that moved since, either way, was never measured, so the raise is
+/// dropped rather than carried over offsets the listing never examined, or
+/// over a `DeleteRecords` that raced it.
+#[yare::parameterized(
+    a_start_lowered_since_the_listing = { 1 },
+    a_start_raised_since_the_listing = { -1 },
+)]
+fn update_log_start_from_remote_tier_drops_a_raise_measured_from_another_start(moved_by: i64) {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        remote_storage_enable: true,
+        ..LogConfig::default()
+    };
+    let mut log = evicted_log(dir.path(), &config, true);
+    let before = GlobalStart::of(&log);
+    let local = log.local_log_start_offset();
+
+    let reported = log
+        .update_log_start_from_remote_tier(before.start + moved_by, local)
+        .unwrap();
+
+    check!((reported, GlobalStart::of(&log)) == (before.start, before));
 }

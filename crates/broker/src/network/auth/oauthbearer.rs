@@ -10,6 +10,7 @@ use {
             ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, principal_change_message,
         },
     },
+    crate::oauth_jwks::JwksSnapshotState,
     krabka_protocol::owned::{
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
@@ -72,8 +73,7 @@ pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     validator: &krabka_security::OAuthBearerValidator,
-    cache_generation: &AtomicU64,
-    last_successful_fetch_ms: &AtomicI64,
+    jwks_snapshot: &JwksSnapshotState,
     clock_ms: impl Fn() -> i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
@@ -82,8 +82,8 @@ pub async fn handle_authenticate_oauthbearer_with_jwks_cache(
         auth,
         validator,
         Some(JwksCache {
-            generation: cache_generation,
-            last_successful_fetch_ms,
+            generation: &jwks_snapshot.generation,
+            last_successful_fetch_ms: &jwks_snapshot.last_successful_fetch_ms,
         }),
         clock_ms,
         max_session_lifetime,

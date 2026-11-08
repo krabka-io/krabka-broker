@@ -25,8 +25,9 @@ pub const WRITE_FREEZE: &str = "write.freeze";
 /// These controller-owned values use ordinary topic metadata records.
 pub const AUDIT_PLACEMENT_EPOCH_PREFIX: &str = "krabka.audit.placement.epoch.";
 
-/// Removed private ELR topic-config key, retained only for migration tests.
-#[cfg(test)]
+/// Removed private ELR topic-config key. The broker no longer writes it, but
+/// reads and strips it to migrate a topic that still carries it to
+/// `PartitionElrRecord`s; see [`crate::elr::state::legacy_elr`].
 pub const ELIGIBLE_LEADER_REPLICAS: &str = "krabka.elr";
 
 /// Topic-scoped config keys that only the controller writes. This is the

@@ -23,6 +23,7 @@ use {
         io::{IoTarget, LogIo, file_io, write_all},
     },
     krabka_ids::Offset,
+    krabka_verified::StampRange,
     std::{
         fs::{self, OpenOptions},
         io::ErrorKind,
@@ -60,13 +61,6 @@ pub struct OffsetRange {
     pub last: Offset,
 }
 
-/// The base offsets and the last offsets of a run of stamp entries, each in
-/// entry order.
-struct StampCoordinates {
-    bases: Vec<i64>,
-    lasts: Vec<i64>,
-}
-
 /// One stamped offset range. The inclusive offsets
 /// `[base_offset, last_offset]` all carry `stamp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +68,16 @@ pub struct StampEntry {
     pub base_offset: Offset,
     pub last_offset: Offset,
     pub stamp: u64,
+}
+
+impl StampEntry {
+    /// The entry's inclusive offsets, as the verified range kernels take them.
+    const fn range(self) -> StampRange {
+        StampRange {
+            base: self.base_offset.0,
+            last: self.last_offset.0,
+        }
+    }
 }
 
 /// On-disk byte layout of one `StampEntry`. `zerocopy` reinterprets it in
@@ -392,17 +396,12 @@ impl StampIndex {
     #[must_use]
     pub fn entries(&self) -> &[StampEntry] { &self.entries }
 
-    fn coordinates(entries: &[StampEntry]) -> StampCoordinates {
-        let (bases, lasts) = entries
-            .iter()
-            .map(|entry| (entry.base_offset.0, entry.last_offset.0))
-            .unzip();
-        StampCoordinates { bases, lasts }
+    fn ranges(entries: &[StampEntry]) -> Vec<StampRange> {
+        entries.iter().map(|entry| entry.range()).collect()
     }
 
     fn entries_valid(entries: &[StampEntry]) -> bool {
-        let StampCoordinates { bases, lasts } = Self::coordinates(entries);
-        krabka_verified::stamp_ranges_valid(&bases, &lasts)
+        krabka_verified::stamp_ranges_valid(&Self::ranges(entries))
     }
 
     /// The stamp of the entry whose inclusive `[base_offset, last_offset]`
@@ -461,29 +460,24 @@ mod tests {
             let entries: Vec<_> = (0..length)
                 .map(|number| stamp_entry(number * 5 - 40, number * 5 - 38, 1))
                 .collect();
-            let StampCoordinates { bases, lasts } = StampIndex::coordinates(&entries);
-            assert2::assert!(krabka_verified::stamp_ranges_valid(&bases, &lasts));
+            let ranges = StampIndex::ranges(&entries);
+            assert2::assert!(krabka_verified::stamp_ranges_valid(&ranges));
             let IndexFixture {
                 dir: _dir, index, ..
             } = index_with(&entries);
             for first in -45..65 {
-                let expected_stamp =
-                    krabka_verified::covering_stamp_range_index(&bases, &lasts, first)
-                        .map(|position| entries[position].stamp);
+                let expected_stamp = krabka_verified::covering_stamp_range_index(&ranges, first)
+                    .map(|position| entries[position].stamp);
                 assert2::assert!(index.stamp_for_offset(Offset(first)) == expected_stamp);
                 for last in -45..65 {
                     let entry = stamp_entry(first, last, 1);
                     assert2::assert!(
                         StampIndex::exact_range_index(&entries, Offset(first), Offset(last))
-                            == krabka_verified::exact_stamp_range_index(
-                                &bases, &lasts, first, last
-                            )
+                            == krabka_verified::exact_stamp_range_index(&ranges, entry.range())
                     );
                     assert2::assert!(
                         StampIndex::insertion_position(&entries, entry)
-                            == krabka_verified::stamp_range_insertion_index(
-                                &bases, &lasts, first, last
-                            )
+                            == krabka_verified::stamp_range_insertion_index(&ranges, entry.range())
                     );
                 }
             }

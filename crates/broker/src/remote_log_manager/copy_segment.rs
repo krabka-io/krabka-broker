@@ -2,8 +2,6 @@
 //! upload, then `CopySegmentFinished`, together with the rollback that runs
 //! when any step of it fails.
 
-#[cfg(test)]
-use krabka_remote_storage::LogSegmentData;
 use {
     super::{
         RemoteTier,
@@ -16,8 +14,8 @@ use {
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
-        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-        TopicIdPartition, WormChainRecord,
+        ChainStamp, CustomMetadata, LogSegmentData, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentState, RemoteStorageError, TopicIdPartition, WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{
@@ -157,6 +155,28 @@ pub(super) async fn copy_one(
     outcome
 }
 
+/// A copy's place in the chain once [`ChainPosition::Exhausted`] is ruled
+/// out: the two positions a copy can still go ahead from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Chain {
+    /// Mutable tier: the copy stamps nothing.
+    Unchained,
+    /// Write-once archive: the copy's manifest joins the chain here.
+    At(ChainStamp),
+}
+
+impl Chain {
+    /// Count a copy that did not seal its manifest. Only a chained copy is
+    /// trying to seal one, so only a chained copy can fail to. An unchained
+    /// copy failing on a mutable tier is an ordinary copy failure and says
+    /// nothing about the archive's attestation.
+    fn record_seal_failure(self, tier: &RemoteTier<'_>) {
+        if matches!(self, Self::At(_)) {
+            tier.metrics.worm_manifest_seal_failures_total.inc();
+        }
+    }
+}
+
 async fn copy_one_inner(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
@@ -168,69 +188,21 @@ async fn copy_one_inner(
     ex: &SegmentExport,
     chain: ChainPosition,
 ) -> CopyOutcome {
-    let (rsm, rlmm) = (tier.rsm, tier.rlmm);
-    // Only a chained copy is trying to seal a manifest, so only a chained copy
-    // can fail to. An unchained copy failing on a mutable tier is an ordinary
-    // copy failure and says nothing about the archive's attestation.
-    let seal_failed = || {
-        if matches!(chain, ChainPosition::At(_)) {
-            tier.metrics.worm_manifest_seal_failures_total.inc();
-        }
-    };
-    if chain == ChainPosition::Exhausted {
-        error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-               "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
-        return CopyOutcome::Failed;
-    }
-    let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
-    // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
-    // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
-    // `RemoteLogSegmentMetadata` carries verbatim.
-    let epochs = export_epoch_map(ex, krabka_ids::LeaderEpoch(leader_epoch.0.max(0)));
-    let size = ex.size.bytes_i32();
-
-    let metadata = match RemoteLogSegmentMetadata::new(
-        id.clone(),
-        ex.base_offset.0,
-        ex.last_offset.0,
-        ex.max_timestamp,
-        broker_id,
-        now_ms(),
-        krabka_remote_storage::RemoteLogSegmentDetails::new(
-            size,
-            RemoteLogSegmentState::CopySegmentStarted,
-            epochs.clone(),
-        ),
-    ) {
-        Ok(m) => m,
-        Err(e) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: skipping segment with invalid metadata");
+    let rlmm = tier.rlmm;
+    let chain = match chain {
+        ChainPosition::Unchained => Chain::Unchained,
+        ChainPosition::At(stamp) => Chain::At(stamp),
+        ChainPosition::Exhausted => {
+            error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   "remote-log-manager: refusing a WORM copy after chain sequence exhaustion");
             return CopyOutcome::Failed;
         }
     };
-    // KIP-405 txnIndexEmpty: set true when the log segment has no transaction
-    // index file (non-transactional topics or segments written before txn support).
-    let metadata = if ex.transaction_index_path.is_none() {
-        metadata.with_txn_index_empty(true)
-    } else {
-        metadata
+    let Some((metadata, epochs)) = build_started_metadata(tp, broker_id, leader_epoch, ex, chain)
+    else {
+        return CopyOutcome::Failed;
     };
-    // The chain stamp goes on before the copy: a WORM backend refuses to seal
-    // an unstamped manifest, and it refuses only *after* uploading every
-    // object, which would leave orphans in a bucket that takes nothing back.
-    let metadata = match chain {
-        ChainPosition::Unchained => metadata,
-        ChainPosition::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
-            Ok(custom) => metadata.with_custom_metadata(custom),
-            Err(e) => {
-                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
-                return CopyOutcome::Failed;
-            }
-        },
-        ChainPosition::Exhausted => return CopyOutcome::Failed,
-    };
+    let id = metadata.remote_log_segment_id().clone();
 
     let md_started = metadata.clone();
     if let Err(e) = rlmm_mutate(rlmm, move |m| m.add_remote_log_segment_metadata(md_started)).await
@@ -253,64 +225,9 @@ async fn copy_one_inner(
         leader_epoch_index_bytes(&epochs)
     });
 
-    // The RSM is a blocking SPI — run the copy on the blocking pool.
-    //
-    // Bounded, because the pass is serial: an object store that accepts the
-    // upload and then answers nothing would otherwise hold this partition,
-    // and every partition queued behind it, for as long as the store cares
-    // to stall. `spawn_blocking` cannot be cancelled, so past the deadline
-    // the upload is abandoned rather than stopped — it keeps running on the
-    // blocking pool against a segment id no metadata will ever finish, and
-    // its objects are what the next tick's fresh id copies again.
-    //
-    // The upload is tracked from here until it returns, past any deadline, so
-    // remote retention leaves its `CopySegmentStarted` segment alone.
-    let rsm_copy = Arc::clone(rsm);
-    let md_copy = metadata.clone();
-    let in_flight = tier.copies_in_flight.track(id.id);
-    let copy_result = time::timeout(
-        tier.copy_timeout.to_std(),
-        spawn_blocking(move || {
-            let returned = rsm_copy.copy_log_segment_data(&md_copy, &data);
-            drop(in_flight);
-            returned
-        }),
-    )
-    .await;
-
-    // Copy failed (or the blocking task panicked): clean up so the segment
-    // is retried next tick.
-    let returned = match copy_result {
-        Ok(Ok(Ok(returned))) => returned,
-        // The deadline expired. Nothing is rolled back: the abandoned upload
-        // is still writing under this metadata's segment id, and a delete
-        // racing it could remove an object the upload then re-creates,
-        // leaving the tier holding a partial segment that no metadata
-        // records. The segment stays in `CopySegmentStarted` instead, which
-        // is what makes local retention refuse to drop its local copy and
-        // the next tick re-copy it under a fresh id.
-        Err(_) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  timeout_ms = tier.copy_timeout.millis_i64(),
-                  "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
-                   moving on to the next partition");
-            seal_failed();
-            return CopyOutcome::Failed;
-        }
-        Ok(Ok(Err(e))) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: segment copy failed");
-            seal_failed();
-            rollback(tier, &metadata, broker_id).await;
-            return CopyOutcome::Failed;
-        }
-        Ok(Err(e)) => {
-            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                  error = %e, "remote-log-manager: segment copy task panicked");
-            seal_failed();
-            rollback(tier, &metadata, broker_id).await;
-            return CopyOutcome::Failed;
-        }
+    let Some(returned) = upload_with_deadline(tier, ex, chain, &metadata, broker_id, data).await
+    else {
+        return CopyOutcome::Failed;
     };
 
     // The upload may have outlived this broker's leadership. On a mutable
@@ -319,7 +236,7 @@ async fn copy_one_inner(
     // write-once copy is past that point: the backend has sealed a manifest
     // over the objects, they cannot be deleted, and the chain the next copy
     // extends already runs through it, so it is published as usual.
-    if chain == ChainPosition::Unchained && !fence.holds() {
+    if chain == Chain::Unchained && !fence.holds() {
         fenced(tp, ex, "after the upload");
         rollback(tier, &metadata, broker_id).await;
         return CopyOutcome::Fenced;
@@ -331,43 +248,8 @@ async fn copy_one_inner(
     // finished: the read path serves every finished segment, and it would then
     // be serving unattested data. Leaving it in `CopySegmentStarted` is what
     // makes the next tick retry it under a fresh segment id.
-    let next = match chain {
-        ChainPosition::Unchained => ChainPosition::Unchained,
-        ChainPosition::At(requested) => {
-            let Some(receipt) = returned
-                .as_ref()
-                .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
-            else {
-                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                       "remote-log-manager: write-once copy returned no chain receipt; \
-                        leaving the segment in CopySegmentStarted rather than serving \
-                        unattested data");
-                seal_failed();
-                return CopyOutcome::Failed;
-            };
-            if receipt.head.is_none()
-                || receipt.epoch_id != requested.epoch_id
-                || receipt.seq != requested.seq
-                || receipt.prev_head != requested.prev_head
-            {
-                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-                       "remote-log-manager: write-once copy returned a mismatched chain receipt; \
-                        leaving the segment in CopySegmentStarted rather than serving \
-                        unattested data");
-                seal_failed();
-                return CopyOutcome::Failed;
-            }
-            // The receipt is the archive's word that a manifest over these
-            // objects is sealed and chained where the copy asked for it, so
-            // this is the one point at which a seal is known to have happened.
-            tier.metrics.worm_manifests_sealed_total.inc();
-            match receipt.next_stamp() {
-                Some(stamp) => ChainPosition::At(stamp),
-                None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
-                None => return CopyOutcome::Failed,
-            }
-        }
-        ChainPosition::Exhausted => return CopyOutcome::Failed,
+    let Some(next) = finish_chain_receipt(tier, tp, ex, chain, returned.as_ref()) else {
+        return CopyOutcome::Failed;
     };
 
     // The backend's receipt is the chain position a restart reads back, so
@@ -408,6 +290,198 @@ async fn copy_one_inner(
         }
         _ => CopyOutcome::Copied { next },
     }
+}
+
+/// The chain position the copy after this one takes, given what the backend
+/// returned for `chain`. An unchained copy stays unchained. A chained copy
+/// needs a receipt that matches the stamp it asked for, and counts its seal.
+/// `None`, after an error and a seal failure where the receipt is missing or
+/// mismatched, when the segment must stay in `CopySegmentStarted`.
+fn finish_chain_receipt(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    ex: &SegmentExport,
+    chain: Chain,
+    returned: Option<&CustomMetadata>,
+) -> Option<ChainPosition> {
+    let next = match chain {
+        Chain::Unchained => ChainPosition::Unchained,
+        Chain::At(requested) => {
+            let Some(receipt) =
+                returned.and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
+            else {
+                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                       "remote-log-manager: write-once copy returned no chain receipt; \
+                        leaving the segment in CopySegmentStarted rather than serving \
+                        unattested data");
+                chain.record_seal_failure(tier);
+                return None;
+            };
+            if receipt.head.is_none()
+                || receipt.epoch_id != requested.epoch_id
+                || receipt.seq != requested.seq
+                || receipt.prev_head != requested.prev_head
+            {
+                error!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                       "remote-log-manager: write-once copy returned a mismatched chain receipt; \
+                        leaving the segment in CopySegmentStarted rather than serving \
+                        unattested data");
+                chain.record_seal_failure(tier);
+                return None;
+            }
+            // The receipt is the archive's word that a manifest over these
+            // objects is sealed and chained where the copy asked for it, so
+            // this is the one point at which a seal is known to have happened.
+            tier.metrics.worm_manifests_sealed_total.inc();
+            match receipt.next_stamp() {
+                Some(stamp) => ChainPosition::At(stamp),
+                None if receipt.seq.0 == u64::MAX => ChainPosition::Exhausted,
+                None => return None,
+            }
+        }
+    };
+    Some(next)
+}
+
+/// Upload `data` under `metadata` on the blocking pool, bounded by the tier's
+/// copy timeout, and return the custom metadata the backend hands back.
+/// `None`, after a warning, a seal failure for a chained copy and, unless
+/// the deadline expired, a rollback, when the upload did not succeed.
+async fn upload_with_deadline(
+    tier: &RemoteTier<'_>,
+    ex: &SegmentExport,
+    chain: Chain,
+    metadata: &RemoteLogSegmentMetadata,
+    broker_id: i32,
+    data: LogSegmentData,
+) -> Option<Option<CustomMetadata>> {
+    let tp = &metadata.remote_log_segment_id().topic_id_partition;
+    // The RSM is a blocking SPI — run the copy on the blocking pool.
+    //
+    // Bounded, because the pass is serial: an object store that accepts the
+    // upload and then answers nothing would otherwise hold this partition,
+    // and every partition queued behind it, for as long as the store cares
+    // to stall. `spawn_blocking` cannot be cancelled, so past the deadline
+    // the upload is abandoned rather than stopped — it keeps running on the
+    // blocking pool against a segment id no metadata will ever finish, and
+    // its objects are what the next tick's fresh id copies again.
+    //
+    // The upload is tracked from here until it returns, past any deadline, so
+    // remote retention leaves its `CopySegmentStarted` segment alone.
+    let rsm_copy = Arc::clone(tier.rsm);
+    let md_copy = metadata.clone();
+    let in_flight = tier
+        .copies_in_flight
+        .track(metadata.remote_log_segment_id().id);
+    let copy_result = time::timeout(
+        tier.copy_timeout.to_std(),
+        spawn_blocking(move || {
+            let returned = rsm_copy.copy_log_segment_data(&md_copy, &data);
+            drop(in_flight);
+            returned
+        }),
+    )
+    .await;
+
+    // Copy failed (or the blocking task panicked): clean up so the segment
+    // is retried next tick.
+    let returned = match copy_result {
+        Ok(Ok(Ok(returned))) => returned,
+        // The deadline expired. Nothing is rolled back: the abandoned upload
+        // is still writing under this metadata's segment id, and a delete
+        // racing it could remove an object the upload then re-creates,
+        // leaving the tier holding a partial segment that no metadata
+        // records. The segment stays in `CopySegmentStarted` instead, which
+        // is what makes local retention refuse to drop its local copy and
+        // the next tick re-copy it under a fresh id.
+        Err(_) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  timeout_ms = tier.copy_timeout.millis_i64(),
+                  "remote-log-manager: segment copy exceeded its deadline; abandoning it and \
+                   moving on to the next partition");
+            chain.record_seal_failure(tier);
+            return None;
+        }
+        Ok(Ok(Err(e))) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: segment copy failed");
+            chain.record_seal_failure(tier);
+            rollback(tier, metadata, broker_id).await;
+            return None;
+        }
+        Ok(Err(e)) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: segment copy task panicked");
+            chain.record_seal_failure(tier);
+            rollback(tier, metadata, broker_id).await;
+            return None;
+        }
+    };
+    Some(returned)
+}
+
+/// The `CopySegmentStarted` metadata for copying `ex`, stamped for `chain`,
+/// and the epoch map it carries. `None`, after a warning, when the metadata
+/// is invalid or the chain stamp cannot be encoded.
+fn build_started_metadata(
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    leader_epoch: krabka_ids::LeaderEpoch,
+    ex: &SegmentExport,
+    chain: Chain,
+) -> Option<(
+    RemoteLogSegmentMetadata,
+    BTreeMap<krabka_ids::LeaderEpoch, i64>,
+)> {
+    let id = RemoteLogSegmentId::new(tp.clone(), Uuid::new_v4());
+    // Unwrap the log-layer `Offset`s into the remote-storage metadata's `i64`
+    // world at the seam; the epoch map keeps its `LeaderEpoch` keys, which
+    // `RemoteLogSegmentMetadata` carries verbatim.
+    let epochs = export_epoch_map(ex, krabka_ids::LeaderEpoch(leader_epoch.0.max(0)));
+    let size = ex.size.bytes_i32();
+
+    let metadata = match RemoteLogSegmentMetadata::new(
+        id,
+        ex.base_offset.0,
+        ex.last_offset.0,
+        ex.max_timestamp,
+        broker_id,
+        now_ms(),
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
+            size,
+            RemoteLogSegmentState::CopySegmentStarted,
+            epochs.clone(),
+        ),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: skipping segment with invalid metadata");
+            return None;
+        }
+    };
+    // KIP-405 txnIndexEmpty: set true when the log segment has no transaction
+    // index file (non-transactional topics or segments written before txn support).
+    let metadata = if ex.transaction_index_path.is_none() {
+        metadata.with_txn_index_empty(true)
+    } else {
+        metadata
+    };
+    // The chain stamp goes on before the copy: a WORM backend refuses to seal
+    // an unstamped manifest, and it refuses only *after* uploading every
+    // object, which would leave orphans in a bucket that takes nothing back.
+    let metadata = match chain {
+        Chain::Unchained => metadata,
+        Chain::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
+            Ok(custom) => metadata.with_custom_metadata(custom),
+            Err(e) => {
+                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
+                return None;
+            }
+        },
+    };
+    Some((metadata, epochs))
 }
 
 /// Whether a refused `CopySegmentFinished` means somebody deleted the segment
@@ -461,7 +535,7 @@ async fn delete_below_floor(
     debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
            end = copied.end_offset(), floor = floor.0,
            "remote-log-manager: copy finished below the established log start; deleting it");
-    delete_segment_metered(tier, tp, broker_id, &current).await
+    delete_segment_metered(tier.delete_targets(), tp, broker_id, &current).await
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.
@@ -1128,6 +1202,47 @@ mod tests {
             );
             drop(seen);
         }
+    }
+
+    /// A copy handed an exhausted chain uploads nothing, records nothing and
+    /// counts no seal attempt: it fails before it touches the tier.
+    #[tokio::test]
+    async fn copy_one_refuses_an_exhausted_chain_before_touching_the_tier() {
+        let rsm_impl = Arc::new(CapturingRsm::default());
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
+        let fixtures::OwnedTierResources {
+            rlmm,
+            metrics,
+            index_cache,
+        } = fixtures::owned_tier_resources();
+        let tier = fixtures::configured_tier()
+            .rsm(&rsm)
+            .rlmm(&rlmm)
+            .archive(ArchiveMode::WriteOnce)
+            .metrics(&metrics)
+            .index_cache(&index_cache)
+            .call();
+
+        let outcome = copy_one(
+            &tier,
+            &tp(),
+            CopyIdentity::unfenced(1, LeaderEpoch(0)),
+            &synth_export().call(),
+            ChainPosition::Exhausted,
+        )
+        .await;
+
+        check!(outcome == CopyOutcome::Failed);
+        check!(
+            rsm_impl
+                .seen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
+        );
+        check!(rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
+        check!(metrics.worm_manifests_sealed_total.get() == 0);
+        check!(metrics.worm_manifest_seal_failures_total.get() == 0);
     }
 
     #[tokio::test]

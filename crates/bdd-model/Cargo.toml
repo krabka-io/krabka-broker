@@ -1,0 +1,23 @@
+[package]
+name = "krabka-bdd-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The Gherkin model behind krabka-bdd: loading, rule flattening, outline expansion, naming, the tag glossary and the house-style lint"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gherkin = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+rstest = { workspace = true }

@@ -2,9 +2,9 @@
 use super::control_truncation::physical_batch_sequence_valid;
 use {
     super::{
-        DeleteRecordsTrimApplication, FetchWatermarks, delete_records_trim_application,
-        fetch_visibility, in_half_open_window, truncation_batch_retained, truncation_frontier,
-        wal_checkpoint_range_valid,
+        DeleteRecordsTrimApplication, FetchReader, FetchWatermarks, Isolation,
+        delete_records_trim_application, fetch_visibility, in_half_open_window,
+        truncation_batch_retained, truncation_frontier, wal_checkpoint_range_valid,
     },
     creusot_std::prelude::*,
 };
@@ -86,7 +86,10 @@ pub(super) fn checkpoint_truncation_bounds_fetch(
         lso: truncation_frontier(w.lso, actual_end),
         deliverable: truncation_frontier(w.deliverable, actual_end),
     };
-    Some((kept, fetch_visibility(false, true, w, start).limit_offset))
+    Some((
+        kept,
+        fetch_visibility(FetchReader::Consumer(Isolation::ReadCommitted), w, start).limit_offset,
+    ))
 }
 
 /// Recovery after each completed publication step uses the old durable prefix

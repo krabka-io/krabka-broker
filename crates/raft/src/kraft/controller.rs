@@ -79,6 +79,7 @@ use {
         fmt::Human as _,
         prelude::{self, ByteSize, Time, TimeExt as _},
     },
+    record_processing::RecordProcessingStats,
     std::{
         collections::BTreeMap,
         path::PathBuf,
@@ -116,6 +117,7 @@ mod queries;
 mod quorum_requests;
 mod quorum_state_file;
 mod reconfiguration;
+mod record_processing;
 mod records;
 mod recovery;
 mod replication;
@@ -130,6 +132,7 @@ pub use self::{
     control_state::control_batch_image_records,
     mutation_policy::encode_record,
     records::{decode_committed_value, is_kip835_noop},
+    snapshotting::SnapshotPolicy,
 };
 
 #[cfg(test)]
@@ -259,16 +262,8 @@ struct Engine {
     /// committed image, so it waits while such a batch is uncommitted: see
     /// [`Engine::registration_change_must_wait`].
     registration_writes: BTreeMap<krabka_metadata::NodeId, (Epoch, Offset)>,
-    /// Snapshot every this many committed records past the last snapshot
-    /// (KIP-630). The cleaning decides when the log below a snapshot goes.
-    /// `0` disables this trigger.
-    snapshot_interval_records: u64,
-    /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
-    /// disables the byte-size cap.
-    max_bytes_between_snapshots: ByteSize,
-    /// `metadata.log.max.snapshot.interval.ms` (KIP-630). `0` disables the
-    /// time-based cap.
-    max_snapshot_interval: Time,
+    /// When this voter writes a regular snapshot (KIP-630).
+    snapshot_policy: SnapshotPolicy,
     metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     /// Kafka's `MetadataLogConfig`: the retention limits the cleaning applies
     /// and the KIP-835 idle interval.
@@ -296,9 +291,7 @@ struct Engine {
     last_applied_record_timestamp_ms: i64,
     /// Aggregate durations of completed applies that consumed newly
     /// committed records. The average/max are lifetime values for this process.
-    pending_record_processing_time_us_total: u128,
-    pending_record_processing_time_samples: u64,
-    pending_record_processing_time_us_max: u64,
+    record_processing: RecordProcessingStats,
     /// `self.now()` (ms) at which the last checkpoint was written. Seeded to
     /// `0` on construction, which is `clock_base`'s own instant, so a
     /// restarted node measures the time-based cap from its own start rather
@@ -450,16 +443,8 @@ pub struct KraftConfig {
     pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
     pub metadata_raft_fetch_max: MetadataRaftFetchMax,
     pub peers: Arc<dyn PeerSender>,
-    /// Snapshot once committed offset advances this many records past the
-    /// last snapshot. The cleaning decides when the log below a snapshot goes.
-    /// `0` disables this trigger.
-    pub snapshot_interval_records: u64,
-    /// `metadata.log.max.record.bytes.between.snapshots` (KIP-630). `0`
-    /// disables the byte-size cap.
-    pub max_bytes_between_snapshots: ByteSize,
-    /// `metadata.log.max.snapshot.interval.ms` (KIP-630). `0` disables the
-    /// time-based cap.
-    pub max_snapshot_interval: Time,
+    /// When this voter writes a regular snapshot (KIP-630).
+    pub snapshot_policy: SnapshotPolicy,
     /// Validated maximum metadata snapshot size this follower will fetch.
     pub metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     /// How the metadata log rolls, how long it keeps the prefix a snapshot
@@ -500,15 +485,10 @@ pub struct KraftOpenConfig {
     #[builder(into, default)]
     pub metadata_raft_fetch_max: MetadataRaftFetchMax,
     pub peers: Arc<dyn PeerSender>,
-    /// See [`KraftConfig::snapshot_interval_records`]. `0` disables it.
-    #[builder(default = 0)]
-    pub snapshot_interval_records: u64,
-    /// See [`KraftConfig::max_bytes_between_snapshots`]. `0` disables it.
-    #[builder(default = prelude::bytes(0))]
-    pub max_bytes_between_snapshots: ByteSize,
-    /// See [`KraftConfig::max_snapshot_interval`]. `0` disables it.
-    #[builder(default = prelude::millis(0))]
-    pub max_snapshot_interval: Time,
+    /// See [`KraftConfig::snapshot_policy`]. The default writes no regular
+    /// snapshot.
+    #[builder(default)]
+    pub snapshot_policy: SnapshotPolicy,
     #[builder(default)]
     pub metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
     /// See [`KraftConfig::metadata_log`].
@@ -534,9 +514,7 @@ impl KraftOpenConfig {
             metadata_raft_command_queue_capacity,
             metadata_raft_fetch_max,
             peers,
-            snapshot_interval_records,
-            max_bytes_between_snapshots,
-            max_snapshot_interval,
+            snapshot_policy,
             metadata_snapshot_fetch_max,
             metadata_log,
             activation,
@@ -554,9 +532,7 @@ impl KraftOpenConfig {
             metadata_raft_command_queue_capacity,
             metadata_raft_fetch_max,
             peers,
-            snapshot_interval_records,
-            max_bytes_between_snapshots,
-            max_snapshot_interval,
+            snapshot_policy,
             metadata_snapshot_fetch_max,
             metadata_log,
             activation,

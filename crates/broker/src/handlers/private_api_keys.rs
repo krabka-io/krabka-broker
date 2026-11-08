@@ -5,7 +5,7 @@
 //! features with no Kafka counterpart, so each one takes a number from this
 //! private range instead of a Kafka one.
 
-use super::wire_types::ApiKeyCode;
+use {super::wire_types::ApiKeyCode, krabka_protocol::api_key::ApiKey};
 
 /// Lowest `api_key` in the krabka-private range.
 ///
@@ -52,89 +52,126 @@ pub const APPROVE_BREAK_GLASS_API_KEY: ApiKeyCode = 1018;
 /// `DescribeBreakGlass` (1019): lists break-glass proposals and their approvals.
 pub const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 
+/// One krabka-private RPC: its wire `api_key` and the name operators see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KrabkaPrivateApi {
+    /// The wire `api_key`.
+    pub api_key: ApiKeyCode,
+    /// The RPC name, used as its metric label and its request span name.
+    pub name: &'static str,
+}
+
+/// Every krabka-private RPC without a generated schema, each with its name.
+///
+/// This is the one place a key is paired with its name. A new private key
+/// takes a row here, and the request metrics and request spans then name it
+/// rather than calling it `Unknown`.
+pub const KRABKA_PRIVATE_APIS: [KrabkaPrivateApi; 10] = [
+    KrabkaPrivateApi {
+        api_key: ALTER_BARRIER_GROUPS_API_KEY,
+        name: "AlterBarrierGroups",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_BARRIER_GROUPS_API_KEY,
+        name: "DescribeBarrierGroups",
+    },
+    KrabkaPrivateApi {
+        api_key: TRIGGER_BARRIER_API_KEY,
+        name: "TriggerBarrier",
+    },
+    KrabkaPrivateApi {
+        api_key: LIST_BARRIER_CUTS_API_KEY,
+        name: "ListBarrierCuts",
+    },
+    KrabkaPrivateApi {
+        api_key: WRITE_BARRIER_MARKERS_API_KEY,
+        name: "WriteBarrierMarkers",
+    },
+    KrabkaPrivateApi {
+        api_key: SET_TOPIC_FREEZE_API_KEY,
+        name: "SetTopicFreeze",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_TOPIC_FREEZES_API_KEY,
+        name: "DescribeTopicFreezes",
+    },
+    KrabkaPrivateApi {
+        api_key: PROPOSE_BREAK_GLASS_API_KEY,
+        name: "ProposeBreakGlass",
+    },
+    KrabkaPrivateApi {
+        api_key: APPROVE_BREAK_GLASS_API_KEY,
+        name: "ApproveBreakGlass",
+    },
+    KrabkaPrivateApi {
+        api_key: DESCRIBE_BREAK_GLASS_API_KEY,
+        name: "DescribeBreakGlass",
+    },
+];
+
+/// The name of the krabka-private RPC at `api_key`, if one is registered.
+#[must_use]
+pub fn krabka_private_api_name(api_key: ApiKeyCode) -> Option<&'static str> {
+    KRABKA_PRIVATE_APIS
+        .iter()
+        .find(|api| api.api_key == api_key)
+        .map(|api| api.name)
+}
+
+/// The name of the RPC the broker knows at `api_key`, if any.
+///
+/// A key the generated [`ApiKey`] enum knows resolves to its variant name.
+/// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
+/// krabka-private key with a generated schema. Any other key at or above
+/// [`KRABKA_PRIVATE_API_KEY_FLOOR`] resolves through
+/// [`krabka_private_api_name`]. The request metrics and the request spans
+/// both name an api this way, so a dashboard and a trace agree.
+#[must_use]
+pub fn api_name(api_key: ApiKeyCode) -> Option<&'static str> {
+    match ApiKey::from_i16(api_key) {
+        Some(known) => Some(known.into()),
+        None if api_key >= KRABKA_PRIVATE_API_KEY_FLOOR => krabka_private_api_name(api_key),
+        None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert};
 
-    /// A krabka-private api key, the name a failure reports, and the key it
-    /// must have.
-    struct PrivateApiKey {
-        name: &'static str,
-        api_key: ApiKeyCode,
-        want: ApiKeyCode,
-    }
-
-    /// Every krabka-private api key, with the name a failure reports.
-    const KRABKA_PRIVATE_API_KEYS: [PrivateApiKey; 10] = [
-        PrivateApiKey {
-            name: "AlterBarrierGroups",
-            api_key: ALTER_BARRIER_GROUPS_API_KEY,
-            want: 1010,
-        },
-        PrivateApiKey {
-            name: "DescribeBarrierGroups",
-            api_key: DESCRIBE_BARRIER_GROUPS_API_KEY,
-            want: 1011,
-        },
-        PrivateApiKey {
-            name: "TriggerBarrier",
-            api_key: TRIGGER_BARRIER_API_KEY,
-            want: 1012,
-        },
-        PrivateApiKey {
-            name: "ListBarrierCuts",
-            api_key: LIST_BARRIER_CUTS_API_KEY,
-            want: 1013,
-        },
-        PrivateApiKey {
-            name: "WriteBarrierMarkers",
-            api_key: WRITE_BARRIER_MARKERS_API_KEY,
-            want: 1014,
-        },
-        PrivateApiKey {
-            name: "SetTopicFreeze",
-            api_key: SET_TOPIC_FREEZE_API_KEY,
-            want: 1015,
-        },
-        PrivateApiKey {
-            name: "DescribeTopicFreezes",
-            api_key: DESCRIBE_TOPIC_FREEZES_API_KEY,
-            want: 1016,
-        },
-        PrivateApiKey {
-            name: "ProposeBreakGlass",
-            api_key: PROPOSE_BREAK_GLASS_API_KEY,
-            want: 1017,
-        },
-        PrivateApiKey {
-            name: "ApproveBreakGlass",
-            api_key: APPROVE_BREAK_GLASS_API_KEY,
-            want: 1018,
-        },
-        PrivateApiKey {
-            name: "DescribeBreakGlass",
-            api_key: DESCRIBE_BREAK_GLASS_API_KEY,
-            want: 1019,
-        },
+    /// Each krabka-private RPC name and the wire key it must keep. A client
+    /// that speaks the RPC relies on the key, and an operator's dashboards on
+    /// the name.
+    const WANT: [(&str, ApiKeyCode); 10] = [
+        ("AlterBarrierGroups", 1010),
+        ("DescribeBarrierGroups", 1011),
+        ("TriggerBarrier", 1012),
+        ("ListBarrierCuts", 1013),
+        ("WriteBarrierMarkers", 1014),
+        ("SetTopicFreeze", 1015),
+        ("DescribeTopicFreezes", 1016),
+        ("ProposeBreakGlass", 1017),
+        ("ApproveBreakGlass", 1018),
+        ("DescribeBreakGlass", 1019),
     ];
 
     #[test]
+    fn krabka_private_apis_keep_their_names_and_wire_keys() {
+        let got = KRABKA_PRIVATE_APIS.map(|api| (api.name, api.api_key));
+        assert!(got == WANT);
+    }
+
+    #[test]
     fn krabka_private_api_keys_sit_in_the_private_range() {
-        for PrivateApiKey {
-            name,
-            api_key,
-            want,
-        } in KRABKA_PRIVATE_API_KEYS
-        {
-            assert!(api_key == want, "{name}");
+        for KrabkaPrivateApi { api_key, name } in KRABKA_PRIVATE_APIS {
             assert!(api_key >= KRABKA_PRIVATE_API_KEY_FLOOR, "{name}");
         }
     }
 
     #[test]
     fn krabka_private_api_keys_are_pairwise_distinct() {
-        for (index, left) in KRABKA_PRIVATE_API_KEYS.iter().enumerate() {
-            for right in &KRABKA_PRIVATE_API_KEYS[index + 1..] {
+        for (index, left) in KRABKA_PRIVATE_APIS.iter().enumerate() {
+            for right in &KRABKA_PRIVATE_APIS[index + 1..] {
                 assert!(
                     left.api_key != right.api_key,
                     "{} and {}",
@@ -143,5 +180,11 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn krabka_private_api_name_finds_registered_keys_only() {
+        assert!(krabka_private_api_name(SET_TOPIC_FREEZE_API_KEY) == Some("SetTopicFreeze"));
+        assert!(krabka_private_api_name(KRABKA_PRIVATE_API_KEY_FLOOR).is_none());
     }
 }

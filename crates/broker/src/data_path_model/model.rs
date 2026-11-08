@@ -19,7 +19,7 @@ use {
         },
         truncation::real_truncation_offset,
     },
-    crate::handlers::fetch::{FetchWatermarks, compute_visibility_window},
+    crate::handlers::fetch::{FetchWatermarks, compute_visibility_window, fetch_reader},
     krabka_log::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, PartitionOffsetAdvanceRecord},
     stateright::{Model, Property},
@@ -193,8 +193,7 @@ impl Model for DpModel {
                 } => {
                     let leader_log_len = s.leader_leo();
                     let vw = compute_visibility_window(
-                        false, // consumer, not follower
-                        read_committed,
+                        fetch_reader(false, read_committed),
                         FetchWatermarks {
                             log_start: Offset(0),
                             hw: Offset(s.hwm),

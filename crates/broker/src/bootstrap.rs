@@ -5,23 +5,22 @@
 //! reads `meta.properties` through [`krabka_format::MetaProperties`], which
 //! reads and writes the file as Kafka does.
 //!
-//! The framing of `bootstrap.records.bin` matches `crates/format`: a
-//! big-endian `i16` version, [`BOOTSTRAP_RECORDS_VERSION`], once at the start
-//! of the file, then
-//!   [`u32_le` length][serde_wincode-encoded MetadataRecord]
-//! repeated until EOF.
+//! [`load_bootstrap_records`] reads `bootstrap.records.bin` through
+//! [`krabka_format::decode_bootstrap_records`], which holds its layout beside
+//! the encoder `krabka format` writes it with.
 
 use {
     crate::{NodeId, error::BrokerError},
-    krabka_format::{ClusterId, DirectoryId, META_PROPERTIES, MetaProperties},
+    krabka_format::{
+        BOOTSTRAP_RECORDS, BootstrapRecordsError, ClusterId, DirectoryId, META_PROPERTIES,
+        MetaProperties, decode_bootstrap_records,
+    },
     krabka_metadata::MetadataRecord,
-    serde_wincode::SerdeCompat,
     std::{
         fs,
         io::{self, ErrorKind},
         path::{Path, PathBuf},
     },
-    wincode::Deserialize,
 };
 
 /// The identity of this node that its metadata log directory records.
@@ -281,71 +280,17 @@ pub fn initial_voters(records: &[MetadataRecord]) -> krabka_metadata::VoterSet {
         .unwrap_or_default()
 }
 
-/// The `bootstrap.records.bin` format version this build reads, and the one
-/// `krabka format` writes: the big-endian `i16` at the front of the file.
-///
-/// It is part of the 1.x on-disk contract: a 1.x broker reads every version
-/// an earlier 1.x `krabka format` wrote. `crates/format` writes the same
-/// number, and a golden-bytes test on each side pins the layout.
-pub const BOOTSTRAP_RECORDS_VERSION: i16 = 0;
-
-/// The name of the bootstrap record stream in the metadata log directory.
-const BOOTSTRAP_RECORDS_FILE: &str = "bootstrap.records.bin";
-
-/// Why the version header of `bootstrap.records.bin` is refused. It is the
-/// source of the [`BrokerError::BootstrapFile`] the read returns.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum BootstrapRecordsVersionError {
-    /// The file is too short to hold a version.
-    #[error(
-        "{BOOTSTRAP_RECORDS_FILE} has no version header: it predates krabka 1.0, so the node \
-         must be reformatted"
-    )]
-    Missing,
-    /// The file names a version this build does not read. A file written
-    /// before 1.0 starts with a record length instead, which reads as an
-    /// unknown version.
-    #[error(
-        "unrecognized version {found} of {BOOTSTRAP_RECORDS_FILE}: a file without a version \
-         header predates krabka 1.0, so the node must be reformatted"
-    )]
-    Unsupported {
-        /// The version the first two bytes name.
-        found: i16,
-    },
-}
-
-/// Encode `records` as `krabka format` writes `bootstrap.records.bin`: the
-/// version header, then each record as a `u32` little-endian length and its
-/// wincode bytes.
-///
-/// # Errors
-/// Returns a message when a record does not serialize or is longer than a
-/// `u32` length can say.
-pub fn encode_bootstrap_records(records: &[MetadataRecord]) -> Result<Vec<u8>, String> {
-    use wincode::Serialize as _;
-
-    let mut bytes = BOOTSTRAP_RECORDS_VERSION.to_be_bytes().to_vec();
-    for record in records {
-        let blob = <SerdeCompat<MetadataRecord>>::serialize(record)
-            .map_err(|e| format!("serialize record: {e}"))?;
-        let len = u32::try_from(blob.len())
-            .map_err(|_| format!("record too large: {} bytes", blob.len()))?;
-        bytes.extend_from_slice(&len.to_le_bytes());
-        bytes.extend_from_slice(&blob);
-    }
-    Ok(bytes)
-}
-
 /// Reads `<log_dir>/bootstrap.records.bin`. A missing file holds no records.
+///
+/// [`decode_bootstrap_records`] decodes the bytes; this keeps the file I/O.
 ///
 /// # Errors
 /// Returns [`BrokerError::BootstrapFile`] when the file cannot be read, when
 /// its version header is missing or unknown (the source is a
-/// [`BootstrapRecordsVersionError`]), or when a record is truncated or does
+/// [`krabka_format::BootstrapRecordsVersionError`]), or when a record is truncated or does
 /// not decode.
 pub fn load_bootstrap_records(log_dir: &Path) -> Result<Vec<MetadataRecord>, BrokerError> {
-    let path = log_dir.join(BOOTSTRAP_RECORDS_FILE);
+    let path = log_dir.join(BOOTSTRAP_RECORDS);
     if !path.exists() {
         return Ok(vec![]);
     }
@@ -353,44 +298,16 @@ pub fn load_bootstrap_records(log_dir: &Path) -> Result<Vec<MetadataRecord>, Bro
         path: path.clone(),
         source: Box::new(e),
     })?;
-    let Some((&header, mut cur)) = bytes.split_first_chunk::<2>() else {
-        return Err(BrokerError::BootstrapFile {
-            path,
-            source: Box::new(BootstrapRecordsVersionError::Missing),
-        });
-    };
-    let found = i16::from_be_bytes(header);
-    if found != BOOTSTRAP_RECORDS_VERSION {
-        return Err(BrokerError::BootstrapFile {
-            path,
-            source: Box::new(BootstrapRecordsVersionError::Unsupported { found }),
-        });
-    }
-    let mut out = Vec::new();
-    while !cur.is_empty() {
-        let Some((prefix, rest)) = cur.split_first_chunk::<4>() else {
-            return Err(BrokerError::BootstrapFile {
-                path,
-                source: "truncated length prefix".into(),
-            });
-        };
-        let len = u32::from_le_bytes(*prefix) as usize;
-        let Some((body, rest)) = rest.split_at_checked(len) else {
-            return Err(BrokerError::BootstrapFile {
-                path,
-                source: "truncated record body".into(),
-            });
-        };
-        let rec = <SerdeCompat<MetadataRecord>>::deserialize(body).map_err(|e| {
-            BrokerError::BootstrapFile {
-                path: path.clone(),
-                source: Box::new(io::Error::other(format!("decode: {e}"))),
+    decode_bootstrap_records(&bytes).map_err(|error| BrokerError::BootstrapFile {
+        path,
+        source: match error {
+            BootstrapRecordsError::Version(version) => Box::new(version),
+            BootstrapRecordsError::TruncatedLength | BootstrapRecordsError::TruncatedBody => {
+                error.to_string().into()
             }
-        })?;
-        out.push(rec);
-        cur = rest;
-    }
-    Ok(out)
+            BootstrapRecordsError::Decode(_) => Box::new(io::Error::other(error.to_string())),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -399,11 +316,12 @@ mod tests {
         super::*,
         crate::test_support::write_bootstrap_records,
         assert2::{assert, check},
+        krabka_format::{BOOTSTRAP_RECORDS_VERSION, BootstrapRecordsVersionError},
         krabka_metadata::ScramCredentialRecord,
         krabka_security::SaslMechanism,
         std::{
             collections::{BTreeMap, HashSet},
-            iter,
+            error, iter,
         },
         uuid::Uuid,
     };
@@ -572,161 +490,98 @@ mod tests {
     }
 
     fn write_records_file(dir: &Path, bytes: &[u8]) {
-        fs::write(dir.join(BOOTSTRAP_RECORDS_FILE), bytes).unwrap();
+        fs::write(dir.join(BOOTSTRAP_RECORDS), bytes).unwrap();
     }
 
-    /// The records the golden file holds.
-    fn golden_records() -> Vec<MetadataRecord> {
-        vec![MetadataRecord::V1FeatureLevel(
-            krabka_metadata::FeatureLevelRecord {
-                name: "metadata.version".into(),
-                level: 30,
-            },
-        )]
-    }
-
-    /// `golden_records` as a 1.0 `krabka format` writes them: the version
-    /// header, then one `u32` little-endian length and the wincode record.
+    /// The bytes a 1.0 `krabka format` writes for one `metadata.version`
+    /// feature level record.
     const GOLDEN_BYTES: &[u8] = include_bytes!("../../format/tests/fixtures/bootstrap.records.bin");
 
     #[test]
-    fn the_encoder_produces_the_golden_bytes() {
-        assert!(encode_bootstrap_records(&golden_records()).unwrap() == GOLDEN_BYTES);
-    }
-
-    #[test]
-    fn the_golden_bytes_decode_to_their_records() {
+    fn the_golden_bytes_load_to_their_records() {
         let dir = tempfile::tempdir().unwrap();
         write_records_file(dir.path(), GOLDEN_BYTES);
-        assert!(load_bootstrap_records(dir.path()).unwrap() == golden_records());
+        assert!(
+            load_bootstrap_records(dir.path()).unwrap()
+                == vec![MetadataRecord::V1FeatureLevel(
+                    krabka_metadata::FeatureLevelRecord {
+                        name: "metadata.version".into(),
+                        level: 30,
+                    },
+                )]
+        );
     }
 
-    /// A file holding only the header has no records.
-    #[test]
-    fn a_header_alone_holds_no_records() {
-        let dir = tempfile::tempdir().unwrap();
-        write_records_file(dir.path(), &BOOTSTRAP_RECORDS_VERSION.to_be_bytes());
-        assert!(load_bootstrap_records(dir.path()).unwrap().is_empty());
+    /// The kind of source a refused records file carries.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Source {
+        /// A typed [`BootstrapRecordsVersionError`].
+        Version(BootstrapRecordsVersionError),
+        /// An [`io::Error`] with this message.
+        Io(String),
+        /// A plain message.
+        Message(String),
     }
 
-    /// A missing header and an unknown version are refused, each with a
-    /// typed source. A file `krabka format` wrote before 1.0 starts with the
-    /// first record's `u32` little-endian length, which reads as an unknown
-    /// version.
-    fn refused_records(bytes: &[u8]) -> RefusedRecords {
-        let dir = tempfile::tempdir().unwrap();
-        write_records_file(dir.path(), bytes);
-        let error = load_bootstrap_records(dir.path()).unwrap_err();
-        RefusedRecords { dir, error }
-    }
-
-    /// The directory that holds a refused records file, and the refusal.
-    struct RefusedRecords {
-        dir: tempfile::TempDir,
-        error: BrokerError,
-    }
-
-    #[test]
-    fn a_missing_or_unknown_version_is_refused() {
-        struct Case {
-            what: &'static str,
-            bytes: Vec<u8>,
-            want: BootstrapRecordsVersionError,
+    impl Source {
+        fn of(source: &(dyn error::Error + Send + Sync + 'static)) -> Self {
+            match (
+                source.downcast_ref::<BootstrapRecordsVersionError>(),
+                source.downcast_ref::<io::Error>(),
+            ) {
+                (Some(version), _) => Self::Version(version.clone()),
+                (None, Some(io)) => Self::Io(io.to_string()),
+                (None, None) => Self::Message(source.to_string()),
+            }
         }
+    }
 
-        let mut pre_1_0 = Vec::new();
-        for record in golden_records() {
-            use wincode::Serialize as _;
-            let blob = <SerdeCompat<MetadataRecord>>::serialize(&record).unwrap();
-            pre_1_0.extend_from_slice(&u32::try_from(blob.len()).unwrap().to_le_bytes());
-            pre_1_0.extend_from_slice(&blob);
-        }
-        let pre_1_0_version = i16::from_be_bytes([pre_1_0[0], pre_1_0[1]]);
-        let mut version_one = GOLDEN_BYTES.to_vec();
-        version_one[..2].copy_from_slice(&1_i16.to_be_bytes());
-        let cases: [Case; 5] = [
-            Case {
-                what: "empty",
-                bytes: Vec::new(),
-                want: BootstrapRecordsVersionError::Missing,
-            },
-            Case {
-                what: "one byte",
-                bytes: vec![0],
-                want: BootstrapRecordsVersionError::Missing,
-            },
-            Case {
-                what: "version 1",
-                bytes: version_one,
-                want: BootstrapRecordsVersionError::Unsupported { found: 1 },
-            },
-            Case {
-                what: "version -1",
-                bytes: vec![0xff, 0xff],
-                want: BootstrapRecordsVersionError::Unsupported { found: -1 },
-            },
-            Case {
-                what: "the pre-1.0 layout",
-                bytes: pre_1_0,
-                want: BootstrapRecordsVersionError::Unsupported {
-                    found: pre_1_0_version,
-                },
-            },
+    /// A refused file is a [`BrokerError::BootstrapFile`] naming the file. A
+    /// refused version keeps its typed source, a record that does not decode
+    /// is an I/O error, and broken framing is a plain message.
+    #[test]
+    fn a_refused_records_file_names_the_file_and_the_cause() {
+        let header = BOOTSTRAP_RECORDS_VERSION.to_be_bytes();
+        let cases: [(&str, Vec<u8>, Source); 5] = [
+            (
+                "empty",
+                Vec::new(),
+                Source::Version(BootstrapRecordsVersionError::Missing),
+            ),
+            (
+                "version -1",
+                vec![0xff, 0xff],
+                Source::Version(BootstrapRecordsVersionError::Unsupported { found: -1 }),
+            ),
+            (
+                "a truncated length",
+                [&header[..], &[0, 0, 0]].concat(),
+                Source::Message("truncated length prefix".into()),
+            ),
+            (
+                "a truncated body",
+                [&header[..], &100u32.to_le_bytes(), &[0; 4]].concat(),
+                Source::Message("truncated record body".into()),
+            ),
+            (
+                "a zero-length body",
+                [&header[..], &0u32.to_le_bytes()].concat(),
+                Source::Io(
+                    decode_bootstrap_records(&[&header[..], &0u32.to_le_bytes()].concat())
+                        .unwrap_err()
+                        .to_string(),
+                ),
+            ),
         ];
-        for Case { what, bytes, want } in cases {
-            let RefusedRecords { dir, error } = refused_records(&bytes);
+        for (what, bytes, want) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            write_records_file(dir.path(), &bytes);
+            let error = load_bootstrap_records(dir.path()).unwrap_err();
             let BrokerError::BootstrapFile { path, source } = error else {
                 panic!("{what}: not a bootstrap file error: {error}");
             };
-            check!(path == dir.path().join(BOOTSTRAP_RECORDS_FILE), "{what}");
-            check!(
-                source.downcast_ref::<BootstrapRecordsVersionError>() == Some(&want),
-                "{what}"
-            );
-            check!(source.to_string().contains("predates krabka 1.0"), "{what}");
-        }
-    }
-
-    /// The framing after the header: a short length, a short body, and a
-    /// body that does not decode are each refused with their own message.
-    #[test]
-    fn malformed_framing_after_the_header_is_refused() {
-        struct Case {
-            what: &'static str,
-            bytes: Vec<u8>,
-            want: &'static str,
-        }
-
-        let header = BOOTSTRAP_RECORDS_VERSION.to_be_bytes();
-        let framed = |tail: &[u8]| [&header[..], tail].concat();
-        let cases: [Case; 4] = [
-            Case {
-                what: "a truncated length",
-                bytes: framed(&[0, 0, 0]),
-                want: "truncated length prefix",
-            },
-            Case {
-                what: "a truncated body",
-                bytes: framed(&[&100u32.to_le_bytes()[..], &[0; 4]].concat()),
-                want: "truncated record body",
-            },
-            Case {
-                what: "an undecodable body",
-                bytes: framed(&[&8u32.to_le_bytes()[..], &[0xff; 8]].concat()),
-                want: "decode:",
-            },
-            Case {
-                what: "a zero-length body",
-                bytes: framed(&0u32.to_le_bytes()),
-                want: "decode:",
-            },
-        ];
-        for Case { what, bytes, want } in cases {
-            let RefusedRecords { dir: _dir, error } = refused_records(&bytes);
-            let BrokerError::BootstrapFile { source, .. } = error else {
-                panic!("{what}: not a bootstrap file error: {error}");
-            };
-            check!(source.to_string().starts_with(want), "{what}: {source}");
+            check!(path == dir.path().join(BOOTSTRAP_RECORDS), "{what}");
+            check!(Source::of(source.as_ref()) == want, "{what}");
         }
     }
 

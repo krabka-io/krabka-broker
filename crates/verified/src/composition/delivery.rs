@@ -2,8 +2,9 @@
 use crate::broker::committed_fetch_response;
 use {
     super::{
-        FetchWatermarks, delivery_watermark_advance, earliest_max_timestamp_index,
-        fetch_visibility, restore_batch_step, scheduled_delivery_visible,
+        FetchReader, FetchWatermarks, Isolation, delivery_watermark_advance,
+        earliest_max_timestamp_index, fetch_visibility, restore_batch_step,
+        scheduled_delivery_visible,
     },
     crate::broker::FetchVisibility,
     creusot_std::prelude::*,
@@ -137,8 +138,12 @@ pub(super) fn scheduled_prefix_bounds_fetch(
     }
     let deliverable = delivery_watermark_advance(w.log_start, w.log_start, candidate, w.log_end);
     let bounded = FetchWatermarks { deliverable, ..w };
-    let consumer = fetch_visibility(false, true, bounded, w.log_start);
-    let follower = fetch_visibility(true, true, bounded, w.log_start);
+    let consumer = fetch_visibility(
+        FetchReader::Consumer(Isolation::ReadCommitted),
+        bounded,
+        w.log_start,
+    );
+    let follower = fetch_visibility(FetchReader::Follower, bounded, w.log_start);
     Some((deliverable, consumer, follower))
 }
 

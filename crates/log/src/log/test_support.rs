@@ -491,7 +491,7 @@ pub struct PartitionState {
 /// the first one, and the first offset of its open transaction.
 pub fn transaction_fields(log: &Log, producer_id: ProducerId) -> TransactionFields {
     TransactionFields {
-        coordinator_epoch: log.transaction_marker_state(producer_id).1,
+        coordinator_epoch: log.transaction_marker_state(producer_id).coordinator_epoch,
         first_offset: log.pending_transaction_start(producer_id),
     }
 }

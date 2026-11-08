@@ -27,7 +27,15 @@ Cargo working tree to build a subprocess from.
 ## Usage
 
 Every subcommand needs `--bootstrap-server` (`-b`), which also reads the
-`KRABKA_BOOTSTRAP_SERVER` environment variable.
+`KRABKA_BOOTSTRAP_SERVER` environment variable. On a TLS or SASL
+listener, add `--command-config <file>`, a Kafka client properties file like
+the one `kafka-topics --command-config` takes. Both flags go before the
+subcommand. [`krabka-cli-connection`](../cli-connection/README.md) lists the
+properties the file takes. The broker authorizes every barrier api as the
+principal that file logs in as, which needs `Alter` on the cluster to define,
+delete or trigger a group, and `Describe` on the cluster to describe or list
+one. `verify` also reads the log, so it needs `Describe` and `Read` on the
+group's topics.
 
 Define a group over two topics, cut it every five minutes, and keep the last
 200 cuts:
@@ -40,14 +48,17 @@ krabka-barrier -b broker-1:9092 define \
   --retained-cuts 200
 ```
 
-Trigger a cut now, read the cuts back, and prove that the newest one is in the
-log:
+Trigger a cut now, read it back, and prove that it is in the log. The trigger
+prints the epoch it took, 42 here:
 
 ```sh
 krabka-barrier -b broker-1:9092 trigger --group orders-cut --timeout 30s
-krabka-barrier -b broker-1:9092 list --group orders-cut --max-results 1
+krabka-barrier -b broker-1:9092 list --group orders-cut --from-epoch 42
 krabka-barrier -b broker-1:9092 verify --group orders-cut --epoch 42
 ```
+
+`list` prints cuts oldest first, so `--max-results 1` prints the oldest
+retained cut, not the newest. `--from-epoch` keeps the epoch it names.
 
 `verify` fetches the batch at every offset the cut names. It checks that each
 batch is a barrier control batch that carries this group and this epoch.
@@ -60,7 +71,7 @@ batch is a barrier control batch that carries this group and this epoch.
 | `delete` | `--group <name>` | Delete a group and its cuts. |
 | `describe` | `--group <name>` (repeat, or omit for every group) | Print a group's definition and its latest epoch. |
 | `trigger` | `--group <name>`, `--timeout <time>` | Inject a cut now and print the offsets it took. The broker clamps `--timeout` to its configured ceiling. |
-| `list` | `--group <name>`, `--from-epoch <n>` (default `0`), `--max-results <n>` (default `-1`, every retained cut) | Print a group's retained cuts. |
+| `list` | `--group <name>`, `--from-epoch <n>` (default `0`), `--max-results <n>` (default `-1`, every retained cut) | Print a group's retained cuts, oldest first. |
 | `verify` | `--group <name>`, `--epoch <n>` | Read the log at a cut's offsets and check that each one holds that cut's marker. |
 
 A `<time>` value takes any unit the broker configuration takes: `ns`, `us`,
@@ -76,12 +87,13 @@ and `krabka-guard`.
 | --- | --- |
 | `0` | The broker accepted the request. |
 | `1` | The broker refused the request. The reason is on stderr. |
-| `2` | The broker could not be reached. Nothing is known about the outcome. |
+| `2` | No request completed: the broker could not be reached or refused the login, or `--command-config` could not be read or names conflicting properties. Nothing is known about the outcome. |
 | `3` | A cut does not match the log. |
 
 ## Documentation
 
 - [KFC-4: cross-topic snapshots](../../docs/KFCs/KFC-4-cross-topic-snapshots.md)
+- [`krabka-cli-connection`](../cli-connection/README.md), the `--command-config` properties
 - [API documentation](https://krabka-io.github.io/krabka-broker/krabka-barrier/)
 
 ## License

@@ -10,14 +10,10 @@ use {
     crate::{
         error::RaftError,
         kraft::{
-            controller::checkpoint::{
-                CheckpointChunk, latest_checkpoint_id, load_checkpoint_by_id, open_checkpoint,
-            },
-            snapshot_fetch::SnapshotId,
+            controller::checkpoint::{CheckpointChunk, latest_checkpoint_id, open_checkpoint},
             transport::Inbound,
         },
     },
-    std::path::Path,
     tokio::sync::oneshot,
 };
 
@@ -58,13 +54,13 @@ impl ControllerHandle {
         };
         // Retention can delete the id between the scan and the open, which
         // reads as no checkpoint, as it did before the scan saw it.
-        let Some(mut checkpoint) = open_checkpoint(&self.data_dir, id.0, id.1) else {
+        let Some(mut checkpoint) = open_checkpoint(&self.data_dir, id) else {
             return SnapshotRange::NoSnapshot;
         };
         match checkpoint.read_chunk(position, max_bytes) {
             Ok(CheckpointChunk::Bytes(bytes)) => SnapshotRange::Slice(SnapshotSlice {
-                end_offset: id.0,
-                epoch: id.1,
+                end_offset: id.end_offset,
+                epoch: id.epoch,
                 total_size: i64::try_from(checkpoint.len()).unwrap_or(i64::MAX),
                 bytes: bytes::Bytes::from(bytes),
             }),
@@ -113,20 +109,15 @@ impl ControllerHandle {
     }
 }
 
-/// The highest `(end_offset, epoch)` `.checkpoint` in `dir` plus its raw
-/// bytes. Matches the bare-checkpoint format the engine writes (no `.meta`
-/// sidecar).
-pub(super) fn load_latest_checkpoint(dir: &Path) -> Option<(SnapshotId, Vec<u8>)> {
-    let id = latest_checkpoint_id(dir)?;
-    let bytes = load_checkpoint_by_id(dir, id.0, id.1)?;
-    Some((id, bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::{controller::test_support::joining_controller, metadata_partition_dir},
+        crate::{
+            controller::test_support::joining_controller,
+            kraft::{controller::checkpoint::load_latest_checkpoint, snapshot_fetch::SnapshotId},
+            metadata_partition_dir,
+        },
         std::fs,
         tempfile::TempDir,
     };
@@ -159,8 +150,9 @@ mod tests {
         )
         .unwrap();
 
-        let latest = load_latest_checkpoint(dir.path()).expect("checkpoint");
-        assert2::assert!(latest == ((2, 3), b"best".to_vec()));
+        let id = latest_checkpoint_id(dir.path());
+        let latest = load_latest_checkpoint(dir.path()).expect("readable checkpoint");
+        assert2::assert!((id, latest) == (Some(SnapshotId::new(2, 3)), Some(b"best".to_vec())));
     }
 
     #[yare::parameterized(

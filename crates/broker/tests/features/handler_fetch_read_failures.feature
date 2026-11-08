@@ -11,4 +11,5 @@ Feature: Fetch read failures and directory health
       | requested-0-before-log-start-5 | 1 | false |
       | requested-0-before-local-start-5 | 1 | false |
       | corrupt-record-batch-header | 2 | false |
+      | record-batch-that-does-not-parse | 2 | false |
       | task-panic-boom | -1 | false |

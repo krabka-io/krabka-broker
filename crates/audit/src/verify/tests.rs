@@ -576,6 +576,32 @@ fn stale_checkpoint_chain_head_mismatch_detected() {
     );
 }
 
+/// Each key id is trusted with the public key at its own position.
+#[test]
+fn paired_keys_trust_each_key_under_its_own_key_id() {
+    let trusted = TrustedKeys::paired(vec!["old".into(), "new".into()], vec![
+        b"old-key".to_vec(),
+        b"new-key".to_vec(),
+    ])
+    .unwrap();
+    check!(
+        (trusted.get("old"), trusted.get("new"), trusted.get("other"))
+            == (Some(&b"old-key"[..]), Some(&b"new-key"[..]), None)
+    );
+}
+
+/// A key id without a public key is refused rather than paired off by one.
+#[test]
+fn paired_keys_refuse_a_count_mismatch() {
+    let error = TrustedKeys::paired(vec!["old".into(), "new".into()], vec![b"old-key".to_vec()])
+        .unwrap_err();
+    check!(
+        error.to_string()
+            == "audit key: 2 key id(s) but 1 public key(s): each key id pairs with the public key \
+                at the same position"
+    );
+}
+
 /// The kind of bytes a torn or tampered write leaves after the last batch.
 #[derive(Debug, Clone, Copy)]
 enum CorruptTail {

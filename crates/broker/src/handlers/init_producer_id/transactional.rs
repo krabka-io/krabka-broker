@@ -141,58 +141,52 @@ async fn allocate_fresh(
     Ok(identity_response(pid, epoch))
 }
 
-/// KIP-939 `keepPreparedTxn`: recover the `Ongoing` transaction on `existing`
-/// under a fresh producer identity. `None` lets the call fall through to the
-/// reuse path, for an entry in any other state that is neither pending nor
-/// fenced.
+/// KIP-939 `keepPreparedTxn`: recover the `Ongoing` transaction on the
+/// published entry under a fresh producer identity. `None` lets the call fall
+/// through to the reuse path, for an entry in any other state that is neither
+/// pending nor fenced.
+///
+/// Like [`bump_epoch`], this takes the state-partition write lock and then the
+/// entry lock, and stages the recovery on a clone that it publishes only once
+/// the append is durable. Kafka's `prepareInitProducerIdTransit` likewise
+/// stages a `TxnTransitMetadata` and changes the cached metadata only in the
+/// append's success callback.
 async fn recover_prepared(
     coord: &TxnCoordinator,
     init: &TransactionalInit<'_>,
-    existing: &Mutex<TxnEntry>,
+    existing: &Arc<Mutex<TxnEntry>>,
     now_ms: i64,
 ) -> Result<Option<InitProducerIdResponse>, BrokerError> {
-    let recovery = {
-        let mut entry = existing.lock().await;
-        if let Some(response) = pending_or_fenced_response(&entry, init.request_identity) {
-            return Ok(Some(response));
-        }
-        if entry.state == TxnState::Ongoing {
-            let ongoing_pid = entry.producer_id;
-            let ongoing_epoch = entry.producer_epoch;
-            if init.enable_2pc {
-                entry.txn_timeout_ms = i32::MAX;
-            }
-            let ProducerIdentity {
-                id: next_pid,
-                epoch: next_epoch,
-            } = stage_recovery_identity(&mut entry, &coord.producer_ids).await?;
-            entry.last_update_ms = now_ms;
-            Some((
-                entry.clone(),
-                next_pid,
-                next_epoch,
-                ongoing_pid,
-                ongoing_epoch,
-            ))
-        } else {
-            None
-        }
-    };
-    if let Some((snapshot, next_pid, next_epoch, ongoing_pid, ongoing_epoch)) = recovery {
-        coord.put(snapshot, init.txnv).await?;
-        return Ok(Some(InitProducerIdResponse {
-            error_code: codes::NONE,
-            producer_id: next_pid.get(),
-            producer_epoch: next_epoch,
-            ongoing_txn_producer_id: ongoing_pid.get(),
-            ongoing_txn_producer_epoch: ongoing_epoch,
-            ..Default::default()
-        }));
+    let _state_partition_write = coord.lock_state_partition_for(init.tid).await;
+    let current = coord.get(init.tid).unwrap_or_else(|| Arc::clone(existing));
+    let mut entry = current.lock().await;
+    if let Some(response) = pending_or_fenced_response(&entry, init.request_identity) {
+        return Ok(Some(response));
     }
-    Ok(pending_or_fenced_response(
-        &*existing.lock().await,
-        init.request_identity,
-    ))
+    if entry.state != TxnState::Ongoing {
+        return Ok(None);
+    }
+    let mut staged = entry.clone();
+    if init.enable_2pc {
+        staged.txn_timeout_ms = i32::MAX;
+    }
+    let ProducerIdentity {
+        id: next_pid,
+        epoch: next_epoch,
+    } = stage_recovery_identity(&mut staged, &coord.producer_ids).await?;
+    staged.last_update_ms = now_ms;
+    let persisted = coord
+        .put_under_state_partition_lock(staged, init.txnv)
+        .await?;
+    *entry = persisted;
+    Ok(Some(InitProducerIdResponse {
+        error_code: codes::NONE,
+        producer_id: next_pid.get(),
+        producer_epoch: next_epoch,
+        ongoing_txn_producer_id: entry.producer_id.get(),
+        ongoing_txn_producer_epoch: entry.producer_epoch,
+        ..Default::default()
+    }))
 }
 
 /// Fence and abort the `Ongoing` transaction on the published entry. `None`
@@ -2027,5 +2021,102 @@ mod tests {
             after == live,
             "the fence's CompleteAbort overwrote the bumped identity"
         );
+    }
+
+    /// A KIP-939 `keepPreparedTxn` recovery of `tid` with `enable2Pc`, naming
+    /// no identity.
+    async fn recover_verified(
+        coordinator: &Arc<TxnCoordinator>,
+        tid: &str,
+    ) -> Result<InitProducerIdResponse, BrokerError> {
+        handle_transactional(
+            coordinator,
+            TransactionalInit::builder()
+                .tid(tid)
+                .txnv(TxnVersion::Verified)
+                .txn_timeout(60_000)
+                .enable_2pc(true)
+                .keep_prepared_txn(true)
+                .build(),
+        )
+        .await
+    }
+
+    /// A KIP-939 recovery whose state write fails leaves the published entry
+    /// as it was. Kafka stages the recovery on a `TxnTransitMetadata` and
+    /// changes the cached metadata only in the append's success callback, so
+    /// a failed append keeps neither the staged producer identity nor the
+    /// two-phase-commit timeout.
+    ///
+    /// The ongoing transaction sits one bump below the exhausted epoch, so the
+    /// recovery rotates to the test allocator's first producer id. Another
+    /// transactional id already owns that id, and the coordinator refuses the
+    /// install before it appends.
+    #[tokio::test]
+    async fn a_failed_recovery_write_leaves_the_published_entry_unchanged() {
+        const TID: &str = "tid-failed-recovery";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let SeededCoordinator {
+            coordinator,
+            partition: part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
+        seed(
+            &coordinator,
+            TxnEntry::new_empty("tid-owner".to_owned(), ProducerId(0), 0, 60_000, 0),
+        )
+        .await;
+        let mut ongoing =
+            TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), i16::MAX - 1, 60_000, 0);
+        ongoing.state = TxnState::Ongoing;
+        seed(&coordinator, ongoing).await;
+        let before = coordinator.get(TID).expect("entry").lock().await.clone();
+        let log_end = part.log_end_offset();
+
+        check!(recover_verified(&coordinator, TID).await.is_err());
+
+        let after = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(after == before);
+        check!(part.log_end_offset() == log_end);
+    }
+
+    /// A KIP-939 recovery that races a fence of the same ongoing transaction
+    /// keeps the fence's abort. The fence holds the state-partition write lock
+    /// first; the recovery must find the entry the fence persisted, which is
+    /// mid-abort, and answer `CONCURRENT_TRANSACTIONS`, rather than write the
+    /// `Ongoing` entry it read before the fence over the fence's abort.
+    #[tokio::test]
+    async fn a_recovery_racing_a_fence_does_not_overwrite_the_abort() {
+        const TID: &str = "tid-recovery-race";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_ongoing_transaction(dir.path(), TID).await;
+
+        // Both calls park on the partition's write lock while the test holds
+        // it, the fence first.
+        let state_partition_write = coordinator.lock_state_partition_for(TID).await;
+        let fence = tokio::spawn({
+            let coordinator = Arc::clone(&coordinator);
+            async move { init_verified(&coordinator, TID, InitIdentity::Anonymous).await }
+        });
+        task::yield_now().await;
+        let recovery = tokio::spawn({
+            let coordinator = Arc::clone(&coordinator);
+            async move { recover_verified(&coordinator, TID).await }
+        });
+        task::yield_now().await;
+        drop(state_partition_write);
+
+        let fenced = fence.await.expect("fence task").expect("fence responds");
+        let recovered = recovery
+            .await
+            .expect("recovery task")
+            .expect("recovery responds");
+
+        check!(fenced == concurrent_transactions_response());
+        check!(recovered == concurrent_transactions_response());
+        let after = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(after.state == TxnState::CompleteAbort);
     }
 }

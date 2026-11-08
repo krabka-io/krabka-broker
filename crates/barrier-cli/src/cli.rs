@@ -9,21 +9,29 @@
 
 use {
     clap::{Parser, Subcommand},
-    krabka_units::{Time, parse},
+    krabka_cli_connection::ConnectionArgs,
+    krabka_units::{Time, convert::TimeExt as _, parse},
 };
 
 /// The tool's command line.
 ///
 /// Shared by the binary and by [`crate::run_from_args`], so both accept
 /// exactly the same flags.
-#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-barrier",
     version,
     about = "Define barrier groups, trigger cuts, and verify a cut against the log"
 )]
-pub struct Cli {}
+pub struct Cli {
+    /// Where the cluster is.
+    #[command(flatten)]
+    pub connection: ConnectionArgs,
+
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// The subcommands, one per barrier api.
 #[derive(Subcommand)]
@@ -65,8 +73,10 @@ pub enum Command {
         /// How long the coordinator retries a partition that has no marker
         /// yet. Takes any time unit, the same as `--interval`. The broker
         /// clamps this to its own configured ceiling. Omit to take the
-        /// broker's default.
-        #[arg(long, value_parser = parse_time)]
+        /// broker's default. A negative value is refused, and so is one that
+        /// rounds to 0 ms (below 0.5ms) other than `0`, since the broker counts
+        /// this in whole milliseconds.
+        #[arg(long, value_parser = parse_timeout)]
         timeout: Option<Time>,
     },
     /// Print a group's retained cuts.
@@ -108,9 +118,29 @@ pub enum Command {
 /// meant milliseconds would otherwise wait thirty seconds without complaining.
 fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
 
+/// Parse `trigger --timeout`: a non-negative time argument that is `0` or
+/// rounds to at least one millisecond.
+///
+/// The request carries whole milliseconds and a non-positive value asks for
+/// the broker's default, so `250us` or `-5s` would otherwise reach the broker
+/// as that default rather than as the timeout the operator gave.
+fn parse_timeout(raw: &str) -> Result<Time, String> {
+    let timeout = parse::non_negative_time(raw).map_err(|e| e.to_string())?;
+    if timeout.nanos_i64() != 0 && timeout.millis_i64() == 0 {
+        return Err(format!(
+            "{raw} rounds to 0 ms, which asks for the broker's default; give at least 1ms"
+        ));
+    }
+    Ok(timeout)
+}
+
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_units::convert::TimeExt as _};
+    use {
+        super::*,
+        assert2::{assert, check},
+        std::path::PathBuf,
+    };
 
     krabka_macros::duration_parser_fixture!(
         {
@@ -134,12 +164,66 @@ mod tests {
         ]
     );
 
+    /// `--timeout` takes what `--interval` takes, except a value that rounds
+    /// to 0 ms and so would ask for the broker's default.
+    #[yare::parameterized(
+        one_millisecond = { "1ms", Some(1) },
+        five_seconds = { "5s", Some(5_000) },
+        rounds_up_to_one_millisecond = { "600us", Some(1) },
+        zero = { "0", Some(0) },
+        submillisecond = { "250us", None },
+        one_nanosecond = { "1ns", None },
+        missing_unit = { "90", None },
+        negative = { "-5s", None },
+        large_negative = { "-30d", None },
+    )]
+    fn parse_timeout_refuses_a_value_that_rounds_to_zero_milliseconds(
+        raw: &str,
+        expected_ms: Option<i64>,
+    ) {
+        check!(parse_timeout(raw).ok().map(Time::millis_i64) == expected_ms);
+    }
+
     krabka_macros::bootstrap_parser_fixture!(["krabka-barrier", "describe"], [
         "krabka-barrier",
         "-b",
         "localhost:9092",
         "describe"
     ]);
+
+    /// `--command-config` reaches a TLS or SASL listener the way
+    /// `kafka-topics --command-config` does, and it is refused after the
+    /// subcommand, where no connection flag goes.
+    #[test]
+    fn the_command_config_comes_before_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "krabka-barrier",
+            "-b",
+            "broker-1:9093",
+            "--command-config",
+            "/etc/krabka/barrier.properties",
+            "describe",
+        ])
+        .expect("parses");
+        check!(
+            cli.connection.security.command_config
+                == Some(PathBuf::from("/etc/krabka/barrier.properties"))
+        );
+        let plaintext = Cli::try_parse_from(["krabka-barrier", "-b", "broker-1:9093", "describe"])
+            .expect("parses");
+        check!(plaintext.connection.security.command_config == None);
+        assert!(
+            Cli::try_parse_from([
+                "krabka-barrier",
+                "-b",
+                "broker-1:9093",
+                "describe",
+                "--command-config",
+                "/etc/krabka/barrier.properties",
+            ])
+            .is_err()
+        );
+    }
 
     /// A group with no periodic injection is the default, and it reaches the
     /// wire as the -1 the broker reads as "on demand only".

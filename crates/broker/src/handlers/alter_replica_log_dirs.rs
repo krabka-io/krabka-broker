@@ -153,6 +153,9 @@ pub fn handle<'a>(
 
         // (topic, partition) → error code.
         let mut per_partition: BTreeMap<TopicPartitionKey, i16> = BTreeMap::new();
+        // Kafka handles the whole request under `replicaStateChangeLock`, so
+        // a concurrent request cannot interleave its moves with these.
+        let move_guard = broker.move_lock.lock().await;
         for (
             TopicPartitionKey {
                 topic,
@@ -162,6 +165,7 @@ pub fn handle<'a>(
         ) in destinations
         {
             let code = match future_log::start_move()
+                .move_guard(&move_guard)
                 .partitions(&partitions)
                 .future_logs(&future_logs)
                 .all_log_dirs(&all_log_dirs)
@@ -198,6 +202,7 @@ pub fn handle<'a>(
                 code,
             );
         }
+        drop(move_guard);
 
         // Group per-partition results back into the response's
         // per-topic shape.
