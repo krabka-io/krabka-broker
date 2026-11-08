@@ -909,7 +909,9 @@ pub async fn propose_isr(
     #[builder(default = WireUuid ([9 ; 16]))] topic_id: WireUuid,
     #[builder(into, default = krabka_metadata :: LeaderEpoch (7))]
     leader_epoch: krabka_metadata::LeaderEpoch,
-    #[builder(into, default = krabka_ids :: ApiVersion (2))] version: krabka_ids::ApiVersion,
+    /// v2 keeps the plain ISR list, avoiding the v3 broker-epoch eligibility extension.
+    #[builder(into, default = krabka_ids :: ApiVersion (2))]
+    version: krabka_ids::ApiVersion,
     #[builder(default = & [WireBrokerId (1)])] new_isr: &'_ [WireBrokerId],
     #[builder(default)] response_check: IsrResponseCheck,
 ) -> AlterPartitionResponse {

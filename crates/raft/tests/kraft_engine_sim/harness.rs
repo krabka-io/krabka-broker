@@ -70,6 +70,8 @@ pub fn start_engines(
     #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] ids: &'_ [NodeId],
     #[builder(default)] cluster_id: uuid::Uuid,
     #[builder(default = & STAGGERED_TIMEOUTS)] timeouts: &'_ [Time],
+    /// One fetch timeout for every node, or each node's election timeout when
+    /// `None`.
     fetch_timeout: Option<Time>,
 ) -> Vec<tempfile::TempDir> {
     let mut dirs = Vec::new();

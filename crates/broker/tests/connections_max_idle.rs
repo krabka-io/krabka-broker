@@ -38,10 +38,9 @@
 
 mod support;
 
-/// The dev server certificate scenario 4's TLS listener presents. Nothing
-/// verifies it -- the peer under test never sends a `ClientHello` -- but the
-/// listener will not bind without one.
-use support::tls::{DEV_CERT, DEV_KEY};
+// DEV_CERT is the dev server certificate scenario 4's TLS listener presents.
+// Nothing verifies it -- the peer under test never sends a `ClientHello` --
+// but the listener will not bind without one.
 use {
     assert2::assert,
     bytes::{Buf, BufMut, BytesMut},
@@ -64,7 +63,11 @@ use {
         path::{Path, PathBuf},
         time::Duration,
     },
-    support::{listeners::loopback_listener, wire::decode_response_frame},
+    support::{
+        listeners::loopback_listener,
+        tls::{DEV_CERT, DEV_KEY},
+        wire::decode_response_frame,
+    },
     tempfile::TempDir,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

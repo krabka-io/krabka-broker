@@ -48,6 +48,9 @@ pub(super) struct StaleFollower {
     pub caught_up_age: Duration,
 }
 
+/// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
+/// Each `(follower, age)` in `stale_followers` has not fetched from this
+/// leader and last caught up `age` ago.
 pub(super) async fn set_replica_state(
     part: &Partition,
     record: MetadataRecord,

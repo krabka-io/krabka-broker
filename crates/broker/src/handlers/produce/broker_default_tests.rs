@@ -42,7 +42,8 @@ async fn create_topic(broker: &BrokerHandle, name: &str) {
 }
 
 /// The stored value of one dynamic broker config, on `node` (the cluster
-/// default for [`DEFAULT_BROKER_CONFIG_NODE_ID`]).
+/// default for [`DEFAULT_BROKER_CONFIG_NODE_ID`]). By default it sets a
+/// cluster-wide two-MiB message cap.
 #[bon::builder]
 async fn set_broker_config(
     broker: &BrokerHandle,

@@ -93,7 +93,8 @@ pub fn tier<'a>(
         .call()
 }
 
-/// A tier borrowing its backends and the selected test resources.
+/// A tier borrowing its backends and the selected test resources: its
+/// policies and resources. Counter assertions override the shared metrics.
 #[bon::builder]
 pub fn configured_tier<'a>(
     rsm: &'a Arc<dyn RemoteStorageManager>,
