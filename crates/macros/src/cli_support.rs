@@ -195,8 +195,14 @@ fn documentation(input: TokenStream) -> Result<TokenStream, ParseError> {
     }
 }
 
-/// A documented `run_from_args` whose body turns `argv` into a `Cli` with
-/// `parse`.
+/// `run_from_args`, which turns `argv` into a `Cli` with `parse`, an expression
+/// of type `Result<Cli, clap::Error>`, and hands the result to the caller's
+/// `run`.
+///
+/// A parse error prints clap's message and returns the caller's `EXIT_USAGE`,
+/// so the code is the tool's own choice rather than clap's `2`. clap reports
+/// `--help` and `--version` as errors too, with exit code `0`, and those print
+/// to stdout and return `0`.
 fn cli_entrypoint(input: TokenStream, parse: &TokenStream) -> Result<TokenStream, ParseError> {
     let docs = documentation(input)?;
     Ok(moxy::template! {
@@ -206,19 +212,26 @@ fn cli_entrypoint(input: TokenStream, parse: &TokenStream) -> Result<TokenStream
             I: IntoIterator<Item = T>,
             T: Into<::std::ffi::OsString> + Clone,
         {
-            run({{ parse }}).await
+            match {{ parse }} {
+                Ok(cli) => run(cli).await,
+                Err(error) => {
+                    // A stream that refuses clap's message leaves the exit
+                    // code as the whole report.
+                    _ = error.print();
+                    if error.exit_code() == 0 { 0 } else { EXIT_USAGE }
+                }
+            }
         }
     })
 }
 
 pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
-    cli_entrypoint(input, &moxy::template! { Cli::parse_from(argv) })
+    cli_entrypoint(input, &moxy::template! { Cli::try_parse_from(argv) })
 }
 
 pub fn bootstrap_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
     cli_entrypoint(input, &moxy::template! {
         ::krabka_cli_connection::try_parse_with_env::<Cli, _, _>(argv, |name| ::std::env::var(name).ok())
-            .unwrap_or_else(|error| error.exit())
     })
 }
 

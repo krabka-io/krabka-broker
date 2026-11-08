@@ -45,8 +45,24 @@ pub enum ObjectStoreError {
         /// Why the backend rejected the operation.
         reason: String,
     },
-    /// Any other backend error. The error becomes a string, so the public
-    /// surface stays stable.
+    /// The store could not serve the request now, so the same request can
+    /// succeed later and a caller may retry it.
+    ///
+    /// This is a throttle, a server error, a timeout or a lost connection that
+    /// outlasted `object_store`'s own retries. It is also every failure that
+    /// `object_store` leaves unclassified: the crate does not expose the HTTP
+    /// status of such a failure, so a `400` lands here beside a `503`. A
+    /// permanent failure taken for a transient one costs a wasted retry; the
+    /// reverse would turn a throttled store into a hard error.
+    ///
+    /// The error becomes a string, so the public surface stays stable.
+    #[error("object store unavailable: {0}")]
+    Unavailable(String),
+    /// A backend failure that the same request meets again, so a retry does
+    /// not help: a refused or missing credential, an operation or a path the
+    /// backend does not support, or an answer this crate cannot decode.
+    ///
+    /// The error becomes a string, so the public surface stays stable.
     #[error("object store backend error: {0}")]
     Backend(String),
 }
@@ -77,6 +93,7 @@ impl From<object_store::Error> for ObjectStoreError {
                 key: ObjectPath::from(path),
                 reason: source.to_string(),
             },
+            generic @ object_store::Error::Generic { .. } => Self::Unavailable(generic.to_string()),
             other => Self::Backend(other.to_string()),
         }
     }
@@ -147,15 +164,25 @@ mod tests {
         assert!(msg.contains("256"));
     }
 
-    #[test]
-    fn other_errors_map_to_backend() {
-        let err = object_store::Error::Generic {
-            store: "s",
-            source: "boom".into(),
+    /// A failure `object_store` leaves unclassified can be retried; one it
+    /// names as permanent cannot.
+    #[yare::parameterized(
+        generic = { object_store::Error::Generic { store: "S3", source: "503 SlowDown".into() }, true },
+        permission_denied = { object_store::Error::PermissionDenied { path: "seg.log".to_owned(), source: "403".into() }, false },
+        unauthenticated = { object_store::Error::Unauthenticated { path: "seg.log".to_owned(), source: "401".into() }, false },
+        not_supported = { object_store::Error::NotSupported { source: "no copy_if_not_exists".into() }, false },
+        not_implemented = { object_store::Error::NotImplemented { operation: "copy".to_owned(), implementer: "S3".to_owned() }, false },
+        unknown_configuration_key = { object_store::Error::UnknownConfigurationKey { store: "S3", key: "region2".to_owned() }, false },
+    )]
+    fn backend_failures_split_by_whether_a_retry_can_help(
+        err: object_store::Error,
+        retryable: bool,
+    ) {
+        let got = match ObjectStoreError::from(err) {
+            ObjectStoreError::Unavailable(_) => Some(true),
+            ObjectStoreError::Backend(_) => Some(false),
+            _ => None,
         };
-        assert!(matches!(
-            ObjectStoreError::from(err),
-            ObjectStoreError::Backend(_)
-        ));
+        assert2::check!(got == Some(retryable));
     }
 }

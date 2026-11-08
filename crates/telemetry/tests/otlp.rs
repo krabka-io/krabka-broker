@@ -33,7 +33,13 @@ async fn init_with_otlp_installs_the_span_and_log_export_and_shuts_down() {
         heartbeat_interval: Some(secs(60)),
     };
 
-    let guard = krabka_telemetry::init(Some(cfg), "info", "info", "krabka-telemetry-test");
+    let guard = krabka_telemetry::init(
+        Some(cfg),
+        "info",
+        "info",
+        "krabka-telemetry-test",
+        Some("krabka-telemetry-test-project".to_owned()),
+    );
     assert2::assert!(let Ok(guard) = guard);
     assert2::assert!(dispatcher::has_been_set());
 

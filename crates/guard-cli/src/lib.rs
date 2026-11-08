@@ -28,7 +28,8 @@
 //!
 //! A runbook branches on `$?`, so every number means one thing across this tool
 //! and `krabka-barrier`. See [`EXIT_REFUSED`], [`EXIT_UNREACHABLE`],
-//! [`EXIT_MISMATCH`], [`EXIT_NO_APPROVAL`] and [`EXIT_BAD_SIGNATURE`].
+//! [`EXIT_MISMATCH`], [`EXIT_NO_APPROVAL`], [`EXIT_BAD_SIGNATURE`] and
+//! [`EXIT_USAGE`].
 //!
 //! # The api keys
 //!
@@ -94,6 +95,13 @@ pub const EXIT_NO_APPROVAL: i32 = 4;
 /// answer is wrong". KFC-5's verifier draws the same distinction.
 pub const EXIT_BAD_SIGNATURE: i32 = 5;
 
+/// The exit code for a command line the tool cannot parse.
+///
+/// It is `EX_USAGE` from BSD's `sysexits.h`, so a typo in a flag never reads as
+/// [`EXIT_UNREACHABLE`], which a runbook takes to mean "look at the broker".
+/// `--help` and `--version` are not usage errors, and exit `0`.
+pub const EXIT_USAGE: i32 = 64;
+
 krabka_macros::bootstrap_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
     /// Without `--bootstrap-server`, it reads `KRABKA_BOOTSTRAP_SERVER`.
@@ -104,11 +112,8 @@ krabka_macros::bootstrap_cli_entrypoint!({
     /// unusable. `3` means the registry names an operator key this machine
     /// does not hold. `4` means the action needs a break-glass
     /// approval that does not exist. `5` means a signature did not verify.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `argv` does not parse, which for a caller passing a literal
-    /// argument list is a bug in that list rather than a runtime condition.
+    /// [`EXIT_USAGE`] means the command line did not parse, and clap's message
+    /// is on stderr. `--help` and `--version` print and return `0`.
 });
 
 /// Run one parsed command against the process's stdout and stderr.

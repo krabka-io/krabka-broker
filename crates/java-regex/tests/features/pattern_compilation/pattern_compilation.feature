@@ -12,7 +12,7 @@ Feature: A client metrics match pattern compiles as Java's Pattern.compile does
       Then the pattern is refused as invalid
 
       Examples:
-        | case                         | pattern        |
+        | case                         | pattern         |
         | duplicate group name         | (?<n>a)(?<n>b) |
         | dangling quantifier          | *app           |
         | backwards repeat range       | app{3,1}       |
@@ -33,17 +33,44 @@ Feature: A client metrics match pattern compiles as Java's Pattern.compile does
         | an atomic group does not backtrack         | (?>app\|app-1)    | app-1  |
         | a quoted dot is not a wildcard             | \\Qapp.1\\E       | appx1  |
 
+  Rule: A reference to a group the pattern does not have never matches
+
+    Java compiles such a reference, so the pattern is accepted.
+
+    Scenario: The alternative beside a missing reference selects the client
+      Given a client metrics subscription that matches client ids with pattern (app)\2|svc-.*
+      When the subscription is tested against the client id svc-1
+      Then the subscription selects the client
+
+    Scenario: A missing reference never matches
+      Given a client metrics subscription that matches client ids with pattern (app)\2
+      When the subscription is tested against the client id appapp
+      Then the subscription does not select the client
+
+  Rule: A repeated look-ahead is a zero-width atom, tested at most once
+
+    Scenario: A look-ahead repeated at least once rules out a client it does not hold for
+      Given a client metrics subscription that matches client ids with pattern (?=svc)+.*
+      When the subscription is tested against the client id app-1
+      Then the subscription does not select the client
+
+    Scenario: A look-ahead repeated at least zero times rules out no client
+      Given a client metrics subscription that matches client ids with pattern (?=svc)*.*
+      When the subscription is tested against the client id app-1
+      Then the subscription selects the client
+
   Rule: A pattern Java compiles that cannot be read as Java reads it is refused
 
     Refusing it keeps a subscription from selecting clients that Java would
-    not select. The crate documents each such pattern under Limits.
+    not select. Each of these needs Unicode data that Java takes from its own
+    Unicode version. The crate documents each such pattern under Limits.
 
     Scenario Outline: A pattern beyond what can be read as Java reads it is refused
       When an operator writes the client metrics match pattern <pattern>
       Then the pattern is refused as invalid
 
       Examples:
-        | case                             | pattern      |
-        | Unicode block                    | \\p{InGreek} |
-        | quantified look-ahead            | (?=a)*a      |
-        | backreference to a missing group | (a)\\2       |
+        | case             | pattern                   |
+        | Unicode block    | \\p{InGreek}              |
+        | grapheme cluster | \\X                       |
+        | named character  | \\N{LATIN SMALL LETTER A} |

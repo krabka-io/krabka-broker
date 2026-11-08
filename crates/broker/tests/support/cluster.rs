@@ -110,8 +110,8 @@ struct NodeMeta {
 /// Like [`start_n_node`], but it invokes `customize(i, &mut cfg)` on each
 /// broker's `BrokerConfig` before start. A test can then add per-broker
 /// overrides such as `rack` or `replica_selector` and still keep the race-free
-/// held-listener bootstrap. There is no `bind_and_drop_ports` TOCTOU window in
-/// which a concurrently running test can steal a just-released port
+/// held-listener bootstrap. No port is released before its broker binds it, so
+/// there is no window in which a concurrently running test can steal one
 /// (`AddrInUse`).
 pub async fn start_n_node_with(
     n: u64,
@@ -130,8 +130,8 @@ pub async fn start_n_node_with(
     // binds its data-plane listener — a `:0` there would register port 0 and
     // break the inter-broker heartbeat / replication dial.
     //
-    // Unlike the bind-and-drop trick (`bind_and_drop_ports`), these sockets are
-    // never dropped before the broker re-binds them, so there is no TOCTOU
+    // Unlike the bind-and-drop trick (bind a listener, read its port, drop
+    // it), these sockets are never dropped before the broker re-binds them, so there is no TOCTOU
     // window for a concurrently-running test to steal a just-released port —
     // the `AddrInUse` flake under parallel `cargo test` / `cargo llvm-cov`.
     let mut client_listeners = Vec::with_capacity(n_usize);

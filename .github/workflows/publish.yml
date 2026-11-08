@@ -127,7 +127,7 @@ jobs:
       # path dependencies carry a `version` that becomes the published
       # requirement. `check-version-pins` reads all of them, as `release.yml`
       # does, so a tag over a tree that says another version publishes nothing.
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         if: github.ref_type == 'tag'
       - name: the version pins name the tag
         if: github.ref_type == 'tag'

@@ -242,7 +242,9 @@ async fn propose(
         action: action.wire(),
         target,
         reason,
-        // Zero asks the broker for `break_glass.proposal_ttl`.
+        // Zero asks the broker for `break_glass.proposal_ttl`. The parser
+        // refuses a `--ttl` below a millisecond, so only an omitted flag
+        // sends it.
         ttl_ms: ttl.map_or(0, Time::millis_i64),
         ..bg::ProposeBreakGlassRequest::default()
     };

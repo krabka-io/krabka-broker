@@ -73,6 +73,8 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+# No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }

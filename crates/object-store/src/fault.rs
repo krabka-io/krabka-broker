@@ -25,7 +25,8 @@
 //! The errors resemble a backend's errors but are not identical to them. A
 //! transport fault is an `object_store::Error::Generic` whose source is the
 //! text of the S3 status line, such as `503 SlowDown`, with no HTTP status
-//! behind it. A lost object is an `object_store::Error::NotFound`.
+//! behind it. A lost object is an `object_store::Error::NotFound`, and a
+//! refused credential is an `object_store::Error::PermissionDenied`.
 //!
 //! The failure schedule is deterministic, not random: a rate of 500 per
 //! thousand fails every second call to that operation, always the same ones,
@@ -111,6 +112,9 @@ pub enum FaultKind {
     /// The object is not there. Unlike the other two this is not a transport
     /// fault, and a caller is entitled to treat it as an answer.
     NotFound,
+    /// `403 AccessDenied`, the answer S3 gives a credential that may not make
+    /// the request. Retrying the same request meets it again.
+    AccessDenied,
 }
 
 impl FaultKind {
@@ -128,6 +132,10 @@ impl FaultKind {
             Self::NotFound => object_store::Error::NotFound {
                 path: location.to_string(),
                 source: "injected".into(),
+            },
+            Self::AccessDenied => object_store::Error::PermissionDenied {
+                path: location.to_string(),
+                source: "403 AccessDenied: Access Denied".into(),
             },
         }
     }

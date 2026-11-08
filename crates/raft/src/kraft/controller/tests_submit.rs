@@ -6,7 +6,7 @@ use {
     super::{CommitWaiter, Engine},
     crate::{
         OffsetReservation, SubmitChangeResult,
-        error::RaftError,
+        error::{FreezeRefusal, RaftError},
         kraft::{
             KraftController,
             controller::test_support::{
@@ -579,13 +579,20 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     create_task.await.unwrap().unwrap();
 
     let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
-    for rejected in [
-        freeze("orders", 10, true),
-        freeze("orders", 9, true),
-        freeze("missing", 11, false),
+    for (rejected, expected) in [
+        (freeze("orders", 10, true), FreezeRefusal::Stale),
+        (freeze("orders", 9, true), FreezeRefusal::Stale),
+        (freeze("missing", 11, false), FreezeRefusal::Missing),
     ] {
-        check_rejected_without_append(&ctrl, MetadataRecord::V1TopicFreeze(rejected), log_end)
+        let key = format!("Literal:{}", rejected.scope);
+        let result = ctrl
+            .submit_change(vec![MetadataRecord::V1TopicFreeze(rejected)])
             .await;
+        assert2::assert!(
+            let Err(RaftError::FreezeRefused { key: refused_key, refusal }) = result
+        );
+        assert2::check!((refused_key, refusal) == (key, expected));
+        assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
     }
     let batch = ctrl
         .submit_change(vec![
@@ -619,7 +626,17 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
             .is_some_and(|stored| stored.set_at_ms == i64::MAX)
     );
 
-    assert_rejected_change_and_shutdown(&ctrl, MetadataRecord::V1TopicFreeze(replacement)).await;
+    let retry = ctrl
+        .submit_change(vec![MetadataRecord::V1TopicFreeze(replacement)])
+        .await;
+    assert2::assert!(matches!(
+        retry,
+        Err(RaftError::FreezeRefused {
+            refusal: FreezeRefusal::Stale,
+            ..
+        })
+    ));
+    ctrl.shutdown().await;
 }
 
 #[tokio::test]

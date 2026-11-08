@@ -11,7 +11,7 @@ use {
             KAFKA_IMAGE_KRAFT, docker_bridge_gateway, docker_rm, kafka_cluster_id_string,
             produce_committed_prefix,
         },
-        support::{self, JvmBrokerSetup, JvmStaticVoterSetup, controller_voters},
+        support::{self, JvmBrokerSetup, JvmStaticVoterSetup, ReservedPorts, controller_voters},
         topic_admin::create_and_wait_for_isr,
     },
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
@@ -34,6 +34,10 @@ pub struct MixedCluster {
     pub krabka: Vec<(BrokerHandle, TempDir)>,
     jvm_container: String,
     _propdir: TempDir,
+    /// Holds every Krabka and JVM port, from before any of them is configured
+    /// until the cluster is dropped, so no other socket takes one before the
+    /// Krabka brokers bind theirs and `docker run -p` publishes the JVM's.
+    _reserved: ReservedPorts,
     /// Comma-separated `host.docker.internal:<port>` bootstrap for all data
     /// listeners reachable from inside the tool containers.
     pub bootstrap_all: String,
@@ -135,12 +139,12 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
     let cid_str = kafka_cluster_id_string(cluster_id);
     let advertised_host = docker_bridge_gateway();
 
-    // Pre-bind 2 Krabka client ports, 3 controller ports.
-    let (client_addrs, controller_addrs) = support::bind_and_drop_ports(3).await;
-    let krabka_client_ports = [client_addrs[0].port(), client_addrs[1].port()];
-    let p1 = controller_addrs[0].port();
-    let p2 = controller_addrs[1].port();
-    let p3 = controller_addrs[2].port();
+    // Reserve 2 Krabka client ports, the JVM data port, and 3 controller ports.
+    let reserved = support::reserve_ports(3);
+    let krabka_client_ports = [reserved.clients[0].port(), reserved.clients[1].port()];
+    let p1 = reserved.controllers[0].port();
+    let p2 = reserved.controllers[1].port();
+    let p3 = reserved.controllers[2].port();
 
     let mut krabka_voters: Vec<(u64, SocketAddr)> = vec![
         (1, format!("127.0.0.1:{p1}").parse().unwrap()),
@@ -185,7 +189,7 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 
     // Start JVM node 3, optionally as a controller voter. The capability test
     // uses broker-only mode so UpdateFeatures deterministically reaches Krabka.
-    let jvm_data_port = client_addrs[2].port();
+    let jvm_data_port = reserved.clients[2].port();
     let process_roles = if jvm_is_controller {
         "broker,controller"
     } else {
@@ -271,6 +275,7 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
         krabka: vec![(c1, dir1), (c2, dir2)],
         jvm_container: container.to_owned(),
         _propdir: propdir,
+        _reserved: reserved,
         bootstrap_all,
     }
 }

@@ -3,7 +3,7 @@
 use {
     crate::{
         ObjectStoreError, S3Config,
-        build::build_s3_store,
+        build::build_s3_store_resolved,
         control_plane::{s3_bucket_url, s3_http_client, signed_s3_get_xml},
     },
     serde::Deserialize,
@@ -50,7 +50,10 @@ pub async fn list_s3_multipart_uploads(
     cfg: &S3Config,
     prefix: Option<&str>,
 ) -> Result<Vec<IncompleteMultipartUpload>, ObjectStoreError> {
-    let store = build_s3_store(cfg)?;
+    // The listing signs its own requests, so it takes the region and the
+    // endpoint the store resolved from the environment as well as the config.
+    let (store, resolved) = build_s3_store_resolved(cfg)?;
+    let cfg = &resolved;
     let credential = store.credentials().get_credential().await?;
     let client = s3_http_client(cfg)?;
     let bucket_url = s3_bucket_url(cfg)?;

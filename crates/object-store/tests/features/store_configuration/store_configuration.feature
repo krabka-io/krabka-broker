@@ -107,3 +107,71 @@ Feature: An archive store is built from the operator's backend configuration
         | a connection may take five seconds  | connect timeout in seconds   | 5         |
         | create-only writes are atomic       | conditional put              | on        |
         | the bucket verifies each object     | SHA-256 checksum             | on        |
+
+  Rule: A configured S3 setting wins over the broker's AWS environment
+
+    Scenario Outline: The AWS environment does not override a configured S3 setting
+      Given an operator has configured the s3 backend with <configured>
+      And the broker's environment sets <variable> to <environment>
+      When the broker resolves the S3 store's settings
+      Then the store's <property> is <expected>
+
+      Examples:
+        | case                              | configured             | variable            | environment             | property      | expected                 |
+        | the configured region wins        | its essential settings | AWS_REGION          | eu-west-1               | region        | us-east-1                |
+        | the configured endpoint wins      | an endpoint            | AWS_ENDPOINT_URL_S3 | https://s3.example.test | endpoint      | http://minio:9000        |
+        | the configured access key id wins | a static access key    | AWS_ACCESS_KEY_ID   | environment-key-id      | access key id | operator-credential-7f3a |
+
+    Scenario: A configured static access key does not take the environment's session token
+      Given an operator has configured the s3 backend with a static access key
+      And the broker's environment sets AWS_SESSION_TOKEN to environment-session-token
+      When the broker resolves the S3 store's settings
+      Then the store has no session token
+
+    Scenario: A configured static access key wins over a web identity in the environment
+      Given an operator has configured the s3 backend with a static access key
+      And the broker's environment names a web identity credential whose token file is missing
+      When the broker asks the S3 store for a credential
+      Then the store signs with the configured access key
+
+  Rule: The broker's AWS environment fills an S3 setting the operator left unset
+
+    Scenario Outline: An unset S3 setting is taken from the AWS environment
+      Given an operator has configured the s3 backend with <configured>
+      And the broker's environment sets <variable> to <environment>
+      When the broker resolves the S3 store's settings
+      Then the store's <property> is <environment>
+
+      Examples:
+        | case                               | configured             | variable                               | environment                                             | property                   |
+        | the region from AWS_REGION         | no region              | AWS_REGION                             | eu-west-1                                               | region                     |
+        | the region from AWS_DEFAULT_REGION | no region              | AWS_DEFAULT_REGION                     | eu-central-1                                            | region                     |
+        | the endpoint from the S3 endpoint  | its essential settings | AWS_ENDPOINT_URL_S3                    | https://s3.example.test                                 | endpoint                   |
+        | the IRSA token file                | its essential settings | AWS_WEB_IDENTITY_TOKEN_FILE            | /var/run/secrets/eks.amazonaws.com/serviceaccount/token | web identity token file    |
+        | the IRSA role                      | its essential settings | AWS_ROLE_ARN                           | arn:aws:iam::123456789012:role/krabka-tier              | role ARN                   |
+        | the ECS task role                  | its essential settings | AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | /v2/credentials/krabka                                  | container credentials path |
+
+    Scenario: AWS_REGION wins over AWS_DEFAULT_REGION
+      Given an operator has configured the s3 backend with no region
+      And the broker's environment sets AWS_DEFAULT_REGION to eu-central-1
+      And the broker's environment sets AWS_REGION to eu-west-1
+      When the broker resolves the S3 store's settings
+      Then the store's region is eu-west-1
+
+    Scenario: An S3 store whose region nothing names signs for us-east-1
+      Given an operator has configured the s3 backend with no region
+      When the broker resolves the S3 store's settings
+      Then the store's region is us-east-1
+
+  Rule: An S3 store without a static key takes its credential from the AWS environment
+
+    Scenario Outline: The store reads the token file the environment names
+      Given an operator has configured the s3 backend with its essential settings
+      And the broker's environment names a <provider> credential whose token file is missing
+      When the broker asks the S3 store for a credential
+      Then the credential request fails on the missing token file
+
+      Examples:
+        | case             | provider         |
+        | IRSA on EKS      | web identity     |
+        | EKS Pod Identity | EKS Pod Identity |

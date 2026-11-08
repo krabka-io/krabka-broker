@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           disk-cache: false
@@ -158,7 +158,7 @@ jobs:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -264,7 +264,7 @@ jobs:
       # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -530,7 +530,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       - uses: ./.github/actions/remote-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -720,7 +720,7 @@ jobs:
       # whether this job builds anything, so it has to be resolved before the
       # cache-warming setup further down knows whether it is wanted. The Bazel
       # caches stay on that second step, on the path that actually runs Bazel.
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       - uses: ./.github/actions/remote-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -760,7 +760,7 @@ jobs:
             echo "hit=false" >>"${GITHUB_OUTPUT}"
           fi
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         if: steps.cached.outputs.hit != 'true'
         with:
           bazelisk-cache: true
@@ -849,7 +849,7 @@ jobs:
         with:
           # rdeps needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -966,7 +966,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -1011,7 +1011,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           disk-cache: false
@@ -1046,7 +1046,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           disk-cache: false
@@ -1070,7 +1070,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -1139,7 +1139,7 @@ jobs:
 
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
@@ -1201,7 +1201,7 @@ jobs:
 
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Off explicitly, as in `soak`: the remote cache covers it.
@@ -1271,7 +1271,7 @@ jobs:
       # The release build and the node image need the space.
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Off explicitly, as in `soak`: the remote cache covers it.
@@ -1602,7 +1602,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the

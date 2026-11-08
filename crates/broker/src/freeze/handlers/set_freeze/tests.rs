@@ -4,8 +4,10 @@
 //! connection, so a test can present a record she signed as well as one the
 //! trust set refuses.
 use {
+    super::{commit::submit_refusal, outcome::Refusal},
     crate::{
         cluster_id::encode,
+        codes,
         config::BrokerConfig,
         freeze::signing::freeze_signing_bytes,
         handlers::{RequestContext, test_support::StartedBroker},
@@ -15,7 +17,11 @@ use {
         },
     },
     krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord},
-    krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, SetTopicFreezeRequest},
+    krabka_protocol::{
+        krabka::freeze::{PATTERN_TYPE_LITERAL, SetTopicFreezeRequest},
+        primitives::uuid::Uuid as WireUuid,
+    },
+    krabka_raft::{FreezeRefusal, RaftError},
     krabka_security::Principal,
     ring::signature::Ed25519KeyPair,
     std::net::SocketAddr,
@@ -203,4 +209,79 @@ async fn handle_processes_request_and_encodes_response() {
     assert2::check!(!resp_bytes.is_empty());
 
     broker_handle.shutdown().await;
+}
+
+/// A thaw of a scope with no live entry is the operator's mistake, not a
+/// broker fault, so it answers `INVALID_REQUEST` before any record is built.
+/// Returning before the approval check leaves the named proposal unspent.
+#[test]
+fn a_thaw_of_a_scope_with_no_live_freeze_is_an_invalid_request() {
+    let config = BrokerConfig::default();
+    let thaw = SetTopicFreezeRequest {
+        frozen: false,
+        proposal_id: WireUuid(PROPOSAL.into_bytes()),
+        ..freeze_request("orders", PATTERN_TYPE_LITERAL)
+    };
+
+    with_freeze_env(
+        &config,
+        &image(&[("payments", PatternType::Literal)]),
+        |env| {
+            let refusal = super::checks::prepare(env, &thaw).err();
+
+            assert2::check!(
+                refusal
+                    == Some(Refusal::new(
+                        codes::INVALID_REQUEST,
+                        "literal:orders has no live freeze entry, so there is nothing to thaw",
+                    ))
+            );
+        },
+    );
+}
+
+/// A thaw that loses a race to another writer reaches the controller after
+/// the entry has gone, or behind a newer record. The controller's refusal
+/// answers the same `INVALID_REQUEST` the broker's own check does.
+#[rstest::rstest]
+#[case::missing(FreezeRefusal::Missing)]
+#[case::stale(FreezeRefusal::Stale)]
+fn a_thaw_the_controller_refuses_is_an_invalid_request(#[case] refusal: FreezeRefusal) {
+    let error = RaftError::FreezeRefused {
+        key: "Literal:orders".to_owned(),
+        refusal,
+    };
+
+    let answer = submit_refusal(&error, &thaw_record(), true);
+
+    assert2::check!(
+        answer
+            == Refusal {
+                code: codes::INVALID_REQUEST,
+                message: "literal:orders has no live freeze entry this thaw can replace; \
+                          describe the freezes and retry"
+                    .to_owned(),
+                signature_verified: true,
+            }
+    );
+}
+
+#[test]
+fn any_other_submit_failure_stays_a_coordinator_failure() {
+    let error = RaftError::ChangeRejected("disk full".to_owned());
+
+    let answer = submit_refusal(&error, &thaw_record(), false);
+
+    assert2::check!(answer.code == codes::COORDINATOR_NOT_AVAILABLE);
+}
+
+fn thaw_record() -> TopicFreezeRecord {
+    TopicFreezeRecord {
+        frozen: false,
+        ..super::checks::record_of(
+            &freeze_request("orders", PATTERN_TYPE_LITERAL),
+            PatternType::Literal,
+            ALICE,
+        )
+    }
 }
