@@ -456,6 +456,50 @@ struct PartitionSweep<'a> {
     permits: &'a SweepPermits,
 }
 
+/// What one tick reads from a partition's log, under one hold of its lock.
+struct LogSnapshot {
+    log_config: krabka_log::LogConfig,
+    log_start_offset: krabka_log::Offset,
+    /// The floor somebody established, which remote retention measures a
+    /// segment against.
+    deleted_below: Option<krabka_log::Offset>,
+    /// The epoch the epoch cache was cut to by that floor.
+    earliest_epoch: Option<krabka_ids::LeaderEpoch>,
+    local_exports: Vec<krabka_log::SegmentExport>,
+    local_log_size: ByteSize,
+    /// Kafka's `UnifiedLog.lastStableOffset`, which bounds what the copy may
+    /// upload.
+    last_stable_offset: krabka_log::Offset,
+}
+
+/// Reads config, both readings of the global log start and the sealed-segment
+/// list under one hold of the log lock, then drops it. `None` skips a
+/// partition whose log mutex is poisoned.
+///
+/// The floors ride along with the config because remote retention measures a
+/// segment against them, and a value read under a second lock could describe a
+/// different `DeleteRecords` than the segment list does.
+fn snapshot_log(partition: &Partition, high_watermark: krabka_log::Offset) -> Option<LogSnapshot> {
+    let mut log = lock_log_or_skip(partition)?;
+    let log_config = log.config_snapshot();
+    let log_start_offset = log.log_start_offset();
+    let deleted_below = log.established_log_start();
+    let earliest_epoch = log.log_start_epoch();
+    let local_exports = log.tierable_segments();
+    let local_log_size = log.size();
+    let last_stable_offset = log.last_stable_offset(high_watermark);
+    drop(log);
+    Some(LogSnapshot {
+        log_config,
+        log_start_offset,
+        deleted_below,
+        earliest_epoch,
+        local_exports,
+        local_log_size,
+        last_stable_offset,
+    })
+}
+
 /// Sweep one partition: the copy pass under a copier permit, then the two
 /// retention passes under an expiration permit.
 ///
@@ -483,39 +527,19 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // runs at all: the copy and the remote-retention pass are the
     // leader's, local retention is every replica's.
     let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
-    // Read config, both readings of the global log start and the
-    // sealed-segment list under one hold of the log lock, then drop it.
-    // The floors ride along with the config because remote retention
-    // measures a segment against them, and a value read under a second
-    // lock could describe a different `DeleteRecords` than the segment
-    // list does.
     // The high watermark is read before the lock, because reading it awaits.
     let high_watermark = partition.high_watermark().await;
-    let (
+    let Some(LogSnapshot {
         log_config,
         log_start_offset,
-        (deleted_below, earliest_epoch),
+        deleted_below,
+        earliest_epoch,
         local_exports,
         local_log_size,
-        lso,
-    ) = {
-        let Some(mut log) = lock_log_or_skip(&partition) else {
-            return;
-        };
-        let cfg = log.config_snapshot();
-        (
-            cfg,
-            log.log_start_offset(),
-            // What remote retention measures a segment against: the floor
-            // somebody established, and the epoch the epoch cache was cut to
-            // by it.
-            (log.established_log_start(), log.log_start_epoch()),
-            log.tierable_segments(),
-            log.size(),
-            // Kafka's `UnifiedLog.lastStableOffset`, which bounds what the
-            // copy may upload.
-            log.last_stable_offset(high_watermark),
-        )
+        last_stable_offset: lso,
+    }) = snapshot_log(&partition, high_watermark)
+    else {
+        return;
     };
     if !log_config.remote_storage_enable {
         // KIP-950: the alter paths refuse this flip unless
