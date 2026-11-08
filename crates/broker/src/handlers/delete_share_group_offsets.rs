@@ -149,40 +149,11 @@ pub async fn handle(
     // The actor answers in Kafka's row order: the deleted topics, the topics
     // `sharePartitionsEligibleForOffsetDeletion` refused, then the topics
     // whose state delete failed.
-    for (topic_name, outcome) in outcomes {
-        responses.push(match outcome {
-            DeleteTopicOutcome::Deleted { topic_id, .. } => DeleteShareGroupOffsetsResponseTopic {
-                topic_name,
-                topic_id: Uuid(*topic_id.as_bytes()),
-                error_code: codes::NONE,
-                ..Default::default()
-            },
-            DeleteTopicOutcome::UnknownTopic => DeleteShareGroupOffsetsResponseTopic {
-                topic_name,
-                topic_id: Uuid::default(),
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: kafka_message(codes::UNKNOWN_TOPIC_OR_PARTITION).map(str::to_owned),
-                ..Default::default()
-            },
-            DeleteTopicOutcome::NoState => DeleteShareGroupOffsetsResponseTopic {
-                topic_name,
-                topic_id: Uuid::default(),
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: Some(NO_OFFSETS_MESSAGE.to_owned()),
-                ..Default::default()
-            },
-            DeleteTopicOutcome::Failed {
-                topic_id,
-                error_code,
-            } => DeleteShareGroupOffsetsResponseTopic {
-                topic_name,
-                topic_id: Uuid(*topic_id.as_bytes()),
-                error_code,
-                error_message: kafka_message(error_code).map(str::to_owned),
-                ..Default::default()
-            },
-        });
-    }
+    responses.extend(
+        outcomes
+            .iter()
+            .map(|(topic_name, outcome)| topic_row(topic_name, outcome)),
+    );
 
     let resp = DeleteShareGroupOffsetsResponse {
         throttle_time_ms: 0,
@@ -213,6 +184,43 @@ fn invalidate_deleted_partitions(
                     .invalidate(gid, *topic_id, partition);
             }
         }
+    }
+}
+
+/// The response row for `topic_name`, rendered from the actor's `outcome`.
+fn topic_row(
+    topic_name: &str,
+    outcome: &DeleteTopicOutcome,
+) -> DeleteShareGroupOffsetsResponseTopic {
+    let (topic_id, error_code, error_message) = match *outcome {
+        DeleteTopicOutcome::Deleted { topic_id, .. } => {
+            (Uuid(*topic_id.as_bytes()), codes::NONE, None)
+        }
+        DeleteTopicOutcome::UnknownTopic => (
+            Uuid::default(),
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            kafka_message(codes::UNKNOWN_TOPIC_OR_PARTITION).map(str::to_owned),
+        ),
+        DeleteTopicOutcome::NoState => (
+            Uuid::default(),
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            Some(NO_OFFSETS_MESSAGE.to_owned()),
+        ),
+        DeleteTopicOutcome::Failed {
+            topic_id,
+            error_code,
+        } => (
+            Uuid(*topic_id.as_bytes()),
+            error_code,
+            kafka_message(error_code).map(str::to_owned),
+        ),
+    };
+    DeleteShareGroupOffsetsResponseTopic {
+        topic_name: topic_name.to_owned(),
+        topic_id,
+        error_code,
+        error_message,
+        ..Default::default()
     }
 }
 
