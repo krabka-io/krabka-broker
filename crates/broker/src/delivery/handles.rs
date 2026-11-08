@@ -5,9 +5,7 @@
 //! themselves: a restart or a leader change derives the same answer again.
 
 use {
-    crate::{
-        delivery::{PartitionDelivery, waker::DeliveryWaker},
-    },
+    crate::delivery::{PartitionDelivery, waker::DeliveryWaker},
     arc_swap::ArcSwapOption,
     krabka_ids::Offset,
     krabka_log::{DeliveryPolicy, Log, epoch_ms},
