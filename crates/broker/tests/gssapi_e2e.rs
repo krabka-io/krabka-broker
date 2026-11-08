@@ -60,7 +60,7 @@ const BOOTSTRAP: &str = "host.docker.internal:9092";
 use crate::support::init_tracing_with;
 /// Absolute path to the KDC fixture dir, which holds `kafka.keytab` and
 /// `alice.keytab`.
-use support::{free_port, manifest_dir};
+use support::{HeldPort, hold_port, manifest_dir};
 
 fn kdc_fixtures() -> PathBuf { manifest_dir().join("tests/fixtures/security/kdc") }
 
@@ -68,10 +68,13 @@ fn kdc_fixtures() -> PathBuf { manifest_dir().join("tests/fixtures/security/kdc"
 /// `client_jaas.conf`, and `client.properties`.
 fn gssapi_fixtures() -> PathBuf { manifest_dir().join("tests/fixtures/gssapi") }
 
-/// A running broker and the directory that backs it.
+/// A running broker, the directory that backs it, and the ports it binds.
 struct HostGssapiBroker {
     broker: BrokerHandle,
     dir: tempfile::TempDir,
+    /// Holds the controller and `INTERNAL` ports for as long as the broker
+    /// lives, so no other socket takes one before the broker binds it.
+    ports: [HeldPort; 2],
 }
 
 /// Spawn an in-process Krabka broker on `LISTEN`.
@@ -88,10 +91,12 @@ async fn start_host_gssapi_broker() -> HostGssapiBroker {
     cfg.broker_id = 1;
     cfg.listen_addr = LISTEN.parse().expect("static addr");
     cfg.advertised_listener = BOOTSTRAP.into();
-    let controller = format!("127.0.0.1:{}", free_port());
+    let ports = [hold_port(), hold_port()];
+    let [controller_port, internal_port] = ports.each_ref().map(HeldPort::port);
+    let controller = format!("127.0.0.1:{controller_port}");
     cfg.controller_listen_addr = controller.parse().expect("controller addr");
     cfg.controller_quorum_voters = vec![(cfg.node_id, controller)];
-    let internal = format!("127.0.0.1:{}", free_port());
+    let internal = format!("127.0.0.1:{internal_port}");
     cfg.listeners = vec![
         ListenerSpec {
             name: "SASL_PLAINTEXT".to_owned(),
@@ -124,6 +129,7 @@ async fn start_host_gssapi_broker() -> HostGssapiBroker {
     HostGssapiBroker {
         broker: handle,
         dir,
+        ports,
     }
 }
 
@@ -311,6 +317,7 @@ async fn cp_kafka_gssapi_client_round_trip(kerberos: KerberosRoundTrip) {
     let HostGssapiBroker {
         broker,
         dir: _directory,
+        ports: _ports,
     } = kerberos.broker.unwrap();
     broker.shutdown().await;
 }

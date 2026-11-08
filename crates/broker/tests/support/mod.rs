@@ -153,7 +153,7 @@ pub use self::{
         ContainerInput, JvmAdminSetup, JvmBrokerSetup, JvmDockerSetup, JvmListeners,
         JvmSingleBrokerSetup, JvmStaticVoterSetup, StartedBroker, bridge_gateway, combined_output,
         docker, docker_exec, docker_logs, docker_output, docker_run_blocking, docker_tool_command,
-        fixture_cache_dir, format_jvm_voter, free_port, init_jvm_tracing, jvm_acks_all_burst,
+        fixture_cache_dir, format_jvm_voter, init_jvm_tracing, jvm_acks_all_burst,
         jvm_acks_all_producer, jvm_admin_args, jvm_admin_config, jvm_bootstrap_servers,
         jvm_broker_config, jvm_client_addr, jvm_client_ports, jvm_docker_command, jvm_docker_run,
         jvm_finalized_level, jvm_listeners, jvm_output_lines, jvm_parse_offset,
@@ -168,7 +168,7 @@ pub use self::{
         sasl_client, sasl_plain_security, start_with_operator_key, start_with_operator_keys,
         start_with_operator_keys_sasl,
     },
-    ports::{ReservedPorts, bind_and_hold_ports, reserve_ports},
+    ports::{HeldPort, ReservedPorts, bind_and_hold_ports, hold_port, reserve_ports},
     reserved_port::reserve_port,
     sasl::{sasl_plaintext_config, sasl_plaintext_with_users, start_broker},
     single_broker::{
