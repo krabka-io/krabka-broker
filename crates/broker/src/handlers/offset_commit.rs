@@ -28,13 +28,13 @@ use {
                     validate_commit,
                 },
                 classic_state::OffsetEntry,
-                streams::actor::validate_streams_group_offset_commit,
+                streams::actor::commit_validation::validate_streams_group_offset_commit,
             },
         },
         error::BrokerError,
         handlers::{
-            ApiVersion, RequestContext, group_coordinator_error, group_read_denied,
-            requested_topic_name,
+            ApiVersion, RequestContext, group_actor_error_code, group_coordinator_error,
+            group_read_denied, requested_topic_name,
         },
         task_util::ask,
         time_util::now_ms,
@@ -258,7 +258,7 @@ async fn commit_rows(
             expire_timestamp_ms,
             image: &image,
         };
-        commit_through_actor(&handle, &valid, commit).await?;
+        commit_through_actor(broker, &handle, &valid, commit).await?;
     }
     Ok(rows)
 }
@@ -524,6 +524,7 @@ fn commit_records(
 ///
 /// Returns `Err(error_code)` when the append failed or the actor is gone.
 async fn commit_through_actor(
+    broker: &Broker,
     handle: &Arc<GroupActorHandle>,
     req: &OffsetCommitRequest,
     commit: Commit<'_>,
@@ -538,7 +539,7 @@ async fn commit_through_actor(
         reply,
     })
     .await
-    .unwrap_or(Err(codes::UNKNOWN_SERVER_ERROR))
+    .unwrap_or_else(|error| Err(group_actor_error_code(broker, &req.group_id, error)))
 }
 
 fn build_response_all(req: &OffsetCommitRequest, code: i16) -> OffsetCommitResponse {

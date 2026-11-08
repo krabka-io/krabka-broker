@@ -26,9 +26,9 @@ impl GroupCoordinator {
     ///
     /// The method walks ALL handles and selects on the group's LIVE kind, not
     /// on the spawn-time `handle.kind` hint. A KIP-848 live migration can make
-    /// the two differ. The `ClassicInspect` arm replies for a classic-kind
-    /// group only, so a consumer group or an upgraded group drops its reply
-    /// sender and this method skips it.
+    /// the two differ. The `ClassicInspect` arm gives a view for a
+    /// classic-kind group only, so this method skips a consumer group or an
+    /// upgraded group, which answers `None`.
     ///
     /// This keeps `list_groups` the only producer of the `classic` rows. The
     /// `ListGroups` handler emits the consumer-kind groups separately through
@@ -40,9 +40,10 @@ impl GroupCoordinator {
         let handles = cloned_registry_values(&self.groups);
         let mut out = Vec::with_capacity(handles.len());
         for h in handles {
-            // `ClassicInspect` replies only for a classic-kind group; a
-            // consumer-kind group never sends, so the ask errors and we skip.
-            if let Ok(view) = ask(&h.tx, |reply| GroupActorMessage::ClassicInspect { reply }).await
+            // `ClassicInspect` gives a view only for a classic-kind group, and
+            // an actor that stopped gives none.
+            if let Ok(Some(view)) =
+                ask(&h.tx, |reply| GroupActorMessage::ClassicInspect { reply }).await
             {
                 out.push(view.snapshot());
             }

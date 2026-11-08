@@ -13,7 +13,7 @@
 //!
 //! let rule = JavaPattern::compile("CN=([^,]+),OU=(?i)ops.*")?;
 //! assert!(rule.matches("CN=alice,OU=OPS-EU")?);
-//! assert!(rule.replace("CN=alice,OU=ops", "$1", true)? == "alice");
+//! assert!(rule.replace_all("CN=alice,OU=ops", "$1")? == "alice");
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -337,8 +337,7 @@ impl JavaPattern {
         }))
     }
 
-    /// `input.replaceAll(pattern, replacement)` when `all`, and
-    /// `input.replaceFirst(pattern, replacement)` when not.
+    /// `input.replaceAll(pattern, replacement)`.
     ///
     /// The matches are `Matcher.find`'s, not the `regex` crate's iterator's.
     /// After a match that is not empty, `find` may match the empty string at
@@ -352,11 +351,35 @@ impl JavaPattern {
     /// [`MatchError`] for a replacement Java refuses, for a search past the
     /// backtrack limit, and for an input longer than the pattern's input
     /// limit.
-    pub fn replace(&self, input: &str, replacement: &str, all: bool) -> Result<String, MatchError> {
+    pub fn replace_all(&self, input: &str, replacement: &str) -> Result<String, MatchError> {
+        self.replace_matches(input, replacement, None)
+    }
+
+    /// `input.replaceFirst(pattern, replacement)`: [`Self::replace_all`]
+    /// stopped after the first match, an empty one included.
+    ///
+    /// # Errors
+    ///
+    /// [`MatchError`] for a replacement Java refuses, for a search past the
+    /// backtrack limit, and for an input longer than the pattern's input
+    /// limit.
+    pub fn replace_first(&self, input: &str, replacement: &str) -> Result<String, MatchError> {
+        self.replace_matches(input, replacement, Some(1))
+    }
+
+    /// Replaces `Matcher.find`'s matches in `input`, at most `limit` of them,
+    /// or every one when `limit` is `None`.
+    fn replace_matches(
+        &self,
+        input: &str,
+        replacement: &str,
+        limit: Option<usize>,
+    ) -> Result<String, MatchError> {
         check_input_length(self.0.input_limit, input)?;
         let mut out = String::with_capacity(input.len());
         let mut copied = 0;
         let mut search_from = 0;
+        let mut replaced = 0;
         while search_from <= input.len() {
             let Some(groups) = self.find(input, search_from, copied)? else {
                 break;
@@ -371,7 +394,8 @@ impl JavaPattern {
             );
             self.append_replacement(&mut out, replacement, input, &groups)?;
             copied = whole.end;
-            if !all {
+            replaced += 1;
+            if limit.is_some_and(|limit| replaced >= limit) {
                 break;
             }
             search_from = next_search_start(input, &whole);
@@ -676,7 +700,7 @@ mod tests {
 
     fn check_replacements<'a>(
         cases: impl IntoIterator<Item = ReplaceCase<'a>>,
-        all: bool,
+        replace: fn(&JavaPattern, &str, &str) -> Result<String, MatchError>,
         include_replacement: bool,
     ) {
         for ReplaceCase {
@@ -692,8 +716,7 @@ mod tests {
                 format!("{source} on {input}")
             };
             check!(
-                pattern(source)
-                    .replace(input, replacement, all)
+                replace(&pattern(source), input, replacement)
                     .ok()
                     .as_deref()
                     == Some(expected),
@@ -747,7 +770,7 @@ mod tests {
             replace_row("a", "", "|", ""),
             replace_row("b*", "aé", "-", "-a-é-"),
         ];
-        check_replacements(cases, true, false);
+        check_replacements(cases, JavaPattern::replace_all, false);
     }
 
     /// `replaceFirst` stops after the first match, an empty one included.
@@ -759,7 +782,7 @@ mod tests {
                 replace_row("(.*)", "alice", "$1x", "alicex"),
                 replace_row("b*", "abc", "-", "-abc"),
             ],
-            false,
+            JavaPattern::replace_first,
             false,
         );
     }
@@ -1917,7 +1940,7 @@ mod tests {
             ),
             replace_row("(?i)\\G(a)\\1", "aAaAbaA", "x", "xxbaA"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// The matcher for a backreference under a case flag reads the rest of the
@@ -2023,7 +2046,7 @@ mod tests {
             replace_row("\\R", "a\r\nb", "|", "a|b"),
             replace_row("\\R\\n", "a\r\nb", "|", "a|b"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// `\R` is `\r\n` or one line terminator, and gives back the `\n` of
@@ -2139,7 +2162,7 @@ mod tests {
             replace_row("\\Z", "a\r\n", "|", "a|\r\n|"),
             replace_row("\\h+", "a\u{a0}\u{3000}b", "_", "a_b"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// `\h` and `\v` are Java's horizontal and vertical whitespace, and `\H`
@@ -2217,7 +2240,7 @@ mod tests {
             replace_row("(a)|(b)", "b", "[$1]", "[]"),
             replace_row("x", "abc", "$9", "abc"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// The replacements Java throws on.
@@ -2236,7 +2259,7 @@ mod tests {
     )]
     fn replace_all_refuses_what_java_throws_on(source: &str, input: &str, replacement: &str) {
         check!(
-            pattern(source).replace(input, replacement, true).is_err(),
+            pattern(source).replace_all(input, replacement).is_err(),
             "{source} on {input} with {replacement}"
         );
     }
@@ -2254,14 +2277,14 @@ mod tests {
     )]
     fn replace_all_names_what_java_throws_on(source: &str, replacement: &str, message: &str) {
         check!(
-            pattern(source).replace("a", replacement, true) == Err(MatchError(message.to_owned())),
+            pattern(source).replace_all("a", replacement) == Err(MatchError(message.to_owned())),
             "{source} with {replacement}"
         );
     }
 
     #[test]
     fn replace_first_stops_after_one_match() {
-        let result = pattern("a").replace("aaa", "b", false);
+        let result = pattern("a").replace_first("aaa", "b");
         assert!(result.ok().as_deref() == Some("baa"));
     }
 
@@ -2639,7 +2662,7 @@ mod tests {
             replace_row("(a*)*x", "aax", "[$1]", "[]"),
             replace_row("(a|b*)*c", "abc", "[$1]", "[]"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// A backreference sees the group an empty last iteration set. Each row is
@@ -2685,7 +2708,7 @@ mod tests {
             replace_row("\\G(a|)", "aab", "[$1]", "[a][a][]b"),
             replace_row("a*?\\G", "aa", "-", "-aa"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// A look-behind whose maximum length wraps in Java's `int`, and whose
@@ -2769,7 +2792,7 @@ mod tests {
             // No wrap.
             replace_row("(?<=a*)c", "aac", "<$0>", "aa<c>"),
         ];
-        check_replacements(cases, true, false);
+        check_replacements(cases, JavaPattern::replace_all, false);
     }
 
     /// Java's `Behind` counts its window in UTF-16 units, a class or `.` as
@@ -2800,7 +2823,7 @@ mod tests {
             // An input with no char past U+FFFF reads as before.
             replace_row("(?<=..)x", "abx", "<$0>", "ab<x>"),
         ];
-        check_replacements(cases, true, false);
+        check_replacements(cases, JavaPattern::replace_all, false);
     }
 
     /// A group the look-behind starts between the two UTF-16 units of a char
@@ -2809,8 +2832,8 @@ mod tests {
     #[test]
     fn a_group_holding_half_a_char_is_refused_in_a_replacement() {
         let source = ".(?<=(.))x";
-        check!(pattern(source).replace("😀x", "<$0>", true).ok().as_deref() == Some("<😀x>"));
-        check!(pattern(source).replace("😀x", "<$1>", true).is_err());
+        check!(pattern(source).replace_all("😀x", "<$0>").ok().as_deref() == Some("<😀x>"));
+        check!(pattern(source).replace_all("😀x", "<$1>").is_err());
     }
 
     /// A look-behind accepted with a wrapped maximum of at least 2^30 limits
@@ -2910,7 +2933,7 @@ mod tests {
             replace_row("(?<=\\R?(x))(y)", "xy", "[$2$1]", "x[yx]"),
             replace_row("(?<=\\R?(?<n>x))y", "\nxy", "[${n}$0]", "\nx[xy]"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// A counted repeat too large for the `regex` crate at its default size
@@ -2969,7 +2992,7 @@ mod tests {
             replace_row("(x){1,1000000000}", "xxx", "[$1]", "[x]"),
             replace_row("(?<n>x){1,1000000000}", "xxx", "[${n}]", "[x]"),
         ];
-        check_replacements(cases, true, true);
+        check_replacements(cases, JavaPattern::replace_all, true);
     }
 
     /// A very large repeat of something that matches nothing ends in a
@@ -3013,7 +3036,7 @@ mod tests {
             );
             check!(
                 compiled
-                    .replace(&input, "<$0>", true)
+                    .replace_all(&input, "<$0>")
                     .map_or(true, |out| out == replaced),
                 "{source} replaceAll"
             );
@@ -3077,7 +3100,7 @@ mod tests {
         let java = pattern(source);
         let matched = java
             .matches(input)
-            .map(|matched| matched.then(|| java.replace(input, "$1", true).unwrap_or_default()));
+            .map(|matched| matched.then(|| java.replace_all(input, "$1").unwrap_or_default()));
         check!(
             matched == Ok(group.map(str::to_owned)),
             "{source:?} against {input:?}"
@@ -3088,7 +3111,7 @@ mod tests {
     /// `replaceAll` on JDK 21.0.12.
     #[test]
     fn a_quantified_look_around_is_tested_at_each_match() {
-        check!(pattern("(?=(a))*").replace("aa", "[$1]", true) == Ok("[a]a[a]a[]".to_owned()));
+        check!(pattern("(?=(a))*").replace_all("aa", "[$1]") == Ok("[a]a[a]a[]".to_owned()));
     }
 
     /// What follows a quantified look-around reads as Java reads what follows
@@ -3135,7 +3158,7 @@ mod tests {
     /// 21.0.12.
     #[test]
     fn a_missing_reference_leaves_no_group_behind() {
-        check!(pattern("(a)\\2|a").replace("aa", "[$1]", true) == Ok("[][]".to_owned()));
+        check!(pattern("(a)\\2|a").replace_all("aa", "[$1]") == Ok("[][]".to_owned()));
     }
 
     /// A large look-behind under the size limit still compiles. Each row is
@@ -3147,6 +3170,6 @@ mod tests {
             replace_row("(?<=x{2,20000})y", "xxy", "<$0>", "xx<y>"),
             replace_row("(?<=x{2,20000})y", "xy", "<$0>", "xy"),
         ];
-        check_replacements(cases, true, false);
+        check_replacements(cases, JavaPattern::replace_all, false);
     }
 }

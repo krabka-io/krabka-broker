@@ -291,28 +291,6 @@ impl Broker {
             audit_signer,
         } = joined;
 
-        // 1b. KIP-853 controller auto-join. Spawned BEFORE the leader-wait in
-        //     step 2: a `Join` broker's empty raft log keeps it in openraft's
-        //     Learner state with no leader, so `Broker::start` would block in
-        //     step 2 forever. The auto-join loop concurrently sends
-        //     `AddRaftVoter(self)` to a `bootstrap_servers` entry; the leader's
-        //     handler runs `add_learner` (replicating the log to us) and
-        //     promotes us — at which point step 2's `watch_leader` fires and
-        //     start proceeds. `run` returns immediately when `auto_join` is
-        //     disabled (bootstrap / standalone brokers), so this is a cheap
-        //     no-op there. The loop advertises the controller's REAL bound
-        //     address, known now that `Controller::start` has bound the
-        //     listener.
-        // The joiner sends `AddRaftVoter` to a bootstrap server's *client*
-        // data-plane listener (where api_key 80 is served), so it speaks the
-        // inter-broker listener protocol — not the controller-listener
-        // protocol that openraft RPCs use.
-        // Auto-join grows the controller *voter* quorum, so only nodes that
-        // run a controller participate. A broker-only node is a pure observer
-        // and never joins the quorum.
-        // `start_metadata_phase` completes auto-join, leader readiness, the
-        // wait for `metadata.version`, and registration.
-
         // The metadata authority exists and this node has reached the quorum,
         // so `/readyz` can compare this node's offset against the quorum's.
         health.install_metadata_progress(metadata_progress(Arc::clone(&controller)));

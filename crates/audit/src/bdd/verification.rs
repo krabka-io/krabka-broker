@@ -9,10 +9,11 @@
 use {
     self::partition::{Alteration, AuditPartition, AuditorTrust},
     crate::{
-        RecordCount, Seq, VerifyReport,
+        OcsfVersion, RecordCount, Seq, VerifyReport,
         verify::{VerifyBreak, VerifyLoss},
     },
     krabka_bdd::Given,
+    krabka_metadata::krabka_version::KrabkaVersion,
 };
 
 mod partition;
@@ -181,9 +182,29 @@ fn broker_has_checkpointed(verification: &mut VerificationScenario, count: u64) 
     verification.partition.set(partition);
 }
 
+#[rstest_bdd_macros::given("a broker has written {count} audit events at krabka.version {level}")]
+fn broker_has_written_at(verification: &mut VerificationScenario, count: u64, level: i16) {
+    let mut partition = AuditPartition::new();
+    partition.write_events_at(count, OcsfVersion::at(KrabkaVersion::new(level)));
+    verification.partition.set(partition);
+}
+
 #[rstest_bdd_macros::given("it has written {count} more audit events")]
 fn broker_has_written_more(verification: &mut VerificationScenario, count: u64) {
     verification.partition.get_mut().write_events(count);
+}
+
+#[rstest_bdd_macros::given("it has written {count} more audit events at krabka.version {level}")]
+fn broker_has_written_more_at(verification: &mut VerificationScenario, count: u64, level: i16) {
+    verification
+        .partition
+        .get_mut()
+        .write_events_at(count, OcsfVersion::at(KrabkaVersion::new(level)));
+}
+
+#[rstest_bdd_macros::given("it has written a signed checkpoint")]
+fn broker_has_written_checkpoint(verification: &mut VerificationScenario) {
+    verification.partition.get_mut().write_signed_checkpoint();
 }
 
 /// The loss marker sits between events, so the chain runs on past it.

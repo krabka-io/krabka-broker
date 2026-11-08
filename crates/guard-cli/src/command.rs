@@ -19,6 +19,7 @@ use {
         },
         signing, verify,
     },
+    krabka_log::epoch_ms,
     krabka_protocol::{
         krabka::{
             break_glass as bg,
@@ -28,11 +29,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::{
-        io::Write,
-        path::Path,
-        time::{self, SystemTime},
-    },
+    std::{io::Write, path::Path, time::SystemTime},
 };
 
 // Commands share transport errors and the broker's ordinary refusal report.
@@ -159,7 +156,10 @@ async fn set_freeze(
     err: &mut impl Write,
 ) -> Result<i32, Failure> {
     let scope = scope.resolve()?;
-    let set_at_ms = now_ms();
+    // The signed record carries the wall clock, and the broker refuses one
+    // outside `freeze.signature_max_skew` of its own. A clock before the epoch
+    // reads as zero, which the broker refuses as far outside the window.
+    let set_at_ms = epoch_ms(SystemTime::now());
     let frozen = change.frozen();
     let proposal_id = WireUuid(*change.proposal().as_bytes());
 
@@ -377,17 +377,6 @@ async fn cluster_id(client: &krabka_client_core::Client) -> Result<String, Failu
         )));
     }
     Ok(response.cluster_id)
-}
-
-/// The current wall clock, in milliseconds since the Unix epoch.
-///
-/// A signed record carries it, and the broker refuses one outside
-/// `freeze.signature_max_skew` of its own clock. A clock before the epoch
-/// saturates at zero, which the broker then refuses as far outside the window.
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(time::UNIX_EPOCH)
-        .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(0))
 }
 
 #[cfg(test)]

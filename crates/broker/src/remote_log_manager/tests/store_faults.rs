@@ -33,6 +33,7 @@ use {
             self as fixtures, PartitionSnapshot, RetentionPolicy, TEST_COPY_TIMEOUT, copy_exports,
             partition_snapshot, rolled_tiered_partition_with_config,
         },
+        test_support::{LogCapture, LoggedEvent},
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
@@ -46,6 +47,7 @@ use {
         sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
+    tracing::{Instrument as _, Level, dispatcher, instrument::WithSubscriber as _},
 };
 
 /// How long a stalled store holds a call. Long enough that a copy under the
@@ -182,10 +184,11 @@ async fn a_healthy_store_finishes_every_copy() {
     );
 }
 
-/// A store answering `503 SlowDown` must leave nothing finished, count every
-/// attempt as an error, and leave the copy lag standing at the full backlog.
-/// Those are the three series `KrabkaRemoteCopyErrors` and
-/// `KrabkaRemoteCopyLagGrowing` read.
+/// A store answering `503 SlowDown` must leave nothing finished, count the
+/// throttled copy as an error, and leave the copy lag standing at the full
+/// backlog. Those are the three series `KrabkaRemoteCopyErrors` and
+/// `KrabkaRemoteCopyLagGrowing` read. The pass stops at the first throttled
+/// copy, so one tick counts one error, not one per segment.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series() {
     let FaultyCopyFixture {
@@ -223,8 +226,7 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
         "a throttled copy reached CopySegmentFinished: {listed:?}"
     );
     let label = orders_label();
-    let want = u64::try_from(exports.len()).unwrap();
-    check!(metrics.remote_copy_errors_total.get_or_create(&label).get() == want);
+    check!(metrics.remote_copy_errors_total.get_or_create(&label).get() == 1);
     check!(metrics.remote_copy_bytes_total.get_or_create(&label).get() == 0);
     // The lag is what the round found waiting. Nothing was copied, so a
     // second round must still find all of it: this is the gauge whose
@@ -238,6 +240,45 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
         metrics.remote_copy_lag_segments.get_or_create(&label).get()
             == i64::try_from(exports.len()).unwrap()
     );
+}
+
+/// A store that fails an upload fails the next one too, so the copy pass
+/// stops at the first, as Kafka's `RLMCopyTask` does, and the next tick
+/// retries from that segment. The two kinds are logged apart: a throttle
+/// clears on its own and is a warning; a refused credential does not and is
+/// an error.
+#[yare::parameterized(
+    throttled = { FaultKind::Throttled, Level::WARN },
+    refused = { FaultKind::AccessDenied, Level::ERROR },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread"))]
+async fn a_failing_store_stops_the_copy_pass_and_logs_its_kind(fault: FaultKind, level: Level) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let TieredPartition { exports, .. } = tiered_partition(log_dir.path());
+    let store = faulty_store(FaultPolicy::none().with(StoreOp::Put, OpFault::always(fault)));
+    let copy_context = CopyExportContext::new(backend(Arc::clone(&store)));
+    let capture = LogCapture::default();
+    let dispatch = capture.dispatch();
+    let span = dispatcher::with_default(&dispatch, LogCapture::span);
+
+    let copied = copy_context
+        .copy(CopyExportRequest::builder().exports(exports).build())
+        .instrument(span)
+        .with_subscriber(dispatch)
+        .await;
+
+    check!(copied == 0);
+    check!(
+        store.attempts(StoreOp::Put) == 1,
+        "the pass went on uploading to a failing store"
+    );
+    let stopped: Vec<Level> = capture
+        .events()
+        .into_iter()
+        .filter(|LoggedEvent { message, .. }| message.contains("stopping the copy pass"))
+        .map(|LoggedEvent { level, .. }| level)
+        .collect();
+    check!(stopped == [level]);
 }
 
 /// A store that accepts the upload and then answers [`STALL`] late must not
@@ -312,7 +353,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
     partitions.insert("orders".into(), PartitionIndex(0), first);
     let second_dir = tempfile::tempdir().unwrap();
     let second = tiered_partition(second_dir.path()).partition;
-    second.current_leader.store(1, Ordering::Relaxed);
+    second.test_set_leader(1);
     partitions.insert("orders".into(), PartitionIndex(1), second);
 
     let StoreBackend { store, rsm } = store_backend(stalling_store);

@@ -8,10 +8,10 @@ use {
         handlers::{ApiKeyCode, RequestContext},
         metrics::BrokerMetrics,
         quota::{
-            QuotaBuckets, QuotaDelay, QuotaType, debt_tokens, entity_field, lookup_quota_with_key,
-            throttle_time_ms,
+            QuotaBuckets, QuotaDelay, QuotaRecorded, QuotaType, lookup_quota_with_key,
+            record_consumer_quota, throttle_time_ms,
         },
-        throttle::{ReplicationQuota, TokenBucket, TopicThrottle},
+        throttle::{ClientQuota, ReplicationQuota, TopicThrottle},
     },
     krabka_protocol::{
         Encode as _,
@@ -131,10 +131,10 @@ fn record_throttled_replication(
 
 /// The bytes a consumer may read in one fetch without a throttle: Kafka's
 /// `ClientQuotaManager.maxValueInQuotaWindow`, which is
-/// `consumer_byte_rate * (quota.window.num - 1) * quota.window.size.seconds`.
-/// `quota_window` is the whole `quota.window.num * quota.window.size.seconds`
-/// and `quota_throttle_max` is one `quota.window.size.seconds`. Without a
-/// `consumer_byte_rate` the read is not capped.
+/// `consumer_byte_rate * (quota.window.num - 1) * quota.window.size.seconds`,
+/// over the window the client quotas sample
+/// ([`BrokerConfig::client_quota_window`](crate::config::BrokerConfig::client_quota_window)).
+/// Without a `consumer_byte_rate` the read is not capped.
 pub(super) fn consumer_quota_window_bytes(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
@@ -151,29 +151,27 @@ pub(super) fn consumer_quota_window_bytes(
     if !rate.is_finite() || rate <= 0.0 {
         return usize::MAX;
     }
-    let window_secs = (broker.config.quota_window - broker.config.quota_throttle_max)
-        .secs_f64()
-        .max(0.0);
+    let window = broker.config.client_quota_window();
+    let window_secs = f64::from(window.samples() - 1) * window.sample().secs_f64();
     (rate * window_secs).to_usize().unwrap_or(usize::MAX)
 }
 
 /// The byte-rate charge a consumer fetch made, in bytes, which a throttled
 /// fetch gives back.
-pub(super) struct ConsumerCharge(Option<ChargedBucket>);
+pub(super) struct ConsumerCharge(Option<ChargedQuota>);
 
-/// The bucket a consumer fetch drew from and the bytes it drew.
-struct ChargedBucket {
-    bucket: Arc<TokenBucket>,
+/// The quota a consumer fetch was recorded on and the bytes it recorded.
+struct ChargedQuota {
+    quota: Arc<ClientQuota>,
     bytes: u64,
 }
 
 impl ConsumerCharge {
     /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
-    /// no records, so the bytes it was charged come off the quota. The whole
-    /// charge comes back, the debt it left included.
+    /// no records, so the bytes it recorded come off the quota.
     pub fn refund(self) {
-        if let Some(ChargedBucket { bucket, bytes }) = self.0 {
-            bucket.refund(bytes);
+        if let Some(ChargedQuota { quota, bytes }) = self.0 {
+            quota.unrecord(bytes);
         }
     }
 }
@@ -258,12 +256,10 @@ struct ConsumerQuotaOutcome {
     charge: ConsumerCharge,
 }
 
-/// KIP-13 `consumer_byte_rate` enforcement.
-///
-/// The function looks up the matching quota for `(principal, client_id)`,
-/// takes `bytes` from the bucket, and returns the throttle delay with the
-/// charge it made. The delay is zero when the config sets no quota, or when
-/// the bucket has enough capacity.
+/// KIP-13 `consumer_byte_rate` enforcement: records `bytes` on the quota of
+/// the entity `(principal, client_id)` resolves to, and returns the throttle
+/// with the charge it made. The throttle is zero when the config sets no
+/// quota, or when the measured rate is within it.
 fn consume_consumer_quota(
     image: &krabka_metadata::MetadataImage,
     buckets: &QuotaBuckets,
@@ -271,45 +267,11 @@ fn consume_consumer_quota(
     client_id: Option<&str>,
     bytes: u64,
 ) -> ConsumerQuotaOutcome {
-    let Some((entity_key, rate)) =
-        lookup_quota_with_key(image, principal, client_id, QuotaType::Fetch)
-    else {
-        return ConsumerQuotaOutcome {
-            throttle: QuotaDelay::zero(),
-            charge: ConsumerCharge(None),
-        };
-    };
-    if !rate.is_finite() || rate <= 0.0 {
-        return ConsumerQuotaOutcome {
-            throttle: QuotaDelay::zero(),
-            charge: ConsumerCharge(None),
-        };
-    }
-    let user = entity_field(&entity_key, "user");
-    let client_id_opt = entity_field(&entity_key, "client-id");
-    // Kafka holds the quota as a double (`ClientQuotaManager`), so the bucket
-    // runs at the configured rate, fractional part included. Like the
-    // producer path it records the whole response and turns the debt into the
-    // throttle (#1212); a throttled fetch then gives the whole charge back.
-    let bucket = buckets.get_or_create(QuotaType::Fetch, &entity_key, rate);
-    let debt = bucket.record(bytes);
-    let charge = ConsumerCharge(Some(ChargedBucket {
-        bucket: Arc::clone(&bucket),
-        bytes,
-    }));
-    let Some(overage) = debt_tokens(debt) else {
-        return ConsumerQuotaOutcome {
-            throttle: QuotaDelay::zero(),
-            charge,
-        };
-    };
-    let delay_secs = overage / rate;
-    // Kafka's `ClientQuotaManager.throttleTime` does not bound a byte-rate
-    // throttle.
-    let delay = Time::from_secs_f64(delay_secs);
+    let QuotaRecorded { delay, quota } =
+        record_consumer_quota(image, buckets, principal, client_id, bytes);
     ConsumerQuotaOutcome {
-        throttle: QuotaDelay::new(delay, user, client_id_opt),
-        charge,
+        throttle: delay,
+        charge: ConsumerCharge(quota.map(|quota| ChargedQuota { quota, bytes })),
     }
 }
 
@@ -322,7 +284,9 @@ mod tests {
             metrics::BrokerMetrics,
             quota::{
                 QuotaBuckets,
-                test_support::{QuotaEntityInput, check_fractional_bandwidth, image_with_quota},
+                test_support::{
+                    QuotaEntityInput, check_fractional_bandwidth, image_with_quota, manual_buckets,
+                },
             },
             throttle::{LEADER_THROTTLED_REPLICAS_KEY, ReplicationQuota},
         },
@@ -374,20 +338,19 @@ mod tests {
             .key("consumer_byte_rate")
             .value(1024.0)
             .call();
-        // A one-second window, so 4096 bytes at 1024 B/s is over the burst
-        // rather than inside the default 11-second one.
-        let buckets = QuotaBuckets::with_window(secs(1));
-        // 3072 bytes over at 1024 B/s is three seconds, reported whole: Kafka
-        // does not bound a byte-rate throttle (#709).
+        // 40 960 bytes over Kafka's padded 10 s window are 4096 B/s, a
+        // `(4096 - 1024) / 1024 * 10 s` = 30 s throttle, reported whole:
+        // Kafka does not bound a byte-rate throttle (#709).
+        let buckets = QuotaBuckets::new();
         let delay_match =
-            super::consume_consumer_quota(&img, &buckets, "alice", Some("app-x"), 4096).throttle;
+            super::consume_consumer_quota(&img, &buckets, "alice", Some("app-x"), 40_960).throttle;
         assert!(
-            delay_match > millis(2_900) && delay_match <= secs(3),
+            delay_match == secs(30),
             "tuple quota match should throttle for the whole overage; got {delay_match:?}"
         );
-        let buckets2 = QuotaBuckets::with_window(secs(1));
+        let buckets2 = QuotaBuckets::new();
         let delay_other =
-            super::consume_consumer_quota(&img, &buckets2, "alice", Some("other"), 4096).throttle;
+            super::consume_consumer_quota(&img, &buckets2, "alice", Some("other"), 40_960).throttle;
         assert!(
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
@@ -403,26 +366,29 @@ mod tests {
         }
     }
 
-    /// A fetch is charged in full and, when that throttles it, the whole
-    /// charge comes back (`ClientQuotaManager.unrecordQuotaSensor`), the debt
-    /// it left included: the fetch that follows the throttle finds the bucket
-    /// as it was. A throttled fetch that is not refunded stays charged.
+    /// A fetch is recorded in full and, when that throttles it, the whole
+    /// charge comes back (`ClientQuotaManager.unrecordQuotaSensor`): the
+    /// fetch that follows the throttle finds the quota as it was. At
+    /// 1000 B/s over Kafka's padded 10 s window, 15 000 bytes are 1500 B/s, a
+    /// 5 s throttle. Given back, the 10 000 bytes after are 1000 B/s, within
+    /// the quota. Kept, the two are 2500 B/s, a 15 s throttle.
     #[test]
     fn a_throttled_fetch_gives_the_whole_charge_back() {
         let consume = alice_consumer();
 
-        let refunded = QuotaBuckets::with_window(secs(1));
-        let ConsumerQuotaOutcome { throttle, charge } = consume(&refunded, 1_500);
+        let (_, refunded) = manual_buckets();
+        let ConsumerQuotaOutcome { throttle, charge } = consume(&refunded, 15_000);
         charge.refund();
-        let after_refund = consume(&refunded, 1_000).throttle;
+        let after_refund = consume(&refunded, 10_000).throttle;
 
-        let kept = QuotaBuckets::with_window(secs(1));
-        let _ = consume(&kept, 1_500);
-        let after_kept = consume(&kept, 1_000).throttle;
+        let (_, kept) = manual_buckets();
+        let _ = consume(&kept, 15_000);
+        let after_kept = consume(&kept, 10_000).throttle;
 
-        assert!(throttle > <Time as TimeExt>::ZERO, "{throttle:?}");
-        assert!(after_refund == <Time as TimeExt>::ZERO, "{after_refund:?}");
-        assert!(after_kept > millis(1_400), "{after_kept:?}");
+        assert!(
+            (throttle.delay, after_refund.delay, after_kept.delay)
+                == (secs(5), <Time as TimeExt>::ZERO, secs(15))
+        );
     }
 
     /// What settling one consumer fetch's throttle did.
@@ -437,7 +403,8 @@ mod tests {
     /// a fetch that reports a throttle gives its charge back. A delay under
     /// half a millisecond still mutes the connection for that long, but the
     /// response reports no throttle and carries its records, so the fetch
-    /// keeps its charge.
+    /// keeps its charge. 15 000 bytes at 1000 B/s and then 10 000 are over
+    /// the quota unless the first are given back.
     #[test]
     fn only_a_reported_throttle_gives_the_charge_back() {
         let consume = alice_consumer();
@@ -471,13 +438,13 @@ mod tests {
                 user ["alice"];
                 client ["app"];
             };
-            let buckets = QuotaBuckets::with_window(secs(1));
-            let ConsumerQuotaOutcome { charge, .. } = consume(&buckets, 1_500);
+            let (_, buckets) = manual_buckets();
+            let ConsumerQuotaOutcome { charge, .. } = consume(&buckets, 15_000);
             let throttle_time_ms = super::settle_consumer_throttle(&context, delay, charge);
             actual.push((name, Settled {
                 throttle_time_ms,
                 recorded: context.take_throttle(),
-                refunded: consume(&buckets, 1_000).throttle == <Time as TimeExt>::ZERO,
+                refunded: consume(&buckets, 10_000).throttle == <Time as TimeExt>::ZERO,
             }));
             expected.push((name, want));
         }
@@ -490,8 +457,8 @@ mod tests {
     /// second.
     #[test]
     fn a_fractional_consumer_byte_rate_throttles() {
-        // `(consumer_byte_rate, response bytes, expected throttle)`. The
-        // one-second window gives the bucket a burst of exactly its rate.
+        // `(consumer_byte_rate, response bytes, expected throttle)`, measured
+        // over Kafka's padded window.
         check_fractional_bandwidth("consumer_byte_rate", |image, buckets, bytes| {
             super::consume_consumer_quota(image, buckets, "alice", Some("app"), bytes)
                 .throttle

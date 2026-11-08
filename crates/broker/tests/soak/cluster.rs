@@ -50,8 +50,9 @@
 pub use crate::support::docker;
 use {
     crate::support::{
+        HeldPort,
         diskless::broker_principal,
-        free_port,
+        hold_port,
         load_test::{Client, CreatableTopic, CreateTopicsRequest},
         remove_container_with_volumes,
         storage::host_directory_user,
@@ -227,6 +228,11 @@ pub struct SoakBroker {
     pub(crate) root: tempfile::TempDir,
     /// How this node is started; see [`Launch`].
     pub(crate) launch: Launch,
+    /// Holds every published host port above for the broker's whole life, so
+    /// no other process can take one between the reservation and
+    /// `docker run --publish`, or while a roll or a restart starts the
+    /// container again. Never read.
+    _held: Vec<HeldPort>,
 }
 
 impl SoakBroker {
@@ -456,6 +462,15 @@ impl Drop for SoakBroker {
     }
 }
 
+/// Hold a fresh host port, keep its reservation in `held`, and return the
+/// port number.
+fn hold_into(held: &mut Vec<HeldPort>) -> u16 {
+    let reservation = hold_port();
+    let port = reservation.port();
+    held.push(reservation);
+    port
+}
+
 /// The directory id node `n` is formatted with.
 ///
 /// Fixed rather than random so the `--initial-controllers` list every node is
@@ -588,16 +603,20 @@ impl SoakCluster {
         };
         let cluster_id = uuid::Uuid::new_v4().to_string();
         let mut brokers: Vec<SoakBroker> = (1..=brokers)
-            .map(|node_id| SoakBroker {
-                name: format!("krabka-soak-{}-{node_id}", process::id()),
-                node_id,
-                client_port: free_port(),
-                controller_port: free_port(),
-                metrics_port: free_port(),
-                inter_broker_port: diskless_quorum.then(free_port),
-                tls_port: tls.is_some().then(free_port),
-                root: tempfile::TempDir::new().expect("host data directory"),
-                launch: Launch::default(),
+            .map(|node_id| {
+                let mut held = Vec::new();
+                SoakBroker {
+                    name: format!("krabka-soak-{}-{node_id}", process::id()),
+                    node_id,
+                    client_port: hold_into(&mut held),
+                    controller_port: hold_into(&mut held),
+                    metrics_port: hold_into(&mut held),
+                    inter_broker_port: diskless_quorum.then(|| hold_into(&mut held)),
+                    tls_port: tls.is_some().then(|| hold_into(&mut held)),
+                    root: tempfile::TempDir::new().expect("host data directory"),
+                    launch: Launch::default(),
+                    _held: held,
+                }
             })
             .collect();
 

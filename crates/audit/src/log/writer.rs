@@ -14,15 +14,16 @@ use {
         checkpoint::Checkpoint,
         event::AuditEvent,
         ids::{EpochMs, Seq},
-        ocsf::ProductInfo,
+        ocsf::{OcsfVersionSwitch, ProductInfo},
         signing::FileEd25519Signer,
         sink::{AuditError, AuditRecord, AuditSink},
         spool::{PendingLosses, Spool},
         stats::AuditStats,
     },
+    krabka_log::epoch_ms,
     krabka_units::prelude::{Time, TimeExt as _},
     qubit_clock::Timer,
-    std::sync::Arc,
+    std::{sync::Arc, time::SystemTime},
     tracing::field::Empty,
 };
 
@@ -30,6 +31,10 @@ use {
 pub struct AuditWriterParams {
     pub sink: Arc<dyn AuditSink>,
     pub product: ProductInfo,
+    /// The OCSF record version each event is serialized with. The writer
+    /// reads it when it first serializes an event, so a record keeps that
+    /// version through the spool and its replay.
+    pub ocsf_version: OcsfVersionSwitch,
     pub signer: Option<Arc<FileEd25519Signer>>,
     /// Emit a checkpoint after the writer chains this many records since the
     /// last checkpoint. This field is a count, not an extent. `0` disables the
@@ -58,6 +63,7 @@ pub struct AuditWriter {
     rx: AuditReceiver,
     pub(super) sink: Arc<dyn AuditSink>,
     product: ProductInfo,
+    ocsf_version: OcsfVersionSwitch,
     chain: ChainState,
     signer: Option<Arc<FileEd25519Signer>>,
     checkpoint_every_n: u64,
@@ -83,6 +89,7 @@ impl AuditWriter {
             rx,
             sink: params.sink,
             product: params.product,
+            ocsf_version: params.ocsf_version,
             chain: params.chain,
             signer: params.signer,
             checkpoint_every_n: params.checkpoint_every_n,
@@ -234,7 +241,7 @@ impl AuditWriter {
     )]
     async fn write_chained(&mut self, event: &AuditEvent, durable: bool) -> Result<(), AuditError> {
         self.write_pending_loss_marker(durable).await?;
-        let record = AuditRecord::from_event(event, &self.product);
+        let record = AuditRecord::from_event(event, &self.product, self.ocsf_version.get());
         tracing::Span::current().record("seq", self.chain.next_seq());
         self.append_chained(record, durable).await
     }
@@ -303,7 +310,12 @@ impl AuditWriter {
         let seq_high = Seq(self.chain.next_seq().saturating_sub(1));
         tracing::Span::current().record("seq_high", seq_high.0);
         let head = self.chain.head();
-        let cp = Checkpoint::signed(signer.as_ref(), seq_high, &head, EpochMs(now_ms()));
+        let cp = Checkpoint::signed(
+            signer.as_ref(),
+            seq_high,
+            &head,
+            EpochMs(epoch_ms(SystemTime::now())),
+        );
         let record = cp.to_record();
         match self.write_or_spool(&record, false).await {
             Ok(()) => self.since_checkpoint = 0,
@@ -353,14 +365,6 @@ krabka_macros::timer_hooks! {
     /// writer must stop for the same reason [`arm`] returning `None` makes it stop.
     fired("the armed audit timer failed; stopping the writer");
 }
-
-krabka_macros::epoch_millis_fn!(
-/// Epoch-millisecond clock for the checkpoint timestamps.
-// cargo-mutants: wall-clock read; no deterministic assertion.
-#[cfg_attr(test, mutants::skip)]
-fn now_ms,
-i64::MAX
-);
 
 #[cfg(test)]
 mod tests {

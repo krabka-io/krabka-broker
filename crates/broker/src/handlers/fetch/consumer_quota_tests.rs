@@ -29,10 +29,15 @@ use {
     std::sync::Arc,
 };
 
-/// The broker's quota window, in seconds. A byte-rate bucket holds this many
-/// seconds of its rate. The window is long, so the bucket refills by a
-/// negligible part of a response between two fetches of the test.
+/// The broker's quota window, in seconds: two samples of half of it.
 const QUOTA_WINDOW_SECS: u32 = 20;
+
+/// The window Kafka's `Rate` measures a new client over, in seconds:
+/// `quota.window.num - 1` samples of `quota.window.size.seconds`, one sample
+/// of 10 s here. A byte-rate quota lets a new client read this many seconds
+/// of its rate before it throttles. The window is long, so the measured rate
+/// falls by a negligible part of a response between two fetches of the test.
+const PADDED_WINDOW_SECS: u32 = QUOTA_WINDOW_SECS / 2;
 
 /// The records the topic holds, in one batch. Enough that a response that
 /// carries them is far larger than one that carries none.
@@ -67,9 +72,9 @@ async fn fetch_from(
         .await
 }
 
-/// Three fetches by a user whose byte-rate bucket holds one and a half full
-/// responses. The first fetch of the whole log fits. The second takes the
-/// bucket past it, so it is throttled. Its bytes come off the quota again, so
+/// Three fetches by a user whose byte-rate quota allows one and a half full
+/// responses over the padded window. The first fetch of the whole log fits.
+/// The second takes the measured rate past the quota, so it is throttled. Its bytes come off the quota again, so
 /// the third fetch, from the end of the log, which carries no records, is not
 /// throttled. Charged without the refund, it would be.
 #[tokio::test]
@@ -93,7 +98,7 @@ async fn a_throttled_fetch_gives_its_bytes_back_to_the_next_fetch() {
     let measured = fetch_from(&broker, topic_id, 0, "consumer-measure").await;
     let full_response = fetch_response_size(&measured, MAX_VERSION);
     let rate = 1.5 * f64::from(u32::try_from(full_response).expect("small response"))
-        / f64::from(QUOTA_WINDOW_SECS);
+        / f64::from(PADDED_WINDOW_SECS);
     set_user_quota(&broker, user, "consumer_byte_rate", rate).await;
 
     let mut throttled = Vec::new();

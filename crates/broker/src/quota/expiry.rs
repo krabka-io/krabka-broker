@@ -13,10 +13,10 @@
 //! releases the metric series each one had materialised, so an inactive
 //! tenant's label set leaves the `/metrics` body instead of growing it forever.
 //!
-//! Reviving a client that was expired costs one bucket allocation and starts it
-//! at full burst, which is the same state a first-seen client gets. An hour of
-//! silence is longer than any quota window, so the burst it is handed back is
-//! one it would have refilled to anyway.
+//! Reviving a client that was expired costs one quota allocation and starts it
+//! with no samples, which is the same state a first-seen client gets. An hour
+//! of silence is longer than any quota window, so the samples it loses had
+//! already left the window.
 
 use {
     super::buckets::{ExpiredBucket, QuotaBuckets},

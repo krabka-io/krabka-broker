@@ -27,8 +27,8 @@ use {
     crate::{
         probe::{retry_until, wait_bounded},
         support::{
-            self, JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
-            jvm_docker_command, kafka_single_node_env_args, remove_container,
+            HeldPort, JvmListeners, controller_voters, docker_logs, hold_port, init_tracing,
+            jvm_broker_config, jvm_docker_command, kafka_single_node_env_args, remove_container,
             unique_container_name,
         },
     },
@@ -36,7 +36,7 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec},
     krabka_security::ListenerProtocol,
     std::{
-        net::SocketAddr,
+        net::{Ipv4Addr, SocketAddr},
         process::{Command, Output, Stdio},
         time::Duration,
     },
@@ -62,6 +62,10 @@ const ORACLE_BOOT_GAP: Duration = Duration::from_secs(1);
 pub struct KrabkaBroker {
     pub(crate) handle: BrokerHandle,
     pub(crate) dir: tempfile::TempDir,
+    /// Holds the inter-broker port for as long as the broker lives, so no
+    /// other socket takes it before the broker binds it. The client and
+    /// controller ports are held by the [`JvmListeners`] the broker started on.
+    pub(crate) inter_broker_port: HeldPort,
 }
 
 /// Boot an in-process krabka broker on `listeners`, advertised under the name
@@ -84,9 +88,8 @@ pub async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
     let dir = tempfile::tempdir().expect("tempdir");
     let controller_addr: SocketAddr = listeners.controller.parse().expect("allocated addr");
     let client_addr: SocketAddr = listeners.listen.parse().expect("allocated addr");
-    let inter_broker_addr: SocketAddr = format!("127.0.0.1:{}", support::free_port())
-        .parse()
-        .expect("allocated addr");
+    let inter_broker_port = hold_port();
+    let inter_broker_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, inter_broker_port.port()));
     let config = BrokerConfig {
         listeners: vec![
             ListenerSpec {
@@ -122,7 +125,11 @@ pub async fn start_krabka(listeners: &JvmListeners) -> KrabkaBroker {
         "KRABKA[test] broker started listen={} advertised={} inter_broker={}",
         listeners.listen, listeners.advertised, inter_broker_addr
     );
-    KrabkaBroker { handle, dir }
+    KrabkaBroker {
+        handle,
+        dir,
+        inter_broker_port,
+    }
 }
 
 /// Run the tool from a throwaway container against the krabka broker that

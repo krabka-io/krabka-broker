@@ -25,6 +25,7 @@ use {
     krabka_metadata::{MetadataImage, NodeId},
     krabka_security::{ClientAuthMode, TlsConfig},
     rustls::{
+        crypto::aws_lc_rs,
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject},
         server::WebPkiClientVerifier,
     },
@@ -39,6 +40,18 @@ use {
         time::SystemTime,
     },
 };
+
+/// Installs aws-lc-rs as the process-wide rustls `CryptoProvider`, unless one
+/// is installed already.
+///
+/// Both the `aws-lc-rs` and the `ring` rustls features are in the dependency
+/// graph, so rustls cannot pick a provider by itself, and
+/// `CryptoProvider::get_default()` panics until one is installed. Every path
+/// that builds a rustls config calls this first. That includes broker startup
+/// and the OAuth introspection client, which `FileConfig::apply_to` builds
+/// before the broker starts. A second install returns `AlreadySet`, which is
+/// ignored: every caller installs the same provider, so the first one wins.
+pub fn ensure_crypto_provider() { let _ = aws_lc_rs::default_provider().install_default(); }
 
 /// Kafka's `DefaultSslEngineFactory.PEM_TYPE`.
 const PEM: &str = "PEM";

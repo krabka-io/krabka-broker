@@ -4,6 +4,10 @@
 
 use {
     super::{
+        commit_validation::{
+            streams_offset_delete_guard, validate_streams_group_commit,
+            validate_streams_group_offset_commit, validate_streams_group_offset_fetch,
+        },
         test_support::{
             coordinator_with_log, describe, heartbeat_result_at, make_coordinator, member_request,
             response_tasks, undelayed,
@@ -17,12 +21,12 @@ use {
             offsets_log::fake::InMemoryOffsetsLog,
             persistence::parse_key,
             streams::{
-                config::KEY_NUM_STANDBY_REPLICAS,
+                config::{KEY_NUM_STANDBY_REPLICAS, resolve_group_config_from_image},
                 persistence::{
                     DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords,
                     StoredSubtopology, StoredTopicInfo, StreamsGroupMetadataValue,
                 },
-                state::{StreamsGroupState, StreamsMemberState},
+                state::{StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState},
             },
             test_support::{assert_single_member_limit_with_log, heartbeat_write_failures},
         },
@@ -103,6 +107,53 @@ fn persisted_group_config_overrides_actor_defaults() {
     let unaffected =
         resolve_group_config_from_image(&StreamsGroupConfig::default(), &image, "other-app");
     assert!(unaffected == StreamsGroupConfig::default());
+}
+
+/// A handle whose mailbox is already closed, as after the actor exited.
+fn closed_handle() -> StreamsGroupActorHandle {
+    let (tx, rx) = mpsc::channel(1);
+    drop(rx);
+    StreamsGroupActorHandle {
+        tx,
+        owner: Arc::new(()),
+        _task: tokio::spawn(async {}),
+    }
+}
+
+/// Every validation round trip answers an actor that never replies with the
+/// code its caller sends back. A commit or fetch check answers a closed mailbox
+/// with `UNKNOWN_SERVER_ERROR` and a dropped reply with the retriable
+/// `COORDINATOR_NOT_AVAILABLE`; the `OffsetDelete` guard answers both with
+/// `GROUP_ID_NOT_FOUND`.
+#[tokio::test]
+async fn validation_round_trips_answer_an_actor_that_never_replies() {
+    let cases = [
+        (
+            "closed mailbox",
+            closed_handle(),
+            codes::UNKNOWN_SERVER_ERROR,
+        ),
+        (
+            "dropped reply",
+            StreamsGroupActorHandle::dropping_replies(),
+            codes::COORDINATOR_NOT_AVAILABLE,
+        ),
+    ];
+    for (label, handle, validation_code) in cases {
+        let answers = [
+            validate_streams_group_commit(&handle, "m1", None, 1, Vec::new()).await,
+            validate_streams_group_offset_commit(&handle, "m1", 1, 9, Vec::new()).await,
+            validate_streams_group_offset_fetch(&handle, Some("m1"), 1).await,
+            streams_offset_delete_guard(&handle).await.err(),
+        ];
+        let expected = [
+            Some(validation_code),
+            Some(validation_code),
+            Some(validation_code),
+            Some(codes::GROUP_ID_NOT_FOUND),
+        ];
+        assert!(answers == expected, "{label}");
+    }
 }
 
 /// The member ids that the group holds, sorted.

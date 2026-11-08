@@ -24,7 +24,8 @@ use {
             configure_single_partition_transactions, decode_response, dispatch_context,
             encode_request, peer, principal, request_context, start_broker_no_audit_with,
         },
-        txn::{state::TxnEntry, util::now_millis, version::TxnVersion},
+        time_util,
+        txn::{state::TxnEntry, version::TxnVersion},
     },
     assert2::check,
     krabka_log::ProducerId,
@@ -156,7 +157,7 @@ async fn stage_producer_identity(broker: &Broker, transactional_id: &str, produc
         ProducerId(producer_id),
         0,
         60_000,
-        now_millis(),
+        time_util::now_ms(),
     );
     entry.next_producer_id = ProducerId(producer_id + 1);
     entry.next_producer_epoch = 0;

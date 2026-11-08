@@ -20,7 +20,7 @@ use {
     crate::{
         broker::Broker,
         coordinator::unified::streams::{
-            actor::resolve_group_config_from_image,
+            config::resolve_group_config_from_image,
             topology::{InternalTopicSpec, status as topo_status},
         },
         handlers::{RequestContext, acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},

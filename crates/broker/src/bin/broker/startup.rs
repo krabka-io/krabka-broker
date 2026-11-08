@@ -454,7 +454,7 @@ mod tests {
         super::*,
         crate::test_support::env_guard,
         assert2::assert,
-        krabka_broker::config::DEFAULT_BROKER_ID,
+        krabka_broker::{BrokerState, config::DEFAULT_BROKER_ID},
         std::{
             error::Error,
             fs, future, io,
@@ -518,10 +518,6 @@ mod tests {
         shutdown: CancellationToken,
     }
 
-    // The `PENDING_CONTROLLED_SHUTDOWN` ordinal of `HealthState::broker_state`,
-    // which `/readyz` reports 503 for.
-    const PENDING_CONTROLLED_SHUTDOWN: i64 = 6;
-
     // The post-start path of `krabka-broker`: a controller fault after the
     // broker has come up ends the process with an error that carries Kafka's
     // message, and the stop it runs leaves no clean-shutdown proof, as a
@@ -553,7 +549,7 @@ mod tests {
                 "{name}: a fault-driven stop left a clean-shutdown proof"
             );
             assert!(
-                health.broker_state() == PENDING_CONTROLLED_SHUTDOWN,
+                health.broker_state() == BrokerState::PendingControlledShutdown,
                 "{name}: /readyz was not flipped before the stop"
             );
             assert!(health_shutdown.is_cancelled(), "{name}: probes still up");
@@ -583,7 +579,7 @@ mod tests {
 
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(dir.path().join(CLEAN_SHUTDOWN_PROOF).exists());
-        assert!(health.broker_state() == PENDING_CONTROLLED_SHUTDOWN);
+        assert!(health.broker_state() == BrokerState::PendingControlledShutdown);
         assert!(health_shutdown.is_cancelled());
     }
 

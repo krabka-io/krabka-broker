@@ -119,7 +119,7 @@ use {
         test_support::start_broker_with_authorizer_no_audit as start_broker,
     },
     krabka_protocol::records::{Record, RecordBatch},
-    std::{fs, net::SocketAddr, ops::RangeInclusive, sync::atomic, time::Duration},
+    std::{fs, net::SocketAddr, ops::RangeInclusive, time::Duration},
     tokio::{task, time},
 };
 
@@ -485,7 +485,7 @@ async fn topic_with_configs_holding_a_pending_batch(
         .partitions
         .get(topic, krabka_ids::PartitionIndex(0))
         .expect("the partition is local");
-    let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+    let leader_epoch = part.leader_epoch().get();
     for activation_ms in [DELIVERED_MS, PENDING_MS] {
         part.produce_batch(batch_at(activation_ms, leader_epoch))
             .await
@@ -728,8 +728,7 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
     let topic = "delete-records-follower";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
-    part.current_leader
-        .store(broker.config.node_id.0 + 1, atomic::Ordering::Release);
+    part.test_set_leader(broker.config.node_id.0 + 1);
 
     check_refused_trim()
         .broker(&broker)
@@ -918,7 +917,7 @@ async fn an_internal_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
         if topic != "orders" {
-            let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
+            let leader_epoch = part.leader_epoch().get();
             part.produce_batch(batch_at(DELIVERED_MS, leader_epoch))
                 .await
                 .expect("append a batch");

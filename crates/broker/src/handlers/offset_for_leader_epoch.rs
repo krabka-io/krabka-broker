@@ -12,7 +12,8 @@
 //!   entry for it. No error either way: `LeaderEpochFileCache.endOffsetFor`
 //!   (`storage/.../LeaderEpochFileCache.java:299-303`) answers a requested
 //!   epoch above everything the same way it answers an untracked one below
-//!   it, and only the hosting checks above ever set an error code here.
+//!   it, and only the hosting checks above, or a poisoned log, set an error
+//!   code here.
 //!
 //! Reference: KIP-101 (Alter Replication Protocol to use Leader Epoch
 //! rather than High Watermark for Truncation).
@@ -47,6 +48,9 @@
 
 #[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
+// Only the test-only request counter in `handle` orders an atomic here.
+#[cfg(any(test, feature = "test-helpers"))]
+use std::sync::atomic::Ordering;
 use {
     crate::{
         broker::Broker,
@@ -65,7 +69,6 @@ use {
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
     },
-    std::sync::{PoisonError, atomic::Ordering},
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
@@ -82,7 +85,7 @@ fn not_leader(
     partition: &Partition,
     node_id: krabka_metadata::NodeId,
 ) -> bool {
-    let installed = partition.current_leader.load(Ordering::Acquire) == node_id.0;
+    let installed = partition.leader() == node_id.0;
     let committed_elsewhere = image
         .partition(topic, partition_index)
         .is_some_and(|record| record.leader != node_id);
@@ -148,8 +151,12 @@ fn epoch_end_offset(
     // the checkpoint cannot place answers `(-1, -1)`, which is
     // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
     // the row. No error either way: the hosting checks above are
-    // what set an error code, not this KIP-101 lookup.
-    let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
+    // what set an error code, not this KIP-101 lookup. A poisoned log is
+    // not read: the row carries the poison policy's code instead.
+    let log = match p.lock_log() {
+        Ok(log) => log,
+        Err(error) => return error_row(part.partition, codes::from_broker_error(&error)),
+    };
     let leo = log.log_end_offset();
     let (found_epoch, end_offset) = log
         .epoch_checkpoint()
@@ -534,7 +541,7 @@ mod tests {
         let partition = time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
-                    && partition.current_leader.load(Ordering::Acquire) == leader.0
+                    && partition.leader() == leader.0
                 {
                     return partition;
                 }

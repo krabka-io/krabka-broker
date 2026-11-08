@@ -254,6 +254,57 @@ pub enum BrokerError {
         code: i16,
     },
 
+    /// A startup configuration check failed.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+
+    /// TLS configuration error.
+    #[error("tls: {0}")]
+    Tls(String),
+
+    /// The broker failed to read or decode the bootstrap records file that
+    /// `krabka format --add-scram` wrote.
+    #[error("bootstrap file {path:?}: {source}")]
+    BootstrapFile {
+        /// Path to the file that could not be read or decoded.
+        path: PathBuf,
+        /// Underlying I/O or decode error.
+        #[source]
+        source: Box<dyn error::Error + Send + Sync>,
+    },
+
+    /// Runtime tuning contains an invalid scalar or field relation.
+    #[error("invalid runtime configuration: {0}")]
+    InvalidRuntimeConfig(String),
+
+    /// `[audit.signing]` names a checkpoint signing key that does not load.
+    /// A configured key stops the broker in every audit failure mode, so an
+    /// operator who asked for attested checkpoints never runs without them.
+    #[error("audit signing key {path:?} did not load: {source}")]
+    AuditSigningKey {
+        /// The configured `[audit.signing] key_path`.
+        path: PathBuf,
+        /// Why the key did not load.
+        #[source]
+        source: krabka_audit::AuditError,
+    },
+
+    /// `[audit] failure_mode` is `fail-closed` and no `[audit.signing]` key is
+    /// configured, so no checkpoint would ever attest the audit chain.
+    #[error(
+        "[audit] failure_mode = \"fail-closed\" needs an [audit.signing] key: without one no \
+         checkpoint attests the audit chain"
+    )]
+    AuditSigningKeyRequired,
+
+    #[error("controlled shutdown did not complete within {0:?}")]
+    ShutdownTimeout(Duration),
+}
+
+/// A startup configuration check that failed. No request handler returns
+/// one: the broker refuses to start instead.
+#[derive(Debug, Error)]
+pub enum ConfigError {
     /// Two listeners share the same `bind_addr`.
     #[error("listener bind conflict: {a} and {b} share bind_addr")]
     ListenerConflict { a: String, b: String },
@@ -420,50 +471,8 @@ pub enum BrokerError {
     #[error("GSSAPI is an enabled SASL mechanism but gssapi config is missing")]
     GssapiConfigMissing,
 
-    /// TLS configuration error.
-    #[error("tls: {0}")]
-    Tls(String),
-
-    /// The broker failed to read or decode the bootstrap records file that
-    /// `krabka format --add-scram` wrote.
-    #[error("bootstrap file {path:?}: {source}")]
-    BootstrapFile {
-        /// Path to the file that could not be read or decoded.
-        path: PathBuf,
-        /// Underlying I/O or decode error.
-        #[source]
-        source: Box<dyn error::Error + Send + Sync>,
-    },
-
     #[error("invalid leader_imbalance_check_interval = {value}: must be >= 1")]
     InvalidLeaderRebalanceInterval { value: u64 },
-
-    /// Runtime tuning contains an invalid scalar or field relation.
-    #[error("invalid runtime configuration: {0}")]
-    InvalidRuntimeConfig(String),
-
-    /// `[audit.signing]` names a checkpoint signing key that does not load.
-    /// A configured key stops the broker in every audit failure mode, so an
-    /// operator who asked for attested checkpoints never runs without them.
-    #[error("audit signing key {path:?} did not load: {source}")]
-    AuditSigningKey {
-        /// The configured `[audit.signing] key_path`.
-        path: PathBuf,
-        /// Why the key did not load.
-        #[source]
-        source: krabka_audit::AuditError,
-    },
-
-    /// `[audit] failure_mode` is `fail-closed` and no `[audit.signing]` key is
-    /// configured, so no checkpoint would ever attest the audit chain.
-    #[error(
-        "[audit] failure_mode = \"fail-closed\" needs an [audit.signing] key: without one no \
-         checkpoint attests the audit chain"
-    )]
-    AuditSigningKeyRequired,
-
-    #[error("controlled shutdown did not complete within {0:?}")]
-    ShutdownTimeout(Duration),
 }
 
 impl BrokerError {

@@ -26,6 +26,7 @@
 
 use {
     super::{
+        local::lock_log,
         remote::await_remote,
         sentinels::{UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
     },
@@ -40,7 +41,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
     krabka_units::prelude::ByteSizeExt,
     krabka_verified::list_offsets::earliest_timestamp_candidate,
-    std::{future::Future, sync::PoisonError, time::Duration},
+    std::{future::Future, time::Duration},
     tokio::time::Instant,
 };
 
@@ -62,12 +63,7 @@ pub(super) async fn resolve_timestamp_offset(
     timestamp: i64,
     remote_timeout: Duration,
 ) -> Result<(i64, i64), i16> {
-    let remote_enabled = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .config_snapshot()
-        .remote_storage_enable;
+    let remote_enabled = lock_log(partition)?.config_snapshot().remote_storage_enable;
     resolve_timestamp_with_sources(
         partition,
         &TopicIdPartition::new(topic_id.unwrap_or_default(), topic_name, partition_index),
@@ -99,10 +95,7 @@ pub async fn resolve_timestamp_with_sources(
     diskless_read: Option<&DisklessReadHandle>,
 ) -> Result<(i64, i64), i16> {
     let started = Instant::now();
-    let mut minimum = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    let mut minimum = lock_log(partition)?
         // Only a checkpointed deletion floor bounds the archive. The floor
         // inferred from surviving local files can sit above readable tiered
         // records after a restart.
@@ -117,10 +110,7 @@ pub async fn resolve_timestamp_with_sources(
             .lock()
             .await
             .delete_floor(tp.topic_id, tp.partition);
-        let limit = partition
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let limit = lock_log(partition)?
             .config_snapshot()
             .max_decompressed_record
             .map(ByteSizeExt::bytes_usize);
@@ -143,29 +133,31 @@ pub async fn resolve_timestamp_with_sources(
     } else {
         None
     };
-    let remote = remote_reader.map(|reader| {
-        // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache, the
-        // log end offset and the local segments when the lookup starts.
-        let (lineage, local_base) = {
-            let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-            (
-                EpochLineage::of(&log),
-                log.first_segment_base().map(|base| base.0),
-            )
-        };
-        move |max_record_body| async move {
-            reader
-                .offset_for_timestamp(
-                    tp,
-                    timestamp,
-                    minimum,
-                    max_record_body,
-                    &lineage,
-                    local_base,
+    let remote = remote_reader
+        .map(|reader| -> Result<_, i16> {
+            // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache, the
+            // log end offset and the local segments when the lookup starts.
+            let (lineage, local_base) = {
+                let log = lock_log(partition)?;
+                (
+                    EpochLineage::of(&log),
+                    log.first_segment_base().map(|base| base.0),
                 )
-                .await
-        }
-    });
+            };
+            Ok(move |max_record_body| async move {
+                reader
+                    .offset_for_timestamp(
+                        tp,
+                        timestamp,
+                        minimum,
+                        max_record_body,
+                        &lineage,
+                        local_base,
+                    )
+                    .await
+            })
+        })
+        .transpose()?;
     lookup_timestamp(
         LookedUpPartition {
             partition,
@@ -215,10 +207,7 @@ where
 {
     let mut remote_found = wal_found;
     if let Some(read) = remote {
-        let max_record_body = partition
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let max_record_body = lock_log(partition)?
             .config_snapshot()
             .max_decompressed_record
             .map(ByteSizeExt::bytes_usize);
@@ -246,7 +235,7 @@ where
             }
         }
     }
-    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    let log = lock_log(partition)?;
     if let Some(found) = remote_found
         && found.0 < log.local_log_start_offset().0
     {

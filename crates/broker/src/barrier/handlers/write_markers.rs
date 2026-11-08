@@ -60,7 +60,6 @@ use {
     krabka_verified::{
         BarrierMarkerFenceDecision, BarrierMarkerFenceFacts, barrier_marker_fence_decision,
     },
-    std::sync::atomic::Ordering,
     tracing::warn,
 };
 
@@ -186,8 +185,8 @@ fn leadership_fault(
     index: PartitionIndex,
     expected_leader_epoch: i32,
 ) -> Option<i16> {
-    let local_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-    let local_leader = partition.current_leader.load(Ordering::Acquire);
+    let local_epoch = partition.leader_epoch().get();
+    let local_leader = partition.leader().get();
     let image_partition = image.partition(topic, index.get());
     let decision = barrier_marker_fence_decision(BarrierMarkerFenceFacts {
         image_present: image_partition.is_some(),

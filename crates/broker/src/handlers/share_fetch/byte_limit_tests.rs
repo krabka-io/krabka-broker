@@ -453,12 +453,15 @@ enum UserQuota {
 /// `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`, the bytes that a
 /// member can fetch in one quota window without being throttled. The broker
 /// cap stays at its default here, and the window is one second long
-/// (`quota_window` minus `quota_throttle_max`), so the quota alone limits the
-/// fetch. The first batch still goes out when it is larger than the window.
-/// The fetch is charged to the byte rate too, and the rate's bucket holds two
-/// windows, so a window of three quarters of a batch leaves room for the
-/// batch and its response framing. Half a batch would not: that response
-/// would be throttled and answered without its records, as Kafka's is.
+/// (`quota.window.num - 1` = 1 sample of 1 s), so the quota alone limits the
+/// fetch. A window of two and a half batches reads two whole batches, and
+/// their response framing still fits the quota.
+///
+/// The fetch is charged to the byte rate too, over the same padded window
+/// Kafka's `Rate` measures a new client with, so the first batch, read when
+/// it is larger than the window, takes the response over the quota: it is
+/// throttled and answered without its records, as Kafka's is, and the batch
+/// stays acquired by the member that read it.
 #[tokio::test]
 async fn consumer_quota_window_limits_share_fetch() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
@@ -481,13 +484,17 @@ async fn consumer_quota_window_limits_share_fetch() {
                 numerator: 3,
                 denominator: 4,
             }),
-            one_batch_outcome(),
+            Outcome {
+                acquired: Vec::new(),
+                records: Vec::new(),
+                remainder: vec![OffsetRun::new(2, 7)],
+            },
         ),
         (
-            "window-of-two-batches",
+            "window-of-two-and-a-half-batches",
             UserQuota::BatchesPerSecond(BatchFraction {
-                numerator: 2,
-                denominator: 1,
+                numerator: 5,
+                denominator: 2,
             }),
             Outcome {
                 acquired: vec![OffsetRun::new(0, 3)],

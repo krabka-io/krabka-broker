@@ -16,7 +16,7 @@ mod kafka_error_table;
 
 use {
     super::*,
-    crate::error::BrokerError,
+    crate::error::{BrokerError, ConfigError},
     assert2::assert,
     kafka_error_table::{KAFKA_ERROR_TABLE, KAFKA_ERROR_TABLE_IMAGE_DIGEST},
     std::io::Error,
@@ -250,3 +250,42 @@ fn replica_not_available_is_not_the_controller_moved_code() {
 }
 
 rstest_bdd_macros::scenarios!("tests/features/migrated/src/codes/tests.feature", fixtures = [errors: ErrorNamespaces]);
+
+// Config validation fails startup and never reaches a request, but its errors
+// still have a wire code, and an operator still reads their messages: both
+// stay fixed.
+#[yare::parameterized(
+    listener_conflict = {
+        BrokerError::Config(ConfigError::ListenerConflict { a: "A".into(), b: "B".into() }),
+        "listener bind conflict: A and B share bind_addr",
+    },
+    empty_roles = { BrokerError::Config(ConfigError::EmptyRoles), "process.roles must list at least one role" },
+    broker_id_node_id_mismatch = {
+        BrokerError::Config(ConfigError::BrokerIdNodeIdMismatch { broker_id: 1, node_id: krabka_raft::NodeId(2) }),
+        "broker_id 1 must equal node_id 2",
+    },
+    stretch_requires_rack = {
+        BrokerError::Config(ConfigError::StretchRequiresRack),
+        "stretch profile is configured but rack is unset: a node in a stretch cluster must name \
+         the site it runs in",
+    },
+    stretch_rack_not_in_profile = {
+        BrokerError::Config(ConfigError::StretchRackNotInProfile { rack: "r".into() }),
+        "rack r is not one of stretch.sites",
+    },
+    gssapi_config_missing = {
+        BrokerError::Config(ConfigError::GssapiConfigMissing),
+        "GSSAPI is an enabled SASL mechanism but gssapi config is missing",
+    },
+    invalid_leader_rebalance_interval = {
+        BrokerError::Config(ConfigError::InvalidLeaderRebalanceInterval { value: 0 }),
+        "invalid leader_imbalance_check_interval = 0: must be >= 1",
+    },
+)]
+fn config_errors_keep_their_message_and_map_to_unknown_server_error(
+    err: BrokerError,
+    message: &str,
+) {
+    assert2::assert!(err.to_string() == message);
+    assert2::assert!(from_broker_error(&err) == UNKNOWN_SERVER_ERROR);
+}

@@ -1,11 +1,12 @@
 //! Shared wall-clock time helpers, and the two guards that every cadence loop
 //! puts around its injected [`Timer`].
 //!
-//! The wall-clock half is the single source of truth for the `SystemTime →
-//! UNIX_EPOCH → as_millis() → i64` sequence that the transaction, OAuth, and
-//! delegation-token handlers use, and that every reader of an injected
-//! [`WallClock`](qubit_clock::WallClock) narrows through. The helpers saturate
-//! on overflow and on pre-epoch clock skew, and do not panic.
+//! The wall-clock half is [`now_ms`], the system-clock reading that the
+//! transaction, OAuth, and delegation-token handlers stamp with, and
+//! [`duration_millis`]. A reader of an injected
+//! [`WallClock`](qubit_clock::WallClock) narrows through [`krabka_log::epoch_ms`]
+//! instead. The helpers saturate on overflow and on pre-epoch clock skew, and
+//! do not panic.
 //!
 //! The timer half is [`arm`] and [`fired`]. Registering a deadline is fallible
 //! -- a timer backend reports [`TimeError`] when it cannot take a registration
@@ -17,6 +18,7 @@
 //! [`system_timer`] is the real-time timer those loops run on outside tests.
 
 use {
+    krabka_log::epoch_ms,
     krabka_units::convert::TimeExt as _,
     qubit_clock::{
         MonotonicClock, MonotonicInstant, StdMonotonicClock, StdTimer, TimeError, Timer,
@@ -25,7 +27,7 @@ use {
     std::{
         future,
         sync::Arc,
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime},
     },
     tokio::time::{self, Instant},
 };
@@ -69,18 +71,6 @@ impl MetadataSweepConfig {
     }
 }
 
-/// Returns `instant` in milliseconds since the Unix epoch.
-///
-/// The value saturates to `0` if `instant` falls before the epoch. It
-/// saturates to `i64::MAX` if the duration overflows `i64`, which is about
-/// 292 million years from now and therefore safe in practice.
-#[inline]
-pub fn epoch_millis(instant: SystemTime) -> i64 {
-    instant
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, duration_millis)
-}
-
 /// Whole milliseconds of `duration`, saturating at [`i64::MAX`].
 #[inline]
 pub fn duration_millis(duration: Duration) -> i64 {
@@ -91,9 +81,9 @@ pub fn duration_millis(duration: Duration) -> i64 {
 ///
 /// This reads the system clock directly. A component that takes an injected
 /// [`WallClock`](qubit_clock::WallClock) so a test can drive it reads
-/// `epoch_millis(clock.now())` instead.
+/// [`epoch_ms`]`(clock.now())` instead.
 #[inline]
-pub fn now_ms() -> i64 { epoch_millis(SystemTime::now()) }
+pub fn now_ms() -> i64 { epoch_ms(SystemTime::now()) }
 
 /// Sleeps until `deadline`, or never resolves when it is `None`.
 ///
@@ -181,18 +171,6 @@ mod tests {
 
     const TASK: &str = "a test loop";
 
-    #[yare::parameterized(
-        epoch = { UNIX_EPOCH, 0 },
-        millisecond_precision = {
-            UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
-            1_700_000_000_123,
-        },
-        before_epoch_saturates_to_zero = { UNIX_EPOCH - Duration::from_millis(1), 0 },
-    )]
-    fn epoch_millis_reads_an_instant(instant: SystemTime, want: i64) {
-        check!(epoch_millis(instant) == want, "{instant:?}");
-    }
-
     #[test]
     fn duration_millis_saturates_above_the_range() {
         // Some platforms cannot construct a `SystemTime` far enough from the
@@ -203,9 +181,9 @@ mod tests {
 
     #[test]
     fn now_ms_reads_the_system_clock() {
-        let before = epoch_millis(SystemTime::now());
+        let before = epoch_ms(SystemTime::now());
         let sampled = now_ms();
-        let after = epoch_millis(SystemTime::now());
+        let after = epoch_ms(SystemTime::now());
 
         check!(before <= sampled && sampled <= after);
     }

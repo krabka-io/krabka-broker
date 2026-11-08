@@ -235,7 +235,10 @@ mod tests {
         tid: uuid::Uuid,
         records: RecordCount,
     ) -> Arc<Mutex<AcquisitionState>> {
-        let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+        let cell = mgr.insert_for_test(
+            ShareKeyRef::new("g1", tid, 0),
+            AcquisitionState::new(Offset(0)),
+        );
         {
             let mut state = cell.lock().await;
             acquire_window()
@@ -347,7 +350,7 @@ mod tests {
         // The test manager's persister cannot write, so the reject rolls back.
         let mut state = cell.lock().await;
         let code = mgr
-            .apply_durably("g1", tid, 0, &cell, &mut state, |st| {
+            .apply_durably(ShareKeyRef::new("g1", tid, 0), &cell, &mut state, |st| {
                 st.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
                     .err()
                     .unwrap_or(codes::NONE)
@@ -595,7 +598,10 @@ mod tests {
         let dlq = Arc::new(RecordingDlq::failing(DlqError::Write("boom".into())));
         let mgr = manager_with_dlq(Arc::<RecordingDlq>::clone(&dlq));
         let tid = uuid::Uuid::from_bytes([61; 16]);
-        let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
+        let cell = mgr.insert_for_test(
+            ShareKeyRef::new("g1", tid, 0),
+            AcquisitionState::new(Offset(0)),
+        );
         let key = ShareKey {
             group: "g1".to_owned(),
             topic_id: tid,

@@ -61,7 +61,7 @@ pub(super) fn reconcile(
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) -> Result<(), BrokerError> {
-    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    let before = config.assignor_may_fail().then(|| actor.clone());
     let result = reconcile_inner(actor, config, metadata_source);
     if result.is_err()
         && let Some(before) = before
@@ -262,7 +262,7 @@ pub(super) fn compute_and_install_target(
     topology: &StreamsGroupTopologyValue,
     num_tasks: &BTreeMap<String, i32>,
 ) -> Result<(), BrokerError> {
-    let before = (config.selected_task_assignor_name() != "sticky").then(|| actor.clone());
+    let before = config.assignor_may_fail().then(|| actor.clone());
     if !actor.state.bump_epoch() {
         return Ok(());
     }

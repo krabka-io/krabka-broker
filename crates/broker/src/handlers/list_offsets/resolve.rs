@@ -22,7 +22,7 @@ use {
         bound::{FetchBound, fetchable_offsets},
         diskless::diskless_earliest_candidate,
         leadership::resolve_for_broker,
-        local::{leader_epoch_for_offset, scheduled_latest_offset},
+        local::{self, leader_epoch_for_offset, scheduled_latest_offset},
         remote::await_remote,
         response::error_response,
         sentinels::{SupportedKind, UNKNOWN_EPOCH, UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
@@ -37,10 +37,7 @@ use {
         ListOffsetsEarliestFacts, ListOffsetsKind, ListOffsetsSelectionDecision,
         ListOffsetsSelectionFacts, list_offsets_earliest, list_offsets_selection_decision,
     },
-    std::{
-        sync::{PoisonError, atomic::Ordering},
-        time::Duration,
-    },
+    std::time::Duration,
 };
 
 fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
@@ -132,13 +129,7 @@ async fn resolve_earliest(ctx: PartitionContext<'_>) -> Result<ResolvedOffset, i
             tracing::warn!(topic = ctx.topic_name, partition = ctx.index, error = %error,
                 "list_offsets: remote earliest_offset failed; answering the log start");
         }
-        let reported_start = ctx
-            .partition
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .reported_log_start()
-            .0;
+        let reported_start = local::lock_log(ctx.partition)?.reported_log_start().0;
         remote_earliest_candidate(answer.as_ref(), ctx.snapshot.deleted_below, reported_start)?
     } else {
         None
@@ -162,7 +153,7 @@ async fn resolve_earliest(ctx: PartitionContext<'_>) -> Result<ResolvedOffset, i
     // `UnifiedLog.java:1690-1700`.
     Ok(ResolvedOffset {
         offset: earliest,
-        leader_epoch: leader_epoch_for_offset(ctx.partition, earliest),
+        leader_epoch: leader_epoch_for_offset(ctx.partition, earliest)?,
     })
 }
 
@@ -199,7 +190,7 @@ async fn resolve_earliest_pending_upload(
                 return Err(codes::KAFKA_STORAGE_ERROR);
             };
             let offset = raw_offset.max(ctx.snapshot.local_start);
-            let local_epoch = leader_epoch_for_offset(ctx.partition, offset);
+            let local_epoch = leader_epoch_for_offset(ctx.partition, offset)?;
             let leader_epoch = if local_epoch < 0 {
                 tiered.leader_epoch.0
             } else {
@@ -219,7 +210,7 @@ async fn resolve_earliest_pending_upload(
         Some(Ok(None)) if ctx.snapshot.local_log_start == ctx.snapshot.local_start => {
             Ok(Some(ResolvedOffset {
                 offset: ctx.snapshot.local_start,
-                leader_epoch: leader_epoch_for_offset(ctx.partition, ctx.snapshot.local_start),
+                leader_epoch: leader_epoch_for_offset(ctx.partition, ctx.snapshot.local_start)?,
             }))
         }
         Some(Ok(None)) => Ok(None),
@@ -297,11 +288,7 @@ fn resolve_max_timestamp(
     partition: &Partition,
     topic: TopicPartitionName<'_>,
 ) -> Result<(i64, i64), i16> {
-    let found = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .max_timestamp_offset_and_ts();
+    let found = local::lock_log(partition)?.max_timestamp_offset_and_ts();
     match found {
         Ok(found) => Ok(found.map_or(
             (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
@@ -317,8 +304,14 @@ fn resolve_max_timestamp(
 
 /// The leader epoch of the batch that holds a by-record lookup's `offset`,
 /// or `None` when the lookup found nothing and the row keeps its epoch.
-fn epoch_of_found(partition: &Partition, offset: i64) -> Option<i32> {
-    (offset != UNKNOWN_OFFSET).then(|| leader_epoch_for_offset(partition, offset))
+///
+/// # Errors
+///
+/// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned.
+fn epoch_of_found(partition: &Partition, offset: i64) -> Result<Option<i32>, i16> {
+    (offset != UNKNOWN_OFFSET)
+        .then(|| leader_epoch_for_offset(partition, offset))
+        .transpose()
 }
 
 /// The local snapshot and archive lookup needed to resolve scheduled LATEST.
@@ -493,7 +486,7 @@ async fn measure(
     };
     let offsets_error = lagging_high_watermark_error(
         bound.replica_id(),
-        super::local::epoch_start_offset(partition),
+        local::epoch_start_offset(partition)?,
         offsets.high_watermark,
         version,
     );
@@ -572,12 +565,16 @@ impl Resolved {
     }
 
     /// A by-record lookup's answer, with the epoch of the batch it found.
-    fn found(partition: &Partition, offset: i64, timestamp: i64) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned.
+    fn found(partition: &Partition, offset: i64, timestamp: i64) -> Result<Self, i16> {
+        Ok(Self {
             offset,
             timestamp,
-            leader_epoch: epoch_of_found(partition, offset),
-        }
+            leader_epoch: epoch_of_found(partition, offset)?,
+        })
     }
 }
 
@@ -607,9 +604,14 @@ impl PartitionLogSnapshot {
     }
 }
 
-fn partition_log_snapshot(partition: &Partition) -> PartitionLogSnapshot {
-    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
-    PartitionLogSnapshot::of(&log)
+/// Reads the [`PartitionLogSnapshot`] of `partition`.
+///
+/// # Errors
+///
+/// Returns `KAFKA_STORAGE_ERROR` if the log mutex is poisoned.
+fn partition_log_snapshot(partition: &Partition) -> Result<PartitionLogSnapshot, i16> {
+    let log = local::lock_log(partition)?;
+    Ok(PartitionLogSnapshot::of(&log))
 }
 
 /// Sends a row's lookup to the log, the remote tier, or the diskless index
@@ -629,7 +631,7 @@ async fn resolve_kind(
             // happens to sit at -- the two agree once a record lands in the
             // new epoch, but LATEST must not wait for that.
             // `Partition.scala:1473-1475`.
-            let live_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+            let live_epoch = partition.leader_epoch().get();
             resolve_latest(LatestContext {
                 broker: ctx.broker,
                 partition,
@@ -654,7 +656,7 @@ async fn resolve_kind(
             };
             Ok(Resolved::at(ResolvedOffset {
                 offset,
-                leader_epoch: leader_epoch_for_offset(partition, offset),
+                leader_epoch: leader_epoch_for_offset(partition, offset)?,
             }))
         }
         SupportedKind::LatestTiered => resolve_latest_tiered(
@@ -671,7 +673,7 @@ async fn resolve_kind(
         // Kafka fills the epoch with the resolved batch's own
         // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
         SupportedKind::MaxTimestamp => resolve_max_timestamp(partition, ctx.topic())
-            .map(|(offset, timestamp)| Resolved::found(partition, offset, timestamp)),
+            .and_then(|(offset, timestamp)| Resolved::found(partition, offset, timestamp)),
         // Kafka fills the epoch with the matched batch's own epoch.
         // `FileRecords.java:364-381`.
         SupportedKind::Timestamp => resolve_timestamp_offset(
@@ -684,7 +686,7 @@ async fn resolve_kind(
             ctx.remote_timeout,
         )
         .await
-        .map(|(offset, timestamp)| Resolved::found(partition, offset, timestamp)),
+        .and_then(|(offset, timestamp)| Resolved::found(partition, offset, timestamp)),
     }
 }
 
@@ -730,7 +732,10 @@ pub(super) async fn resolve_partition(
         Ok(partition) => partition,
         Err(error_code) => return error_response(index, error_code),
     };
-    let snapshot = partition_log_snapshot(&partition);
+    let snapshot = match partition_log_snapshot(&partition) {
+        Ok(snapshot) => snapshot,
+        Err(error_code) => return error_response(index, error_code),
+    };
     let remote_enabled = snapshot.log_config.remote_storage_enable;
     let diskless = partition.diskless && broker.diskless_read.is_some();
     let topic_id = if (remote_enabled && broker.remote_reader.is_some()) || diskless {
@@ -821,7 +826,10 @@ mod tests {
             owned::create_topics_request::CreatableTopicConfig,
             records::{Record, RecordBatch},
         },
-        std::{io, sync::Arc},
+        std::{
+            io,
+            sync::{Arc, PoisonError},
+        },
     };
 
     /// What the remote tier's answer makes of EARLIEST. A tier that cannot

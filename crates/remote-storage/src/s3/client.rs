@@ -10,7 +10,9 @@
 //! posture.
 
 use {
-    super::{S3RemoteStorage, WormBucket, WormMode, size_from_usize},
+    super::{
+        KeyPrefixGate, S3RemoteStorage, WormBucket, WormMode, prefix::KeyPrefix, size_from_usize,
+    },
     crate::{
         error::RemoteStorageError,
         worm::{WormArchiver, WormConfig},
@@ -52,13 +54,26 @@ impl S3RemoteStorage {
     pub fn with_store(store: Arc<dyn ObjectStore>, prefix: Option<String>) -> Self {
         Self {
             ops: ObjectStoreClient::new(store),
-            prefix,
+            prefix: KeyPrefix::new(prefix),
             multipart_threshold: ByteSize::from_bytes(DEFAULT_MULTIPART_THRESHOLD),
             multipart_chunk_size: size_from_usize(DEFAULT_MULTIPART_CHUNK_SIZE),
             max_index_bytes: Self::DEFAULT_MAX_INDEX_BYTES,
             worm: None,
             worm_bucket: WormBucket::Unverified,
         }
+    }
+
+    /// Installs the gate that picks the spelling of the key prefix new
+    /// objects are written under.
+    ///
+    /// The broker owns a clone of `gate` and sets it from the finalized
+    /// `krabka.version`. Without one the backend writes the prefix
+    /// [as configured](super::KeyPrefixForm::AsConfigured). Reads and deletes
+    /// look under both spellings whatever the gate says.
+    #[must_use]
+    pub fn with_key_prefix_gate(mut self, gate: KeyPrefixGate) -> Self {
+        self.prefix.gate = gate;
+        self
     }
 
     /// Puts this backend into WORM archive mode.

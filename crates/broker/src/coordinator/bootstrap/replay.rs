@@ -135,12 +135,7 @@ pub async fn replay_partition(
     // The log guard is not `Send`, so it lives and dies inside this block:
     // `finalize` awaits, and this function runs inside a spawned task.
     let replayed = {
-        let log = partition.log.lock().map_err(|_| {
-            BrokerError::Startup(format!(
-                "{OFFSETS_TOPIC}-{} log lock poisoned during leadership replay",
-                partition_id.get()
-            ))
-        })?;
+        let log = partition.lock_log()?;
         replay_records(&log, coordinator)?
     };
     finalize(coordinator, replayed).await;

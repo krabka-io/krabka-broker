@@ -388,6 +388,7 @@ mod tests {
                     LoadStatus, ShareCoordinator, ShareStateError, message,
                     test_support::{await_load_status, image_with_topic},
                 },
+                key::ShareKeyRef,
             },
         },
         assert2::assert,
@@ -439,7 +440,12 @@ mod tests {
         let topic_image = image_with_topic(topic_id, 1);
         assert!(
             coordinator
-                .initialize(&topic_image, "g", topic_id, 0, 2, Offset(10))
+                .initialize(
+                    &topic_image,
+                    ShareKeyRef::new("g", topic_id, 0),
+                    2,
+                    Offset(10)
+                )
                 .await
                 == Err(ShareStateError::Operation {
                     code: codes::COORDINATOR_NOT_AVAILABLE,
@@ -454,7 +460,12 @@ mod tests {
         drop(hw);
         assert!(
             coordinator
-                .initialize(&topic_image, "g", topic_id, 0, 1, Offset(20))
+                .initialize(
+                    &topic_image,
+                    ShareKeyRef::new("g", topic_id, 0),
+                    1,
+                    Offset(20)
+                )
                 .await
                 == Err(ShareStateError::Operation {
                     code: codes::COORDINATOR_LOAD_IN_PROGRESS,

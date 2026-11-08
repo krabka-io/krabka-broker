@@ -436,8 +436,7 @@ struct LeaderFence<'a> {
 impl CopyFence for LeaderFence<'_> {
     fn holds(&self) -> bool {
         !self.shutdown.is_cancelled()
-            && self.partition.current_leader.load(Ordering::Acquire) == self.node_id
-            && self.partition.current_leader_epoch.load(Ordering::Acquire) == self.leader_epoch
+            && self.partition.is_leader_at(self.node_id, self.leader_epoch)
     }
 
     fn established_log_start(&self) -> Option<krabka_log::Offset> {
@@ -454,6 +453,73 @@ struct PartitionSweep<'a> {
     tier: &'a RemoteTier<'a>,
     broker: SweepingBroker<'a>,
     permits: &'a SweepPermits,
+}
+
+/// Whether a KFC-9 write freeze holds both retention passes over `topic`.
+///
+/// A freeze refuses every operation that removes data from the topic's log,
+/// and a copy removes none: it adds a replica, which is exactly what a
+/// migration out of a frozen topic needs. So the copy pass still runs on a
+/// frozen topic, and only the retention passes stop.
+///
+/// This is a different question from `archive`, and it does not contradict the
+/// reason that gate gives. `archive` says the remote tier cannot accept a
+/// delete, which leaves the local eviction free precisely because it deletes
+/// nothing remote. A freeze says this topic's log must not lose bytes
+/// anywhere, so it stops the local eviction too.
+///
+/// The sweep is the broker's own work, not a client request, so no
+/// authorization check stands in front of it.
+fn retention_frozen(image: &krabka_metadata::MetadataImage, topic: &str) -> bool {
+    let authorized = true;
+    matches!(
+        resolve_freeze_mutation(image, topic, authorized, FreezeMutationKind::Retention),
+        FreezeMutationResolution::Frozen(_)
+    )
+}
+
+/// What one tick reads from a partition's log, under one hold of its lock.
+struct LogSnapshot {
+    log_config: krabka_log::LogConfig,
+    log_start_offset: krabka_log::Offset,
+    /// The floor somebody established, which remote retention measures a
+    /// segment against.
+    deleted_below: Option<krabka_log::Offset>,
+    /// The epoch the epoch cache was cut to by that floor.
+    earliest_epoch: Option<krabka_ids::LeaderEpoch>,
+    local_exports: Vec<krabka_log::SegmentExport>,
+    local_log_size: ByteSize,
+    /// Kafka's `UnifiedLog.lastStableOffset`, which bounds what the copy may
+    /// upload.
+    last_stable_offset: krabka_log::Offset,
+}
+
+/// Reads config, both readings of the global log start and the sealed-segment
+/// list under one hold of the log lock, then drops it. `None` skips a
+/// partition whose log mutex is poisoned.
+///
+/// The floors ride along with the config because remote retention measures a
+/// segment against them, and a value read under a second lock could describe a
+/// different `DeleteRecords` than the segment list does.
+fn snapshot_log(partition: &Partition, high_watermark: krabka_log::Offset) -> Option<LogSnapshot> {
+    let mut log = lock_log_or_skip(partition)?;
+    let log_config = log.config_snapshot();
+    let log_start_offset = log.log_start_offset();
+    let deleted_below = log.established_log_start();
+    let earliest_epoch = log.log_start_epoch();
+    let local_exports = log.tierable_segments();
+    let local_log_size = log.size();
+    let last_stable_offset = log.last_stable_offset(high_watermark);
+    drop(log);
+    Some(LogSnapshot {
+        log_config,
+        log_start_offset,
+        deleted_below,
+        earliest_epoch,
+        local_exports,
+        local_log_size,
+        last_stable_offset,
+    })
 }
 
 /// Sweep one partition: the copy pass under a copier permit, then the two
@@ -482,40 +548,20 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // Leadership decides which halves of the sweep run, not whether it
     // runs at all: the copy and the remote-retention pass are the
     // leader's, local retention is every replica's.
-    let is_leader = partition.current_leader.load(Ordering::Relaxed) == node_id;
-    // Read config, both readings of the global log start and the
-    // sealed-segment list under one hold of the log lock, then drop it.
-    // The floors ride along with the config because remote retention
-    // measures a segment against them, and a value read under a second
-    // lock could describe a different `DeleteRecords` than the segment
-    // list does.
+    let is_leader = partition.leader_relaxed() == node_id;
     // The high watermark is read before the lock, because reading it awaits.
     let high_watermark = partition.high_watermark().await;
-    let (
+    let Some(LogSnapshot {
         log_config,
         log_start_offset,
-        (deleted_below, earliest_epoch),
+        deleted_below,
+        earliest_epoch,
         local_exports,
         local_log_size,
-        lso,
-    ) = {
-        let Some(mut log) = lock_log_or_skip(&partition) else {
-            return;
-        };
-        let cfg = log.config_snapshot();
-        (
-            cfg,
-            log.log_start_offset(),
-            // What remote retention measures a segment against: the floor
-            // somebody established, and the epoch the epoch cache was cut to
-            // by it.
-            (log.established_log_start(), log.log_start_epoch()),
-            log.tierable_segments(),
-            log.size(),
-            // Kafka's `UnifiedLog.lastStableOffset`, which bounds what the
-            // copy may upload.
-            log.last_stable_offset(high_watermark),
-        )
+        last_stable_offset: lso,
+    }) = snapshot_log(&partition, high_watermark)
+    else {
+        return;
     };
     if !log_config.remote_storage_enable {
         // KIP-950: the alter paths refuse this flip unless
@@ -556,10 +602,8 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // tier already holds keeps working, which is what makes the state a
     // freeze of the copy rather than an abandonment of the data.
     if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
-        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
-        // Atomic stores the raw epoch; wrap for the remote-storage
-        // metadata seam.
-        let leader_epoch = krabka_ids::LeaderEpoch(raw_epoch);
+        let leader_epoch = partition.leader_epoch();
+        let raw_epoch = leader_epoch.get();
         let fence = LeaderFence {
             partition: &partition,
             node_id,
@@ -599,21 +643,8 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         .await;
     }
     // KFC-9: the copy above stays allowed on a frozen topic, and both
-    // retention passes below stop. A freeze refuses every operation that
-    // removes data from the topic's log, and a copy removes none: it adds
-    // a replica, which is exactly what a migration out of a frozen topic
-    // needs.
-    //
-    // This is a different question from `archive`, and it does not
-    // contradict the reason that gate gives below. `archive` says the
-    // remote tier cannot accept a delete, which leaves the local eviction
-    // free precisely because it deletes nothing remote. A freeze says this
-    // topic's log must not lose bytes anywhere, so it stops the local
-    // eviction too.
-    if matches!(
-        resolve_freeze_mutation(image, &partition.topic, true, FreezeMutationKind::Retention,),
-        FreezeMutationResolution::Frozen(_)
-    ) {
+    // retention passes below stop.
+    if retention_frozen(image, &partition.topic) {
         debug!(topic = %partition.topic, partition = tp.partition,
                "remote-log-manager: a write freeze holds both retention passes");
         return;
@@ -624,7 +655,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // against the floors this tick read first, so a raised start reaches them
     // on the next tick, and a stale lower floor only deletes less.
     if is_leader {
-        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+        let raw_epoch = partition.leader_epoch().get();
         let epoch = i64::from(raw_epoch);
         if partition.log_start_checked_epoch.load(Ordering::Acquire) != epoch {
             let fence = LeaderFence {
@@ -1213,7 +1244,7 @@ mod tests {
                 Arc::new(LaggingRlmm(inner))
             }
             Archive::LeadershipLost => {
-                partition.current_leader.store(2, Ordering::Release);
+                partition.test_set_leader(2);
                 inner
             }
         };
@@ -1301,7 +1332,7 @@ mod tests {
             "the tiered reopen takes the stale checkpoint"
         );
         let partition = test_support::leading_partition_over(PartitionIndex(0), local.path(), log);
-        partition.current_leader.store(leader, Ordering::Relaxed);
+        partition.test_set_leader(leader);
         let registry = PartitionRegistry::new();
         let fixtures::RegisteredFixture {
             controller,
@@ -1403,8 +1434,8 @@ mod tests {
     ) {
         let log_dir = tempfile::tempdir().unwrap();
         let partition = rolled_tiered_partition(log_dir.path());
-        partition.current_leader.store(1, Ordering::Release);
-        partition.current_leader_epoch.store(0, Ordering::Release);
+        partition.test_set_leader(1);
+        partition.test_set_leader_epoch(0);
         let shutdown = CancellationToken::new();
         let fence = LeaderFence {
             partition: &partition,
@@ -1413,10 +1444,8 @@ mod tests {
             shutdown: &shutdown,
         };
 
-        partition.current_leader.store(leader, Ordering::Release);
-        partition
-            .current_leader_epoch
-            .store(epoch, Ordering::Release);
+        partition.test_set_leader(leader);
+        partition.test_set_leader_epoch(epoch);
         if stopping {
             shutdown.cancel();
         }
@@ -1904,7 +1933,7 @@ mod tests {
             local_retention_size: Some(NO_BYTES),
             ..fixtures::rolled_partition_config()
         });
-        partition.current_leader.store(2, Ordering::Relaxed);
+        partition.test_set_leader(2);
         let exports = partition
             .log
             .lock()

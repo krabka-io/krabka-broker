@@ -124,7 +124,10 @@ pub async fn handle(
     let result = match asked {
         Ok(result) => result,
         Err(error) => {
-            return Ok(reply(group_actor_error_code(error), None));
+            return Ok(reply(
+                group_actor_error_code(broker, &group_id, error),
+                None,
+            ));
         }
     };
     let mut resp = result.response;
@@ -512,6 +515,64 @@ mod tests {
         );
         let image = broker.controller.current_image();
         assert!(image.topic("no-create-grant-changelog").is_none());
+        broker_handle.shutdown().await;
+    }
+
+    /// An actor that stops with a request in its mailbox drops it, as
+    /// Kafka's `CoordinatorRuntime` fails the operations of a shard that
+    /// unloads. A broker that still serves the group answers the retriable
+    /// `COORDINATOR_NOT_AVAILABLE`, not `UNKNOWN_SERVER_ERROR`, to a heartbeat
+    /// and to a describe.
+    #[rstest::rstest]
+    #[case::heartbeat(false)]
+    #[case::describe(true)]
+    #[tokio::test]
+    async fn a_request_the_stopped_actor_dropped_answers_coordinator_not_available(
+        #[case] describe: bool,
+    ) {
+        use {
+            crate::{
+                coordinator::unified::streams::actor::StreamsGroupActorHandle,
+                handlers::streams_group_describe,
+            },
+            krabka_protocol::owned::streams_group_describe_request::StreamsGroupDescribeRequest,
+        };
+
+        let (
+            version,
+            StartedBroker {
+                broker: broker_handle,
+                dir: _dir,
+            },
+        ) = start_granted_streams_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        create_source_topic(&broker, "in").await;
+        broker.group_coordinator.mark_streams("stopping");
+        broker.group_coordinator.streams_groups.insert(
+            "stopping".into(),
+            Arc::new(StreamsGroupActorHandle::dropping_replies()),
+        );
+        let peer = peer();
+        let principal = principal("Group:Read+Group:Describe+Topic:Describe");
+        let ctx = test_context(&principal, &peer);
+
+        let error_code = if describe {
+            let request = StreamsGroupDescribeRequest {
+                group_ids: vec!["stopping".into()],
+                ..Default::default()
+            };
+            let resp = streams_group_describe::handle(&broker, request, 0, &ctx)
+                .await
+                .expect("handle");
+            resp.groups[0].error_code
+        } else {
+            let resp = handle(&broker, request("stopping"), version, &ctx)
+                .await
+                .expect("handle");
+            resp.error_code
+        };
+
+        assert!(error_code == codes::COORDINATOR_NOT_AVAILABLE);
         broker_handle.shutdown().await;
     }
 

@@ -405,8 +405,8 @@ pub fn leading_partition_over(index: PartitionIndex, log_dir: &Path, log: Log) -
         false,
     )
     .unwrap();
-    partition.current_leader.store(1, Ordering::Relaxed);
-    partition.current_leader_epoch.store(0, Ordering::Release);
+    partition.test_set_leader(1);
+    partition.test_set_leader_epoch(0);
     // A sole replica has replicated everything it wrote: the high watermark
     // is the log end, so nothing the fixture wrote is withheld from the tier
     // as uncommitted.

@@ -32,7 +32,8 @@ use {
             },
         },
         share_coordinator::{
-            coordinator::UNINITIALIZED_START_OFFSET, persister_client::SharePersister,
+            coordinator::UNINITIALIZED_START_OFFSET, key::ShareKeyRef,
+            persister_client::SharePersister,
         },
         time_util::duration_millis,
     },
@@ -270,9 +271,7 @@ fn spawn_initialize(
                 let topic_uuid = uuid::Uuid::from_bytes(call.topic_id.0);
                 let result = persister
                     .initialize(
-                        group_id,
-                        topic_uuid,
-                        call.partition,
+                        ShareKeyRef::new(group_id, topic_uuid, call.partition),
                         state_epoch,
                         krabka_log::Offset(call.start_offset),
                     )

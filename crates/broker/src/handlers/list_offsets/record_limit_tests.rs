@@ -29,7 +29,7 @@ use {
         owned::list_offsets_response::ListOffsetsPartitionResponse,
         records::{Attributes, Record, RecordBatch},
     },
-    std::{sync::atomic::Ordering, time::Duration},
+    std::time::Duration,
     tokio::{task, time},
 };
 
@@ -57,7 +57,7 @@ async fn broker_with_records(unstable: UnstableApiVersions) -> ClientBroker<temp
         .expect("partition");
     for (timestamp, value_len) in [(1_000, 10), (2_000, 1_000)] {
         let batch = RecordBatch {
-            partition_leader_epoch: partition.current_leader_epoch.load(Ordering::Acquire),
+            partition_leader_epoch: partition.leader_epoch().get(),
             base_timestamp: timestamp,
             max_timestamp: timestamp,
             attributes: Attributes::default().with_compression(CompressionType::Gzip),

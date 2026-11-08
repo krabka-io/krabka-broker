@@ -91,10 +91,9 @@ impl Rule {
                 // The rewrite is then `String.replaceAll` with the pattern as
                 // written, so a lazy or alternating pattern replaces its
                 // leftmost matches, not the whole-DN match.
-                let mapped = pattern.replace(
+                let mapped = pattern.replace_all(
                     distinguished_name,
                     &escape_literal_back_references(replacement, pattern.group_count())?,
-                    true,
                 )?;
                 Ok(Some(match case {
                     Case::Preserve => mapped,

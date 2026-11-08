@@ -224,20 +224,10 @@ pub fn subscribed_names_describe_denied(
     .is_empty()
 }
 
-/// Subscription denial code shared by consumer and share heartbeats.
-pub fn subscribed_names_refusal(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    names: Option<&[String]>,
-) -> Option<i16> {
-    subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
-        .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
-}
-
-/// Build a whole-heartbeat refusal when any subscribed topic is not
-/// `Describe`-authorized. Call before coordinator routing so that routing
-/// errors cannot mask the topic authorization failure or reveal topic data.
+/// Build a whole-heartbeat `TOPIC_AUTHORIZATION_FAILED` refusal when any
+/// subscribed topic is not `Describe`-authorized. Call before coordinator
+/// routing so that routing errors cannot mask the topic authorization failure
+/// or reveal topic data.
 pub fn subscribed_names_response<Response>(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
@@ -245,7 +235,9 @@ pub fn subscribed_names_response<Response>(
     names: Option<&[String]>,
     make_response: impl FnOnce(i16) -> Response,
 ) -> Option<Response> {
-    subscribed_names_refusal(broker, image, ctx, names).map(make_response)
+    subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
+        .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
+        .map(make_response)
 }
 
 /// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)` as the

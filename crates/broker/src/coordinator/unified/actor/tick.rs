@@ -13,8 +13,7 @@ use {
         ActorServices, ParkedWaiters,
         downgrade::{FenceFailure, FenceOutcome, fence_or_downgrade},
         persistence::{
-            flush_classic_metadata, leave_written_classic_group, leave_written_consumer_group,
-            written_classic_state,
+            EmptyGenerationFailure, leave_written_consumer_group, persist_empty_generation,
         },
         waiters::settle_removed_classic_waiters,
     },
@@ -23,7 +22,6 @@ use {
             classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup,
         },
         error::BrokerError,
-        metadata_epoch::next_i32,
     },
     std::time::Instant,
 };
@@ -112,25 +110,23 @@ async fn settle_classic_removal(
         return true;
     };
     if state.members.is_empty() && !removed.is_empty() {
-        let Some(generation_id) = next_i32(state.generation_id) else {
-            *state = previous;
-            tracing::warn!(group = %state.group_id,
-                "classic expiration stopped because the generation is exhausted");
-            return false;
-        };
-        state.generation_id = generation_id;
-        if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-            let written = written_classic_state(state, &error);
-            *state = previous;
-            let Some(written) = written else {
-                tracing::warn!(group = %state.group_id, %error,
-                    "classic expiration log write failed; retrying on the next tick");
-                return true;
-            };
-            tracing::warn!(group = %state.group_id, %error,
-                "classic expiration log write may still commit; stopping the actor");
-            leave_written_classic_group(group, written, services.coordinator);
-            return false;
+        match persist_empty_generation(state, &previous, services.offsets_log).await {
+            Ok(()) => {}
+            Err(EmptyGenerationFailure::Exhausted) => {
+                tracing::warn!(group = %state.group_id,
+                    "classic expiration stopped because the generation is exhausted");
+                return false;
+            }
+            Err(EmptyGenerationFailure::Write(failure)) => {
+                if failure.may_commit() {
+                    tracing::warn!(group = %state.group_id, error = %failure.error,
+                        "classic expiration log write may still commit; stopping the actor");
+                } else {
+                    tracing::warn!(group = %state.group_id, error = %failure.error,
+                        "classic expiration log write failed; retrying on the next tick");
+                }
+                return failure.keep_running(group, services.coordinator);
+            }
         }
     }
     settle_removed_classic_waiters(state, previous.state, removed, parked);
@@ -183,33 +179,30 @@ mod tests {
         super::*,
         crate::{
             codes,
-            coordinator::{
-                bootstrap::apply_group_metadata,
-                unified::{
-                    ClientIdentity, GroupCoordinator,
-                    actor::{
-                        ClassicView, GroupActorHandle, GroupActorMessage, GroupKindTag,
-                        PendingRecords, RegexResolution, SyncResult,
-                        test_support::{
-                            actor_services_with, bidirectional_coordinator,
-                            classic_member_for_topic, completing_classic_group,
-                            coordinator_with_log, empty_metadata, join_native_consumer,
-                            last_classic_metadata, log_has_classic_group_metadata_write,
-                            make_coordinator, parked_follower, rpc, subscribed_member,
-                        },
-                        views::build_classic_view,
+            coordinator::unified::{
+                ClientIdentity, GroupCoordinator,
+                actor::{
+                    ClassicView, GroupActorHandle, GroupActorMessage, GroupKindTag, PendingRecords,
+                    RegexResolution, SyncResult,
+                    test_support::{
+                        actor_services_with, bidirectional_coordinator, classic_member_for_topic,
+                        completing_classic_group, coordinator_with_log, empty_metadata,
+                        join_native_consumer, last_classic_metadata, live_actor,
+                        log_has_classic_group_metadata_write, make_coordinator, parked_follower,
+                        reloaded_classic_view, rpc, subscribed_member,
                     },
-                    classic_state::{ClassicGroup, GroupState as ClassicGroupState},
-                    config::NextGenConfig,
-                    consumer_state::GroupState,
-                    group::GroupKind,
-                    migration,
-                    offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
-                    persistence_next_gen::GroupMetadataValue,
-                    reconciler::ReconcileInput,
-                    regex_resolver::no_topic_regex_resolver,
-                    test_support::{check_two_members_expired, expired_session_last_seen},
+                    views::build_classic_view,
                 },
+                classic_state::{ClassicGroup, GroupState as ClassicGroupState},
+                config::NextGenConfig,
+                consumer_state::GroupState,
+                group::GroupKind,
+                migration,
+                offsets_log::{OFFSETS_TOPIC, fake::InMemoryOffsetsLog},
+                persistence_next_gen::GroupMetadataValue,
+                reconciler::ReconcileInput,
+                regex_resolver::no_topic_regex_resolver,
+                test_support::{check_two_members_expired, expired_session_last_seen},
             },
         },
         assert2::{assert, check},
@@ -297,7 +290,7 @@ mod tests {
             members: Vec::new(),
         };
         check!(build_classic_view(group.as_classic().unwrap()) == expired);
-        check!(reloaded_view(&log).await == expired);
+        check!(reloaded_classic_view(&log).await == expired);
     }
 
     #[tokio::test]
@@ -655,6 +648,7 @@ mod tests {
             let members: Vec<String> = view
                 .await
                 .unwrap()
+                .unwrap()
                 .members
                 .into_iter()
                 .map(|member| member.member_id)
@@ -870,14 +864,6 @@ mod tests {
         PendingSync,
     }
 
-    /// The group that a reload of `log` builds, as bootstrap replay applies
-    /// the last group-metadata record.
-    async fn reloaded_view(log: &InMemoryOffsetsLog) -> ClassicView {
-        let mut reloaded = ClassicGroup::new("g");
-        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await);
-        build_classic_view(&reloaded)
-    }
-
     /// A timer empties the group, and its group-metadata write times out
     /// after the record reached the log, so the record may still commit. The
     /// actor stops, as Kafka's `CoordinatorRuntime` keeps a timed-out write's
@@ -933,7 +919,7 @@ mod tests {
         let stopped = timeout(PROMPT, stopping.tx.closed()).await.is_ok();
         log.release_commits();
 
-        let reloaded = reloaded_view(&log).await;
+        let reloaded = reloaded_classic_view(&log).await;
         check!(
             reloaded
                 == ClassicView {
@@ -976,20 +962,6 @@ mod tests {
         clock
             .advance(tick_interval)
             .expect("manual time moves forward");
-    }
-
-    /// The live actor that serves group `g`, once one does.
-    async fn live_actor(coord: &GroupCoordinator) -> Arc<GroupActorHandle> {
-        timeout(PROMPT, async {
-            loop {
-                match coord.find("g") {
-                    Some(handle) if !handle.tx.is_closed() => return handle,
-                    _ => sleep(Duration::from_millis(1)).await,
-                }
-            }
-        })
-        .await
-        .expect("a live actor serves the group")
     }
 
     /// The consumer-group write whose failure stops the actor.

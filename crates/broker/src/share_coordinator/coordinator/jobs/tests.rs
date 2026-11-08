@@ -10,6 +10,7 @@ use {
             ConfiguredCoordinator, Logged, LoggedRecord, NOW_MS, configured_coordinator,
             image_with_topics, lead_all, logged_records, set_clock,
         },
+        key::ShareKeyRef,
         persistence::ShareSnapshotValue,
         state::SharePartitionState,
     },
@@ -69,9 +70,7 @@ async fn job_keys_are_bucketed_once_per_sweep() {
                 check!(bucket.keys.windows(2).all(|keys| keys[0] < keys[1]));
                 for key in &bucket.keys {
                     check!(
-                        coord
-                            .state_partition_for(&key.group, &key.topic_id, key.partition)
-                            .unwrap()
+                        coord.state_partition_for(key.as_key_ref()).unwrap()
                             == bucket.term.partition
                     );
                 }
@@ -104,10 +103,7 @@ async fn job_keys_are_bucketed_once_per_sweep() {
             .iter()
             .filter(|entry| {
                 let key = entry.key();
-                coord
-                    .state_partition_for(&key.group, &key.topic_id, key.partition)
-                    .unwrap()
-                    != inactive
+                coord.state_partition_for(key.as_key_ref()).unwrap() != inactive
             })
             .count();
         check!(observed == expected, "{partitions}");
@@ -131,12 +127,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
             topic_id: T1,
             partition: 0,
         })
-        .find(|key| {
-            coord
-                .state_partition_for(&key.group, &key.topic_id, key.partition)
-                .unwrap()
-                == bucket.term.partition
-        })
+        .find(|key| coord.state_partition_for(key.as_key_ref()).unwrap() == bucket.term.partition)
         .unwrap();
     coord.state.insert(
         fresh.clone(),
@@ -167,11 +158,16 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     let bucket = populated_bucket(&coord).await;
     let fresh = (0..10_000)
         .map(|index| format!("initialized-{index}"))
-        .find(|group| coord.state_partition_for(group, &T1, 0).unwrap() == bucket.term.partition)
+        .find(|group| {
+            coord
+                .state_partition_for(ShareKeyRef::new(group, T1, 0))
+                .unwrap()
+                == bucket.term.partition
+        })
         .unwrap();
     let image = image_with_topics(&[(T1, 1), (T2, 1)]);
     coord
-        .initialize(&image, &fresh, T1, 0, 1, Offset(0))
+        .initialize(&image, ShareKeyRef::new(&fresh, T1, 0), 1, Offset(0))
         .await
         .unwrap();
     let active = coord.active(bucket.term.partition).await.unwrap();
@@ -213,11 +209,11 @@ async fn two_keys(dir: &Path, config: ShareCoordinatorConfig) -> TwoKeys {
     lead_all(&coord).await;
     let image = image_with_topics(&[(T1, 1), (T2, 1)]);
     coord
-        .initialize(&image, "ga", T1, 0, 1, Offset(0))
+        .initialize(&image, ShareKeyRef::new("ga", T1, 0), 1, Offset(0))
         .await
         .unwrap();
     coord
-        .initialize(&image, "gb", T2, 0, 1, Offset(0))
+        .initialize(&image, ShareKeyRef::new("gb", T2, 0), 1, Offset(0))
         .await
         .unwrap();
     TwoKeys {
@@ -229,7 +225,9 @@ async fn two_keys(dir: &Path, config: ShareCoordinatorConfig) -> TwoKeys {
 fn records_of(coord: &ShareCoordinator, group: &str, topic_id: uuid::Uuid) -> Vec<LoggedRecord> {
     logged_records(
         coord,
-        coord.state_partition_for(group, &topic_id, 0).unwrap(),
+        coord
+            .state_partition_for(ShareKeyRef::new(group, topic_id, 0))
+            .unwrap(),
     )
 }
 
@@ -266,10 +264,24 @@ async fn deleted_topic_keys_are_tombstoned() {
         .filter(|logged| *logged == Logged::Tombstone)
         .collect();
     check!(a_records == vec![Logged::Tombstone]);
-    check!(coord.state_for_test("ga", T1, 0).await.is_none());
-    check!(coord.state_for_test("gb", T2, 0).await.is_some());
-    if coord.state_partition_for("ga", &T1, 0).unwrap()
-        != coord.state_partition_for("gb", &T2, 0).unwrap()
+    check!(
+        coord
+            .state_for_test(ShareKeyRef::new("ga", T1, 0))
+            .await
+            .is_none()
+    );
+    check!(
+        coord
+            .state_for_test(ShareKeyRef::new("gb", T2, 0))
+            .await
+            .is_some()
+    );
+    if coord
+        .state_partition_for(ShareKeyRef::new("ga", T1, 0))
+        .unwrap()
+        != coord
+            .state_partition_for(ShareKeyRef::new("gb", T2, 0))
+            .unwrap()
     {
         check!(records_of(&coord, "gb", T2) == b_before);
     }
@@ -307,12 +319,17 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
     }
 
     coord.prune_state_partitions().await;
-    let state_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
+    let state_partition = coord
+        .state_partition_for(ShareKeyRef::new("gb", T2, 0))
+        .unwrap();
     let part = coord
         .partitions
         .get(bootstrap::TOPIC, state_partition)
         .unwrap();
-    let latest = coord.state_for_test("gb", T2, 0).await.unwrap();
+    let latest = coord
+        .state_for_test(ShareKeyRef::new("gb", T2, 0))
+        .await
+        .unwrap();
     check!(latest.last_snapshot_offset > Offset(0));
     assert!(part.log_start_offset().unwrap() == latest.last_snapshot_offset);
 }
@@ -368,7 +385,9 @@ async fn run_loop_reacts_to_images_and_timers() {
         images
             .send(with_share_version(image_with_topics(&[(T2, 1)]), level))
             .unwrap();
-        let a_partition = coord.state_partition_for("ga", &T1, 0).unwrap();
+        let a_partition = coord
+            .state_partition_for(ShareKeyRef::new("ga", T1, 0))
+            .unwrap();
         check!(
             eventually(|| logged_records(&coord, a_partition)
                 .iter()
@@ -377,7 +396,9 @@ async fn run_loop_reacts_to_images_and_timers() {
             "level {level}"
         );
 
-        let b_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
+        let b_partition = coord
+            .state_partition_for(ShareKeyRef::new("gb", T2, 0))
+            .unwrap();
         let part = coord.partitions.get(bootstrap::TOPIC, b_partition).unwrap();
         if jobs_run {
             check!(

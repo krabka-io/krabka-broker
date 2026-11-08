@@ -23,6 +23,7 @@ use {
     crate::{
         broker::Broker,
         codes,
+        controller_endpoint::CONTROLLER_LISTENER_NAME,
         handlers::{
             ApiVersion, DispatchResult, RequestContext, audit_admin_success, audit_resource,
             cluster_alter_denied,
@@ -122,7 +123,7 @@ async fn probe_candidate(
     let endpoint = req
         .listeners
         .iter()
-        .find(|listener| listener.name.eq_ignore_ascii_case("CONTROLLER"))
+        .find(|listener| listener.name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
         .or_else(|| req.listeners.first())
         .ok_or_else(|| unavailable("the request names no listener".to_owned()))?;
     let server_name = broker

@@ -21,7 +21,7 @@ mod support;
 use {
     crate::support::{
         client::{connect_client, create_topic},
-        free_port,
+        hold_port,
         listeners::listener,
         manifest_dir,
         sasl::provision_scram,
@@ -146,7 +146,10 @@ impl SecuredSoakDrill {
 async fn secured_drill_source(soak_drill: &mut SecuredSoakDrill) {
     let _ = aws_lc_rs::default_provider().install_default();
     let security = manifest_dir().join("tests/fixtures/security");
-    let secured: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
+    // Held until the broker has bound the secured listener; it is never
+    // restarted, so the port is not bound again.
+    let held = hold_port();
+    let secured: SocketAddr = format!("127.0.0.1:{}", held.port()).parse().unwrap();
     soak_drill.broker = Some(
         start_configured(|config| {
             let mut sasl_ssl = listener("SASL_SSL", secured, ListenerProtocol::SaslSsl);
@@ -165,6 +168,7 @@ async fn secured_drill_source(soak_drill: &mut SecuredSoakDrill) {
         })
         .await,
     );
+    drop(held);
     provision_scram()
         .broker(&soak_drill.broker.as_ref().expect("secured broker").broker)
         .user("soak".to_owned())
