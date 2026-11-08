@@ -41,8 +41,7 @@ use {
 
 /// `Errors.UNKNOWN_SERVER_ERROR.message()`, which the
 /// `UnknownServerException` `ForwardingManagerImpl` builds carries.
-const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
-    "The server experienced an unexpected error when processing the request.";
+const UNKNOWN_SERVER_ERROR_MESSAGE: &str = codes::default_message(codes::UNKNOWN_SERVER_ERROR);
 
 /// Retry a controller mutation after conflicting metadata or a pending tail.
 ///

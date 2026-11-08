@@ -39,7 +39,7 @@ use {
     crate::{
         codes::{
             CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER, REQUEST_TIMED_OUT,
-            UNKNOWN_SERVER_ERROR,
+            UNKNOWN_SERVER_ERROR, default_message,
         },
         handlers::{
             forward_to_controller::{
@@ -90,7 +90,7 @@ async fn answer(
         return Ok(whole_request_error(
             &req,
             CLUSTER_AUTHORIZATION_FAILED,
-            "Cluster authorization failed.",
+            default_message(CLUSTER_AUTHORIZATION_FAILED),
         ));
     }
 

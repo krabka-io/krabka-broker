@@ -68,14 +68,14 @@ fn broker_error_codes(errors: &mut ErrorNamespaces) {
     errors.private = Some(KRABKA_PRIVATE_CODES.to_vec());
 }
 
-#[rstest_bdd_macros::then("every released error keeps Kafka's name and numeric wire code")]
+#[rstest_bdd_macros::then("every released error keeps Kafka's name, numeric wire code and message")]
 fn released_error_codes(errors: &ErrorNamespaces) {
     for wire in errors
         .released
         .as_ref()
         .expect("broker errors were enumerated")
     {
-        let NamedCode { name, code } = wire;
+        let NamedCode { name, code, .. } = wire;
         let kafka = KAFKA_ERROR_TABLE
             .iter()
             .find(|kafka| kafka.name == wire.name);
@@ -89,7 +89,7 @@ fn private_error_codes(errors: &ErrorNamespaces) {
         .release_ceiling
         .expect("the extracted Kafka table is not empty");
     let highest_trunk = errors.trunk_ceiling.expect("the trunk table is not empty");
-    for NamedCode { name, code } in errors
+    for NamedCode { name, code, .. } in errors
         .private
         .as_ref()
         .expect("broker errors were enumerated")
@@ -100,29 +100,36 @@ fn private_error_codes(errors: &ErrorNamespaces) {
     }
 }
 
-/// The codes Kafka trunk adds after the 4.3.1 table ends, as
-/// `org.apache.kafka.common.protocol.Errors` assigns them at trunk
+/// The codes Kafka trunk adds after the 4.3.1 table ends, with their default
+/// messages, as `org.apache.kafka.common.protocol.Errors` assigns them at trunk
 /// `abf522e1ca5d`: 134 is `GROUP_DELETION_FAILED`, which krabka does not
 /// return, 135 is KIP-1331's and 136 is KIP-1312's.
 const KAFKA_TRUNK_ERROR_TABLE: &[NamedCode] = &[
     NamedCode {
         name: "GROUP_DELETION_FAILED",
         code: 134,
+        message: Some(
+            "DeleteGroups could not complete; see the error message on the per-group result for details.",
+        ),
     },
     NamedCode {
         name: "STREAMS_TOPOLOGY_DESCRIPTION_UPDATE_FAILED",
         code: 135,
+        message: Some(
+            "The broker could not process the topology description update; see the error message for details.",
+        ),
     },
     NamedCode {
         name: "CONTROLLER_ID_NOT_REGISTERED",
         code: 136,
+        message: Some("The given controller ID was not registered."),
     },
 ];
 
 #[test]
 fn every_trunk_constant_appears_in_the_trunk_table_and_not_in_the_release() {
     for wire in KAFKA_TRUNK_CODES {
-        let NamedCode { name, code } = wire;
+        let NamedCode { name, code, .. } = wire;
         let trunk = KAFKA_TRUNK_ERROR_TABLE
             .iter()
             .find(|trunk| trunk.name == wire.name);
@@ -134,6 +141,163 @@ fn every_trunk_constant_appears_in_the_trunk_table_and_not_in_the_release() {
             "{name} is in the release table and belongs with the Kafka-range codes"
         );
     }
+}
+
+#[test]
+fn every_private_constant_declares_no_message() {
+    for NamedCode { name, message, .. } in KRABKA_PRIVATE_CODES {
+        assert!(message.is_none(), "{name}");
+    }
+}
+
+#[test]
+fn every_declared_kafka_code_answers_its_own_name_and_message() {
+    for NamedCode {
+        name,
+        code,
+        message,
+    } in KAFKA_RANGE_CODES.iter().chain(KAFKA_TRUNK_CODES)
+    {
+        assert!(error_name(*code) == *name);
+        assert!(Some(default_message(*code)) == *message, "{name}");
+    }
+}
+
+/// Kafka's `Errors.forCode` reads a code it does not know as
+/// `UNKNOWN_SERVER_ERROR`, and so do [`error_name`] and [`default_message`]:
+/// for a Kafka code this module does not declare, for a krabka-private code,
+/// and for a number no table assigns.
+#[yare::parameterized(
+    undeclared_kafka_code = { 4 },
+    krabka_private_code = { BARRIER_INJECTION_IN_PROGRESS },
+    unassigned_code = { i16::MAX },
+    below_unknown_server_error = { -2 },
+)]
+fn an_undeclared_code_reads_as_unknown_server_error(code: i16) {
+    assert2::assert!(error_name(code) == "UNKNOWN_SERVER_ERROR");
+    assert2::assert!(
+        default_message(code)
+            == "The server experienced an unexpected error when processing the request."
+    );
+}
+
+/// The messages the broker's handlers put on the wire, pinned byte for byte.
+/// The guard above holds every declared row against Kafka's table; this one
+/// holds the rows the handlers send against the literal bytes they sent
+/// before the messages had one home.
+#[yare::parameterized(
+    none = { NONE, "NONE" },
+    unknown_server_error = {
+        UNKNOWN_SERVER_ERROR,
+        "The server experienced an unexpected error when processing the request.",
+    },
+    unknown_topic_or_partition = {
+        UNKNOWN_TOPIC_OR_PARTITION,
+        "This server does not host this topic-partition.",
+    },
+    leader_not_available = {
+        LEADER_NOT_AVAILABLE,
+        "There is no leader for this topic-partition as we are in the middle of a leadership \
+         election.",
+    },
+    not_leader_or_follower = {
+        NOT_LEADER_OR_FOLLOWER,
+        "For requests intended only for the leader, this error indicates that the broker is not \
+         the current leader. For requests intended for any replica, this error indicates that the \
+         broker is not a replica of the topic partition.",
+    },
+    request_timed_out = { REQUEST_TIMED_OUT, "The request timed out." },
+    network_exception = {
+        NETWORK_EXCEPTION,
+        "The server disconnected before a response was received.",
+    },
+    coordinator_load_in_progress = {
+        COORDINATOR_LOAD_IN_PROGRESS,
+        "The coordinator is loading and hence can't process requests.",
+    },
+    coordinator_not_available = { COORDINATOR_NOT_AVAILABLE, "The coordinator is not available." },
+    not_coordinator = { NOT_COORDINATOR, "This is not the correct coordinator." },
+    invalid_topic_exception = {
+        INVALID_TOPIC_EXCEPTION,
+        "The request attempted to perform an operation on an invalid topic.",
+    },
+    invalid_group_id = { INVALID_GROUP_ID, "The group id is invalid." },
+    topic_authorization_failed = { TOPIC_AUTHORIZATION_FAILED, "Topic authorization failed." },
+    group_authorization_failed = { GROUP_AUTHORIZATION_FAILED, "Group authorization failed." },
+    cluster_authorization_failed = {
+        CLUSTER_AUTHORIZATION_FAILED,
+        "Cluster authorization failed.",
+    },
+    illegal_sasl_state = {
+        ILLEGAL_SASL_STATE,
+        "Request is not valid given the current SASL state.",
+    },
+    unsupported_version = { UNSUPPORTED_VERSION, "The version of API is not supported." },
+    topic_already_exists = { TOPIC_ALREADY_EXISTS, "Topic with this name already exists." },
+    invalid_partitions = { INVALID_PARTITIONS, "Number of partitions is below 1." },
+    invalid_replication_factor = {
+        INVALID_REPLICATION_FACTOR,
+        "Replication factor is below 1 or larger than the number of available brokers.",
+    },
+    invalid_replica_assignment = { INVALID_REPLICA_ASSIGNMENT, "Replica assignment is invalid." },
+    invalid_config = { INVALID_CONFIG, "Configuration is invalid." },
+    not_controller = { NOT_CONTROLLER, "This is not the correct controller for this cluster." },
+    invalid_request = {
+        INVALID_REQUEST,
+        "This most likely occurs because of a request being malformed by the client library or \
+         the message was sent to an incompatible broker. See the broker logs for more details.",
+    },
+    policy_violation = {
+        POLICY_VIOLATION,
+        "Request parameters do not satisfy the configured policy.",
+    },
+    transactional_id_authorization_failed = {
+        TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+        "Transactional Id authorization failed.",
+    },
+    non_empty_group = { NON_EMPTY_GROUP, "The group is not empty." },
+    group_id_not_found = { GROUP_ID_NOT_FOUND, "The group id does not exist." },
+    kafka_storage_error = {
+        KAFKA_STORAGE_ERROR,
+        "Disk error when trying to access log file on the disk.",
+    },
+    fenced_leader_epoch = {
+        FENCED_LEADER_EPOCH,
+        "The leader epoch in the request is older than the epoch on the broker.",
+    },
+    unknown_leader_epoch = {
+        UNKNOWN_LEADER_EPOCH,
+        "The leader epoch in the request is newer than the epoch on the broker.",
+    },
+    offset_not_available = {
+        OFFSET_NOT_AVAILABLE,
+        "The leader high watermark has not caught up from a recent leader election so the \
+         offsets cannot be guaranteed to be monotonically increasing.",
+    },
+    preferred_leader_not_available = {
+        PREFERRED_LEADER_NOT_AVAILABLE,
+        "The preferred leader was not available.",
+    },
+    eligible_leaders_not_available = {
+        ELIGIBLE_LEADERS_NOT_AVAILABLE,
+        "Eligible topic partition leaders are not available.",
+    },
+    election_not_needed = {
+        ELECTION_NOT_NEEDED,
+        "Leader election not needed for topic partition.",
+    },
+    no_reassignment_in_progress = {
+        NO_REASSIGNMENT_IN_PROGRESS,
+        "No partition reassignment is in progress.",
+    },
+    throttling_quota_exceeded = {
+        THROTTLING_QUOTA_EXCEEDED,
+        "The throttling quota has been exceeded.",
+    },
+    unknown_topic_id = { UNKNOWN_TOPIC_ID, "This server does not host this topic ID." },
+)]
+fn the_messages_the_handlers_send_keep_their_bytes(code: i16, message: &str) {
+    assert2::assert!(default_message(code) == message);
 }
 
 #[test]
@@ -149,12 +313,14 @@ fn no_two_error_code_constants_collide() {
         NamedCode {
             name: left_name,
             code: left,
+            ..
         },
     ) in all.iter().enumerate()
     {
         for NamedCode {
             name: right_name,
             code: right,
+            ..
         } in &all[index + 1..]
         {
             assert!(

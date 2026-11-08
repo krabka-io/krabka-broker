@@ -99,7 +99,7 @@ pub fn handle(
             topics_out.push(refused_topic(
                 topic_req,
                 codes::TOPIC_AUTHORIZATION_FAILED,
-                "Topic authorization failed.",
+                codes::default_message(codes::TOPIC_AUTHORIZATION_FAILED),
             ));
             continue;
         }
@@ -120,7 +120,7 @@ pub fn handle(
                 let error_message = image
                     .topic(topic_req.name.as_str())
                     .is_none()
-                    .then(|| "This server does not host this topic-partition.".to_owned());
+                    .then(|| codes::default_message(codes::UNKNOWN_TOPIC_OR_PARTITION).to_owned());
                 parts_out.push(PartitionResponse {
                     partition_index: idx,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,

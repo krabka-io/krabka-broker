@@ -240,7 +240,7 @@ pub(super) async fn refuse_gated_request(
 }
 
 /// `Errors.ILLEGAL_SASL_STATE.message()`.
-const ILLEGAL_SASL_STATE_MESSAGE: &str = "Request is not valid given the current SASL state.";
+const ILLEGAL_SASL_STATE_MESSAGE: &str = codes::default_message(codes::ILLEGAL_SASL_STATE);
 
 /// The `ILLEGAL_SASL_STATE` answer Kafka's `SaslServerAuthenticator` writes
 /// for a request other than `SaslAuthenticate` that arrives after a handshake

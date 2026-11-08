@@ -471,9 +471,14 @@ pub fn background_controllers(item: ItemStruct) -> Result<TokenStream, ParseErro
     background_controllers::expand(item)
 }
 
-/// Declare wire constants and their ordered release, trunk, and private guard tables.
-/// Accepts `release TABLE { NAME = -1; } trunk TABLE { ... } private TABLE { ... }`.
-/// Each section emits public i16 constants and a private test-only `NamedCode` table.
+/// Declare wire constants, their default messages, and their ordered release, trunk,
+/// and private guard tables.
+/// Accepts `release TABLE { NAME = -1 => "message"; } trunk TABLE { ... } private TABLE
+/// { NAME = 1000; }`: a release or trunk row names its message, and a private row none.
+/// Each section emits public i16 constants and a private test-only `NamedCode` table,
+/// and the declaration emits a private `const fn declared_kafka_error(i16) ->
+/// Option<KafkaError>` over the rows that name a message. The caller defines
+/// `NamedCode { name, code, message: Option<&str> }` and `KafkaError { name, message }`.
 #[moxy::function]
 pub fn wire_codes(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
     wire_codes::expand(&tokens.into())

@@ -334,7 +334,8 @@ fn too_many_partitions_message(unstable: UnstableApiVersions) -> &'static str {
 
 /// Kafka's `Errors.THROTTLING_QUOTA_EXCEEDED.message()`, which
 /// `StrictControllerMutationQuota.record` puts on the exception.
-const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str = "The throttling quota has been exceeded.";
+const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str =
+    codes::default_message(codes::THROTTLING_QUOTA_EXCEEDED);
 
 /// The names that more than one request row carries, in the order of their
 /// first row.

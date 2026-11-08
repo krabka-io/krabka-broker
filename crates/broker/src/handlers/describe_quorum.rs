@@ -110,12 +110,11 @@ pub async fn handle(
 }
 
 /// Kafka's `Errors.CLUSTER_AUTHORIZATION_FAILED.message()`.
-const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed.";
+const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str =
+    codes::default_message(codes::CLUSTER_AUTHORIZATION_FAILED);
 
 /// Kafka's `Errors.NOT_LEADER_OR_FOLLOWER.message()`.
-const NOT_LEADER_OR_FOLLOWER_MESSAGE: &str = "For requests intended only for the leader, this \
-     error indicates that the broker is not the current leader. For requests intended for any \
-     replica, this error indicates that the broker is not a replica of the topic partition.";
+const NOT_LEADER_OR_FOLLOWER_MESSAGE: &str = codes::default_message(codes::NOT_LEADER_OR_FOLLOWER);
 
 /// A whole-request `DescribeQuorum` refusal, in the shape of Kafka's
 /// `DescribeQuorumRequest.getTopLevelErrorResponse`: the top-level
