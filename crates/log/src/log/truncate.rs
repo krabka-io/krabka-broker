@@ -10,8 +10,8 @@ use krabka_units::prelude::ByteSizeExt as _;
 use {
     super::Log,
     crate::{
-        error::LogError, producer_snapshot, retention::DirSync, segment::Segment,
-        txn_index::TxnIndex,
+        error::LogError, name::SegmentFile, producer_snapshot, retention::DirSync,
+        segment::Segment, txn_index::TxnIndex,
     },
     krabka_ids::Offset,
     std::{
@@ -76,12 +76,7 @@ impl Log {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
         let now = SystemTime::now();
-        self.retire_files(
-            base,
-            now,
-            &["log", "index", "timeindex", "txnindex", "stampindex"],
-            DirSync::Now,
-        )
+        self.retire_files(base, now, &SegmentFile::SEGMENT, DirSync::Now)
     }
 
     /// Retire the files of the newest sealed segment, then forget the segment
@@ -235,7 +230,7 @@ impl Log {
         // Kafka's `rebuildProducerState` skips the replay when there were no
         // producers and no unreplicated transactions before the truncation:
         // cutting the log cannot create any.
-        if !self.producer_state.is_empty() || !self.unreplicated.is_empty() {
+        if !self.producers.entries.is_empty() || !self.unreplicated.is_empty() {
             self.rebuild_producer_and_transaction_state()?;
         }
         // Kafka's `UnifiedLog.truncateTo` rebuilds the producer state and
@@ -243,7 +238,7 @@ impl Log {
         self.take_producer_snapshot()?;
         // A verification started against the discarded tail proves nothing
         // about the retained log. A reopen starts without one too.
-        self.verification_states.clear();
+        self.producers.verifications.clear();
         let new_end = self.log_end_offset();
         // Every cached visibility frontier is clamped to the actual retained
         // batch prefix, which can end before a cut that lands inside a batch.

@@ -13,7 +13,7 @@ use {
     crate::{
         error::LogError,
         io::LogIo,
-        name,
+        name::{self, SegmentFile},
         retention::{DELETED_SUFFIX, remove_optional_counted},
     },
     std::{collections::HashSet, fs, path::Path},
@@ -21,9 +21,6 @@ use {
 };
 
 pub mod swap;
-
-/// The sidecar extensions a segment carries beside its `.log`.
-const SIDECAR_EXTENSIONS: [&str; 4] = ["index", "timeindex", "txnindex", "stampindex"];
 
 /// Reclaim what an interrupted segment deletion left in `dir`.
 ///
@@ -95,15 +92,17 @@ fn is_deleted_tombstone(value: &str) -> bool {
     // A retired producer-state snapshot is a tombstone too: retention and
     // compaction retire it with its segment. It is not a stranded sidecar,
     // because a live snapshot may sit at an offset with no `.log`.
-    ["log", "snapshot"]
+    [SegmentFile::Log, SegmentFile::Snapshot]
+        .map(SegmentFile::extension)
         .into_iter()
-        .chain(SIDECAR_EXTENSIONS)
+        .chain(SegmentFile::SIDECARS.map(SegmentFile::extension))
         .any(|ext| canonical_base(rest, ext).is_some())
 }
 
 /// `true` for a canonical sidecar name whose segment `.log` is not present.
 fn is_stranded_sidecar(value: &str, log_bases: &HashSet<i64>) -> bool {
-    SIDECAR_EXTENSIONS
+    SegmentFile::SIDECARS
+        .map(SegmentFile::extension)
         .into_iter()
         .filter_map(|ext| canonical_base(value, ext))
         .any(|base| !log_bases.contains(&base))

@@ -25,10 +25,11 @@ krabka_macros::parsed_cli_entrypoint!({
     /// Run the tool from an argv-style iterator, returning its exit code.
     ///
     /// `0` means the broker accepted the request. `1` means it refused one, and the
-    /// reason is on stderr. `2` means the broker could not be reached, so nothing
-    /// is known about the outcome. `3` means a cut does not match the log.
-    /// `64` means the command line did not parse, and clap's message is on
-    /// stderr. `--help` and `--version` print and return `0`.
+    /// reason is on stderr. `2` means no request completed, because the broker
+    /// could not be reached or refused the login, or `--command-config` was
+    /// unusable. `3` means a cut does not match the log. `64` means the command
+    /// line did not parse, and clap's message is on stderr. `--help` and
+    /// `--version` print and return `0`.
 });
 
 /// The `timeout_ms` that asks the broker for its own default. The broker reads
@@ -56,15 +57,10 @@ pub async fn run(cli: Cli) -> i32 {
 ///
 /// The exit code means what it does for [`run_from_args`].
 pub async fn run_with(cli: Cli, console: &mut Console<'_>) -> i32 {
-    let client = match Client::builder()
-        .bootstrap(&cli.bootstrap_server)
-        .client_id("krabka-barrier")
-        .build()
-        .await
-    {
+    let client = match cli.connection.connect("krabka-barrier").await {
         Ok(client) => client,
         Err(error) => {
-            console.err(format!("cannot reach {}: {error}", cli.bootstrap_server));
+            console.err(error.to_string());
             return EXIT_UNREACHABLE;
         }
     };

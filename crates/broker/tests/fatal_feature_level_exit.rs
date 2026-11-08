@@ -17,38 +17,33 @@
 //! started broker.
 #![cfg(test)]
 
+#[path = "support/reserved_port.rs"]
+mod reserved_port;
+
 use {
     assert2::{assert, check},
     krabka_metadata::{MetadataRecord, TopicRecord},
+    reserved_port::reserve_port,
     std::{
         fs::{self, File},
-        net::TcpListener,
+        net::SocketAddr,
         path::Path,
         process::{Command, Stdio},
         thread,
         time::{Duration, Instant},
     },
-    tokio::runtime::Builder,
+    tokio::{net::TcpSocket, runtime::Builder},
 };
 
-/// A loopback port that nothing holds at the moment, for the controller
-/// listener. `krabka format` records it as the voter's endpoint, so it has to be
-/// a known number, and it cannot stay on the binary's default port 9093, which
-/// `cli_smoke` binds while this suite may run.
-fn free_loopback_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
 /// Formats a standalone log directory with the extra `flags`, and `extra`
-/// seeded into the bootstrap records. The voter set records `controller_port`
-/// as this node's endpoint, and the broker has to listen there.
+/// seeded into the bootstrap records. The voter set records `controller` as
+/// this node's endpoint, and the broker has to listen there.
 ///
 /// Called in process rather than spawned, as `cli_smoke` does: the formatting
 /// is setup, not the thing under test.
 fn format_standalone(
     log_dir: &Path,
-    controller_port: u16,
+    controller: SocketAddr,
     flags: &[&str],
     extra: Vec<MetadataRecord>,
 ) {
@@ -60,7 +55,7 @@ fn format_standalone(
         "--node-id",
         "1",
         "--controller-listener",
-        &format!("127.0.0.1:{controller_port}"),
+        &controller.to_string(),
     ]
     .into_iter()
     .map(str::to_owned)
@@ -76,7 +71,16 @@ fn format_standalone(
 
 struct FatalControllerStartup {
     directory: tempfile::TempDir,
-    controller_port: u16,
+    /// Holds the controller port from before `krabka format` records it until
+    /// the scenario ends, so no other socket can take it before the broker
+    /// binds it. It is bound but not listening, so only the broker's
+    /// `SO_REUSEADDR` listener can share it.
+    ///
+    /// `krabka format` records the port as the voter's endpoint, so it has to
+    /// be a known number, and it cannot stay on the binary's default port
+    /// 9093, which `cli_smoke` binds while this suite may run.
+    _controller_reservation: TcpSocket,
+    controller: SocketAddr,
     status: Option<ExitStatus>,
     output: Option<Output>,
     stdout: String,
@@ -84,9 +88,11 @@ struct FatalControllerStartup {
 #[rstest::fixture]
 fn fatal_startup() -> FatalControllerStartup {
     let directory = tempfile::tempdir().expect("process workspace");
+    let (controller_reservation, controller) = reserve_port();
     FatalControllerStartup {
         directory,
-        controller_port: free_loopback_port(),
+        _controller_reservation: controller_reservation,
+        controller,
         status: None,
         output: None,
         stdout: String::new(),
@@ -96,7 +102,7 @@ fn fatal_startup() -> FatalControllerStartup {
 fn unsupported_controller_bootstrap(fatal_startup: &mut FatalControllerStartup) {
     format_standalone(
         &fatal_startup.directory.path().join("data"),
-        fatal_startup.controller_port,
+        fatal_startup.controller,
         &[
             "--release-version",
             "4.5-IV0",
@@ -124,7 +130,7 @@ fn duplicate_controller_bootstrap(
         .collect();
     format_standalone(
         &fatal_startup.directory.path().join("data"),
-        fatal_startup.controller_port,
+        fatal_startup.controller,
         &[],
         records,
     );
@@ -137,8 +143,8 @@ fn boot_controller_with_fatal_records(fatal_startup: &mut FatalControllerStartup
     let mut child = Command::new(env!("CARGO_BIN_EXE_krabka-broker"))
         .arg("--listen-addr=127.0.0.1:0")
         .arg(format!(
-            "--controller-listen-addr=127.0.0.1:{}",
-            fatal_startup.controller_port
+            "--controller-listen-addr={}",
+            fatal_startup.controller
         ))
         .arg(format!(
             "--log-dir={}",

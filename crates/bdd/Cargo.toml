@@ -18,11 +18,14 @@ futures-util = { workspace = true }
 inventory = { workspace = true }
 krabka-bdd-macros = { path = "../bdd-macros" }
 krabka-bdd-model = { path = "../bdd-model" }
+qubit-clock = { workspace = true }
 rstest-bdd = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+bon = { workspace = true }
 rstest = { workspace = true }
 rstest-bdd-macros = { workspace = true }
 rust-embed = { workspace = true }

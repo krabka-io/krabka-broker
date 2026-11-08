@@ -3,7 +3,7 @@
 use {
     crate::{
         fixtures::{name, named_arguments},
-        meta::{ItemBody, argument_array, body_group, item_body, named_body},
+        meta::{ItemBody, argument_array, item_body},
     },
     moxy::{
         ast::ParseError,
@@ -122,34 +122,6 @@ pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStre
             T: Into<::std::ffi::OsString> + Clone,
         {{ body }}
     })
-}
-
-pub fn bootstrap_cli_fields(
-    meta: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, ParseError> {
-    no_options(meta)?;
-    let ItemBody {
-        mut tokens,
-        body_index: body,
-    } = named_body(item, "bootstrap_cli_fields")?;
-    let group = body_group(&mut tokens, body)?;
-    if !group.tokens.is_empty() {
-        return Err(ParseError::new(
-            group.span(),
-            "bootstrap_cli_fields needs an empty Cli body",
-        ));
-    }
-    group.tokens = moxy::template! {
-        /// One or more `host:port` pairs to bootstrap against.
-        #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
-        pub bootstrap_server: String,
-
-        /// What to do.
-        #[command(subcommand)]
-        pub command: Command,
-    };
-    Ok(tokens.into())
 }
 
 pub fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
@@ -303,22 +275,6 @@ pub fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseErr
             ::std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
             ::std::fs::write(rlmm.join("snapshot"), b"rlmm snapshot bytes").expect("write the rlmm snapshot");
             log_dir
-        }
-    })
-}
-
-pub fn connect_cli_client(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [bootstrap, client_id, unreachable] = argument_array(input)?;
-    Ok(moxy::template! {
-        match ::krabka_client_core::Client::builder()
-            .bootstrap({{ bootstrap }})
-            .client_id({{ client_id }})
-            .build().await {
-            Ok(client) => client,
-            Err(error) => {
-                eprintln!("cannot reach {}: {error}", {{ bootstrap }});
-                return {{ unreachable }};
-            }
         }
     })
 }

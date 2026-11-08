@@ -33,7 +33,7 @@ use {
         path::{self, Path, PathBuf},
         sync::{Arc, Mutex},
     },
-    tokio::task::JoinHandle,
+    tokio::{sync as async_sync, task::JoinHandle},
     tokio_util::sync::CancellationToken,
 };
 
@@ -78,6 +78,37 @@ pub struct FutureLogState {
     /// Retained so cancellation and broker shutdown can abort and await the
     /// replicator task.
     pub task: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// Serializes the log-directory moves a broker starts, as Kafka's
+/// `ReplicaManager.alterReplicaLogDirs` does under `replicaStateChangeLock`.
+///
+/// [`start_move`] checks the registry for a move in flight, then opens the
+/// future log and registers a new move. Two concurrent `AlterReplicaLogDirs`
+/// requests for one partition could otherwise both find no move: both would
+/// open the same future directory, and the registry would keep only the
+/// second move, so the first replicator task would run on where no cancel or
+/// shutdown could stop it.
+///
+/// Kafka holds the lock for a whole request, so the handler takes it once and
+/// passes the [`MoveGuard`] to every `start_move` call of that request.
+#[derive(Debug, Default)]
+pub struct MoveLock(async_sync::Mutex<()>);
+
+impl MoveLock {
+    /// Wait until no other move start holds the lock, then take it.
+    pub async fn lock(&self) -> MoveGuard<'_> {
+        MoveGuard {
+            _guard: self.0.lock().await,
+        }
+    }
+}
+
+/// Proof that the holder has the broker's [`MoveLock`]. The lock is released
+/// when the guard drops.
+#[derive(Debug)]
+pub struct MoveGuard<'a> {
+    _guard: async_sync::MutexGuard<'a, ()>,
 }
 
 /// Why a [`start_move`] or [`resume_move`] call could not be honoured.

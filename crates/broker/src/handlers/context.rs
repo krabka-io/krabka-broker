@@ -6,10 +6,10 @@ use {
     crate::{
         broker::Broker,
         client_metrics::manager::ClientAttributes,
-        metrics::{QuotaCharge, QuotaType},
+        metrics::QuotaCharge,
         quota::{
-            ControllerMutationQuota, QuotaDelay, QuotaRequest, ThrottleSlot, consume_request_quota,
-            throttle_time_ms,
+            ControllerMutationQuota, QuotaDelay, QuotaRequest, QuotaType, ThrottleSlot,
+            consume_request_quota, throttle_time_ms,
         },
     },
     krabka_security::Principal,

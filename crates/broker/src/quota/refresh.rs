@@ -6,7 +6,7 @@
 
 use {
     super::{
-        IpNames,
+        IpNames, QuotaType,
         buckets::{BucketKey, LiveBucket, QuotaBuckets},
         ip_names::system_lookup,
     },
@@ -81,7 +81,7 @@ where
     let names = buckets.ip_names();
     loop {
         let image = Arc::clone(&images.borrow());
-        let due = names.claim(names.update(&image), Instant::now());
+        let due = names.claim_due(&image, Instant::now());
         if !due.is_empty() {
             names.resolve(&due, lookup).await;
             let image = Arc::clone(&images.borrow());
@@ -97,39 +97,25 @@ where
     }
 }
 
-/// The token rate a bucket for `quota_key` runs at, in the unit its consumer
-/// meters: the same conversion the consumer used when it created the bucket.
-///
-/// `request_percentage` meters microseconds of handler time per second. Every
-/// other quota meters its own unit, and keeps its fractional part: Kafka
-/// holds each quota as a double, and the bucket enforces a fractional rate as
-/// configured.
-fn token_rate(quota_key: &str, rate: f64) -> f64 {
-    match quota_key {
-        "request_percentage" => super::request::request_percentage_token_rate(rate),
-        _ => rate,
-    }
-}
-
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
     let window = buckets.quota_window();
     for LiveBucket {
         key: BucketKey {
-            quota_key,
+            quota_type,
             entity_key,
         },
         entry,
     } in buckets.iter()
     {
-        let new_rate = configured_rate(image, buckets.ip_names(), &quota_key, &entity_key)
-            .map_or(0.0, |rate| token_rate(&quota_key, rate));
+        let new_rate = configured_rate(image, buckets.ip_names(), quota_type, &entity_key)
+            .map_or(0.0, |rate| quota_type.token_rate(rate));
 
         let new_rate = super::bucket_rate(new_rate);
         // Compared as the bucket stores it, so a rate finer than the bucket
         // resolves does not reset the bucket on every image.
         if !entry.bucket.runs_at_byte_rate(new_rate) {
             debug!(
-                quota_key,
+                quota_key = quota_type.config_key(),
                 ?entity_key,
                 new_rate = new_rate.bytes_per_sec_f64(),
                 "quota refresh: rate update"
@@ -152,22 +138,22 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
 /// nothing for it and would remove the `connection_creation_rate` limit at the
 /// next image change.
 ///
-/// The rate comes back in the unit the image configures it in; [`token_rate`]
-/// converts it to the bucket's token unit.
+/// The rate comes back in the unit the image configures it in;
+/// [`QuotaType::token_rate`] converts it to the bucket's token unit.
 fn configured_rate(
     image: &MetadataImage,
     ip_names: &IpNames,
-    quota_key: &str,
+    quota_type: QuotaType,
     entity_key: &EntityKey,
 ) -> Option<f64> {
     if let [(entity_type, Some(peer))] = entity_key.as_slice()
         && entity_type == "ip"
     {
         let peer_ip = peer.parse().ok()?;
-        return super::lookup::lookup_ip_quota_with_key(image, ip_names, peer_ip, quota_key)
+        return super::lookup::lookup_ip_quota_with_key(image, ip_names, peer_ip, quota_type)
             .map(|(_, rate)| rate);
     }
-    super::lookup::lookup_bucket_rate(image, entity_key, quota_key)
+    super::lookup::lookup_bucket_rate(image, entity_key, quota_type)
 }
 
 #[cfg(test)]
@@ -199,25 +185,28 @@ mod tests {
     /// unlimited rate 0.
     #[test]
     fn refresh_keeps_the_rate_unit_each_quota_meters() {
-        for (quota_key, value, created_at, expected) in [
-            ("request_percentage", 50.0, 500_000.0, 500_000.0),
-            ("request_percentage", 0.0001, 1.0, 1.0),
-            ("request_percentage", 0.000_05, 0.5, 0.5),
-            ("connection_creation_rate", 0.5, 0.5, 0.5),
-            ("producer_byte_rate", 2048.0, 2048.0, 2048.0),
+        for (quota_type, value, created_at, expected) in [
+            (QuotaType::Request, 50.0, 500_000.0, 500_000.0),
+            (QuotaType::Request, 0.0001, 1.0, 1.0),
+            (QuotaType::Request, 0.000_05, 0.5, 0.5),
+            (QuotaType::ConnectionCreation, 0.5, 0.5, 0.5),
+            (QuotaType::Produce, 2048.0, 2048.0, 2048.0),
         ] {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-            let bucket = buckets.get_or_create(quota_key, &key, created_at);
+            let bucket = buckets.get_or_create(quota_type, &key, created_at);
 
             refresh_buckets(
-                &img_with_quota().key(quota_key).value(value).call(),
+                &img_with_quota()
+                    .key(quota_type.config_key())
+                    .value(value)
+                    .call(),
                 &buckets,
             );
 
             assert2::check!(
                 bucket.byte_rate() == bucket_rate(expected),
-                "{quota_key}={value}"
+                "{quota_type:?}={value}"
             );
         }
     }
@@ -290,7 +279,7 @@ mod tests {
         {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
-            let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
+            let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
 
             let img = img_with_quota()
                 .entity(vec![QuotaEntityInput::ip(entity_name)])
@@ -309,14 +298,14 @@ mod tests {
     fn refresh_keeps_the_rate_an_alias_ip_entity_configures() {
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some("::1".into()))];
-        let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
+        let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
         let img = img_with_quota()
             .entity(vec![QuotaEntityInput::ip(Some("0:0:0:0:0:0:0:1"))])
             .key("connection_creation_rate")
             .value(3.0)
             .call();
 
-        let _ = buckets.ip_names().update(&img);
+        buckets.ip_names().update(&img);
         refresh_buckets(&img, &buckets);
 
         assert!(b.byte_rate() == bucket_rate(3.0));
@@ -335,7 +324,7 @@ mod tests {
             .to_canonical();
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some(peer.to_string()))];
-        let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
+        let b = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
         let img = img_with_quota()
             .entity(vec![QuotaEntityInput::ip(Some("localhost"))])
             .key("connection_creation_rate")
@@ -408,7 +397,7 @@ mod tests {
         fn start(image: Arc<MetadataImage>, resolver: &Arc<Resolver>) -> Self {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("ip".into(), Some(resolver.address.to_string()))];
-            let bucket = buckets.get_or_create("connection_creation_rate", &key, 1.0);
+            let bucket = buckets.get_or_create(QuotaType::ConnectionCreation, &key, 1.0);
             let (images, rx) = watch::channel(image);
             let shutdown = CancellationToken::new();
             let resolver = Arc::clone(resolver);
@@ -536,40 +525,40 @@ mod tests {
     /// neither rounds it to a whole byte per second nor to no limit.
     #[test]
     fn refresh_keeps_a_fractional_byte_rate() {
-        /// A quota key configured at `rate`, and the rate its bucket must keep.
+        /// A quota configured at `rate`, and the rate its bucket must keep.
         struct FractionalRateCase {
-            quota_key: &'static str,
+            quota_type: QuotaType,
             rate: f64,
             want: f64,
         }
         let cases: [FractionalRateCase; 6] = [
             FractionalRateCase {
-                quota_key: "consumer_byte_rate",
+                quota_type: QuotaType::Fetch,
                 rate: 2048.0,
                 want: 2048.0,
             },
             FractionalRateCase {
-                quota_key: "consumer_byte_rate",
+                quota_type: QuotaType::Fetch,
                 rate: 1.5,
                 want: 1.5,
             },
             FractionalRateCase {
-                quota_key: "consumer_byte_rate",
+                quota_type: QuotaType::Fetch,
                 rate: 0.5,
                 want: 0.5,
             },
             FractionalRateCase {
-                quota_key: "producer_byte_rate",
+                quota_type: QuotaType::Produce,
                 rate: 2048.0,
                 want: 2048.0,
             },
             FractionalRateCase {
-                quota_key: "producer_byte_rate",
+                quota_type: QuotaType::Produce,
                 rate: 1.5,
                 want: 1.5,
             },
             FractionalRateCase {
-                quota_key: "producer_byte_rate",
+                quota_type: QuotaType::Produce,
                 rate: 0.5,
                 want: 0.5,
             },
@@ -577,18 +566,21 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for FractionalRateCase {
-            quota_key,
+            quota_type,
             rate,
             want,
         } in cases
         {
             let AliceBucket { buckets, bucket: b } =
-                alice_bucket().key(quota_key).rate(1024.0).call();
+                alice_bucket().quota_type(quota_type).rate(1024.0).call();
 
-            let img = img_with_quota().key(quota_key).value(rate).call();
+            let img = img_with_quota()
+                .key(quota_type.config_key())
+                .value(rate)
+                .call();
             refresh_buckets(&img, &buckets);
-            actual.push((quota_key, rate.to_string(), b.byte_rate()));
-            expected.push((quota_key, rate.to_string(), bucket_rate(want)));
+            actual.push((quota_type, rate.to_string(), b.byte_rate()));
+            expected.push((quota_type, rate.to_string(), bucket_rate(want)));
         }
         assert!(actual == expected);
     }
@@ -646,12 +638,12 @@ mod tests {
         for (label, key, before, after, expected) in cases {
             let buckets = QuotaBuckets::new();
             let bucket = buckets.get_or_create(
-                "producer_byte_rate",
+                QuotaType::Produce,
                 &key,
                 configured_rate(
                     &image_with_quotas(before),
                     buckets.ip_names(),
-                    "producer_byte_rate",
+                    QuotaType::Produce,
                     &key,
                 )
                 .expect("the bucket was made under a quota"),
@@ -671,7 +663,7 @@ mod tests {
         let rate = 0.123_456_7;
         let buckets = Arc::new(QuotaBuckets::with_window(krabka_units::secs(10)));
         let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-        let b = buckets.get_or_create("producer_byte_rate", &key, rate);
+        let b = buckets.get_or_create(QuotaType::Produce, &key, rate);
         let drained = b.try_consume(5);
 
         refresh_buckets(&img_with_quota().value(rate).call(), &buckets);

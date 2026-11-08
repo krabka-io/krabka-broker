@@ -27,7 +27,15 @@ Cargo working tree to build a subprocess from.
 ## Usage
 
 Every subcommand needs `--bootstrap-server` (`-b`), which also reads the
-`KRABKA_BOOTSTRAP_SERVER` environment variable.
+`KRABKA_BOOTSTRAP_SERVER` environment variable. On a TLS or SASL
+listener, add `--command-config <file>`, a Kafka client properties file like
+the one `kafka-topics --command-config` takes. Both flags go before the
+subcommand. [`krabka-cli-connection`](../cli-connection/README.md) lists the
+properties the file takes. The broker authorizes every barrier api as the
+principal that file logs in as, which needs `Alter` on the cluster to define,
+delete or trigger a group, and `Describe` on the cluster to describe or list
+one. `verify` also reads the log, so it needs `Describe` and `Read` on the
+group's topics.
 
 Define a group over two topics, cut it every five minutes, and keep the last
 200 cuts:
@@ -79,13 +87,14 @@ and `krabka-guard`.
 | --- | --- |
 | `0` | The broker accepted the request. |
 | `1` | The broker refused the request. The reason is on stderr. |
-| `2` | The broker could not be reached. Nothing is known about the outcome. |
+| `2` | No request completed: the broker could not be reached or refused the login, or `--command-config` could not be read or names conflicting properties. Nothing is known about the outcome. |
 | `3` | A cut does not match the log. |
 | `64` | The command line does not parse (`EX_USAGE`). clap's message is on stderr, and nothing was sent. `--help` and `--version` exit `0`. |
 
 ## Documentation
 
 - [KFC-4: cross-topic snapshots](../../docs/KFCs/KFC-4-cross-topic-snapshots.md)
+- [`krabka-cli-connection`](../cli-connection/README.md), the `--command-config` properties
 - [API documentation](https://krabka-io.github.io/krabka-broker/krabka-barrier/)
 
 ## License

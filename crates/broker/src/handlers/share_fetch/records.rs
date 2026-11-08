@@ -15,6 +15,7 @@ use {
         blocking::spawn_blocking,
         diskless::read::DisklessReadHandle,
         error::BrokerError,
+        handlers::batch_headers::v2_batch_headers,
         partition::Partition,
         remote_reader::RemoteReader,
         share_partition::{
@@ -26,7 +27,7 @@ use {
     krabka_log::{LogError, Offset, RawRead},
     krabka_protocol::{
         owned::share_fetch_response::{AcquiredRecords, PartitionData},
-        records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsError, RecordsPayload},
+        records::{Attributes, RecordsError, RecordsPayload},
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
@@ -36,7 +37,6 @@ use {
         sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
-    zerocopy::FromBytes as _,
 };
 
 /// What one acquire step may take from a share partition.
@@ -328,33 +328,23 @@ pub(super) struct BatchSpan {
 /// Every v2 batch in `bytes`, in the order that the bytes hold them. It reads
 /// only the batch headers.
 pub(super) fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> {
-    let mut spans = Vec::new();
-    let mut at = 0_usize;
-    while at < bytes.len() {
-        let header = bytes
-            .get(at..at + HEADER_LEN)
-            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
-            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
-        let length = usize::try_from(header.batch_length.get())
-            .ok()
-            .and_then(|length| length.checked_add(LOG_OVERHEAD))
-            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
-            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
-        let base = header.base_offset.get();
-        let last = base
-            .checked_add(i64::from(header.last_offset_delta.get()))
-            .ok_or_else(|| corrupt_read("a record batch whose last offset overflows"))?;
-        spans.push(BatchSpan {
-            bytes: at..at + length,
-            base,
-            last,
-            attributes: Attributes(header.attributes.get()),
-            producer_id: header.producer_id.get(),
-            max_timestamp: header.max_timestamp.get(),
-        });
-        at += length;
-    }
-    Ok(spans)
+    v2_batch_headers(bytes)
+        .map(|batch| {
+            let (span, header) = batch.map_err(|fault| corrupt_read(fault.what()))?;
+            let base = header.base_offset.get();
+            let last = base
+                .checked_add(i64::from(header.last_offset_delta.get()))
+                .ok_or_else(|| corrupt_read("a record batch whose last offset overflows"))?;
+            Ok(BatchSpan {
+                bytes: span,
+                base,
+                last,
+                attributes: Attributes(header.attributes.get()),
+                producer_id: header.producer_id.get(),
+                max_timestamp: header.max_timestamp.get(),
+            })
+        })
+        .collect()
 }
 
 /// The first and last offsets that a v2 batch holds.
@@ -534,10 +524,6 @@ struct SourcedSpan<'a> {
     source: &'a Bytes,
     range: Range<usize>,
 }
-
-/// The bytes of a v2 batch in front of its `batch_length` field: the base
-/// offset (8) and the length itself (4).
-const LOG_OVERHEAD: usize = 12;
 
 /// A read whose bytes are not a run of whole record batches. Kafka reports
 /// such a batch as `CORRUPT_MESSAGE`, which [`LogError::Records`] maps to.
@@ -758,7 +744,7 @@ mod tests {
         },
         assert2::assert,
         krabka_log::{DeliveryPolicy, LogConfig},
-        krabka_protocol::records::{Record, RecordBatch},
+        krabka_protocol::records::{HEADER_LEN, Record, RecordBatch},
         qubit_clock::{FixedWallClock, WallClock},
         tempfile::TempDir,
     };
@@ -1223,5 +1209,39 @@ mod tests {
             )))) = batch_spans(&bytes)
         );
         assert!(what == "share-fetch read returned a record batch whose last offset overflows");
+    }
+
+    /// Bytes that are not whole batches are a corrupt read naming the fault:
+    /// a header cut short, or a `batch_length` shorter than a header or
+    /// running past the read.
+    #[test]
+    fn a_read_that_is_not_whole_batches_names_the_fault() {
+        let with_length = |length: u8| {
+            let mut raw = OVERFLOWING_BATCH_HEADER;
+            raw[11] = length;
+            Bytes::copy_from_slice(&raw)
+        };
+        let cases = [
+            (
+                Bytes::from_static(&OVERFLOWING_BATCH_HEADER[..20]),
+                "a truncated record batch header",
+            ),
+            (with_length(0x30), "a record batch length outside the read"),
+            (with_length(0x32), "a record batch length outside the read"),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(bytes, _)| match batch_spans(bytes) {
+                Err(BrokerError::Log(krabka_log::LogError::Records(
+                    RecordsError::RecordParse(what),
+                ))) => Some(what),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|(_, what)| Some(format!("share-fetch read returned {what}")))
+            .collect();
+        assert!(actual == expected);
     }
 }

@@ -4,10 +4,11 @@ use {
     bytes::Bytes,
     krabka_ids::PartitionIndex,
     krabka_protocol::{
-        Decode, Encode,
+        Decode, Encode, ProtocolError,
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
         primitives::uuid::Uuid,
     },
+    krabka_raft::kraft::transport::wire::encode_message,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::num::{NonZeroU32, NonZeroU64},
 };
@@ -204,10 +205,18 @@ pub fn unknown_shard_fetch_response(group: QuorumGroup) -> FetchResponse {
     )
 }
 
-pub fn encode_fetch_response_struct(response: &FetchResponse) -> Bytes {
-    let mut out = bytes::BytesMut::new();
-    let _ = response.encode(&mut out, KIP_595_FETCH_VERSION);
-    out.freeze()
+/// Encodes a WAL Fetch response for a follower.
+///
+/// # Errors
+/// Returns the encoder's error. The partly written bytes are dropped, so a
+/// follower never receives a truncated response.
+pub fn encode_fetch_response_struct(response: &FetchResponse) -> Result<Bytes, ProtocolError> {
+    encode_at_fetch_version(response)
+}
+
+/// Encodes a WAL Fetch message at [`KIP_595_FETCH_VERSION`].
+fn encode_at_fetch_version<T: Encode>(message: &T) -> Result<Bytes, ProtocolError> {
+    encode_message(message, KIP_595_FETCH_VERSION)
 }
 
 pub fn fetch_request(
@@ -267,14 +276,38 @@ pub fn encode_fetch_for_group(
         fetch_offset,
         ByteSize::from_bytes(u64::MAX),
     );
-    let mut out = bytes::BytesMut::new();
-    let _ = request.encode(&mut out, KIP_595_FETCH_VERSION);
-    out.freeze()
+    encode_at_fetch_version(&request).unwrap()
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, krabka_raft::NodeId};
+    use {super::*, bytes::BufMut, krabka_raft::NodeId};
+
+    /// Writes a byte and then refuses, the way a generated encoder stops part
+    /// way through a message on an out-of-range field.
+    struct RefusesMidMessage;
+
+    impl Encode for RefusesMidMessage {
+        fn encode<B: BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
+            buf.put_u8(0);
+            Err(ProtocolError::UnsupportedVersion {
+                api_key: 1,
+                version,
+            })
+        }
+
+        fn encoded_len(&self, _version: i16) -> usize { 1 }
+    }
+
+    #[test]
+    fn a_wal_fetch_encode_failure_is_an_error_not_truncated_bytes() {
+        assert2::assert!(
+            let Err(ProtocolError::UnsupportedVersion {
+                api_key: 1,
+                version: KIP_595_FETCH_VERSION,
+            }) = encode_at_fetch_version(&RefusesMidMessage)
+        );
+    }
 
     #[test]
     fn classify_fetch_distinguishes_metadata_quorum() {

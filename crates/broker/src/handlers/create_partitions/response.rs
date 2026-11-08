@@ -3,7 +3,10 @@
 //! result rows.
 
 use {
-    crate::{handlers::RequestContext, metrics::QuotaType, quota::throttle_time_ms},
+    crate::{
+        handlers::RequestContext,
+        quota::{QuotaType, throttle_time_ms},
+    },
     krabka_protocol::owned::create_partitions_response::{
         CreatePartitionsResponse, CreatePartitionsTopicResult,
     },

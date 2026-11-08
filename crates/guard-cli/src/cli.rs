@@ -10,6 +10,7 @@
 use {
     super::failure::Failure,
     clap::{Args, Parser, Subcommand, ValueEnum},
+    krabka_cli_connection::ConnectionArgs,
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
     krabka_units::{Time, convert::TimeExt as _, parse},
     std::path::{Path, PathBuf},
@@ -21,14 +22,21 @@ use {
 /// same flags.
 ///
 /// [`run_from_args`]: crate::run_from_args
-#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-guard",
     version,
     about = "Freeze topic writes, lift a freeze, and run the break-glass two-person rule"
 )]
-pub struct Cli {}
+pub struct Cli {
+    /// Where the cluster is.
+    #[command(flatten)]
+    pub connection: ConnectionArgs,
+
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// The two halves of the tool.
 #[derive(Subcommand)]
@@ -193,8 +201,12 @@ pub struct ScopeArgs {
 /// The three flags travel together. The broker binds the signature to the
 /// principal on the connection and to the principal that `[[operator_keys]]`
 /// binds the key to, and both of those have to be the name the signed bytes
-/// carry. Only the operator knows what their listener authenticates them as, so
-/// the tool asks rather than guesses.
+/// carry. The connection's principal comes from `--command-config`: a SASL
+/// login as `alice` is `User:alice`, an mTLS login is the listener's mapped
+/// certificate name, and a PLAINTEXT connection is `User:ANONYMOUS`. Only the
+/// operator knows what their listener authenticates them as, so the tool asks
+/// rather than guesses, and a signature whose `--principal` is not the one the
+/// broker authenticated fails verification.
 #[derive(Args, Debug, Clone)]
 pub struct FreezeSigningArgs {
     /// The PKCS#8 Ed25519 key file. It is read here, used here, and never
@@ -205,8 +217,10 @@ pub struct FreezeSigningArgs {
     /// it.
     #[arg(long, requires = "sign_with")]
     pub key_id: Option<String>,
-    /// The principal the broker authenticates on this connection, which is the
-    /// author the record carries.
+    /// The principal the broker authenticates on this connection, such as
+    /// `User:alice` for a SASL login as `alice` through `--command-config`.
+    /// It is the author the signed bytes carry, and a signature naming any
+    /// other fails verification.
     #[arg(long, requires = "sign_with")]
     pub principal: Option<String>,
 }

@@ -23,6 +23,12 @@ meaning = "Automation or production code is incomplete. The test passes while th
 [tags.manual]
 meaning = "Checked by a person, not automated. Generated as `#[ignore = \"manual\"]`. Rare and discouraged: automate the check instead where you can."
 
+[tags.only_in_process]
+meaning = "With `drivers = [..]`, the scenario runs against the in-process driver alone, for behavior the wire cannot reach."
+
+[tags.only_wire]
+meaning = "With `drivers = [..]`, the scenario runs against the Kafka-wire driver alone, for behavior only a real client sees."
+
 [tags.allow_skipped]
 meaning = "A step may skip the scenario at run time. Without it, a skipped scenario fails."
 

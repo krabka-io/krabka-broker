@@ -37,6 +37,10 @@ enum Operation {
     Put,
     Read,
     Listing,
+    /// One part of an upload in parts.
+    Part,
+    /// The completion of an upload in parts.
+    Completion,
 }
 
 impl Operation {
@@ -45,6 +49,8 @@ impl Operation {
             Self::Put => StoreOp::Put,
             Self::Read => StoreOp::Get,
             Self::Listing => StoreOp::List,
+            Self::Part => StoreOp::PutPart,
+            Self::Completion => StoreOp::Complete,
         }
     }
 }

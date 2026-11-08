@@ -57,7 +57,6 @@ use {clap::Parser as _, std::io};
 pub mod archive;
 pub mod capture;
 pub mod cli;
-pub mod connection;
 pub mod diskless;
 pub mod error;
 pub mod manifest;

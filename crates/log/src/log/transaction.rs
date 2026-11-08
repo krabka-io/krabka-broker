@@ -9,10 +9,7 @@
 use {
     super::{
         Log,
-        control::{
-            TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
-            transaction_marker_flags,
-        },
+        control::{TransactionMarkerFlags, transaction_marker_flags},
     },
     crate::{error::LogError, stamp_index::OffsetRange, txn_index::AbortedTxn},
     krabka_ids::{Offset, ProducerId},
@@ -109,12 +106,6 @@ impl Log {
             is_commit,
             self.pending.contains_key(producer_id),
         );
-        if (is_abort || is_commit)
-            && producer_id.get() >= 0
-            && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
-        {
-            self.coordinator_epochs.insert(producer_id, epoch);
-        }
         if closes && is_abort {
             let pending_start = self.pending.get(producer_id).map(|offset| offset.0);
             let Some((start, last)) = krabka_verified::aborted_transaction_interval(

@@ -6,14 +6,13 @@
 
 use {
     super::{
-        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel, QuotaType,
+        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
         QuotaTypeLabel, UNKNOWN_LABEL,
     },
     crate::{
-        handlers::{ApiKeyCode, KRABKA_PRIVATE_API_KEY_FLOOR, krabka_private_api_name},
-        quota::QuotaDelay,
+        handlers::{self, ApiKeyCode},
+        quota::{QuotaDelay, QuotaType},
     },
-    krabka_protocol::api_key,
     krabka_units::{Time, convert::TimeExt},
 };
 
@@ -216,24 +215,17 @@ impl BrokerMetrics {
 
 /// Resolve a wire `api_key` to the name used as the metric label.
 ///
-/// An api key the generated `ApiKey` enum knows resolves to its variant name.
-/// That covers every Kafka key and `GetReplicaLogInfo` (1020), the one
-/// krabka-private key with a generated schema. Any other krabka-private api
-/// key resolves through [`krabka_private_api_name`]. Anything else folds under
-/// [`UNKNOWN_LABEL`].
+/// The name comes from [`handlers::api_name`], which the request spans use
+/// too: the generated `ApiKey` enum for every Kafka key and
+/// `GetReplicaLogInfo`, and the krabka-private name table for the other
+/// private RPCs. Anything else folds under [`UNKNOWN_LABEL`].
 ///
-/// Without the krabka-private arm every krabka-private request shares one
+/// Without the krabka-private names every krabka-private request shares one
 /// `api_requests{api_key="Unknown"}` series with genuine garbage traffic, and
 /// an operator cannot tell the two apart. Cardinality stays bounded: the range
 /// holds one label per krabka-private RPC, plus [`UNKNOWN_LABEL`].
 fn api_key_label_name(api_key: ApiKeyCode) -> &'static str {
-    match api_key::ApiKey::from_i16(api_key) {
-        Some(k) => k.into(),
-        None if api_key >= KRABKA_PRIVATE_API_KEY_FLOOR => {
-            krabka_private_api_name(api_key).unwrap_or(UNKNOWN_LABEL)
-        }
-        None => UNKNOWN_LABEL,
-    }
+    handlers::api_name(api_key).unwrap_or(UNKNOWN_LABEL)
 }
 
 #[cfg(test)]

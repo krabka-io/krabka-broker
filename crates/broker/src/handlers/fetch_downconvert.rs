@@ -1,25 +1,29 @@
 //! Helpers that down-convert v2 `RecordBatch` values to v0 or v1
 //! `MessageSet` bytes for a requester on Fetch v<4.
 //!
-//! The helpers drop control batches, that is txn markers, entirely. They
-//! re-compress zstd-compressed batches as snappy, because v0 and v1 do not
-//! support zstd.
+//! The helpers drop control batches, that is txn markers, entirely. They refuse
+//! a zstd-compressed batch, because v0 and v1 cannot carry zstd: as in Kafka's
+//! `RecordsUtil.downConvert`, the batch fails with `UNSUPPORTED_COMPRESSION_TYPE`
+//! and is not re-compressed with another codec. When batches before it
+//! converted, the partition answers with those batches alone, as Kafka's lazy
+//! down-conversion stops at the zstd batch. The consumer then fetches from the
+//! zstd batch's offset and gets the error.
 
 use {
     crate::codes,
     bytes::BytesMut,
-    krabka_compression::CompressionType,
     krabka_protocol::records::{RecordBatch, RecordsPayload},
-    krabka_records_legacy::{Magic, v2_to_legacy},
+    krabka_records_legacy::{LegacyRecordsError, Magic, v2_to_legacy},
     std::borrow::Cow,
 };
 
 /// Builds the records-field payload for one batch.
 ///
 /// It returns `Ok(None)` when it drops the whole batch, which happens for a
-/// control batch on the legacy path. It returns `Err(error_code)` for a hard
+/// control batch on the legacy path. It returns `Err(error_code)` for a
 /// down-conversion failure that the caller should report as a per-partition
-/// error.
+/// error: `UNSUPPORTED_COMPRESSION_TYPE` for a zstd batch, which v0 and v1
+/// cannot carry, and `CORRUPT_MESSAGE` for any other failure.
 pub fn down_convert_for_fetch(
     batch: &RecordBatch,
     request_version: i16,
@@ -30,19 +34,6 @@ pub fn down_convert_for_fetch(
     if batch.attributes.is_control_batch() {
         return Ok(None);
     }
-    // Zstd is not representable in v0/v1. Re-compress as snappy so the
-    // client gets a compressed wire format it can decompress. v2_to_legacy
-    // decodes the v2 payload first (which decompresses whatever codec the
-    // batch used internally) and then re-encodes using the batch's codec.
-    // Swapping zstd → snappy before calling v2_to_legacy routes the output
-    // through encode_compressed_message_set with snappy.
-    let working = if batch.attributes.compression() == CompressionType::Zstd {
-        let mut clone = batch.clone();
-        clone.attributes = clone.attributes.with_compression(CompressionType::Snappy);
-        Cow::Owned(clone)
-    } else {
-        Cow::Borrowed(batch)
-    };
     // Fetch v0-1 → Magic::V0 (no per-message timestamps)
     // Fetch v2-3 → Magic::V1 (KIP-32 timestamps)
     let target = if request_version >= 2 {
@@ -50,9 +41,17 @@ pub fn down_convert_for_fetch(
     } else {
         Magic::V0
     };
-    let bytes = v2_to_legacy(&working, target).map_err(|e| {
-        tracing::warn!(error = %e, "v2_to_legacy failed during fetch down-conversion");
-        codes::CORRUPT_MESSAGE
+    let bytes = v2_to_legacy(batch, target).map_err(|e| match e {
+        // Kafka traces this case rather than warning: it is a property of the
+        // data and the client's version, not a broker fault.
+        LegacyRecordsError::UnsupportedCompression { codec } => {
+            tracing::trace!(?codec, "batch codec cannot be down-converted for fetch");
+            codes::UNSUPPORTED_COMPRESSION_TYPE
+        }
+        e => {
+            tracing::warn!(error = %e, "v2_to_legacy failed during fetch down-conversion");
+            codes::CORRUPT_MESSAGE
+        }
     })?;
     Ok(Some(RecordsPayload::Legacy(bytes)))
 }
@@ -64,6 +63,14 @@ pub fn down_convert_for_fetch(
 /// here, the only place that parses `Raw`, and only for legacy clients. It
 /// returns `Ok(None)` when it dropped every batch, for example when they are
 /// all control batches.
+///
+/// A batch that fails with `UNSUPPORTED_COMPRESSION_TYPE` ends the payload.
+/// When batches before it converted, the function returns those batches, as
+/// Kafka's `LazyDownConversionRecords` sends the chunks it converted before
+/// the zstd batch and pads the rest with an overflow batch that the consumer
+/// ignores. The consumer's next fetch starts at the zstd batch, which then
+/// fails as the first batch. Only a zstd batch with nothing converted before it
+/// turns into the partition's error code.
 pub fn down_convert_payload_for_fetch(
     payload: &RecordsPayload,
     request_version: i16,
@@ -82,10 +89,12 @@ pub fn down_convert_payload_for_fetch(
 
     let mut out = BytesMut::new();
     for batch in batches.iter() {
-        match down_convert_for_fetch(batch, request_version)? {
-            Some(RecordsPayload::Legacy(b)) => out.extend_from_slice(&b),
-            Some(_) => return Err(codes::CORRUPT_MESSAGE),
-            None => {}
+        match down_convert_for_fetch(batch, request_version) {
+            Ok(Some(RecordsPayload::Legacy(b))) => out.extend_from_slice(&b),
+            Ok(Some(_)) => return Err(codes::CORRUPT_MESSAGE),
+            Ok(None) => {}
+            Err(codes::UNSUPPORTED_COMPRESSION_TYPE) if !out.is_empty() => break,
+            Err(code) => return Err(code),
         }
     }
     if out.is_empty() {
@@ -101,6 +110,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         bytes::Bytes,
+        krabka_compression::CompressionType,
         krabka_protocol::records::{Attributes, Record, RecordBatch},
         krabka_records_legacy::{ParsedRecord, decode_message_set},
     };
@@ -165,12 +175,8 @@ mod tests {
         );
     }
 
-    /// Version 3 with a zstd batch returns `Some(Legacy)` with snappy in the
-    /// wrapper.
-    #[test]
-    fn zstd_batch_recompressed_as_snappy() {
-        // Build a batch with 50 records so compression is exercised.
-        let records: Vec<Record> = (0..50)
+    fn zstd_records() -> Vec<Record> {
+        (0..50)
             .map(|i| Record {
                 attributes: 0,
                 offset_delta: i,
@@ -179,27 +185,66 @@ mod tests {
                 value: Some(Bytes::from(format!("val-{i} hello world this is a test"))),
                 headers: vec![],
             })
-            .collect();
-        let batch = make_batch(CompressionType::Zstd, records);
-        let result = down_convert_for_fetch(&batch, 3).unwrap();
-        let payload = result.expect("zstd batch should produce Some payload");
-        let RecordsPayload::Legacy(bytes) = payload else {
-            panic!("expected Legacy for version < 4");
-        };
-        // The outer wrapper message's attributes byte is at a well-known offset.
-        // MessageSet: first message starts at byte 0:
-        //   offset(8) + size(4) + crc(4) + magic(1) + attributes(1)
-        // attributes byte is at index 17. Snappy codec id is 2 (bits 0-2).
-        assert!(
-            bytes.len() > 17,
-            "expected non-empty legacy bytes, got len={}",
-            bytes.len()
-        );
-        let attrs = bytes[17] & 0x07;
-        assert!(
-            attrs == 2,
-            "expected snappy codec (2) in wrapper message attributes, got {attrs}"
-        );
+            .collect()
+    }
+
+    /// A zstd batch fails with `UNSUPPORTED_COMPRESSION_TYPE` on every legacy
+    /// version, as Kafka's `RecordsUtil.downConvert` refuses it.
+    #[rstest::rstest]
+    #[case::fetch_v0(0)]
+    #[case::fetch_v1(1)]
+    #[case::fetch_v2(2)]
+    #[case::fetch_v3(3)]
+    fn zstd_batch_unsupported_compression(#[case] version: i16) {
+        let batch = make_batch(CompressionType::Zstd, zstd_records());
+        let result = down_convert_for_fetch(&batch, version);
+        assert!(result == Err(codes::UNSUPPORTED_COMPRESSION_TYPE));
+    }
+
+    /// A zstd control batch is dropped before its codec is checked, as Kafka
+    /// skips control batches first.
+    #[test]
+    fn zstd_control_batch_returns_none() {
+        let mut batch = make_batch(CompressionType::Zstd, vec![sample_record("k", "v")]);
+        batch.attributes = batch.attributes.with_control(true);
+        assert!(down_convert_for_fetch(&batch, 3) == Ok(None));
+    }
+
+    /// A payload that starts with a zstd batch fails the partition, even when
+    /// convertible batches follow it.
+    #[test]
+    fn payload_leading_zstd_batch_fails_partition() {
+        let zstd = make_batch(CompressionType::Zstd, zstd_records());
+        let plain = make_batch(CompressionType::None, vec![sample_record("a", "1")]);
+        let payload = RecordsPayload::V2(vec![zstd, plain]);
+        let result = down_convert_payload_for_fetch(&payload, 3);
+        assert!(result == Err(codes::UNSUPPORTED_COMPRESSION_TYPE));
+    }
+
+    /// A payload with a control batch and then a zstd batch fails the
+    /// partition: the dropped control batch converted nothing.
+    #[test]
+    fn payload_control_then_zstd_fails_partition() {
+        let mut control = make_batch(CompressionType::None, vec![sample_record("c", "")]);
+        control.attributes = control.attributes.with_control(true);
+        let zstd = make_batch(CompressionType::Zstd, zstd_records());
+        let payload = RecordsPayload::V2(vec![control, zstd]);
+        let result = down_convert_payload_for_fetch(&payload, 3);
+        assert!(result == Err(codes::UNSUPPORTED_COMPRESSION_TYPE));
+    }
+
+    /// A payload with an uncompressed batch and then a zstd batch returns the
+    /// uncompressed batch alone and stops at the zstd batch, as Kafka's lazy
+    /// down-conversion does. The consumer's next fetch starts at the zstd batch.
+    #[test]
+    fn payload_stops_before_zstd_batch() {
+        let plain = make_batch(CompressionType::None, vec![sample_record("a", "1")]);
+        let zstd = make_batch(CompressionType::Zstd, zstd_records());
+        let trailing = make_batch(CompressionType::None, vec![sample_record("b", "2")]);
+        let expected = down_convert_for_fetch(&plain, 3).unwrap();
+        let payload = RecordsPayload::V2(vec![plain, zstd, trailing]);
+        let result = down_convert_payload_for_fetch(&payload, 3);
+        assert!(result == Ok(expected));
     }
 
     /// Version 3 with an uncompressed batch returns Legacy bytes that decode
