@@ -456,6 +456,29 @@ struct PartitionSweep<'a> {
     permits: &'a SweepPermits,
 }
 
+/// Whether a KFC-9 write freeze holds both retention passes over `topic`.
+///
+/// A freeze refuses every operation that removes data from the topic's log,
+/// and a copy removes none: it adds a replica, which is exactly what a
+/// migration out of a frozen topic needs. So the copy pass still runs on a
+/// frozen topic, and only the retention passes stop.
+///
+/// This is a different question from `archive`, and it does not contradict the
+/// reason that gate gives. `archive` says the remote tier cannot accept a
+/// delete, which leaves the local eviction free precisely because it deletes
+/// nothing remote. A freeze says this topic's log must not lose bytes
+/// anywhere, so it stops the local eviction too.
+///
+/// The sweep is the broker's own work, not a client request, so no
+/// authorization check stands in front of it.
+fn retention_frozen(image: &krabka_metadata::MetadataImage, topic: &str) -> bool {
+    let authorized = true;
+    matches!(
+        resolve_freeze_mutation(image, topic, authorized, FreezeMutationKind::Retention),
+        FreezeMutationResolution::Frozen(_)
+    )
+}
+
 /// What one tick reads from a partition's log, under one hold of its lock.
 struct LogSnapshot {
     log_config: krabka_log::LogConfig,
@@ -623,21 +646,8 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         .await;
     }
     // KFC-9: the copy above stays allowed on a frozen topic, and both
-    // retention passes below stop. A freeze refuses every operation that
-    // removes data from the topic's log, and a copy removes none: it adds
-    // a replica, which is exactly what a migration out of a frozen topic
-    // needs.
-    //
-    // This is a different question from `archive`, and it does not
-    // contradict the reason that gate gives below. `archive` says the
-    // remote tier cannot accept a delete, which leaves the local eviction
-    // free precisely because it deletes nothing remote. A freeze says this
-    // topic's log must not lose bytes anywhere, so it stops the local
-    // eviction too.
-    if matches!(
-        resolve_freeze_mutation(image, &partition.topic, true, FreezeMutationKind::Retention,),
-        FreezeMutationResolution::Frozen(_)
-    ) {
+    // retention passes below stop.
+    if retention_frozen(image, &partition.topic) {
         debug!(topic = %partition.topic, partition = tp.partition,
                "remote-log-manager: a write freeze holds both retention passes");
         return;
