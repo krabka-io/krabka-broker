@@ -477,7 +477,10 @@ mod authorize_by_resource_type {
         assert2::assert!(resource_authorization.decision == Some(expected));
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/resource_authorization", fixtures = [resource_authorization: ResourceAuthorizationScenario]);
+    krabka_bdd::scenarios!(
+        "tests/features/resource_authorization",
+        fixtures = [resource_authorization: ResourceAuthorizationScenario],
+    );
 
     #[yare::parameterized(
         different_principal = {

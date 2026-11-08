@@ -25,6 +25,8 @@ krabka-verified = { version = "1.1.5", path = "../verified" }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# No `version`: `krabka-bdd` is not published. See CLAUDE.md "Releases".
+krabka-bdd = { path = "../bdd" }
 rstest = { workspace = true }
 rstest-bdd = { workspace = true }
 rstest-bdd-macros = { workspace = true }

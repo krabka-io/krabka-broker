@@ -4,8 +4,8 @@
 //! types their expansions name. Among its macros:
 //!
 //! - `scenarios!` lints every `.feature` file under a directory against the
-//!   [Gherkin style guide], then expands to `rstest_bdd_macros::scenarios!`
-//!   with Krabka's defaults and a step-registry check.
+//!   [Gherkin style guide], then generates one test per scenario and Examples
+//!   row that runs on the krabka-bdd runner, and a step-registry check.
 //! - `#[derive(StepParam)]` gives a unit-variant enum the `FromStr` and
 //!   `Display` that a step placeholder parses with.
 //! - `#[derive(ScenarioContext)]` gives a scenario context of `Given<T>`

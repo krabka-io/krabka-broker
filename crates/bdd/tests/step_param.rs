@@ -114,7 +114,7 @@ fn step_text_is(policy_scenario: &PolicyScenario, text: String) {
     assert!(policy_scenario.text.as_deref() == Some(text.as_str()));
 }
 
-rstest_bdd_macros::scenarios!(
+krabka_bdd::scenarios!(
     "tests/features/step_param",
-    fixtures = [policy_scenario: PolicyScenario]
+    fixtures = [policy_scenario: PolicyScenario],
 );
