@@ -89,6 +89,7 @@ and `krabka-guard`.
 | `1` | The broker refused the request. The reason is on stderr. |
 | `2` | No request completed: the broker could not be reached or refused the login, or `--command-config` could not be read or names conflicting properties. Nothing is known about the outcome. |
 | `3` | A cut does not match the log. |
+| `64` | The command line does not parse (`EX_USAGE`). clap's message is on stderr, and nothing was sent. `--help` and `--version` exit `0`. |
 
 ## Documentation
 

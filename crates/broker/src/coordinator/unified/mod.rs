@@ -64,11 +64,17 @@ mod value_version_tests;
 pub const INITIAL_GROUP_EPOCH: i32 = 1;
 
 /// Map a coordinator actor's commit-validation reply to its protocol error.
+///
+/// An actor that gave no reply has stopped: this broker unloaded the group's
+/// offsets partition, or a write failed. Kafka fails the operations of a
+/// shard that unloads with a retriable coordinator error, so the commit
+/// answers `COORDINATOR_NOT_AVAILABLE`: the client looks the coordinator up
+/// again and retries.
 pub(crate) fn commit_validation_reply<E>(reply: &Result<Result<(), i16>, E>) -> Option<i16> {
     match reply {
         Ok(Ok(())) => None,
         Ok(Err(code)) => Some(*code),
-        Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
+        Err(_) => Some(codes::COORDINATOR_NOT_AVAILABLE),
     }
 }
 

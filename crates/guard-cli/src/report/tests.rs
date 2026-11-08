@@ -63,4 +63,38 @@ fn cli_private_code_values_match_the_broker_wire_contract() {
     check!(broker_codes::OPERATOR_SIGNATURE_REQUIRED == codes::OPERATOR_SIGNATURE_REQUIRED);
     check!(broker_codes::FREEZE_SCOPE_INVALID == codes::FREEZE_SCOPE_INVALID);
     check!(broker_codes::FREEZE_LIMIT_EXCEEDED == codes::FREEZE_LIMIT_EXCEEDED);
+    check!(broker_codes::INVALID_REQUEST == codes::INVALID_REQUEST);
+}
+
+/// A thaw the broker refuses with `INVALID_REQUEST` names a scope with no
+/// freeze, and the line says so; a freeze keeps the plain Kafka code, because
+/// the tool has no reason to read more into it there.
+#[yare::parameterized(
+    thaw = {
+        false,
+        "error 42 (the registry holds no freeze at this exact scope, so there is nothing to \
+         thaw): literal:orders has no live freeze entry, so there is nothing to thaw"
+    },
+    freeze = {
+        true,
+        "error 42: literal:orders has no live freeze entry, so there is nothing to thaw"
+    },
+)]
+fn a_refused_set_freeze_names_the_refusal(frozen: bool, line: &str) {
+    let response = api::SetTopicFreezeResponse {
+        error_code: codes::INVALID_REQUEST,
+        error_message: Some(
+            "literal:orders has no live freeze entry, so there is nothing to thaw".to_owned(),
+        ),
+        ..api::SetTopicFreezeResponse::default()
+    };
+
+    check!(
+        set_freeze_report(&response, frozen)
+            == SetFreezeReport {
+                stdout: None,
+                stderr: Some(line.to_owned()),
+                exit: EXIT_REFUSED,
+            }
+    );
 }

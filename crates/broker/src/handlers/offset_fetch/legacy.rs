@@ -47,12 +47,7 @@ pub(super) async fn handle_legacy(
     ctx: &RequestContext<'_>,
 ) -> OffsetFetchResponse {
     if let Some(error_code) = group_error(broker, ctx, &req.group_id) {
-        return OffsetFetchResponse {
-            topics: Vec::new(),
-            error_code,
-            throttle_time_ms: 0,
-            ..Default::default()
-        };
+        return group_error_response(error_code);
     }
 
     // Fetch the group's offset state from its actor. An unknown id reads as a
@@ -75,9 +70,12 @@ pub(super) async fn handle_legacy(
                     .collect(),
             )
         });
-    let offsets = fetch_offsets(broker, &req.group_id, None, -1, selection)
-        .await
-        .unwrap_or_default();
+    // A fetch with no member is refused only by an actor that stopped with
+    // it in its mailbox, which answers as the group check above does.
+    let offsets = match fetch_offsets(broker, &req.group_id, None, -1, selection).await {
+        Ok(offsets) => offsets,
+        Err(error_code) => return group_error_response(error_code),
+    };
 
     // A `None` `topics` field (v ≥ 2) is the "fetch all" sentinel:
     // return every committed offset stored for this group.
@@ -96,6 +94,16 @@ pub(super) async fn handle_legacy(
     OffsetFetchResponse {
         topics: topics_out,
         error_code: codes::NONE,
+        throttle_time_ms: 0,
+        ..Default::default()
+    }
+}
+
+/// The legacy response that refuses the whole group with `error_code`.
+fn group_error_response(error_code: i16) -> OffsetFetchResponse {
+    OffsetFetchResponse {
+        topics: Vec::new(),
+        error_code,
         throttle_time_ms: 0,
         ..Default::default()
     }

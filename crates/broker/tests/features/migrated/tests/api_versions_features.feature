@@ -9,7 +9,7 @@ Feature: Production Kafka feature discovery
       | metadata.version    | 7       | latest-production |
       | group.version       | 0       | 1                 |
       | transaction.version | 0       | 2                 |
-      | krabka.version      | 0       | 2                 |
+      | krabka.version      | 0       | 3                 |
     And the bootstrapped finalized levels are:
       | feature             | level             |
       | metadata.version    | latest-production |

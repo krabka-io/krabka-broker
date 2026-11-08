@@ -104,6 +104,8 @@ pub fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         scope: Scope::default(),
         outer: Vec::new(),
         groups: Vec::new(),
+        look_arounds: Vec::new(),
+        backrefs: 0,
         classes: Vec::new(),
         class_start: false,
         run: 0,
@@ -192,6 +194,12 @@ struct Translator<'a> {
     /// The number of each group in `outer`, or `None` for one that does not
     /// capture.
     groups: Vec<Option<usize>>,
+    /// For each group in `outer` that is a look-around, where it opens in
+    /// `out` and how many backreferences were written before it, for
+    /// [`Self::quantified_look_around`].
+    look_arounds: Vec<Option<(usize, usize)>>,
+    /// The backreferences written so far, outside classes.
+    backrefs: usize,
     /// The character classes open here, the innermost last.
     classes: Vec<OpenClass>,
     /// The next char is the first in a class, where a `]` is a member.
@@ -301,9 +309,13 @@ impl Translator<'_> {
             ')' if !self.in_class() => {
                 self.scope = self.outer.pop()?;
                 let number = self.groups.pop().flatten();
+                let look_around = self.look_arounds.pop()?;
                 self.copy(1)?;
                 if let Some(number) = number {
                     *self.group_repeats.get_mut(number)? = self.group_curly_at(self.at);
+                }
+                if let Some((out_at, backrefs)) = look_around {
+                    self.quantified_look_around(out_at, backrefs)?;
                 }
             }
             '|' if !self.in_class() => {
@@ -372,6 +384,9 @@ impl Translator<'_> {
             if !self.group_names.contains(&name) {
                 return None;
             }
+        }
+        if escape == Escape::BackRef && !in_class {
+            self.backrefs += 1;
         }
         match escape {
             // `fancy_regex` reads `\N{name}` as `\N` and the text of the name,
@@ -650,6 +665,88 @@ impl Translator<'_> {
         })
     }
 
+    /// Rewrites the look-around `L` that `out` holds from `out_at` on when a
+    /// quantifier follows it, which `fancy_regex` cannot parse. `backrefs` is
+    /// how many backreferences were written before `L` opened.
+    ///
+    /// Java's `closure` makes `?` and `{0,1}` a `Ques`, which tries `L` once,
+    /// and every other quantifier a `Curly`. A `Curly` runs `L` its least count
+    /// of times, then a greedy or possessive one tries it once more and stops,
+    /// since `L` matches nothing, while a lazy one tries what follows first and
+    /// never keeps that try. The groups `L` sets stay set when what follows
+    /// fails, so a greedy or possessive try is atomic. Running `L` again gives
+    /// what it gave before, unless it refers to a group, which may have changed:
+    ///
+    /// | Quantifier                         | Rewritten as   |
+    /// | :--------------------------------- | :------------- |
+    /// | `{0}`                              | `(?!(?!)L)`    |
+    /// | `{n}`, n of 1 or more              | `L`            |
+    /// | `+`, `{n,}`, `{n,m}`, n of 1 or more | `L(?:\|)`    |
+    /// | `?`, `*`, `{0,}`, `{0,m}`, greedy or possessive | `(?>L\|)` |
+    /// | `??`, `{0,1}?`                     | `(?:\|L)`      |
+    /// | `*?`, `{0,}?`, `{0,m}?`, m of 2 or more | `(?:(?!)L\|)` |
+    ///
+    /// The never-taken forms keep `L` so its groups keep their numbers, and
+    /// the alternations mark what Java's `TreeInfo` reads as not
+    /// deterministic, which a repeated group in a look-behind depends on.
+    /// Where `L` refers to a group and Java runs it twice or more, as in
+    /// `(?=(\1a|a)){2}`, the pattern is refused: two copies of `L` would number
+    /// its groups twice.
+    ///
+    /// An illegal `{` is left for [`Self::step`] to refuse.
+    fn quantified_look_around(&mut self, out_at: usize, backrefs: usize) -> Option<()> {
+        let at = self.at + self.ignored_len(self.at);
+        let (least, most, len): (u32, Option<u32>, usize) = match self.chars.get(at) {
+            Some('?') => (0, Some(1), 1),
+            Some('*') => (0, None, 1),
+            Some('+') => (1, None, 1),
+            Some('{') => {
+                let Some(len) = self.bounds_len(at) else {
+                    return Some(());
+                };
+                let bounds: String = self.chars.get(at + 1..at + len - 1)?.iter().collect();
+                let (least, most) = match bounds.split_once(',') {
+                    Some((least, "")) => (least.parse().ok()?, None),
+                    Some((least, most)) => (least.parse().ok()?, Some(most.parse().ok()?)),
+                    None => (bounds.parse().ok()?, bounds.parse().ok()),
+                };
+                (least, most, len)
+            }
+            _ => return Some(()),
+        };
+        let modifier = at + len + self.ignored_len(at + len);
+        let (lazy, end) = match self.chars.get(modifier) {
+            Some('?') => (true, modifier + 1),
+            Some('+') => (false, modifier + 1),
+            _ => (false, at + len),
+        };
+        let ranged = most != Some(least);
+        let runs = least + u32::from(ranged && !lazy);
+        if runs > 1 && self.backrefs > backrefs {
+            return None;
+        }
+        let (prefix, suffix) = match (least, most, lazy) {
+            (0, Some(0), _) => ("(?!(?!)", ")"),
+            (1.., ..) if ranged => ("", "(?:|)"),
+            (1.., ..) => ("", ""),
+            (0, Some(1), true) => ("(?:|", ")"),
+            (0, _, true) => ("(?:(?!)", "|)"),
+            (0, _, false) => ("(?>", "|)"),
+        };
+        let body = self.out.split_off(out_at);
+        self.out.push_str(prefix);
+        self.out.push_str(&body);
+        self.out.push_str(suffix);
+        for (opens, _) in &mut self.look_behinds {
+            if *opens >= out_at {
+                *opens += prefix.len();
+            }
+        }
+        self.at = end;
+        self.quantified = Quantified::Closed;
+        Some(())
+    }
+
     /// Opens a group with the flags in force here, and gives it the next
     /// group number when it `captures`.
     fn open_group(&mut self, captures: bool) {
@@ -659,6 +756,7 @@ impl Translator<'_> {
             self.group_repeats.len() - 1
         });
         self.groups.push(number);
+        self.look_arounds.push(None);
         self.quantified = Quantified::Start;
     }
 
@@ -809,7 +907,13 @@ impl Translator<'_> {
             Some(_) => return self.flag_group(rest),
             None => return None,
         };
+        let look_around = matches!(rest.first(), Some('=' | '!'))
+            || (rest.first() == Some(&'<') && matches!(rest.get(1), Some('=' | '!')));
+        let out_at = self.out.len();
         self.open_group(captures);
+        if look_around {
+            *self.look_arounds.last_mut()? = Some((out_at, self.backrefs));
+        }
         self.copy(opener)
     }
 
@@ -1437,6 +1541,9 @@ mod tests {
         not_word_boundary = { r"(?<=😀)\B", &[true, false, false] },
         dollar = { "(?<=a)$😀", &[true, false] },
         quantified_dollar = { "😀$?(?<!a)", &[false, false] },
+        quantified_look_behind = { "(?<=a)?😀", &[true] },
+        in_a_quantified_look_ahead = { "(?=(?<=a)b)*😀", &[true] },
+        after_a_quantified_look_ahead = { "(?=b)?(?<=a)😀", &[true] },
         none = { "abc", &[] },
     )]
     fn look_behind_code_points_follows_find_supplementary(source: &str, expected: &[bool]) {

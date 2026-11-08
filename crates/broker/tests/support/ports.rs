@@ -1,8 +1,9 @@
 //! Reserving ephemeral loopback ports for a multi-broker test cluster.
 //!
-//! Both helpers hand back one client address and one controller address per
-//! broker, and keep each port held until the caller lets it go, so nothing can
-//! take a port between the reservation and the listener that binds it.
+//! [`hold_port`] holds one port. The other two helpers hand back one client
+//! address and one controller address per broker. All of them keep each port
+//! held until the caller lets it go, so nothing can take a port between the
+//! reservation and the listener that binds it.
 //! [`bind_and_hold_ports`] returns listeners for a caller that hands them to
 //! `Broker::start_with_listeners`. [`reserve_ports`] returns non-listening
 //! reservations for a caller whose listener binds the address itself: a
@@ -13,6 +14,37 @@ use {
     std::net::{Ipv4Addr, SocketAddr},
     tokio::net::{TcpListener, TcpSocket},
 };
+
+/// A loopback port held by a [`reserve_port`] reservation until this is
+/// dropped.
+///
+/// For a port that must be known before its listener starts -- one written into
+/// a voter set, a container's `-p`, or a config file -- and that is bound later
+/// by something with `SO_REUSEADDR`: a Tokio listener, the JDK's, or the proxy
+/// that `docker run -p` starts. Keep it for as long as the port may be bound
+/// again, such as across a broker restart, since the port is free the moment
+/// this is dropped.
+pub struct HeldPort {
+    /// The socket that holds the port; never read.
+    _reservation: TcpSocket,
+    port: u16,
+}
+
+impl HeldPort {
+    /// The held port number.
+    #[must_use]
+    pub fn port(&self) -> u16 { self.port }
+}
+
+/// Hold a fresh ephemeral loopback port. See [`HeldPort`].
+#[must_use]
+pub fn hold_port() -> HeldPort {
+    let (reservation, address) = reserve_port((Ipv4Addr::LOCALHOST, 0));
+    HeldPort {
+        _reservation: reservation,
+        port: address.port(),
+    }
+}
 
 /// `n` client and `n` controller loopback ports, held by [`reserve_port`]
 /// reservations until this is dropped.

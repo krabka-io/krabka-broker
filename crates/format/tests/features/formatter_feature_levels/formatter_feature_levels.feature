@@ -21,7 +21,7 @@ Feature: Formatter feature-level resolution follows Kafka validation order
       | a metadata feature beside a release         | 4.0-IV0 | metadata.version=24 | false | Use --release-version instead of --feature metadata.version=X to avoid ambiguity. |
       | an unknown metadata level beside a release  | 4.0-IV0 | metadata.version=99 | false | Use --release-version instead of --feature metadata.version=X to avoid ambiguity. |
       | a bad metadata level beats an unknown name  | default | bogus.version=1,metadata.version=99 | false | No MetadataVersion with feature level 99. Valid feature levels are from 7 to 34. |
-      | a krabka level above the latest             | default | krabka.version=3 | false | No feature:krabka.version with feature level 3 |
+      | a krabka level above the latest             | default | krabka.version=4 | false | No feature:krabka.version with feature level 4 |
 
   Scenario Outline: Unsupported feature names precede invalid known feature levels
     Given formatter release selection default

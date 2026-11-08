@@ -809,7 +809,7 @@ mod tests {
                 AuditEndpoint, AuditEvent, AuditEventClass, AuditOutcome, AuditPrincipal,
                 PrivilegedPhase,
             },
-            ocsf::ProductInfo,
+            ocsf::{OcsfVersion, ProductInfo},
             spool::test_support::{
                 LossySpool, ROOMY_CAP, SeededSpool, chained_record, check_empty_file,
                 reopen_after_losses, seeded_spool, spool_with_losses,
@@ -882,7 +882,7 @@ mod tests {
             reason: "incident 42".into(),
             time_ms: 10,
         };
-        let mut rec = AuditRecord::from_event(&event, &product);
+        let mut rec = AuditRecord::from_event(&event, &product, OcsfVersion::V1);
         rec.push_chain_headers(0, &GENESIS_HEAD);
 
         let dir = tempfile::tempdir().unwrap();

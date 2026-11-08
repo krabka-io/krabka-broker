@@ -65,8 +65,14 @@ fn controller_port() -> u16 {
 
 /// A second controller port, for the node that joins the quorum.
 fn joiner_controller() -> &'static str {
-    static V: OnceLock<String> = OnceLock::new();
-    V.get_or_init(|| format!("host.docker.internal:{}", support::free_port()))
+    // The `HeldPort` keeps the port reserved for the whole process, so nothing
+    // takes it before the observer binds it.
+    static V: OnceLock<(String, support::HeldPort)> = OnceLock::new();
+    &V.get_or_init(|| {
+        let held = support::hold_port();
+        (format!("host.docker.internal:{}", held.port()), held)
+    })
+    .0
 }
 /// Kafka 4.3.1 is the compatibility oracle for KIP-853 and KIP-1186.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";

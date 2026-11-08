@@ -5,7 +5,6 @@ use {
     super::*,
     assert2::{assert, check},
     krabka_protocol::krabka::freeze::PATTERN_TYPE_ANY,
-    krabka_units::convert::TimeExt as _,
     std::iter,
 };
 
@@ -27,6 +26,25 @@ krabka_macros::duration_parser_fixture!(
         empty = { "", None },
     ]
 );
+
+/// `--ttl` reaches the broker in whole milliseconds, where zero means "take
+/// the cap". A lifetime that would send zero is refused, so only an omitted
+/// flag asks for the cap.
+#[yare::parameterized(
+    zero = { "0", None },
+    zero_with_a_unit = { "0s", None },
+    rounds_to_zero = { "400us", None },
+    one_millisecond = { "1ms", Some(1) },
+    rounds_to_one = { "600us", Some(1) },
+    thirty_minutes = { "30m", Some(1_800_000) },
+    missing_unit = { "30", None },
+)]
+fn a_lifetime_that_would_send_zero_is_refused(raw: &str, expected: Option<i64>) {
+    check!(
+        parse_ttl(raw).ok().map(Time::millis_i64) == expected,
+        "{raw}"
+    );
+}
 
 krabka_macros::bootstrap_parser_fixture!(["krabka-guard", "freeze", "list"], [
     "krabka-guard",

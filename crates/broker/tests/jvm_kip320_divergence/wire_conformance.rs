@@ -13,7 +13,7 @@ use {
             KAFKA_IMAGE, KAFKA_IMAGE_MODERN, docker_rm, docker_run_kafka_tool_with_image,
             produce_lines_via_jvm,
         },
-        support::{self, controller_voters, jvm_broker_config},
+        support::{self, HeldPort, controller_voters, hold_port, jvm_broker_config},
     },
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle},
     krabka_metadata::MetadataRecord,
@@ -26,18 +26,23 @@ use {
     tokio::task,
 };
 
-/// A running broker and the directory that backs it.
+/// A running broker, the directory that backs it, and the ports it binds.
 struct StartedBroker {
     broker: BrokerHandle,
     dir: TempDir,
+    /// Holds the client and controller ports for as long as the broker lives,
+    /// so no other socket takes one before the broker binds it.
+    ports: [HeldPort; 2],
 }
 
 /// Single-broker Krabka config bound on `0.0.0.0:<client_port>`, advertised as
 /// `host.docker.internal:<client_port>`. Mirrors `start_host_broker` but
-/// parameterized on the port so the wire-conformance test can pick a port that
-/// doesn't collide with the rest of the JVM suite.
-async fn start_host_broker_on(client_port: u16, controller_port: u16) -> StartedBroker {
+/// parameterized on the held client and controller ports so the
+/// wire-conformance test can pick ports that don't collide with the rest of the
+/// JVM suite.
+async fn start_host_broker_on(ports: [HeldPort; 2]) -> StartedBroker {
     support::init_tracing();
+    let [client_port, controller_port] = ports.each_ref().map(HeldPort::port);
     let dir = TempDir::new().expect("tempdir");
     let config = BrokerConfig {
         controller_quorum_voters: vec![(
@@ -65,6 +70,7 @@ async fn start_host_broker_on(client_port: u16, controller_port: u16) -> Started
     StartedBroker {
         broker: handle,
         dir,
+        ports,
     }
 }
 
@@ -170,12 +176,13 @@ async fn first_wire_epoch(jvm_wire_epochs: &mut JvmWireEpochs, records: String) 
     // Allocated rather than fixed at 10692/10693: two runs of this suite would
     // otherwise race for the same bind, and the loser reports `Address already
     // in use` as a test failure.
-    let client_port = support::free_port();
-    let controller_port = support::free_port();
+    let ports = [hold_port(), hold_port()];
+    let client_port = ports[0].port();
     let bootstrap = format!("host.docker.internal:{client_port}");
 
     docker_rm(&container);
-    let StartedBroker { broker, dir } = start_host_broker_on(client_port, controller_port).await;
+    let started = start_host_broker_on(ports).await;
+    let broker = &started.broker;
 
     // 1. Create topic (1 partition, RF=1).
     let out = docker_run_kafka_tool_with_image(KAFKA_IMAGE, &[
@@ -202,7 +209,7 @@ async fn first_wire_epoch(jvm_wire_epochs: &mut JvmWireEpochs, records: String) 
         .expect("partition hosted");
     eprintln!("KRABKA[kip320] epoch-0 boundary (LEO) = {epoch0_end}");
 
-    jvm_wire_epochs.started = Some(StartedBroker { broker, dir });
+    jvm_wire_epochs.started = Some(started);
     jvm_wire_epochs.bootstrap = bootstrap;
     jvm_wire_epochs.container = container;
     jvm_wire_epochs.client_port = client_port;
@@ -347,6 +354,7 @@ async fn finish_wire_epochs(jvm_wire_epochs: &mut JvmWireEpochs) {
     let StartedBroker {
         broker,
         dir: _directory_guard,
+        ports: _ports,
     } = jvm_wire_epochs.started.take().expect("broker started");
     broker.shutdown().await;
 }

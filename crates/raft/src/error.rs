@@ -71,6 +71,18 @@ pub enum MetadataReplayError {
     },
 }
 
+/// Why the controller refused a topic-freeze record for good.
+///
+/// The committed image decides both, so a retry of the same record fails the
+/// same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreezeRefusal {
+    /// A thaw of a scope that has no committed freeze entry.
+    Missing,
+    /// A record no newer than the committed entry at its exact key.
+    Stale,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RaftError {
@@ -109,6 +121,11 @@ pub enum RaftError {
 
     #[error("change rejected: {0}")]
     ChangeRejected(String),
+
+    /// The controller refused a topic-freeze record that its committed image
+    /// rules out. `key` is the pattern type and the scope, as `Literal:orders`.
+    #[error("topic-freeze mutation {key} rejected: {refusal:?}")]
+    FreezeRefused { key: String, refusal: FreezeRefusal },
 
     /// The controller leader rejected a change this node forwarded to it.
     ///

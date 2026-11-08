@@ -13,6 +13,8 @@
 //! the mailbox loop, and the shared services and constants — while each RPC
 //! path lives in its own submodule.
 
+#[cfg(test)]
+use crate::task_util::spawn_dropping_mailbox;
 use {
     crate::time_util::sleep_until_opt,
     krabka_protocol::primitives::uuid::Uuid,
@@ -300,11 +302,7 @@ impl GroupActorHandle {
     /// an actor does when it stops with requests still in its mailbox.
     #[cfg(test)]
     pub(crate) fn dropping_replies(kind: GroupKindTag) -> Self {
-        let (tx, task) = spawn_mailbox(8, |mut rx: mpsc::Receiver<GroupActorMessage>| async move {
-            while let Some(message) = rx.recv().await {
-                drop(message);
-            }
-        });
+        let (tx, task) = spawn_dropping_mailbox();
         Self {
             tx,
             kind,

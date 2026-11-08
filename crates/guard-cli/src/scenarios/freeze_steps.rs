@@ -193,6 +193,18 @@ async fn registry_holds_unsigned_freeze(
     assert!(registry == expected);
 }
 
+/// The broker's refusal and the tool's own words both name the scope, so an
+/// operator reads that they asked for the wrong scope, not that a broker failed.
+#[then("the tool explains that the registry holds no freeze on {scope}")]
+fn tool_explains_no_freeze(guard: &GuardScenario, scope: Scope) {
+    let target = thaw_target(&scope);
+    let expected = format!(
+        "error 42 (the registry holds no freeze at this exact scope, so there is nothing to \
+         thaw): {target} has no live freeze entry, so there is nothing to thaw"
+    );
+    assert!(guard.transcript.get().stderr == format!("{expected}\n"));
+}
+
 #[then("the registry still holds the freeze on {scope}")]
 async fn registry_still_holds_freeze(guard: &mut GuardScenario, scope: Scope) {
     let cluster = guard.cluster().await;

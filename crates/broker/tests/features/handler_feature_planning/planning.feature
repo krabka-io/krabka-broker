@@ -94,7 +94,7 @@ Feature: UpdateFeatures validates the proposed feature graph and writes complete
     Then feature krabka.version level <level> is refused because <reason>
     Examples:
       | levels                               | level | kind | reason                                                                                                                |
-      | metadata.version=30                  | 3     | 1    | Local controller 1 only supports versions 0-2                                                                         |
+      | metadata.version=30                  | 4     | 1    | Local controller 1 only supports versions 0-3                                                                         |
       | metadata.version=30,krabka.version=1 | 0     | 1    | Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade.     |
       | metadata.version=30                  | 1     | 2    | Can't downgrade to a newer version.                                                                                  |
 

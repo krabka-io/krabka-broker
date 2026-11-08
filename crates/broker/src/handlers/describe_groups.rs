@@ -39,8 +39,9 @@ use {
         },
         error::BrokerError,
         handlers::{
-            ApiVersion, RequestContext, authorized_operations::fill_group_authorized_operations,
-            group_coordinator_error, group_describe_denied,
+            ApiVersion, RequestContext, actor_stopped_code,
+            authorized_operations::fill_group_authorized_operations, group_coordinator_error,
+            group_describe_denied,
         },
         task_util::{AskError, ask},
     },
@@ -125,22 +126,29 @@ async fn describe_one(broker: &Broker, group_id: String, version: i16) -> Descri
         let message = format!("Group {group_id} not found.");
         return dead_row(group_id, version, message);
     };
-    // `ClassicInspect` replies only while the live group is classic; a
-    // KIP-848 consumer group drops the sender.
+    // `ClassicInspect` gives a view only while the live group is classic; a
+    // KIP-848 consumer group answers `None`.
     match ask(&handle.tx, |reply| GroupActorMessage::ClassicInspect {
         reply,
     })
     .await
     {
-        Ok(view) => described_classic(view),
+        Ok(Some(view)) => described_classic(view),
+        Ok(None) => {
+            let message = format!("Group {group_id} is not a classic group.");
+            dead_row(group_id, version, message)
+        }
         Err(AskError::Closed) => {
             let message = format!("Group {group_id} not found.");
             dead_row(group_id, version, message)
         }
-        Err(AskError::Dropped) => {
-            let message = format!("Group {group_id} is not a classic group.");
-            dead_row(group_id, version, message)
-        }
+        // The actor stopped with the request in its mailbox, as Kafka's
+        // `describeGroups` fails on a shard that unloads: an error row.
+        Err(AskError::Dropped) => DescribedGroup {
+            error_code: actor_stopped_code(broker, &group_id),
+            group_id,
+            ..Default::default()
+        },
     }
 }
 

@@ -81,7 +81,7 @@ use {
         path::{Path, PathBuf},
         process::{self, Command},
     },
-    support::{docker, free_port},
+    support::{HeldPort, docker, hold_port},
     tokio::{task, time},
     zerocopy::FromBytes,
 };
@@ -123,8 +123,9 @@ fn image() -> String {
 /// previous incarnation left behind.
 struct BrokerProcess {
     name: String,
-    /// Published host port for the container's 9092.
-    port: u16,
+    /// Published host port for the container's 9092, held for as long as this
+    /// lives: `docker start` binds it again on every restart.
+    port: HeldPort,
     /// Host side of the `/var/lib/krabka` mount.
     root: tempfile::TempDir,
 }
@@ -134,7 +135,7 @@ impl BrokerProcess {
     fn start() -> Self {
         let root = tempfile::TempDir::new().expect("host data directory");
         let name = format!("krabka-kill-{}", process::id());
-        let port = free_port();
+        let port = hold_port();
         let node = Self { name, port, root };
 
         // Run as whoever owns the host directory. The image's own user is
@@ -150,8 +151,8 @@ impl BrokerProcess {
         ]);
 
         let mount = format!("{}:{CONTAINER_ROOT}", node.host_root().display());
-        let publish = format!("127.0.0.1:{}:9092", node.port);
-        let advertised = format!("--advertised-listener=127.0.0.1:{}", node.port);
+        let publish = format!("127.0.0.1:{}:9092", node.port.port());
+        let advertised = format!("--advertised-listener=127.0.0.1:{}", node.port.port());
         docker(&[
             "run",
             "--detach",
@@ -187,7 +188,7 @@ impl BrokerProcess {
     /// The host-side log directory the container writes into.
     fn host_log_dir(&self) -> PathBuf { self.host_root().join("data") }
 
-    fn bootstrap(&self) -> String { format!("127.0.0.1:{}", self.port) }
+    fn bootstrap(&self) -> String { format!("127.0.0.1:{}", self.port.port()) }
 
     /// Run one of the image's other binaries against the same mount.
     fn run_tool(&self, entrypoint: &str, args: &[&str]) {

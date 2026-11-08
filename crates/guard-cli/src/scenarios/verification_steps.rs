@@ -8,7 +8,7 @@ use {
         params::{BrokerAnswer, KeySource, LocalKeys, Operator, Outcome, RegistryContents, Scope},
         world::GuardScenario,
     },
-    crate::{code_name, exit_for_code},
+    crate::{code_name, exit_for_code, run_from_args},
     assert2::assert,
     rstest_bdd_macros::{given, then, when},
 };
@@ -82,4 +82,26 @@ fn tool_exits_with(guard: &GuardScenario, code: i32) {
 #[then("the operator reads {explanation}")]
 fn operator_reads(guard: &GuardScenario, explanation: String) {
     assert!(code_name(guard.answer.get().code()) == explanation);
+}
+
+/// The bootstrap address for a command line that never reaches a broker.
+const NO_BROKER: &str = "127.0.0.1:1";
+
+/// The shipped entry point, with its own parse step, decides the outcome.
+async fn run_entry_point(args: &[&str]) -> Outcome {
+    let mut command_line = vec!["krabka-guard", "--bootstrap-server", NO_BROKER];
+    command_line.extend_from_slice(args);
+    Outcome::from_exit_code(run_from_args(command_line).await)
+}
+
+#[when("an operator runs the tool with a flag it does not know")]
+async fn runs_with_unknown_flag(guard: &mut GuardScenario) {
+    let outcome = run_entry_point(&["freeze", "list", "--no-such-flag"]).await;
+    guard.outcome.set(outcome);
+}
+
+#[when("an operator asks the tool for help")]
+async fn asks_for_help(guard: &mut GuardScenario) {
+    let outcome = run_entry_point(&["--help"]).await;
+    guard.outcome.set(outcome);
 }
