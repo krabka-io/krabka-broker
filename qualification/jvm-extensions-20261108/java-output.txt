@@ -1,0 +1,19 @@
+Note: AssignorWorker.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+Note: ExtensionWorker.java uses unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+test_bad_version (test_bridge.BridgeTests.test_bad_version) ... ok
+test_cancellation_reaps (test_bridge.BridgeTests.test_cancellation_reaps) ... ok
+test_deadline (test_bridge.BridgeTests.test_deadline) ... ok
+test_exception_death_invalid_output (test_bridge.BridgeTests.test_exception_death_invalid_output) ... ok
+test_first_last_jar_and_conversion (test_bridge.BridgeTests.test_first_last_jar_and_conversion) ... ok
+test_released_sticky_assignor (test_bridge.BridgeTests.test_released_sticky_assignor) ... ok
+test_async_exception_and_protocol_rejection (test_extensions.Extensions.test_async_exception_and_protocol_rejection) ... ok
+test_dlq_exact_long_uuid_causes_state_and_stop (test_extensions.Extensions.test_dlq_exact_long_uuid_causes_state_and_stop) ... ok
+test_permanent_storage_failure (test_extensions.Extensions.test_permanent_storage_failure) ... ok
+test_storage_persistent_roundtrip_epoch_delete_and_close (test_extensions.Extensions.test_storage_persistent_roundtrip_epoch_delete_and_close) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 2.641s
+
+OK

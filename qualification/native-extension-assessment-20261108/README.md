@@ -8,7 +8,9 @@ The isolated assignor prototype is now implemented as an opt-in broker adapter:
 It executes released Java/JAR assignors via nonblocking async jobs and consumes
 only exact-input-matching results through the existing actor rollback/retry path.
 This supersedes the assessment's assignor-only "no worker" statement below;
-topology-storage and DLQ Java adapters are still absent. The original assessment
+persistent topology-storage and custom no-argument DLQ Java adapters are now
+implemented; see [extension qualification](../jvm-extensions-20261108/README.md).
+The stock Java DLQ service-construction contract remains unsupported. The original assessment
 is retained to explain the native/JVM boundary, not as the latest support matrix.
 See [implementation receipt](../jvm-assignor-bridge-20261108/receipt.json).
 

@@ -1,10 +1,7 @@
 # Isolated Kafka 4.4 assignor JAR worker (opt-in prototype)
 
-**Broker integration remains unqualified:** first joins without an explicit
-process ID livelock because pending rollback regenerates the native fallback
-UUID. Four broker checks pass and the heartbeat regression fails; see
-`qualification/jvm-assignor-bridge-20261108/broker-test-output.txt`. A typed
-pending-admission path is needed before this adapter is considered supported.
+The first-join pending admission regression is fixed; all 300 Streams checks
+passed in the retained follow-up receipt.
 
 This executes real released `TaskAssignor` implementations from a supplied JAR.
 The Rust broker adapter in `streams/jvm_assignor.rs` registers through the native
@@ -91,9 +88,10 @@ cancellation with observed process reaping. The released Java StickyTaskAssignor
 The fixture calls every adapter
 accessor. This is lane-scoped executable evidence, not full Kafka parity.
 
-No topology-storage or DLQ-manager Java adapter, distributed
-plugin deployment, restart/state reuse, production metrics or full metadata
-conversion is implemented. The actor target installer and validation remain unchanged; the adapter uses
+Separate persistent topology-storage and custom DLQ-manager Java adapters now
+exist; see [extension contract](../../docs/compatibility/kafka-4.4-jvm-extensions.md).
+Distributed plugin deployment, stateful assignor reuse, production metrics and
+full metadata conversion remain unsupported. The actor target installer and validation remain unchanged; the adapter uses
 nonblocking job submission and retry instead of introducing a new actor mailbox.
 
 ## Broker integration checks

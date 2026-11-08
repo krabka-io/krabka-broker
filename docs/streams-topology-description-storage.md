@@ -182,3 +182,8 @@ Graceful shutdown drains admitted writes before replacement replay; arbitrary
 concurrent owners and stale backend writes still require host fencing. These
 native regressions do not replace an RF3 released-broker concurrent-write
 wire differential or establish filesystem power-loss guarantees.
+
+## Isolated Java embedding adapter
+
+A separate opt-in adapter is documented in [Java extensions](compatibility/kafka-4.4-jvm-extensions.md).
+The native SPI and CLI class-name boundary described above remain unchanged.

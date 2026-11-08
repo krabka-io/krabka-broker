@@ -83,3 +83,8 @@ released/candidate boundaries, actual counters, decoded durable states and
 multi-broker crash schedules. Terminal-prefix pruning remains an explicit
 measured deviation. The pure Creusot decision contract and bounded acquisition
 model do not prove plugin IO or replace these runtime tests.
+
+## Isolated Java embedding adapter
+
+A separate opt-in adapter is documented in [Java extensions](kafka-4.4-jvm-extensions.md).
+The native SPI and CLI class-name boundary described above remain unchanged.

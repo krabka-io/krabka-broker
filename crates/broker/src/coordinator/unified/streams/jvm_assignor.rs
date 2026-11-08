@@ -1,4 +1,4 @@
-//! Opt-in isolated Java TaskAssignor execution without blocking the coordinator.
+//! Opt-in isolated Java `TaskAssignor` execution without blocking the coordinator.
 //!
 //! Register this adapter in `StreamsGroupConfig::task_assignors`. An assignment
 //! not yet ready returns a normal assignor error: the actor retains its previous
@@ -20,7 +20,9 @@ use {
     tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
         process::Command,
+        runtime::Handle,
         task::JoinHandle,
+        time::timeout,
     },
 };
 
@@ -28,7 +30,7 @@ const BYTE_LIMIT: usize = 1024 * 1024;
 const JOB_LIMIT: usize = 32;
 const CACHE_LIFETIME: Duration = Duration::from_secs(60);
 
-/// Java launch settings. Classpath must include AssignorWorker, released Kafka
+/// Java launch settings. Classpath must include `AssignorWorker`, released Kafka
 /// 4.4 libraries and the trusted plugin JAR. No shell interpretation is used.
 #[derive(Clone, Debug)]
 pub struct JvmAssignorOptions {
@@ -115,16 +117,19 @@ impl TaskAssignor for JvmTaskAssignor {
         let mut jobs = self
             .jobs
             .try_lock()
-            .map_err(|_| "JVM assignment cache busy".to_string())?;
+            .map_err(|_| "JVM assignment cache busy".to_owned())?;
         jobs.retain(|_, job| job.created.elapsed() < CACHE_LIFETIME);
         if let Some(job) = jobs.get_mut(&key) {
             if job.result.is_none() && job.handle.as_ref().is_some_and(JoinHandle::is_finished) {
                 use futures_util::FutureExt;
-                let handle = job.handle.take().expect("finished worker handle");
+                let handle = job
+                    .handle
+                    .take()
+                    .ok_or("missing finished JVM worker handle")?;
                 job.result = Some(
                     handle
                         .now_or_never()
-                        .expect("finished worker")
+                        .ok_or("JVM worker completion not ready")?
                         .unwrap_or_else(|e| Err(format!("JVM assignment task failed: {e}"))),
                 );
             }
@@ -136,16 +141,16 @@ impl TaskAssignor for JvmTaskAssignor {
         if jobs.len() >= JOB_LIMIT {
             return Err("JVM assignor request capacity reached".into());
         }
-        let runtime = tokio::runtime::Handle::try_current()
+        let runtime = Handle::try_current()
             .map_err(|e| format!("JVM assignor needs a Tokio runtime: {e}"))?;
         let options = self.options.clone();
         let payload = key.clone();
         let members = members.to_vec();
         let input = input.clone();
         let handle = runtime.spawn(async move {
-            let result = tokio::time::timeout(options.timeout, execute(&options, payload))
+            let result = timeout(options.timeout, execute(&options, payload))
                 .await
-                .map_err(|_| "JVM assignment deadline exceeded".to_string())??;
+                .map_err(|_| "JVM assignment deadline exceeded".to_owned())??;
             super::assignor::validate_assignment(&result, &members, &input)?;
             Ok(result)
         });
@@ -154,6 +159,7 @@ impl TaskAssignor for JvmTaskAssignor {
             handle: Some(handle),
             result: None,
         });
+        drop(jobs);
         Err("JVM assignment pending; retry heartbeat".into())
     }
 }
@@ -203,12 +209,16 @@ async fn execute(
         stdin.shutdown().await.map_err(|e| e.to_string())
     };
     let wait = async { child.wait().await.map_err(|e| e.to_string()) };
-    let (_, stdout, stderr, status) =
+    let ((), stdout, stderr, status) =
         tokio::try_join!(write, bounded_read(stdout), bounded_read(stderr), wait)?;
     if !status.success() {
         return Err(format!(
             "JVM assignor failed ({status}): {}",
-            String::from_utf8_lossy(&stderr[stderr.len().saturating_sub(4096)..])
+            String::from_utf8_lossy(
+                stderr
+                    .get(stderr.len().saturating_sub(4096)..)
+                    .unwrap_or_default()
+            )
         ));
     }
     let response: Response = serde_json::from_slice(&stdout)
@@ -250,7 +260,7 @@ mod tests {
     }
 
     async fn worker_pid(dir: &TempDir) -> u32 {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(5), async {
             loop {
                 if let Ok(pid) = fs::read_to_string(dir.path().join("pid"))
                     && let Ok(pid) = pid.parse()
@@ -265,7 +275,7 @@ mod tests {
     }
 
     async fn reaped(pid: u32) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(5), async {
             while PathBuf::from(format!("/proc/{pid}")).exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }

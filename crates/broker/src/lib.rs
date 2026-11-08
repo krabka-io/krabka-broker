@@ -245,6 +245,7 @@ pub mod schema_validation;
 pub mod security_clients;
 pub mod share_coordinator;
 pub mod share_partition;
+pub mod jvm_extensions;
 pub(crate) mod signing_domains;
 pub(crate) mod site_placement;
 /// Three-site stretch-cluster model: site failure and network partition
