@@ -274,8 +274,7 @@ mod tests {
             .expect("advance helper partition log start");
         assert2::assert!(handle.partition_log_start_for_test(helper_topic, 0) == Some(2));
         assert2::assert!(
-            handle.partition_retention_ms_for_test(helper_topic, 0)
-                == Some(Some(Duration::from_secs(123)))
+            handle.partition_retention_for_test(helper_topic, 0) == Some(Some(secs(123)))
         );
         let observed_config = handle
             .partition_log_config_for_test(helper_topic, 0)

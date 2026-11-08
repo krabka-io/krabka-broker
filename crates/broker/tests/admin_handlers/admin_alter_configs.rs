@@ -92,10 +92,10 @@ fn accepted_alter(settings: &TopicSettings) {
 async fn local_retention(admin: &AdminCluster, settings: &TopicSettings) {
     let broker = admin.broker();
     let deadline = Instant::now() + Duration::from_secs(10);
-    let want = Duration::from_mins(1);
+    let want = krabka_units::minutes(1);
     let last = loop {
         let cur = broker
-            .partition_retention_ms_for_test(&settings.name, 0)
+            .partition_retention_for_test(&settings.name, 0)
             .and_then(|inner| inner);
         if cur == Some(want) {
             break cur;
