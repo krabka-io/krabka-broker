@@ -25,7 +25,7 @@ use {
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
     krabka_units::convert::TimeExt as _,
-    std::{io, sync::PoisonError},
+    std::io,
 };
 
 /// The remote tier of one tiered share partition.
@@ -62,6 +62,7 @@ impl TieredSource<'_> {
     /// A failed remote read is [`BrokerError::Io`], which the partition row
     /// answers with `UNKNOWN_SERVER_ERROR`, as Kafka answers a
     /// `RemoteStorageException`. The client keeps its place and retries.
+    /// A poisoned log mutex is [`BrokerError::PartitionWriterDied`].
     pub(super) async fn read(
         &self,
         partition: &Partition,
@@ -95,20 +96,14 @@ impl TieredSource<'_> {
             }
             // An abort marker can sit in a local segment past the tier.
             let local = partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .lock_log()?
                 .aborted_in_range(from, Offset(last.saturating_add(1)));
             for txn in local {
                 aborted.add(txn.producer_id.get(), txn.start_offset.0, txn.last_offset.0);
             }
         }
         let (policy, uncertainty_ms) = {
-            let config = partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .config_snapshot();
+            let config = partition.lock_log()?.config_snapshot();
             (
                 config.delivery_policy,
                 config.delivery_clock_uncertainty.millis_i64_trunc(),

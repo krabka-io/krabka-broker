@@ -44,7 +44,6 @@ use {
     crate::{
         broker::Broker,
         codes,
-        error::BrokerError,
         handlers::{RequestContext, allowed_topics},
     },
     krabka_log::topic_name::validate_topic_name,
@@ -62,7 +61,7 @@ pub fn handle(
     req: &DescribeProducersRequest,
     _version: i16,
     ctx: &RequestContext<'_>,
-) -> Result<DescribeProducersResponse, BrokerError> {
+) -> DescribeProducersResponse {
     let image = broker.controller.current_image();
 
     // Kafka's `checkValidTopic` runs `Topic.validate` before it authorizes
@@ -136,7 +135,7 @@ pub fn handle(
                 broker,
                 topic_req.name.as_str(),
                 idx,
-            )?);
+            ));
         }
 
         topics_out.push(TopicResponse {
@@ -146,11 +145,11 @@ pub fn handle(
         });
     }
 
-    Ok(DescribeProducersResponse {
+    DescribeProducersResponse {
         throttle_time_ms: 0,
         topics: topics_out,
         ..Default::default()
-    })
+    }
 }
 
 /// The row of a topic refused before any lookup: every requested partition
@@ -178,18 +177,17 @@ fn refused_topic(topic: &TopicRequest, error_code: i16, error_message: &str) -> 
 /// Kafka answers from the log of any replica that the broker hosts, leader or
 /// follower, through `Partition.activeProducerState`. A partition that the
 /// broker does not host is `NOT_LEADER_OR_FOLLOWER`, and a partition in an
-/// offline log directory is `KAFKA_STORAGE_ERROR`. Both rows carry only the
-/// code.
+/// offline log directory is `KAFKA_STORAGE_ERROR`. A partition whose log
+/// lock a panic poisoned answers `NOT_LEADER_OR_FOLLOWER` (see
+/// [`Partition::lock_log`]), as a gone writer does. Each of these rows
+/// carries only the code.
 ///
-/// # Errors
-///
-/// Returns [`BrokerError::Replication`] when a panic poisoned the log lock of
-/// the partition.
+/// [`Partition::lock_log`]: crate::partition::Partition::lock_log
 fn hosted_partition_producers(
     broker: &Broker,
     topic: &str,
     partition_index: i32,
-) -> Result<PartitionResponse, BrokerError> {
+) -> PartitionResponse {
     let refused = |error_code| PartitionResponse {
         partition_index,
         error_code,
@@ -199,17 +197,16 @@ fn hosted_partition_producers(
         .partitions
         .get(topic, krabka_ids::PartitionIndex(partition_index))
     else {
-        return Ok(refused(codes::NOT_LEADER_OR_FOLLOWER));
+        return refused(codes::NOT_LEADER_OR_FOLLOWER);
     };
     if broker.log_dir_status.is_offline(&partition.log_dir.load()) {
-        return Ok(refused(codes::KAFKA_STORAGE_ERROR));
+        return refused(codes::KAFKA_STORAGE_ERROR);
     }
-    let log = partition.log.lock().map_err(|_| {
-        BrokerError::Replication(format!(
-            "DescribeProducers: log lock poisoned for {topic}-{partition_index}"
-        ))
-    })?;
-    Ok(PartitionResponse {
+    let log = match partition.lock_log() {
+        Ok(log) => log,
+        Err(error) => return refused(codes::from_broker_error(&error)),
+    };
+    PartitionResponse {
         partition_index,
         error_code: codes::NONE,
         active_producers: log
@@ -218,7 +215,7 @@ fn hosted_partition_producers(
             .map(producer_state)
             .collect(),
         ..Default::default()
-    })
+    }
 }
 
 /// The wire row of one producer: Kafka's `UnifiedLog.activeProducers`, which
@@ -246,7 +243,7 @@ mod tests {
             authorizer::{AllowAllAuthorizer, Authorizer},
             broker::Broker,
             handlers::RequestContext,
-            partition::Partition,
+            partition::{Partition, test_support::poison_log},
             test_support::{DenyAll, KafkaErrorCode},
             txn::marker::{MarkerType, build_marker_batch},
         },
@@ -286,7 +283,7 @@ mod tests {
         req: &DescribeProducersRequest,
         ctx: &RequestContext<'_>,
     ) -> DescribeProducersResponse {
-        handle(broker, req, VERSION, ctx).expect("handle")
+        handle(broker, req, VERSION, ctx)
     }
 
     /// Kafka's `checkValidTopic` answers `INVALID_TOPIC_EXCEPTION` (17) for
@@ -646,6 +643,21 @@ mod tests {
         }
     }
 
+    /// A request for partition 0 of each of `topics`.
+    fn first_partitions_of(topics: &[&str]) -> DescribeProducersRequest {
+        DescribeProducersRequest {
+            topics: topics
+                .iter()
+                .map(|name| TopicRequest {
+                    name: (*name).into(),
+                    partition_indexes: vec![0],
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     fn partition_row(error_code: i16, active_producers: Vec<ProducerState>) -> PartitionResponse {
         PartitionResponse {
             partition_index: 0,
@@ -751,17 +763,7 @@ mod tests {
             bind(p, peer);
             user ["alice"];
         };
-        let request = DescribeProducersRequest {
-            topics: ["leads", "follows", "moved"]
-                .into_iter()
-                .map(|name| TopicRequest {
-                    name: name.into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        };
+        let request = first_partitions_of(&["leads", "follows", "moved"]);
         let topic = |name: &str, row: PartitionResponse| TopicResponse {
             name: name.into(),
             partitions: vec![row],
@@ -828,6 +830,57 @@ mod tests {
             ..Default::default()
         };
         assert!(offline == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// A partition whose log mutex a panicked task poisoned answers
+    /// `NOT_LEADER_OR_FOLLOWER` on its own row, as a partition whose writer
+    /// is gone does, and the rest of the request is still answered.
+    #[tokio::test]
+    async fn a_poisoned_log_refuses_only_its_own_row() {
+        krabka_macros::broker_test_setup! {
+            bind(broker_handle, _dir, broker);
+            boot [start_broker(Arc::new(AllowAllAuthorizer))];
+        };
+        let local = broker.config.node_id;
+        for name in ["healthy", "poisoned"] {
+            seed_partition()
+                .broker(&broker)
+                .topic(name)
+                .leader(local)
+                .replicas(vec![local])
+                .call()
+                .await
+                .expect("hosted leader");
+        }
+        let poisoned = broker
+            .partitions
+            .get("poisoned", krabka_ids::PartitionIndex(0))
+            .expect("hosted partition");
+        poison_log(&poisoned);
+
+        krabka_macros::request_test_identity! {
+            bind(p, peer);
+            user ["alice"];
+        };
+        let request = first_partitions_of(&["healthy", "poisoned"]);
+
+        let resp = drive(&broker, &request, &test_context(&p, &peer));
+
+        let topic = |name: &str, error_code: i16| TopicResponse {
+            name: name.into(),
+            partitions: vec![partition_row(error_code, Vec::new())],
+            ..Default::default()
+        };
+        assert!(
+            resp == DescribeProducersResponse {
+                topics: vec![
+                    topic("healthy", codes::NONE),
+                    topic("poisoned", codes::NOT_LEADER_OR_FOLLOWER),
+                ],
+                ..Default::default()
+            }
+        );
         broker_handle.shutdown().await;
     }
 }

@@ -34,7 +34,7 @@ use {
     krabka_log::{LogError, Offset},
     krabka_protocol::{owned::share_fetch_response::PartitionData, records::RecordsPayload},
     std::{
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::{Duration, Instant},
     },
     tokio::sync::Mutex,
@@ -201,11 +201,7 @@ async fn grow_readable_window(
     // tiered partition (KIP-405) the offsets below the local log start are in
     // the remote tier, and the acquire step classifies them from the batches
     // it reads there.
-    let log_start = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .local_log_start_offset();
+    let log_start = partition.lock_log()?.local_log_start_offset();
     let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;

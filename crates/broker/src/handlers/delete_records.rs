@@ -104,7 +104,7 @@ use {
         partition::Partition,
         partition_registry::PartitionRegistry,
     },
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
 };
 
 fn delete_records_transition<'a>(
@@ -315,14 +315,13 @@ fn diskless_index<'a>(
 /// Whether the partition's `cleanup.policy` forbids a `DeleteRecords` trim:
 /// Kafka's `!config.delete && config.compact`, which is `compact` alone.
 /// `compact,delete` trims like `delete`.
-fn trim_forbidden_by_policy(part: &Partition) -> bool {
-    let policy = part
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .config_snapshot()
-        .cleanup_policy;
-    policy.contains_compact() && !policy.contains_delete()
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned.
+fn trim_forbidden_by_policy(part: &Partition) -> Result<bool, BrokerError> {
+    let policy = part.lock_log()?.config_snapshot().cleanup_policy;
+    Ok(policy.contains_compact() && !policy.contains_delete())
 }
 
 /// Everything one partition's trim reads, and nothing it writes.
@@ -439,7 +438,17 @@ async fn trim_one(
 
     // A tiered partition's archive enforces the floor before the trim removes
     // anything; see `tiered`.
-    let archive = deletes.then(|| archive_floor(env, topic, &part)).flatten();
+    let archive = match deletes
+        .then(|| archive_floor(env, topic, &part))
+        .transpose()
+    {
+        Ok(archive) => archive.flatten(),
+        Err(error) => {
+            tracing::warn!(%topic, partition = index, %error,
+                           "DeleteRecords cannot read the partition's tiering config");
+            return refused(codes::from_broker_error(&error));
+        }
+    };
     match trim_behind_archive(archive.as_ref(), &part, target).await {
         Ok(_) => {
             let settled = settle_row(env, &part, fp, target, hw).await;
@@ -529,7 +538,7 @@ fn admit_partition(env: &TrimEnv<'_>, topic: &str, index: i32) -> Result<Arc<Par
     // `cleanup.policy` compacts and does not delete. A compacted topic holds
     // the latest value of each key, and a trim would lose keys. The leader's
     // own log config is the one Kafka reads.
-    if trim_forbidden_by_policy(&part) {
+    if trim_forbidden_by_policy(&part).map_err(|error| codes::from_broker_error(&error))? {
         tracing::warn!(
             %topic,
             partition = index,

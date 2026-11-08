@@ -94,11 +94,7 @@ pub(super) async fn append_marker_and_materialize(
         producer_epoch: current_producer_epoch,
         coordinator_epoch: current_coordinator_epoch,
         has_open_transaction: has_pending_transaction,
-    } = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
-        .transaction_marker_state(producer_id);
+    } = partition.lock_log()?.transaction_marker_state(producer_id);
     if transaction_marker_equal_epoch_fenced(
         transaction_version,
         producer_epoch,
@@ -239,10 +235,7 @@ fn landed_marker_offset(
     producer_epoch: i16,
     from: krabka_log::Offset,
 ) -> Result<Option<i64>, BrokerError> {
-    let log = partition
-        .log
-        .lock()
-        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?;
+    let log = partition.lock_log()?;
     let end = log.log_end_offset();
     let mut next = from;
     while next < end {

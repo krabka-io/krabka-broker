@@ -16,7 +16,7 @@ use {
         diskless::read::DisklessReadHandle,
         error::BrokerError,
         handlers::batch_headers::v2_batch_headers,
-        partition::Partition,
+        partition::{Partition, lock_partition_log},
         remote_reader::RemoteReader,
         share_partition::{
             source::diskless_logical_start,
@@ -34,7 +34,7 @@ use {
         collections::HashMap,
         io,
         ops::Range,
-        sync::{Arc, PoisonError},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -138,11 +138,7 @@ pub(super) async fn acquire_read_records(
     if from >= request.upper {
         return Ok(0);
     }
-    let local_start = partition
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .local_log_start_offset();
+    let local_start = partition.lock_log()?.local_log_start_offset();
     let read = if partition.diskless
         && let Some(DisklessSource { reader, topic_id }) = request.diskless
         && from < local_start
@@ -171,7 +167,7 @@ pub(super) async fn acquire_read_records(
             // An offset below an established log start stays with the local
             // read, whose `OffsetTooLow` moves the share-partition start offset
             // past it.
-            Some(tier) if RemoteReader::serves(partition, from) => {
+            Some(tier) if RemoteReader::serves(partition, from)? => {
                 let Some(bytes) =
                     read_tier(tier, partition, state, from, request.max_bytes).await?
                 else {
@@ -547,9 +543,10 @@ async fn read_raw(
     }
     let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
     let log = Arc::clone(&part.log);
-    let join = spawn_blocking(move || {
-        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
-        log.read_raw(fetch_offset, limit_offset, read_max)
+    let (topic, index) = (part.topic.clone(), part.index);
+    let join = spawn_blocking(move || -> Result<RawRead, BrokerError> {
+        let guard = lock_partition_log(&log, &topic, index)?;
+        Ok(guard.read_raw(fetch_offset, limit_offset, read_max)?)
     });
     let raw = match join.await {
         Ok(res) => res?,
@@ -718,16 +715,17 @@ async fn scan_log<T: Send + 'static>(
     read: impl FnOnce(&krabka_log::Log) -> T + Send + 'static,
 ) -> Result<T, BrokerError> {
     let log = Arc::clone(&part.log);
-    spawn_blocking(move || {
-        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
-        read(&log)
+    let (topic, index) = (part.topic.clone(), part.index);
+    spawn_blocking(move || -> Result<T, BrokerError> {
+        let guard = lock_partition_log(&log, &topic, index)?;
+        Ok(read(&guard))
     })
     .await
     .map_err(|join_err| {
         BrokerError::Io(io::Error::other(format!(
             "share-fetch {kind} scan panicked: {join_err}"
         )))
-    })
+    })?
 }
 
 #[cfg(test)]

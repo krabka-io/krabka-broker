@@ -14,6 +14,7 @@ use {
     crate::{
         broker::Broker,
         codes,
+        error::BrokerError,
         handlers::batch_headers::v2_batch_headers,
         metrics::{BrokerMetrics, RemoteTierPath},
         partition::Partition,
@@ -29,7 +30,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition, corrupt_log},
     krabka_units::convert::TimeExt as _,
     krabka_verified::transaction,
-    std::{sync::PoisonError, time::Instant},
+    std::time::Instant,
 };
 
 /// Whether a batch the remote tier returned may go out to a consumer now.
@@ -105,6 +106,13 @@ impl Drop for ReadTimer<'_> {
 /// records.
 fn fail_partition(p: &mut PendingRead) -> usize {
     p.out = refused_read(p.partition_index, codes::UNKNOWN_SERVER_ERROR);
+    0
+}
+
+/// Answers `p` with the code of a local log query that failed, such as
+/// `NOT_LEADER_OR_FOLLOWER` for a poisoned log, and serves nothing.
+fn fail_log_query(p: &mut PendingRead, error: &BrokerError) -> usize {
+    p.out = refused_read(p.partition_index, codes::from_broker_error(error));
     0
 }
 
@@ -368,6 +376,9 @@ enum AbortsFailed {
     /// The window's last offset is the largest offset there is, so the range
     /// has no exclusive end.
     Overflow,
+    /// The local log could not be read, for example because its mutex is
+    /// poisoned.
+    Local(BrokerError),
 }
 
 /// KIP-405 read-committed: the aborted-transaction list for `window`, from
@@ -403,9 +414,8 @@ async fn read_committed_aborts(
         .ok_or(AbortsFailed::Expired)?
         .map_err(AbortsFailed::Remote)?;
     let local = part
-        .log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_log()
+        .map_err(AbortsFailed::Local)?
         .aborted_in_range(Offset(window.fetch_offset), Offset(batch_end));
     let rows: Vec<_> = aborts
         .into_iter()
@@ -440,8 +450,13 @@ struct TierConfig {
 
 /// The partition's [`TierConfig`], or `None` when the topic does not have
 /// `remote.storage.enable=true`.
-fn tier_config(part: &Partition) -> Option<TierConfig> {
-    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
+///
+/// # Errors
+///
+/// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned;
+/// see [`Partition::lock_log`].
+fn tier_config(part: &Partition) -> Result<Option<TierConfig>, BrokerError> {
+    let log = part.lock_log()?;
     let config = log.config_snapshot();
     let tier = config.remote_storage_enable.then(|| TierConfig {
         delivery_policy: config.delivery_policy,
@@ -450,7 +465,7 @@ fn tier_config(part: &Partition) -> Option<TierConfig> {
         local_log_start: log.local_log_start_offset(),
     });
     drop(log);
-    tier
+    Ok(tier)
 }
 
 /// KIP-405: try to serve `p`'s requested offset from the remote tier when the
@@ -473,7 +488,8 @@ fn tier_config(part: &Partition) -> Option<TierConfig> {
 /// `DelayedRemoteFetch.onComplete` turning `RemoteLogManager.read`'s
 /// `OffsetOutOfRangeException` into `LogReadResult(Errors)` for the second.
 /// When the tier itself fails, the partition is answered with a retriable
-/// error instead: see [`remote_failure_code`].
+/// error instead: see [`remote_failure_code`]. A poisoned local log answers
+/// `NOT_LEADER_OR_FOLLOWER`.
 ///
 /// A *follower* never reads the tier at all: it is answered
 /// `OFFSET_MOVED_TO_TIERED_STORAGE` and rebuilds its log at the leader's local
@@ -512,7 +528,10 @@ pub(super) async fn try_remote_read(
         delivery_uncertainty_ms,
         log_start,
         local_log_start,
-    } = tier_config(part)?;
+    } = match tier_config(part) {
+        Ok(tier) => tier?,
+        Err(error) => return Some(fail_log_query(p, &error)),
+    };
     // KIP-405's `RemoteFetchRequestsPerSec`. Counted once this partition is
     // known to be tiered, so a cluster with no tiered topic materialises no
     // series, and before the reader pool can refuse the read, so a refusal
@@ -537,7 +556,10 @@ pub(super) async fn try_remote_read(
     }
     // Kafka reads the bounds it reports for the remote band here, once the
     // offset is known to lie above the global floor.
-    let live = LiveOffsets::of(part).await;
+    let live = match LiveOffsets::of(part).await {
+        Ok(live) => live,
+        Err(error) => return Some(fail_log_query(p, &error)),
+    };
     // KIP-405: a follower in the remote band is redirected, never served.
     // Checked after the floor above, because an offset below the global floor
     // is gone from every tier and stays `OFFSET_OUT_OF_RANGE` for a follower
@@ -655,6 +677,7 @@ pub(super) async fn try_remote_read(
             Err(AbortsFailed::Remote(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
             Err(AbortsFailed::Expired) => return Some(expired(p, live)),
             Err(AbortsFailed::Overflow) => return Some(fail_partition(p)),
+            Err(AbortsFailed::Local(error)) => return Some(fail_log_query(p, &error)),
         }
     }
 

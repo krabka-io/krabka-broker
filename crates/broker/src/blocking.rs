@@ -29,7 +29,7 @@ use {
         hint,
         panic::{AssertUnwindSafe, catch_unwind},
         pin::Pin,
-        sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError},
+        sync::{Arc, Mutex, MutexGuard, TryLockError},
         task::{Context, Poll},
         time::{Duration, Instant},
     },
@@ -52,6 +52,10 @@ pub enum BlockingError {
     /// The handle was polled again after it had returned its outcome.
     #[error("blocking handle polled after it completed")]
     PolledAfterCompletion,
+    /// A task panicked while it held the lock, and the caller of
+    /// [`run_page_cache_io`] passed [`OnPoison::Refuse`].
+    #[error("the lock is poisoned: a task panicked while it held it")]
+    Poisoned,
 }
 
 /// Where one piece of blocking work runs.
@@ -144,12 +148,20 @@ pub fn run_in_place<R>(work: impl FnOnce() -> R) -> R {
 /// lock, that it will not wait. The guard is held from that answer through
 /// `work`, so no other thread can take the lock in between.
 ///
+/// `on_poison` says what a lock a panicked task poisoned gets. The writer's
+/// paths pass [`OnPoison::Recover`] to keep a partition live; a reader passes
+/// [`OnPoison::Refuse`], and the poison is checked under the same guard
+/// `work` would run under, so no panic slips in between a check and the read.
+///
 /// # Errors
 ///
-/// Returns [`BlockingError::PanickedInline`] when the work panics, and
-/// [`BlockingError::Join`] when the blocking pool does not return it.
+/// Returns [`BlockingError::PanickedInline`] when the work panics,
+/// [`BlockingError::Join`] when the blocking pool does not return it, and
+/// [`BlockingError::Poisoned`], without running `work`, when `on_poison` is
+/// [`OnPoison::Refuse`] and the lock is poisoned.
 pub async fn run_page_cache_io<T, R>(
     lock: &Arc<Mutex<T>>,
+    on_poison: OnPoison,
     stays_in_cache: impl FnOnce(&mut T) -> bool,
     work: impl FnOnce(&mut T) -> R + Send + 'static,
 ) -> Result<R, BlockingError>
@@ -157,16 +169,31 @@ where
     T: Send + 'static,
     R: Send + 'static,
 {
-    let work = match run_if_cached(lock, stays_in_cache, work) {
+    let work = match run_if_cached(lock, on_poison, stays_in_cache, work) {
         Ok(ran) => return ran,
         Err(work) => work,
     };
     let lock = Arc::clone(lock);
     run_blocking(move || {
-        let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = match lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) if on_poison == OnPoison::Recover => poisoned.into_inner(),
+            Err(_) => return Err(BlockingError::Poisoned),
+        };
         run_inline(|| work(&mut guard))
     })
     .await?
+}
+
+/// What [`run_page_cache_io`] does with a lock a panicked task poisoned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnPoison {
+    /// Take the guard and run the work on what the panicked task left: the
+    /// writer's paths keep a partition live this way.
+    Recover,
+    /// Answer [`BlockingError::Poisoned`] and do not run the work: a reader
+    /// does not read what the panicked task left.
+    Refuse,
 }
 
 /// How long [`run_if_cached`] keeps trying a held lock before it gives up on
@@ -181,11 +208,15 @@ const LOCK_SPIN: Duration = Duration::from_micros(20);
 /// caller's future.
 fn run_if_cached<T, R, W: FnOnce(&mut T) -> R>(
     lock: &Mutex<T>,
+    on_poison: OnPoison,
     stays_in_cache: impl FnOnce(&mut T) -> bool,
     work: W,
 ) -> Result<Result<R, BlockingError>, W> {
-    let Some(mut guard) = lock_within(lock, LOCK_SPIN) else {
-        return Err(work);
+    let mut guard = match lock_within(lock, LOCK_SPIN) {
+        Within::Locked(guard) => guard,
+        Within::Poisoned(guard) if on_poison == OnPoison::Recover => guard,
+        Within::Poisoned(_) => return Ok(Err(BlockingError::Poisoned)),
+        Within::Busy => return Err(work),
     };
     // The predicate runs on the caller's task too, so its panic is returned
     // as the work's would be. `Log::append_may_block` can panic on a
@@ -197,16 +228,28 @@ fn run_if_cached<T, R, W: FnOnce(&mut T) -> R>(
     }
 }
 
-/// `lock`'s guard, if it comes free within `spin`. A poisoned lock is
-/// recovered, as the log's own lock helper does.
-fn lock_within<T>(lock: &Mutex<T>, spin: Duration) -> Option<MutexGuard<'_, T>> {
+/// What [`lock_within`] got.
+enum Within<'a, T> {
+    /// The lock, unpoisoned.
+    Locked(MutexGuard<'a, T>),
+    /// The lock, which a panicked task poisoned.
+    Poisoned(MutexGuard<'a, T>),
+    /// Another holder kept it past the spin.
+    Busy,
+}
+
+/// `lock`'s guard, if it comes free within `spin`, and whether it is
+/// poisoned.
+fn lock_within<T>(lock: &Mutex<T>, spin: Duration) -> Within<'_, T> {
     let started = Instant::now();
     loop {
         match lock.try_lock() {
-            Ok(guard) => return Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Ok(guard) => return Within::Locked(guard),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                return Within::Poisoned(poisoned.into_inner());
+            }
             Err(TryLockError::WouldBlock) if started.elapsed() < spin => hint::spin_loop(),
-            Err(TryLockError::WouldBlock) => return None,
+            Err(TryLockError::WouldBlock) => return Within::Busy,
         }
     }
 }
@@ -462,9 +505,14 @@ mod tests {
         let guard = inline_blocking_on_this_thread();
         let values = runtime.block_on(async {
             let ran = run_blocking(|| 1).await.expect("run_blocking");
-            let caught = run_page_cache_io(&Arc::new(Mutex::new(2)), |_| true, |value| *value)
-                .await
-                .expect("run_page_cache_io");
+            let caught = run_page_cache_io(
+                &Arc::new(Mutex::new(2)),
+                OnPoison::Recover,
+                |_| true,
+                |value| *value,
+            )
+            .await
+            .expect("run_page_cache_io");
             let spawned = spawn_blocking(|| 3).await.expect("spawn_blocking");
             [ran, caught, spawned]
         });
@@ -487,9 +535,21 @@ mod tests {
         let outcomes = runtime.block_on(async {
             [
                 run_blocking(panics).await,
-                run_page_cache_io(&Arc::new(Mutex::new(())), |()| true, |()| panics()).await,
+                run_page_cache_io(
+                    &Arc::new(Mutex::new(())),
+                    OnPoison::Recover,
+                    |()| true,
+                    |()| panics(),
+                )
+                .await,
                 // The cache-residency question runs on the calling task too.
-                run_page_cache_io(&Arc::new(Mutex::new(())), |()| panics() == 0, |()| 0).await,
+                run_page_cache_io(
+                    &Arc::new(Mutex::new(())),
+                    OnPoison::Recover,
+                    |()| panics() == 0,
+                    |()| 0,
+                )
+                .await,
                 spawn_blocking(panics).await,
             ]
         });
@@ -516,11 +576,70 @@ mod tests {
         } = counting_runtime(true);
         let in_place = multi_thread.block_on(run_page_cache_io(
             &Arc::new(Mutex::new(())),
+            OnPoison::Recover,
             |()| true,
             |()| panics(),
         ));
         let error = in_place.expect_err("the panic is caught");
         check!(error.to_string() == "inline blocking panic");
+    }
+
+    /// A reader's page-cache job refuses a lock a panicked task poisoned, and
+    /// never runs its work, whether it finds the poison on the calling task or
+    /// on the pool after the lock was busy. The writer's job recovers the same
+    /// lock and runs.
+    #[test]
+    fn a_page_cache_read_refuses_a_poisoned_lock() {
+        let CountingRuntime { runtime, .. } = counting_runtime(false);
+        let ran = Arc::new(AtomicUsize::new(0));
+        let read = |lock: &Arc<Mutex<i32>>| {
+            let counter = Arc::clone(&ran);
+            runtime.block_on(run_page_cache_io(
+                lock,
+                OnPoison::Refuse,
+                |_| true,
+                move |value| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    *value
+                },
+            ))
+        };
+
+        // Poisoned before the read starts: the calling task finds it.
+        let lock = Arc::new(Mutex::new(5));
+        let poisoner = Arc::clone(&lock);
+        assert!(
+            spawn(move || {
+                let _guard = poisoner.lock();
+                panic!("poison the lock");
+            })
+            .join()
+            .is_err()
+        );
+        check!(let Err(BlockingError::Poisoned) = read(&lock));
+
+        // Held past the spin, then poisoned: the pool finds it.
+        let busy = Arc::new(Mutex::new(5));
+        let holder = Arc::clone(&busy);
+        let (holding, held) = mpsc::channel::<()>();
+        let panicking = spawn(move || {
+            let _guard = holder.lock();
+            holding.send(()).expect("the test waits");
+            thread::sleep(Duration::from_millis(50));
+            panic!("poison the lock while a reader waits");
+        });
+        held.recv().expect("the holder holds the lock");
+        check!(let Err(BlockingError::Poisoned) = read(&busy));
+        assert!(panicking.join().is_err());
+
+        check!(ran.load(Ordering::SeqCst) == 0, "the work never ran");
+        let recovered = runtime.block_on(run_page_cache_io(
+            &lock,
+            OnPoison::Recover,
+            |_| true,
+            |value| *value,
+        ));
+        check!(let Ok(5) = recovered);
     }
 
     /// Page-cache work runs on the calling task only when its lock is free
@@ -535,6 +654,7 @@ mod tests {
             runtime
                 .block_on(run_page_cache_io(
                     &lock,
+                    OnPoison::Recover,
                     move |()| stays_in_cache,
                     |()| thread::current().id(),
                 ))
@@ -554,7 +674,12 @@ mod tests {
             });
             held.recv().expect("the holder takes the lock");
             let outcome = runtime.block_on(async {
-                let work = run_page_cache_io(&lock, |()| true, |()| thread::current().id());
+                let work = run_page_cache_io(
+                    &lock,
+                    OnPoison::Recover,
+                    |()| true,
+                    |()| thread::current().id(),
+                );
                 // `join!` polls the work first: it finds the lock held and
                 // goes to the pool before the holder lets go.
                 let (worker, ()) = tokio::join!(work, async { drop(taken) });

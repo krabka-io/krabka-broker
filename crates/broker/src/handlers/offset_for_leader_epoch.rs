@@ -12,7 +12,8 @@
 //!   entry for it. No error either way: `LeaderEpochFileCache.endOffsetFor`
 //!   (`storage/.../LeaderEpochFileCache.java:299-303`) answers a requested
 //!   epoch above everything the same way it answers an untracked one below
-//!   it, and only the hosting checks above ever set an error code here.
+//!   it, and only the hosting checks above, or a poisoned log, set an error
+//!   code here.
 //!
 //! Reference: KIP-101 (Alter Replication Protocol to use Leader Epoch
 //! rather than High Watermark for Truncation).
@@ -65,7 +66,7 @@ use {
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
     },
-    std::sync::{PoisonError, atomic::Ordering},
+    std::sync::atomic::Ordering,
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
@@ -148,8 +149,12 @@ fn epoch_end_offset(
     // the checkpoint cannot place answers `(-1, -1)`, which is
     // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
     // the row. No error either way: the hosting checks above are
-    // what set an error code, not this KIP-101 lookup.
-    let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
+    // what set an error code, not this KIP-101 lookup. A poisoned log is
+    // not read: the row carries the poison policy's code instead.
+    let log = match p.lock_log() {
+        Ok(log) => log,
+        Err(error) => return error_row(part.partition, codes::from_broker_error(&error)),
+    };
     let leo = log.log_end_offset();
     let (found_epoch, end_offset) = log
         .epoch_checkpoint()

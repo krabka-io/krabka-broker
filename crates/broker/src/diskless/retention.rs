@@ -10,7 +10,6 @@ use {
     krabka_metadata::MetadataImage,
     krabka_units::convert::{ByteSizeExt, TimeExt},
     krabka_verified::{FreezeMutationKind, diskless::DisklessRetentionPolicy},
-    std::sync::PoisonError,
 };
 
 pub(super) struct Retention<'a> {
@@ -83,12 +82,19 @@ impl Retention<'_> {
                 );
                 continue;
             }
-            let config = partition
-                .handle
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .config_snapshot();
+            // A poisoned log is left out of this tick.
+            let config = match partition.handle.lock_log() {
+                Ok(log) => log.config_snapshot(),
+                Err(error) => {
+                    tracing::warn!(
+                        topic = %partition.handle.topic,
+                        partition = partition.handle.index.get(),
+                        %error,
+                        "diskless WAL retention: skipping a partition whose log mutex is poisoned"
+                    );
+                    continue;
+                }
+            };
             let retention_ms = config.retention.map(TimeExt::millis_i64_trunc);
             let retention_bytes = config.retention_size.map(ByteSizeExt::bytes_u64);
             let index = partition.handle.index.get();

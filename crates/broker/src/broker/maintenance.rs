@@ -4,8 +4,6 @@
 //! with each other, so they are grouped here purely as the periodic work the
 //! broker spawns at startup.
 
-#[cfg(not(target_family = "wasm"))]
-use crate::{oauth_jwks::JwksRefresher, time_util::system_timer};
 use {
     crate::{
         blocking::spawn_blocking,
@@ -30,12 +28,17 @@ use {
     },
     krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt},
-    std::sync::{Arc, PoisonError},
+    std::sync::Arc,
     tokio::{
         task::JoinHandle,
         time::{self, Instant},
     },
     tokio_util::sync::CancellationToken,
+};
+#[cfg(not(target_family = "wasm"))]
+use {
+    crate::{oauth_jwks::JwksRefresher, time_util::system_timer},
+    std::sync::PoisonError,
 };
 
 pub(super) fn spawn_storage_security_maintenance(
@@ -186,11 +189,16 @@ async fn expire_log_producers(partitions: &PartitionRegistry, now_ms: i64, expir
     let expiration_ms = expiration.millis_i64();
     let sweep = spawn_blocking(move || {
         for partition in hosted {
-            partition
-                .log
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove_expired_producers(now_ms, expiration_ms);
+            // A poisoned log is left out of this sweep.
+            match partition.lock_log() {
+                Ok(mut log) => log.remove_expired_producers(now_ms, expiration_ms),
+                Err(error) => tracing::warn!(
+                    topic = %partition.topic,
+                    partition = partition.index.get(),
+                    %error,
+                    "producer expiry: skipping a partition whose log mutex is poisoned"
+                ),
+            }
         }
     });
     if let Err(error) = sweep.await {
