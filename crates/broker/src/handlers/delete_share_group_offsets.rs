@@ -33,7 +33,9 @@ use {
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::{
         owned::{
-            delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
+            delete_share_group_offsets_request::{
+                DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
+            },
             delete_share_group_offsets_response::{
                 DeleteShareGroupOffsetsResponse, DeleteShareGroupOffsetsResponseTopic,
             },
@@ -53,57 +55,12 @@ pub async fn handle(
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<DeleteShareGroupOffsetsResponse, BrokerError> {
-    // Feature gate: share groups are on from a finalized `share.version` of 1,
-    // and below it the RPC is unsupported.
-    let image = broker.controller.current_image();
-    if !share_groups_enabled(&image) {
-        return Ok(top_level(codes::UNSUPPORTED_VERSION, None));
-    }
-
     let coordinator = &broker.group_coordinator;
     let gid = req.group_id;
-
-    // ── ACL preamble ────────────────────────────────────
-    // Per-group `Delete` check. On Deny → top-level `error_code = 30`.
-    if acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        ResourceType::Group,
-        gid.as_str(),
-        AclOperation::Delete,
-    ) {
-        return Ok(top_level(codes::GROUP_AUTHORIZATION_FAILED, None));
-    }
-
-    // Per-topic `Read` ACL. Kafka's `handleDeleteShareGroupOffsetsRequest`
-    // authorizes `READ` on each requested topic after the group `Delete`
-    // check; a denied topic gets `TOPIC_AUTHORIZATION_FAILED` and never
-    // reaches the coordinator. Denied rows come before the coordinator's.
-    let topic_names: Vec<String> = req.topics.iter().map(|rt| rt.topic_name.clone()).collect();
-    let topic_decisions = authorize_topics(
-        broker.config.authorizer.as_ref(),
-        &*image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Read,
-        topic_names.iter().map(String::as_str),
-    );
-    let (denied_topics, allowed_topics): (Vec<_>, Vec<_>) =
-        req.topics.into_iter().partition(|rt| {
-            topic_decisions.get(rt.topic_name.as_str()) == Some(&AuthorizationResult::Deny)
-        });
-
-    // GroupCoordinatorService.deleteShareGroupOffsets rejects an empty id
-    // before it routes the group to a shard. An empty id hashes to some
-    // partition, and a broker that does not lead it would otherwise answer
-    // NOT_COORDINATOR instead.
-    if gid.is_empty() {
-        return Ok(top_level(codes::INVALID_GROUP_ID, None));
-    }
-    if let Some(error_code) = group_coordinator_error(broker, &gid) {
-        return Ok(top_level(error_code, None));
-    }
+    let (denied_topics, allowed_topics) = match admit(broker, ctx, &gid, req.topics) {
+        Ok(partitioned) => partitioned,
+        Err(refusal) => return Ok(refusal),
+    };
     let Some(actor) = share_actor_for(coordinator, &gid) else {
         return Ok(top_level(
             codes::GROUP_ID_NOT_FOUND,
@@ -155,6 +112,73 @@ pub async fn handle(
         ..Default::default()
     };
     Ok(resp)
+}
+
+/// The request's gates, in Kafka's order: the `share.version` feature gate,
+/// the group `Delete` ACL, the per-topic `Read` ACL, the group-id check and
+/// coordinator routing.
+///
+/// It answers the denied and the allowed topics, or the top-level refusal.
+fn admit(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    gid: &str,
+    topics: Vec<DeleteShareGroupOffsetsRequestTopic>,
+) -> Result<
+    (
+        Vec<DeleteShareGroupOffsetsRequestTopic>,
+        Vec<DeleteShareGroupOffsetsRequestTopic>,
+    ),
+    DeleteShareGroupOffsetsResponse,
+> {
+    // Feature gate: share groups are on from a finalized `share.version` of 1,
+    // and below it the RPC is unsupported.
+    let image = broker.controller.current_image();
+    if !share_groups_enabled(&image) {
+        return Err(top_level(codes::UNSUPPORTED_VERSION, None));
+    }
+
+    // ── ACL preamble ────────────────────────────────────
+    // Per-group `Delete` check. On Deny → top-level `error_code = 30`.
+    if acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Group,
+        gid,
+        AclOperation::Delete,
+    ) {
+        return Err(top_level(codes::GROUP_AUTHORIZATION_FAILED, None));
+    }
+
+    // Per-topic `Read` ACL. Kafka's `handleDeleteShareGroupOffsetsRequest`
+    // authorizes `READ` on each requested topic after the group `Delete`
+    // check; a denied topic gets `TOPIC_AUTHORIZATION_FAILED` and never
+    // reaches the coordinator. Denied rows come before the coordinator's.
+    let topic_names: Vec<String> = topics.iter().map(|rt| rt.topic_name.clone()).collect();
+    let topic_decisions = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        &*image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Read,
+        topic_names.iter().map(String::as_str),
+    );
+    let (denied_topics, allowed_topics): (Vec<_>, Vec<_>) = topics.into_iter().partition(|rt| {
+        topic_decisions.get(rt.topic_name.as_str()) == Some(&AuthorizationResult::Deny)
+    });
+
+    // GroupCoordinatorService.deleteShareGroupOffsets rejects an empty id
+    // before it routes the group to a shard. An empty id hashes to some
+    // partition, and a broker that does not lead it would otherwise answer
+    // NOT_COORDINATOR instead.
+    if gid.is_empty() {
+        return Err(top_level(codes::INVALID_GROUP_ID, None));
+    }
+    if let Some(error_code) = group_coordinator_error(broker, gid) {
+        return Err(top_level(error_code, None));
+    }
+    Ok((denied_topics, allowed_topics))
 }
 
 /// The share actor of `gid`, or `None` when the group is missing or of
