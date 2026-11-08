@@ -4,6 +4,10 @@
 
 use {
     super::{
+        commit_validation::{
+            streams_offset_delete_guard, validate_streams_group_commit,
+            validate_streams_group_offset_commit, validate_streams_group_offset_fetch,
+        },
         test_support::{
             coordinator_with_log, describe, heartbeat_result_at, make_coordinator, member_request,
             response_tasks, undelayed,
@@ -22,7 +26,7 @@ use {
                     DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords,
                     StoredSubtopology, StoredTopicInfo, StreamsGroupMetadataValue,
                 },
-                state::{StreamsGroupState, StreamsMemberState},
+                state::{StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState},
             },
             test_support::{assert_single_member_limit_with_log, heartbeat_write_failures},
         },
@@ -124,7 +128,11 @@ fn closed_handle() -> StreamsGroupActorHandle {
 #[tokio::test]
 async fn validation_round_trips_answer_an_actor_that_never_replies() {
     let cases = [
-        ("closed mailbox", closed_handle(), codes::UNKNOWN_SERVER_ERROR),
+        (
+            "closed mailbox",
+            closed_handle(),
+            codes::UNKNOWN_SERVER_ERROR,
+        ),
         (
             "dropped reply",
             StreamsGroupActorHandle::dropping_replies(),
