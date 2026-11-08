@@ -62,16 +62,20 @@
 //! never matches, as in Java, on the matcher, since `fancy_regex` refuses
 //! it. A quantifier of a look-around, such as `(?=(a))*`, which
 //! `fancy_regex` cannot parse, is rewritten by what Java's `closure` makes of
-//! a zero-width atom: the look-around itself where the least count is 1 or
-//! more, the look-around or nothing, taken atomically, for a greedy or
-//! possessive repeat that may skip it, nothing and then the look-around for
-//! `??`, and nothing for a lazy `*?` or `{0,m}?` and for `{0}`.
+//! a zero-width atom. `?` and `{0,1}` try it once, `??` after trying to skip
+//! it. Any other quantifier runs it its least count of times, and a greedy or
+//! possessive one tries it once more. A try that holds is never undone, and a
+//! lazy one never keeps a try past its least count.
 //!
 //! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
 //! rather than match them another way. Each is a [`PatternError`].
 //!
 //! - A Unicode block, such as `\p{InGreek}`, and `\X`.
 //! - A named char, `\N{name}`.
+//! - A quantifier of a look-around that refers to a group, where Java runs
+//!   the look-around twice or more, as in `(?=(\1a|a)){2}`: each run may
+//!   change the group, and two copies of the look-around would number its
+//!   groups twice.
 //! - A look-behind whose maximum length overflows Java's `int`, such as
 //!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
 //!   allows. Where the overflowed maximum still covers every start, as in
@@ -3059,6 +3063,11 @@ mod tests {
         lazy_star_keeps_the_skip = { "(?=(a))*?(?!\\1)a", "a", Some("") },
         negative_look_ahead = { "(?!(b))*a", "a", Some("") },
         look_behind = { "(?<=(x))?a", "a", Some("") },
+        counted_zero_to_one_is_a_ques = { "(?=(a)){0,1}?\\1", "a", Some("a") },
+        counted_zero_to_two_is_a_curly = { "(?=(a)){0,2}?\\1", "a", None },
+        self_reference_run_once = { "(?=(\\1a|a)){1}\\1", "aa", None },
+        self_reference_tried_once = { "(?=(\\1a|a))*\\1", "aa", None },
+        self_reference_lazy_tail = { "(?=(\\1a|a)){1,2}?\\1", "aa", None },
     )]
     fn a_quantified_look_around_reads_as_java_repeats_a_zero_width_atom(
         source: &str,
@@ -3084,14 +3093,41 @@ mod tests {
 
     /// What follows a quantified look-around reads as Java reads what follows
     /// a quantifier: a further quantifier is dangling, and bounds must be
-    /// legal.
+    /// legal. A look-around that refers to a group and that Java runs twice or
+    /// more is refused too: on JDK 21.0.12 `(?=(\1a|a)){2}\1` matches `aa`,
+    /// the second run extending the group, which one copy of it cannot do.
     #[yare::parameterized(
         dangling_after_the_modifier = { "(?=a)*+*" },
         no_least_count = { "(?=a){,2}" },
         backwards_range = { "(?=a){3,1}" },
+        self_reference_run_twice = { "(?=(\\1a|a)){2}\\1" },
+        self_reference_tried_after_its_least = { "(?=(\\1a|a))+\\1" },
     )]
-    fn a_quantified_look_around_refuses_what_java_refuses(source: &str) {
+    fn a_quantified_look_around_is_refused(source: &str) {
         check!(let Err(_) = JavaPattern::compile(source));
+    }
+
+    /// A quantified look-around in a repeated group of a look-behind keeps
+    /// the group as deterministic as Java's `TreeInfo` reads it: a fixed count
+    /// is, so Java compiles the look-behind, and a range or a `?` is not, so
+    /// Java refuses it with no obvious maximum length. Each row is JDK 21.0.12.
+    #[yare::parameterized(
+        zero = { "(?<=((?=a){0}a)*)a", true },
+        one = { "(?<=((?=a){1}a)*)a", true },
+        two = { "(?<=((?=a){2}a)*)a", true },
+        ques = { "(?<=((?=a)?a)*)a", false },
+        possessive_ques = { "(?<=((?=a)?+a)*)a", false },
+        range = { "(?<=((?=a){1,2}a)*)a", false },
+        lazy_star = { "(?<=((?=a)*?a)*)a", false },
+    )]
+    fn a_quantified_look_around_in_a_look_behind_is_as_deterministic_as_in_java(
+        source: &str,
+        compiles: bool,
+    ) {
+        let matched = JavaPattern::compile(source)
+            .ok()
+            .map(|java| java.matches("a"));
+        check!(matched == compiles.then_some(Ok(true)), "{source:?}");
     }
 
     /// The group a failed alternative set before the missing reference is

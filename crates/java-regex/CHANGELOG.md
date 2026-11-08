@@ -12,10 +12,13 @@ release that contains `krabka-java-regex`.
   compiles and never matches, as in Java, where it was refused. `(a)\2|b`
   matches `b`.
 - A quantified look-around, such as `(?=(a))*`, compiles and matches as
-  Java's `closure` repeats a zero-width atom, where it was refused: with a
-  least count of 1 or more it is the look-around; `?`, `*`, `{0,m}` and their
-  possessive forms take it at most once and never go back to skip it; `??`
-  tries skipping it first; and `*?`, `{0,m}?` and `{0}` never take it.
+  Java's `closure` repeats a zero-width atom, where it was refused. `?` and
+  `{0,1}` try it once and never go back to skip it, `??` and `{0,1}?` after
+  trying to skip it, and any other quantifier runs it its least count of
+  times, a greedy or possessive one trying it once more and a lazy one never
+  keeping that try. A fixed count leaves a look-behind deterministic, as in
+  Java. One that refers to a group and runs twice or more, such as
+  `(?=(\1a|a)){2}`, stays refused.
 - Bounds where Java has no atom to repeat, as in `a*{2}`, `a{2}{3}`, `{2}`
   and `(?i){2}`, repeat the empty atom as in Java, instead of the atom
   before them or the text of the braces. `(?i){2}` is no longer refused.

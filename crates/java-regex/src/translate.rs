@@ -105,6 +105,7 @@ pub fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         outer: Vec::new(),
         groups: Vec::new(),
         look_arounds: Vec::new(),
+        backrefs: 0,
         classes: Vec::new(),
         class_start: false,
         run: 0,
@@ -193,9 +194,12 @@ struct Translator<'a> {
     /// The number of each group in `outer`, or `None` for one that does not
     /// capture.
     groups: Vec<Option<usize>>,
-    /// For each group in `outer`, where it opens in `out` when it is a
-    /// look-around, which [`Self::quantified_look_around`] may rewrite.
-    look_arounds: Vec<Option<usize>>,
+    /// For each group in `outer` that is a look-around, where it opens in
+    /// `out` and how many backreferences were written before it, for
+    /// [`Self::quantified_look_around`].
+    look_arounds: Vec<Option<(usize, usize)>>,
+    /// The backreferences written so far, outside classes.
+    backrefs: usize,
     /// The character classes open here, the innermost last.
     classes: Vec<OpenClass>,
     /// The next char is the first in a class, where a `]` is a member.
@@ -310,8 +314,8 @@ impl Translator<'_> {
                 if let Some(number) = number {
                     *self.group_repeats.get_mut(number)? = self.group_curly_at(self.at);
                 }
-                if let Some(out_at) = look_around {
-                    self.quantified_look_around(out_at)?;
+                if let Some((out_at, backrefs)) = look_around {
+                    self.quantified_look_around(out_at, backrefs)?;
                 }
             }
             '|' if !self.in_class() => {
@@ -380,6 +384,9 @@ impl Translator<'_> {
             if !self.group_names.contains(&name) {
                 return None;
             }
+        }
+        if escape == Escape::BackRef && !in_class {
+            self.backrefs += 1;
         }
         match escape {
             // `fancy_regex` reads `\N{name}` as `\N` and the text of the name,
@@ -658,31 +665,41 @@ impl Translator<'_> {
         })
     }
 
-    /// Rewrites the look-around that `out` holds from `out_at` on when a
-    /// quantifier follows it, which `fancy_regex` cannot parse.
+    /// Rewrites the look-around `L` that `out` holds from `out_at` on when a
+    /// quantifier follows it, which `fancy_regex` cannot parse. `backrefs` is
+    /// how many backreferences were written before `L` opened.
     ///
-    /// Java's `closure` repeats the look-around as a zero-width atom. A
-    /// `Curly` (`*`, `+`, `{n,m}`) stops at its first zero-length iteration,
-    /// and a `Ques` (`?`) tries it once. The groups it sets stay set when what
-    /// follows fails, so a greedy or possessive repeat that may skip it is
-    /// atomic: it takes the look-around when it holds and never goes back to
-    /// skip it. A lazy `Ques` tries what follows first, and a lazy `Curly`
-    /// never keeps the look-around, nor does a repeat of at most zero:
+    /// Java's `closure` makes `?` and `{0,1}` a `Ques`, which tries `L` once,
+    /// and every other quantifier a `Curly`. A `Curly` runs `L` its least count
+    /// of times, then a greedy or possessive one tries it once more and stops,
+    /// since `L` matches nothing, while a lazy one tries what follows first and
+    /// never keeps that try. The groups `L` sets stay set when what follows
+    /// fails, so a greedy or possessive try is atomic. Running `L` again gives
+    /// what it gave before, unless it refers to a group, which may have changed:
     ///
-    /// | Quantifier                       | Rewritten as |
-    /// | :------------------------------- | :----------- |
-    /// | least count 1 or more            | `L`          |
-    /// | `?`, `?+`, `*`, `*+`, `{0,m}`    | `(?>L\|)`    |
-    /// | `??`                             | `(?:\|L)`    |
-    /// | `*?`, `{0,m}?`, `{0}`            | `(?:(?!)L\|)` |
+    /// | Quantifier                         | Rewritten as   |
+    /// | :--------------------------------- | :------------- |
+    /// | `{0}`                              | `(?!(?!)L)`    |
+    /// | `{n}`, n of 1 or more              | `L`            |
+    /// | `+`, `{n,}`, `{n,m}`, n of 1 or more | `L(?:\|)`    |
+    /// | `?`, `*`, `{0,}`, `{0,m}`, greedy or possessive | `(?>L\|)` |
+    /// | `??`, `{0,1}?`                     | `(?:\|L)`      |
+    /// | `*?`, `{0,}?`, `{0,m}?`, m of 2 or more | `(?:(?!)L\|)` |
+    ///
+    /// The never-taken forms keep `L` so its groups keep their numbers, and
+    /// the alternations mark what Java's `TreeInfo` reads as not
+    /// deterministic, which a repeated group in a look-behind depends on.
+    /// Where `L` refers to a group and Java runs it twice or more, as in
+    /// `(?=(\1a|a)){2}`, the pattern is refused: two copies of `L` would number
+    /// its groups twice.
     ///
     /// An illegal `{` is left for [`Self::step`] to refuse.
-    fn quantified_look_around(&mut self, out_at: usize) -> Option<()> {
+    fn quantified_look_around(&mut self, out_at: usize, backrefs: usize) -> Option<()> {
         let at = self.at + self.ignored_len(self.at);
-        let (least, most, ques, len): (u32, Option<u32>, bool, usize) = match self.chars.get(at) {
-            Some('?') => (0, Some(1), true, 1),
-            Some('*') => (0, None, false, 1),
-            Some('+') => (1, None, false, 1),
+        let (least, most, len): (u32, Option<u32>, usize) = match self.chars.get(at) {
+            Some('?') => (0, Some(1), 1),
+            Some('*') => (0, None, 1),
+            Some('+') => (1, None, 1),
             Some('{') => {
                 let Some(len) = self.bounds_len(at) else {
                     return Some(());
@@ -693,7 +710,7 @@ impl Translator<'_> {
                     Some((least, most)) => (least.parse().ok()?, Some(most.parse().ok()?)),
                     None => (bounds.parse().ok()?, bounds.parse().ok()),
                 };
-                (least, most, false, len)
+                (least, most, len)
             }
             _ => return Some(()),
         };
@@ -703,11 +720,18 @@ impl Translator<'_> {
             Some('+') => (false, modifier + 1),
             _ => (false, at + len),
         };
-        let (prefix, suffix) = match (least, most, lazy, ques) {
-            (_, Some(0), ..) | (0, _, true, false) => ("(?:(?!)", "|)"),
+        let ranged = most != Some(least);
+        let runs = least + u32::from(ranged && !lazy);
+        if runs > 1 && self.backrefs > backrefs {
+            return None;
+        }
+        let (prefix, suffix) = match (least, most, lazy) {
+            (0, Some(0), _) => ("(?!(?!)", ")"),
+            (1.., ..) if ranged => ("", "(?:|)"),
             (1.., ..) => ("", ""),
-            (0, _, true, true) => ("(?:|", ")"),
-            (0, ..) => ("(?>", "|)"),
+            (0, Some(1), true) => ("(?:|", ")"),
+            (0, _, true) => ("(?:(?!)", "|)"),
+            (0, _, false) => ("(?>", "|)"),
         };
         let body = self.out.split_off(out_at);
         self.out.push_str(prefix);
@@ -888,7 +912,7 @@ impl Translator<'_> {
         let out_at = self.out.len();
         self.open_group(captures);
         if look_around {
-            *self.look_arounds.last_mut()? = Some(out_at);
+            *self.look_arounds.last_mut()? = Some((out_at, self.backrefs));
         }
         self.copy(opener)
     }
