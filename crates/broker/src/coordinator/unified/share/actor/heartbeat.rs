@@ -34,6 +34,7 @@ use {
     },
     std::{
         collections::{HashMap, HashSet},
+        ops::ControlFlow,
         time::Instant,
     },
 };
@@ -52,8 +53,8 @@ pub(super) async fn handle_heartbeat(
         return handle_leave(state, config, metadata, coordinator, req, now_ms).await;
     }
     let joining = match check_member(state, config, req) {
-        Ok(joining) => joining,
-        Err(response) => return Ok(response),
+        ControlFlow::Continue(joining) => joining,
+        ControlFlow::Break(response) => return Ok(response),
     };
     let recorder = ShareRecorder::start(state, &[&req.member_id]);
     let assigned_before = state
@@ -109,8 +110,8 @@ pub(super) async fn handle_heartbeat(
     ))
 }
 
-/// Look up the heartbeat's member: whether the heartbeat is a first join,
-/// or the error response to answer with.
+/// Look up the heartbeat's member: continue with whether the heartbeat is a
+/// first join, or break with the error response to answer with.
 ///
 /// KIP-932 mirrors KIP-848: the client mints its own member UUID and sends it
 /// with `member_epoch == 0`. Epoch 0 from an unknown member is a first join
@@ -124,16 +125,16 @@ fn check_member(
     state: &ShareGroupState,
     config: &ShareGroupConfig,
     req: &ShareGroupHeartbeatRequest,
-) -> Result<bool, ShareGroupHeartbeatResponse> {
+) -> ControlFlow<ShareGroupHeartbeatResponse, bool> {
     let joining = req.member_epoch == 0 && !state.members.contains_key(&req.member_id);
     if joining {
         if state.members.len() >= config.max_size {
-            return Err(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
+            return ControlFlow::Break(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
     } else if let Err(error_code) = state.validate_member_epoch(&req.member_id, req.member_epoch) {
-        return Err(error_resp(error_code, config));
+        return ControlFlow::Break(error_resp(error_code, config));
     }
-    Ok(joining)
+    ControlFlow::Continue(joining)
 }
 
 /// The response to a successful heartbeat. Kafka sends the assignment only

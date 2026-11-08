@@ -35,7 +35,7 @@ use {
 /// in the streams actor, not a classic one, so this function must validate it
 /// instead. Otherwise the broker fences the commit against an empty classic
 /// actor and rejects it with `UNKNOWN_MEMBER_ID`.
-pub(crate) async fn validate_streams_group_commit(
+pub async fn validate_streams_group_commit(
     handle: &StreamsGroupActorHandle,
     member_id: &str,
     group_instance_id: Option<&str>,
@@ -61,7 +61,7 @@ pub(crate) async fn validate_streams_group_commit(
 /// [`CommitFence::Offset`].
 ///
 /// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
-pub(crate) async fn validate_streams_group_offset_commit(
+pub async fn validate_streams_group_offset_commit(
     handle: &StreamsGroupActorHandle,
     member_id: &str,
     member_epoch: i32,
@@ -83,7 +83,7 @@ pub(crate) async fn validate_streams_group_offset_commit(
 
 /// Who a commit says it comes from, and which API sent it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CommitIdentity<'a> {
+pub struct CommitIdentity<'a> {
     pub member_id: &'a str,
     pub group_instance_id: Option<&'a str>,
     pub member_epoch: i32,
@@ -106,16 +106,16 @@ async fn send_validate_commit(
         }
     })
     .await;
-    validation_answer(&asked)
+    validation_answer(asked)
 }
 
 /// The answer of a commit or fetch check that `asked` the actor. A closed
 /// mailbox answers `UNKNOWN_SERVER_ERROR`; a reply, or a reply the actor
 /// dropped, answers as [`commit_validation_reply`] does.
-fn validation_answer(asked: &Result<Result<(), i16>, AskError>) -> Option<i16> {
+fn validation_answer(asked: Result<Result<(), i16>, AskError>) -> Option<i16> {
     match asked {
         Err(AskError::Closed) => Some(codes::UNKNOWN_SERVER_ERROR),
-        reply => commit_validation_reply(reply),
+        reply => commit_validation_reply(&reply),
     }
 }
 
@@ -129,7 +129,7 @@ fn validation_answer(asked: &Result<Result<(), i16>, AskError>) -> Option<i16> {
 /// committed offsets live in the offsets-home actor, which knows no streams
 /// member. Without this check a stale or unknown member would read the
 /// group's offsets.
-pub(crate) async fn validate_streams_group_offset_fetch(
+pub async fn validate_streams_group_offset_fetch(
     handle: &StreamsGroupActorHandle,
     member_id: Option<&str>,
     member_epoch: i32,
@@ -142,7 +142,7 @@ pub(crate) async fn validate_streams_group_offset_fetch(
         }
     })
     .await;
-    validation_answer(&asked)
+    validation_answer(asked)
 }
 
 /// Kafka's `StreamsGroup.validateOffsetFetch`.
@@ -155,7 +155,7 @@ pub(crate) async fn validate_streams_group_offset_fetch(
 /// # Errors
 ///
 /// Returns the group error code of a refused fetch.
-pub(crate) fn validate_offset_fetch(
+pub fn validate_offset_fetch(
     state: &StreamsGroupState,
     member_id: Option<&str>,
     member_epoch: i32,
@@ -182,7 +182,7 @@ pub(crate) fn validate_offset_fetch(
 ///
 /// `GROUP_ID_NOT_FOUND` when the actor has stopped, as the classic and
 /// consumer paths answer for theirs.
-pub(crate) async fn streams_offset_delete_guard(
+pub async fn streams_offset_delete_guard(
     handle: &StreamsGroupActorHandle,
 ) -> Result<SubscribedTopics, i16> {
     ask(&handle.tx, |reply| {
@@ -198,7 +198,7 @@ pub(crate) async fn streams_offset_delete_guard(
 /// and expire. Otherwise the group subscribes to the source and repartition
 /// source topics of its stored topology (`StreamsTopology.sourceTopicMap`),
 /// and to nothing before it has one.
-pub(crate) fn subscribed_topics(
+pub fn subscribed_topics(
     state: &StreamsGroupState,
     topology: Option<&StreamsGroupTopologyValue>,
 ) -> SubscribedTopics {
@@ -241,7 +241,7 @@ const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
 ///
 /// Returns the error code of a refused commit, which refuses every partition
 /// of it.
-pub(crate) fn validate_offset_commit(
+pub fn validate_offset_commit(
     state: &StreamsGroupState,
     topology: Option<&StreamsGroupTopologyValue>,
     identity: CommitIdentity<'_>,
