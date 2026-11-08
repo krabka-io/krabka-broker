@@ -1,0 +1,15 @@
+{
+  "base_revision": "00cc632c8",
+  "bounded_pass": true,
+  "universal_parity": false,
+  "native_binary_sha256": "4c16cdaa1385d98e2f689a6a5320420ae5c31b3373fc7177720c77432fa30928",
+  "matching_error_sequence": [
+    30,
+    29,
+    -1
+  ],
+  "scenario_rows_per_broker": 8,
+  "javac": "pass",
+  "native_example_build": "pass",
+  "source_sha256": "2867b49b064aee17689ef3715e1874d1aa72f6dba76057eae1abe77fb0a0d9d7"
+}
