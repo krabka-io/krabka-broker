@@ -205,7 +205,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
         let user = principal(grants);
         let ctx = request_context(&user, &address, "write-txn-markers-authorization");
         let producer_id = 100 + i64::try_from(case).expect("case index") * 10;
-        let before = local.log_end_offset();
+        let before = local.log_end_offset().unwrap();
         let bytes = dispatch_context(
             &broker,
             write_txn_markers_request::API_KEY,
@@ -224,7 +224,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
         } else {
             before
         };
-        check!(local.log_end_offset() == expected_end, "{grants}");
+        check!(local.log_end_offset().unwrap() == expected_end, "{grants}");
     }
     handle.shutdown().await;
 }

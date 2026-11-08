@@ -13,6 +13,9 @@
 //! This module filters out control records, that is, v2 batches with
 //! `is_control_batch == true`. v0/v1 has no concept of them, and Kafka's
 //! reference broker drops them on down-conversion.
+//!
+//! Down-conversion refuses a v2 batch whose codec v0/v1 cannot name, such
+//! as zstd, as Kafka's `RecordsUtil.downConvert` does.
 
 use {
     crate::{
@@ -81,32 +84,40 @@ pub fn parsed_from_v2(
 
 /// Down-convert a v2 [`RecordBatch`] to v0/v1 `MessageSet` bytes.
 ///
-/// If the v2 batch carried gzip or snappy compression, the output uses
-/// that codec in a wrapped `MessageSet`. The output keeps LZ4 in the same
-/// way. v0/v1 cannot represent `Zstd`, so this function emits an
-/// uncompressed `MessageSet` for a `Zstd` batch. The v2 decode path has
-/// already decompressed those records.
+/// An uncompressed v2 batch becomes a flat `MessageSet`. A gzip, snappy or
+/// LZ4 batch becomes one wrapper message compressed with the same codec.
+///
+/// A control batch yields empty bytes whatever its codec, because Kafka's
+/// `RecordsUtil.downConvert` skips it before it looks at the codec. Any
+/// other batch whose codec v0/v1 cannot name, zstd included, is refused
+/// even when it holds no records, as Kafka refuses it before it reads the
+/// records. Kafka's Fetch path answers that partition with
+/// `UNSUPPORTED_COMPRESSION_TYPE`.
 ///
 /// # Errors
-/// Returns an error if an absolute offset or timestamp exceeds `i64`, or if
-/// this function cannot encode the legacy message set.
+/// Returns [`LegacyRecordsError::UnsupportedCompression`] for a non-control
+/// batch whose codec is not none, gzip, snappy or LZ4. Returns an error if
+/// an absolute offset or timestamp exceeds `i64`, or if this function cannot
+/// encode the legacy message set.
 pub fn v2_to_legacy(batch: &RecordBatch, target: Magic) -> Result<Bytes, LegacyRecordsError> {
-    let records = parsed_from_v2(batch, target)?;
     let mut out = BytesMut::new();
-    if records.is_empty() {
+    if batch.attributes.is_control_batch() {
         return Ok(out.freeze());
     }
     let codec = batch.attributes.compression();
-    match codec {
-        CompressionType::Gzip | CompressionType::Snappy | CompressionType::Lz4 => {
-            encode_compressed_message_set(&records, target, codec, &mut out)?;
-        }
-        // None, Zstd, or any future variant: emit uncompressed. Zstd can't
-        // be represented in v0/v1; the v2 decode path already produced
-        // decompressed records for us, so emitting flat is correct.
-        _ => {
-            encode_flat_message_set(records, target, &mut out)?;
-        }
+    let compressed = match codec {
+        CompressionType::None => false,
+        CompressionType::Gzip | CompressionType::Snappy | CompressionType::Lz4 => true,
+        _ => return Err(LegacyRecordsError::UnsupportedCompression { codec }),
+    };
+    let records = parsed_from_v2(batch, target)?;
+    if records.is_empty() {
+        return Ok(out.freeze());
+    }
+    if compressed {
+        encode_compressed_message_set(&records, target, codec, &mut out)?;
+    } else {
+        encode_flat_message_set(records, target, &mut out)?;
     }
     Ok(out.freeze())
 }
@@ -374,6 +385,34 @@ mod tests {
         v2.attributes = v2.attributes.with_control(true);
         let legacy_bytes = v2_to_legacy(&v2, Magic::V1).unwrap();
         assert2::assert!(legacy_bytes.is_empty());
+    }
+
+    #[test]
+    fn zstd_batch_is_refused() {
+        assert2::assert!(
+            let Err(LegacyRecordsError::UnsupportedCompression {
+                codec: CompressionType::Zstd
+            }) = v2_to_legacy(&v2_batch(CompressionType::Zstd), Magic::V1)
+        );
+    }
+
+    #[test]
+    fn empty_zstd_batch_is_refused() {
+        let mut v2 = v2_batch(CompressionType::Zstd);
+        v2.records.clear();
+        v2.last_offset_delta = 0;
+        assert2::assert!(
+            let Err(LegacyRecordsError::UnsupportedCompression {
+                codec: CompressionType::Zstd
+            }) = v2_to_legacy(&v2, Magic::V0)
+        );
+    }
+
+    #[test]
+    fn zstd_control_batch_is_dropped() {
+        let mut v2 = v2_batch(CompressionType::Zstd);
+        v2.attributes = v2.attributes.with_control(true);
+        assert2::assert!(v2_to_legacy(&v2, Magic::V1).unwrap() == Bytes::new());
     }
 
     #[test]

@@ -864,6 +864,14 @@ mod tests {
         PendingSync,
     }
 
+    /// The group that a reload of `log` builds, as bootstrap replay applies
+    /// the last group-metadata record.
+    async fn reloaded_view(log: &InMemoryOffsetsLog) -> ClassicView {
+        let mut reloaded = ClassicGroup::new("g");
+        apply_group_metadata(&mut reloaded, last_classic_metadata(log).await);
+        build_classic_view(&reloaded)
+    }
+
     /// A timer empties the group, and its group-metadata write times out
     /// after the record reached the log, so the record may still commit. The
     /// actor stops, as Kafka's `CoordinatorRuntime` keeps a timed-out write's

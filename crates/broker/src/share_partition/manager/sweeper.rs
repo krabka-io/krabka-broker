@@ -5,8 +5,11 @@
 //! the request path because it is the sole detached task the manager spawns.
 
 use {
-    super::{LeaderKey, SharePartitionLeaderManager},
-    crate::share_partition::{group_settings::GroupShareSettings, state::AcquisitionState},
+    super::SharePartitionLeaderManager,
+    crate::{
+        share_coordinator::key::ShareKey,
+        share_partition::{group_settings::GroupShareSettings, state::AcquisitionState},
+    },
     std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -16,7 +19,7 @@ use {
 
 /// A live share partition: its key and its acquisition state.
 struct LeaderCell {
-    key: LeaderKey,
+    key: ShareKey,
     cell: Arc<Mutex<AcquisitionState>>,
 }
 
@@ -55,12 +58,8 @@ impl SharePartitionLeaderManager {
                     .collect();
                 let now = Instant::now();
                 let image = mgr.controller.current_image();
-                for LeaderCell {
-                    key: (group, topic_id, partition),
-                    cell,
-                } in cells
-                {
-                    let settings = GroupShareSettings::resolve(&image, &group, &mgr.config);
+                for LeaderCell { key, cell } in cells {
+                    let settings = GroupShareSettings::resolve(&image, &key.group, &mgr.config);
                     let mut st = tokio::select! {
                         biased;
                         () = mgr.shutdown.cancelled() => return,
@@ -73,7 +72,7 @@ impl SharePartitionLeaderManager {
                         tokio::select! {
                             biased;
                             () = mgr.shutdown.cancelled() => return,
-                            _ = mgr.persist_if_dirty(&group, topic_id, partition, Some(&cell), &mut st) => {}
+                            _ = mgr.persist_if_dirty(key.as_key_ref(), Some(&cell), &mut st) => {}
                         }
                     }
                     drop(st);
@@ -97,9 +96,12 @@ mod tests {
     async fn shutdown_cancels_a_sweep_waiting_for_a_cell_lock() {
         let manager = manager();
         let cell = Arc::new(Mutex::new(AcquisitionState::new(Offset(0))));
-        manager
-            .leaders
-            .insert(("g".to_owned(), uuid::Uuid::nil(), 0), Arc::clone(&cell));
+        let key = ShareKey {
+            group: "g".to_owned(),
+            topic_id: uuid::Uuid::nil(),
+            partition: 0,
+        };
+        manager.leaders.insert(key, Arc::clone(&cell));
         let held = cell.lock().await;
         manager.spawn_lock_sweeper();
         // The interval's first tick is immediate. Let the worker reach the

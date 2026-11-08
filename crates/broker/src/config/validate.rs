@@ -6,6 +6,7 @@ use {
     crate::{
         BrokerError,
         config::{BrokerConfig, ListenerSpec, RlmmKind},
+        file_config::require_signing_key_when_fail_closed,
         internal_topics::validate_audit_topic_name,
     },
     krabka_security::SaslMechanism,
@@ -54,6 +55,7 @@ impl BrokerConfig {
     /// - A node without the broker role names `[[listeners]]`, which Kafka's
     ///   `KafkaConfig` refuses for `process.roles=controller`.
     /// - `audit_topic` is named outside the internal-topic convention.
+    /// - Audit is enabled and `fail-closed` with no audit signing key.
     /// - On `wasm32-wasip1`, a subsystem that the platform cannot run is
     ///   configured: the metrics server, the OTLP forwarding of client
     ///   metrics, or the OAUTHBEARER JWKS refresher.
@@ -65,6 +67,7 @@ impl BrokerConfig {
         self.validate_log_io_policy()?;
         self.validate_profiling()?;
         validate_audit_topic_name(&self.audit_topic)?;
+        require_signing_key_when_fail_closed(self)?;
         self.validate_node_roles()?;
         let listeners = self.effective_listeners();
         let inter_broker_listener = self.validate_listener_topology(&listeners)?;

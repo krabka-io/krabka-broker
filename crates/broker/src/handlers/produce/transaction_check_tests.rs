@@ -103,7 +103,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         .partitions
         .get(TXN_BOOTSTRAP_TOPIC, PartitionIndex(0))
         .expect("__transaction_state-0");
-    let state_records_before = state_partition.log_end_offset();
+    let state_records_before = state_partition.log_end_offset().unwrap();
 
     let version = 12;
     let request = ProduceRequest {
@@ -159,7 +159,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     assert!(rows == appended);
 
     // One registration record holds all three partitions.
-    assert!(state_partition.log_end_offset() == state_records_before + 1);
+    assert!(state_partition.log_end_offset().unwrap() == state_records_before + 1);
     let entry = broker
         .txn_coordinator
         .get(TXN_ID)

@@ -313,7 +313,7 @@ async fn seed_offsets_log(logged_offsets: &mut LoggedOffsets, input: String) {
         .put(seeded.clone(), TxnVersion::Verified)
         .await
         .expect("seed transaction");
-    logged_offsets.before = log.partition.log_end_offset().0;
+    logged_offsets.before = log.partition.log_end_offset().unwrap().0;
     logged_offsets.seeded = Some(seeded);
     logged_offsets.input = Some(input);
     logged_offsets.log = Some(log);
@@ -347,7 +347,7 @@ async fn offsets_log_result(logged_offsets: &LoggedOffsets, code: i16, mutation:
         .lock()
         .await
         .clone();
-    let appended = log.partition.log_end_offset().0 > logged_offsets.before;
+    let appended = log.partition.log_end_offset().unwrap().0 > logged_offsets.before;
     match mutation.as_str() {
         "Ongoing-with-start-time" => {
             assert!(appended);

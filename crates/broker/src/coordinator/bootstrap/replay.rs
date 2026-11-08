@@ -114,7 +114,6 @@ impl Replayed {
 struct DeferredRecord {
     key: Key,
     value: Option<bytes::Bytes>,
-    timestamp_ms: i64,
     /// Offset of the batch the record arrived in, kept for the records that
     /// turn out to belong to a transaction the log never resolved.
     written_at: i64,
@@ -187,13 +186,7 @@ pub(super) fn replay_records(
                 {
                     for record in records {
                         match record.value {
-                            Some(value) => apply_record_at_timestamp(
-                                coordinator,
-                                &mut acc,
-                                record.key,
-                                &value,
-                                record.timestamp_ms,
-                            )?,
+                            Some(value) => apply_record(coordinator, &mut acc, record.key, &value)?,
                             None => apply_tombstone(coordinator, &mut acc, record.key)?,
                         }
                     }
@@ -220,13 +213,12 @@ pub(super) fn replay_records(
                         .push(DeferredRecord {
                             key,
                             value: record.value.clone(),
-                            timestamp_ms: batch.max_timestamp,
                             written_at: batch.base_offset,
                         });
                     continue;
                 }
                 if let Some(value_bytes) = &record.value {
-                    apply_record(coordinator, &mut acc, key, value_bytes, batch)?;
+                    apply_record(coordinator, &mut acc, key, value_bytes)?;
                 } else {
                     drop_pending_offset_commits(&mut pending_transactions, &key);
                     apply_tombstone(coordinator, &mut acc, key)?;
@@ -321,17 +313,6 @@ pub(super) fn apply_record(
     acc: &mut Replayed,
     key: Key,
     value_bytes: &bytes::Bytes,
-    batch: &RecordBatch,
-) -> Result<(), BrokerError> {
-    apply_record_at_timestamp(coordinator, acc, key, value_bytes, batch.max_timestamp)
-}
-
-fn apply_record_at_timestamp(
-    coordinator: &Arc<GroupCoordinator>,
-    acc: &mut Replayed,
-    key: Key,
-    value_bytes: &bytes::Bytes,
-    timestamp_ms: i64,
 ) -> Result<(), BrokerError> {
     match key {
         Key::OffsetCommit {
@@ -364,7 +345,7 @@ fn apply_record_at_timestamp(
                 .classic
                 .entry(group_id.clone())
                 .or_insert_with(|| ClassicState::new(group_id));
-            apply_group_metadata(state, v, timestamp_ms);
+            apply_group_metadata(state, v);
         }
         Key::NextGen(ng_key) => {
             apply_next_gen_record(coordinator, acc, ng_key, value_bytes)?;

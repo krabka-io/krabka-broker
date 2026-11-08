@@ -4,6 +4,7 @@
 //! any partition is read.
 
 use {
+    super::fetch_reader,
     crate::{
         broker::Broker,
         fetch_session::{CachedPartitionState, FetchSessionKey, SessionDecision},
@@ -11,6 +12,7 @@ use {
     },
     krabka_metadata::AclOperation,
     krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid},
+    krabka_verified::FetchReader,
     std::{collections::HashSet, mem, sync::Arc},
 };
 
@@ -78,8 +80,7 @@ pub(super) struct FetchPreparation {
     pub(super) image: Arc<krabka_metadata::MetadataImage>,
     pub(super) authorization: FetchAuthorization,
     pub(super) effective_replica_id: i32,
-    pub(super) is_follower_fetch: bool,
-    pub(super) read_committed: bool,
+    pub(super) reader: FetchReader,
     /// The partitions the fetch's session forgot lately and has not named
     /// again; see [`crate::fetch_session::ForgottenPartition`]. Empty for a
     /// sessionless or a full fetch.
@@ -159,8 +160,7 @@ pub(super) fn prepare_fetch(
         image,
         authorization,
         effective_replica_id,
-        is_follower_fetch,
-        read_committed: !is_follower_fetch && request.isolation_level == 1,
+        reader: fetch_reader(is_follower_fetch, request.isolation_level == 1),
         forgotten,
     })
 }
@@ -233,7 +233,7 @@ fn group_cached_into_effective_topics(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, krabka_verified::Isolation};
 
     fn key(id: u8, name: &str, partition: i32) -> FetchSessionKey {
         FetchSessionKey {
@@ -375,5 +375,31 @@ mod tests {
             })
             .collect();
         assert2::assert!(shape == expected);
+    }
+
+    /// The reader `prepare_fetch` gives a fetch, from whether `replica_id`
+    /// names a replica and whether `isolation_level` is 1. A follower has no
+    /// isolation level, so a follower that sends `isolation_level=1` still
+    /// reads as a follower, to the log end.
+    #[test]
+    fn a_fetch_reads_as_a_follower_or_under_its_isolation_level() {
+        let cases = [
+            (
+                (false, false),
+                FetchReader::Consumer(Isolation::ReadUncommitted),
+            ),
+            (
+                (false, true),
+                FetchReader::Consumer(Isolation::ReadCommitted),
+            ),
+            ((true, false), FetchReader::Follower),
+            ((true, true), FetchReader::Follower),
+        ];
+        for ((is_follower, read_committed), want) in cases {
+            assert!(
+                fetch_reader(is_follower, read_committed) == want,
+                "is_follower={is_follower}, read_committed={read_committed}"
+            );
+        }
     }
 }

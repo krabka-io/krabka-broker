@@ -14,6 +14,7 @@ use {
         AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
         FileInterBrokerCredentials, FileProcessConfig, FileSchemaRegistryConfig,
         gssapi::DEFAULT_KERBEROS_SERVICE_NAME, parse_bootstrap_server, parse_quorum_voter,
+        require_signing_key_when_fail_closed,
     },
     crate::{
         config::{BrokerConfig, InterBrokerCredentials, NodeRole, validate_oauthbearer_token_file},
@@ -150,7 +151,7 @@ pub(super) fn apply_config_tail(
         cfg.controller_server_name = tail.controller_server_name;
     }
     if let Some(audit) = tail.audit {
-        apply_audit(audit, cfg);
+        apply_audit(audit, cfg)?;
     }
     Ok(())
 }
@@ -159,8 +160,10 @@ pub(super) fn apply_config_tail(
 ///
 /// Its keys replace the broker's audit settings. An absent `[audit.signing]`,
 /// `[audit.checkpoint]` or `[audit.spool]` subtable keeps the settings it
-/// covers, as an absent `[audit]` table keeps all of them.
-fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
+/// covers, as an absent `[audit]` table keeps all of them. A `fail-closed`
+/// result with no signing key is refused here, as a file error, before the
+/// broker starts.
+fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
     cfg.audit_enabled = audit.enabled;
     cfg.audit_failure_mode = audit.failure_mode;
     cfg.audit_topic = audit.topic;
@@ -178,6 +181,8 @@ fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
         cfg.audit_spool_max = ByteSize::from_bytes(spool.max_bytes);
         cfg.audit_spool_sync_every_n = spool.sync_every_n;
     }
+    require_signing_key_when_fail_closed(cfg)
+        .map_err(|error| FileConfigError::InvalidConfig(error.to_string()))
 }
 
 /// Resolve the `[gssapi]` section into the accept-path configuration.

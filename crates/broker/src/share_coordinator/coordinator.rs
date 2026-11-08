@@ -75,14 +75,11 @@ use crate::{
     codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
-        bootstrap, config::ShareCoordinatorConfig, partitioner::partition_for_share_key,
-        persistence::StateBatch, state::SharePartitionState,
+        bootstrap, config::ShareCoordinatorConfig, key::ShareKey,
+        partitioner::partition_for_share_key, persistence::StateBatch, state::SharePartitionState,
     },
     time_util::epoch_millis,
 };
-
-/// In-memory map key: `(group_id, topic_id, partition)`.
-type ShareStateKey3 = (String, uuid::Uuid, i32);
 
 /// KIP-932 share-group state epoch.
 ///
@@ -101,11 +98,15 @@ pub type LeaderEpoch = i32;
 /// See [`crate::codes`].
 pub type ShareErrorCode = i16;
 
-/// Summary tuple that [`ShareCoordinator::read_summary`] returns.
-///
-/// The fields are `state_epoch`, `leader_epoch`, `start_offset`, and
-/// `delivery_complete_count`.
-pub type ShareStateSummary = (StateEpoch, LeaderEpoch, Offset, i32);
+/// The stored state of one share partition, as a `ReadShareGroupStateSummary`
+/// partition reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShareStateSummary {
+    pub(crate) state_epoch: StateEpoch,
+    pub(crate) leader_epoch: LeaderEpoch,
+    pub(crate) start_offset: Offset,
+    pub(crate) delivery_complete_count: i32,
+}
 
 /// Kafka's messages for the share-state error rows: the `Errors` default
 /// messages and the validation messages of `ShareCoordinatorShard`.
@@ -146,8 +147,7 @@ pub enum ShareStateError {
     /// is the code after Kafka's
     /// `CoordinatorOperationExceptionHelper.handleOperationException`, and
     /// `message` is the message of the error before that mapping. Kafka
-    /// prefixes it with `Unable to read share group state: ` or
-    /// `Unable to write share group state: `.
+    /// prefixes it as [`ShareStateOp::failure_prefix`] says.
     Operation {
         code: ShareErrorCode,
         message: &'static str,
@@ -162,26 +162,12 @@ impl ShareStateError {
         }
     }
 
-    /// The wire error message. `operation` is `read` or `write`.
-    pub(crate) fn row_message(self, operation: &str) -> String {
+    /// The wire error message of a refused `op` partition: a refusal's own
+    /// message, or an operation error after the prefix of `op`.
+    pub(crate) fn row_message(self, op: ShareStateOp) -> String {
         match self {
             Self::Refused { message, .. } => message.to_owned(),
-            Self::Operation { message, .. } => {
-                format!("Unable to {operation} share group state: {message}")
-            }
-        }
-    }
-
-    /// The row message of a refused `ReadShareGroupStateSummary` partition: a
-    /// refusal's own message, or the operation error that Kafka's
-    /// `readStateSummary` prefixes with
-    /// `Unable to read share group state summary: `.
-    pub(crate) fn summary_row_message(self) -> String {
-        match self {
-            Self::Refused { message, .. } => message.to_owned(),
-            Self::Operation { message, .. } => {
-                format!("Unable to read share group state summary: {message}")
-            }
+            Self::Operation { message, .. } => format!("{}: {message}", op.failure_prefix()),
         }
     }
 
@@ -193,6 +179,42 @@ impl ShareStateError {
             message::NOT_COORDINATOR
         };
         Self::Operation { code, message }
+    }
+}
+
+/// One of the five KIP-932 share-state RPCs that the persister sends and the
+/// share coordinator serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareStateOp {
+    Initialize,
+    Read,
+    ReadSummary,
+    Write,
+    Delete,
+}
+
+impl ShareStateOp {
+    /// The Kafka API name of the RPC.
+    pub(crate) const fn api_name(self) -> &'static str {
+        match self {
+            Self::Initialize => "InitializeShareGroupState",
+            Self::Read => "ReadShareGroupState",
+            Self::ReadSummary => "ReadShareGroupStateSummary",
+            Self::Write => "WriteShareGroupState",
+            Self::Delete => "DeleteShareGroupState",
+        }
+    }
+
+    /// What Kafka's `ShareCoordinatorService` puts before the message of an
+    /// operation error in a row of this RPC.
+    const fn failure_prefix(self) -> &'static str {
+        match self {
+            Self::Initialize => "Unable to initialize share group state",
+            Self::Read => "Unable to read share group state",
+            Self::ReadSummary => "Unable to read share group state summary",
+            Self::Write => "Unable to write share group state",
+            Self::Delete => "Unable to delete share group state",
+        }
     }
 }
 
@@ -285,8 +307,8 @@ impl ScheduledLoads {
 pub struct ShareCoordinator {
     pub(crate) node_id: krabka_metadata::NodeId,
     pub(crate) partitions: Arc<PartitionRegistry>,
-    /// Live in-memory state: `(group, topicId, partition)` → locked state.
-    state: DashMap<ShareStateKey3, Arc<Mutex<SharePartitionState>>>,
+    /// Live in-memory state: share key → locked state.
+    state: DashMap<ShareKey, Arc<Mutex<SharePartitionState>>>,
     /// Live membership changes by state partition. Background jobs compare
     /// these revisions under the operation guard before using collected
     /// keys. Leadership generations separately fence replay and unload.
@@ -501,8 +523,9 @@ impl ShareCoordinator {
 
     /// Removes every in-memory key that maps to `state_partition`.
     fn drop_partition_state(&self, state_partition: PartitionIndex) {
-        self.state.retain(|(group, topic_id, partition), _| {
-            self.state_partition_for(group, topic_id, *partition) != Some(state_partition)
+        self.state.retain(|key, _| {
+            self.state_partition_for(&key.group, &key.topic_id, key.partition)
+                != Some(state_partition)
         });
     }
 

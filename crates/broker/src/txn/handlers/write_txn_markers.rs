@@ -531,7 +531,10 @@ mod tests {
 
             check_orders_marker(&bytes, expected_code, name);
             if let Some(part) = part {
-                assert!(part.log_end_offset().0 == expected_log_end, "{name}");
+                assert!(
+                    part.log_end_offset().unwrap().0 == expected_log_end,
+                    "{name}"
+                );
             }
             broker_handle.shutdown().await;
         }
@@ -614,7 +617,7 @@ mod tests {
                     let appended = part.append_notify.notified();
                     tokio::pin!(appended);
                     appended.as_mut().enable();
-                    if part.log_end_offset().0 == 1 {
+                    if part.log_end_offset().unwrap().0 == 1 {
                         break;
                     }
                     appended.await;
@@ -633,7 +636,10 @@ mod tests {
             let bytes = answer.await.expect("the handler task").expect("handle");
 
             check_orders_marker(&bytes, expected_code, name);
-            assert!(part.log_end_offset().0 == expected_log_end, "{name}");
+            assert!(
+                part.log_end_offset().unwrap().0 == expected_log_end,
+                "{name}"
+            );
             broker_handle.shutdown().await;
         }
     }

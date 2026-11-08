@@ -12,7 +12,7 @@ use {
         AcquisitionState, DS_ACKNOWLEDGED, DS_ARCHIVED, DS_ARCHIVING, DS_AVAILABLE, InFlightBatch,
         RecordState, clamp_i32, dlq::DlqRange,
     },
-    crate::share_coordinator::persistence::StateBatch,
+    crate::share_coordinator::{coordinator::ShareWrite, persistence::StateBatch},
     krabka_log::Offset,
 };
 
@@ -49,6 +49,21 @@ impl AcquisitionState {
             });
         }
         (self.start_offset, self.delivery_complete_count, out)
+    }
+
+    /// The `WriteShareGroupState` partition that makes the live window
+    /// durable: the epochs of the machine and its
+    /// [projection](Self::to_persist_batches).
+    #[must_use]
+    pub(crate) fn to_share_write(&self) -> ShareWrite {
+        let (start_offset, delivery_complete_count, batches) = self.to_persist_batches();
+        ShareWrite {
+            state_epoch: self.state_epoch,
+            leader_epoch: self.leader_epoch,
+            start_offset,
+            delivery_complete_count,
+            batches,
+        }
     }
 
     /// Number of terminal records, Acknowledged or Archived, in the window at
@@ -173,6 +188,26 @@ mod tests {
         check!(dcc == 0); // nothing terminal yet
         // Acquired persists as Available(0) but retains its delivery_count.
         check!(batches == vec![persisted().bounds(Offset(0)..=Offset(4)).call()]);
+    }
+
+    /// The write carries the state epoch and the leader epoch each in its own
+    /// field, beside the projection of the window.
+    #[test]
+    fn the_share_write_carries_each_epoch_in_its_own_field() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.load_from(Offset(0), 7, 3, &[]);
+        s.materialize(Offset(5), 100);
+        let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        check!(
+            s.to_share_write()
+                == ShareWrite {
+                    state_epoch: 7,
+                    leader_epoch: 3,
+                    start_offset: Offset(0),
+                    delivery_complete_count: 0,
+                    batches: vec![persisted().bounds(Offset(0)..=Offset(4)).call()],
+                }
+        );
     }
 
     #[test]

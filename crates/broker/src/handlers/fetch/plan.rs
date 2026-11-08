@@ -5,6 +5,7 @@
 
 use {
     super::{
+        FetchReaderExt as _,
         read::LiveOffsets,
         request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
         throttle::leader_throttles_replica,
@@ -24,6 +25,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordsPayload,
     },
+    krabka_verified::FetchReader,
     std::{
         collections::HashSet,
         sync::{Arc, PoisonError, atomic},
@@ -44,15 +46,12 @@ pub struct PendingRead {
     pub last_fetched_epoch: i32,
     pub fetch_offset: i64,
     pub max_bytes: i32,
-    /// `true` when `isolation_level == 1` on a consumer fetch, and not on a
-    /// follower fetch. It causes batch-level LSO filtering and fills
-    /// `aborted_transactions` in the response.
-    pub read_committed: bool,
-    /// `true` when `replica_id >= 0`, that is, when the request comes from a
-    /// follower replicator and not from a consumer. Follower fetches see all
-    /// records up to LEO and report the leader's HW and LSO, as consumer
-    /// fetches do. The handler clamps consumer fetches at HW.
-    pub is_follower_fetch: bool,
+    /// Who reads, Kafka's `FetchIsolation`. A follower (`replica_id >= 0`)
+    /// sees all records up to LEO and reports the leader's HW and LSO, as a
+    /// consumer does. The handler clamps a consumer at HW, and a
+    /// `read_committed` consumer (`isolation_level == 1`) at the LSO as well,
+    /// with `aborted_transactions` filled in the response.
+    pub reader: FetchReader,
     /// `true` when only the partition leader may serve this fetch. Kafka's
     /// `FetchParams.fetchOnlyLeader` is true for a follower fetch, and for a
     /// consumer fetch that carries no client metadata, which is every
@@ -83,7 +82,7 @@ impl PendingRead {
         topic_name: &Arc<str>,
         topic_id: WireUuid,
         partition: &EffectivePartition,
-        mode: FetchMode,
+        reader: FetchReader,
         resolved: Option<Arc<Partition>>,
         out: PartitionData,
     ) -> Self {
@@ -95,9 +94,8 @@ impl PendingRead {
             last_fetched_epoch: partition.last_fetched_epoch,
             fetch_offset: partition.fetch_offset,
             max_bytes: partition.partition_max_bytes,
-            read_committed: mode.read_committed,
-            is_follower_fetch: mode.is_follower_fetch,
-            fetch_only_leader: mode.is_follower_fetch,
+            reader,
+            fetch_only_leader: reader.is_follower(),
             follower_position: None,
             partition: resolved,
             out,
@@ -140,8 +138,11 @@ async fn preferred_read_replica(
     let isr: HashSet<krabka_metadata::NodeId> = record.isr.iter().copied().collect();
     // The leader's own view is its log end and zero time since caught up, as
     // Kafka builds it. Read before the replica state lock, so the log's
-    // mutex is never taken under it.
-    let leader_log_end = partition.log_end_offset();
+    // mutex is never taken under it. A poisoned log redirects nobody: the
+    // leader answers the fetch itself.
+    let Ok(leader_log_end) = partition.log_end_offset() else {
+        return -1;
+    };
     let now = Instant::now();
     let replicas: Vec<ReplicaView> = {
         let state = partition.replica_state.lock().await;
@@ -504,14 +505,6 @@ pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> Partit
     }
 }
 
-/// How a fetch reads: with the read-committed isolation level, and as a
-/// follower fetch.
-#[derive(Clone, Copy)]
-pub(super) struct FetchMode {
-    pub(super) read_committed: bool,
-    pub(super) is_follower_fetch: bool,
-}
-
 pub(super) struct PendingPlanContext<'a> {
     pub(super) broker: &'a Broker,
     pub(super) image: &'a krabka_metadata::MetadataImage,
@@ -520,7 +513,8 @@ pub(super) struct PendingPlanContext<'a> {
     /// The negotiated `Fetch` version. It decides whether a topic row names
     /// its topic by name or by id.
     pub(super) version: i16,
-    pub(super) mode: FetchMode,
+    /// Who reads every row of the fetch.
+    pub(super) reader: FetchReader,
     pub(super) follower_id: i32,
     /// The broker epoch the follower's Fetch carried in
     /// `ReplicaState.ReplicaEpoch` (-1 when absent), Kafka's
@@ -571,12 +565,12 @@ pub(super) async fn plan_partition_read(
     request: &EffectivePartition,
 ) -> PlannedRead {
     let refused = |error_code| PlannedRead {
-        slot: ResponseSlot::refused(context.mode.is_follower_fetch, error_code),
+        slot: ResponseSlot::refused(context.reader.is_follower(), error_code),
         read: PendingRead::planned(
             topic_name,
             topic_id,
             request,
-            context.mode,
+            context.reader,
             None,
             refused_partition(request.partition, error_code),
         ),
@@ -584,7 +578,7 @@ pub(super) async fn plan_partition_read(
     // A row answered in the read pass, without reading the log.
     let answered = |output| PlannedRead {
         slot: ResponseSlot::Read,
-        read: PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
+        read: PendingRead::planned(topic_name, topic_id, request, context.reader, None, output),
     };
     // Kafka's `KafkaApis.handleFetchRequest` refuses every row of a follower
     // fetch without `ClusterAction` before it resolves any topic. So that
@@ -618,7 +612,7 @@ pub(super) async fn plan_partition_read(
     // authorization failure still wins, and it sits above the partition
     // lookup, so a witness answers a consumer the same way whether or not it
     // hosts the partition.
-    if !context.mode.is_follower_fetch && context.broker.config.is_witness() {
+    if !context.reader.is_follower() && context.broker.config.is_witness() {
         // This row never touches the log, so it carries the -1 sentinels of
         // a refused read, like `leader_refusal` below it. KIP-951: it names
         // the leader the consumer should go to instead. Kafka fills
@@ -636,7 +630,7 @@ pub(super) async fn plan_partition_read(
     // Kafka's `FetchParams.fetchOnlyLeader`: a follower fetch, or a consumer
     // fetch below v11, which has no client metadata.
     let fetch_only_leader =
-        context.mode.is_follower_fetch || context.version < FIRST_CLIENT_METADATA_VERSION;
+        context.reader.is_follower() || context.version < FIRST_CLIENT_METADATA_VERSION;
     let node_id = context.broker.config.node_id;
     // A follower fetch holds the partition's replication-target read guard
     // through the leader checks, as Kafka's `Partition.fetchRecords` holds
@@ -645,7 +639,7 @@ pub(super) async fn plan_partition_read(
     // after the read, and only while the target that the checks saw is still
     // installed.
     let transition = match partition.as_ref() {
-        Some(partition) if context.mode.is_follower_fetch => {
+        Some(partition) if context.reader.is_follower() => {
             Some(partition.lock_produce_transition().await)
         }
         _ => None,
@@ -674,7 +668,7 @@ pub(super) async fn plan_partition_read(
             ReadRole {
                 partition,
                 required_leader: required_leader(fetch_only_leader, node_id, partition),
-                assigned_follower: !context.mode.is_follower_fetch
+                assigned_follower: !context.reader.is_follower()
                     || partition.diskless
                     || is_assigned_follower(
                         context.image,
@@ -740,7 +734,7 @@ pub(super) async fn plan_partition_read(
     let leader_partition = partition
         .as_ref()
         .filter(|partition| partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0);
-    if !context.mode.is_follower_fetch
+    if !context.reader.is_follower()
         && let Some(leader_partition) = leader_partition
     {
         output.preferred_read_replica = preferred_read_replica(
@@ -770,7 +764,7 @@ pub(super) async fn plan_partition_read(
                         topic_name,
                         topic_id,
                         request,
-                        context.mode,
+                        context.reader,
                         // No `partition`: the read loop skips both the read and
                         // the long-poll arm for an entry with none.
                         None,
@@ -792,7 +786,7 @@ pub(super) async fn plan_partition_read(
                 topic_name,
                 topic_id,
                 request,
-                context.mode,
+                context.reader,
                 partition,
                 output,
             )
@@ -904,6 +898,7 @@ mod tests {
         assert2::assert,
         krabka_ids::PartitionIndex,
         krabka_log::{Log, LogConfig},
+        krabka_verified::{FetchReader, Isolation},
         std::{collections::HashSet, fs, path::Path, sync::Arc, time::Instant},
     };
 
@@ -1051,9 +1046,10 @@ mod tests {
                 },
                 rack_id: "",
                 version: super::super::FIRST_TOPIC_ID_VERSION,
-                mode: super::FetchMode {
-                    read_committed: false,
-                    is_follower_fetch,
+                reader: if is_follower_fetch {
+                    FetchReader::Follower
+                } else {
+                    FetchReader::Consumer(Isolation::ReadUncommitted)
                 },
                 follower_id,
                 follower_broker_epoch: -1,
@@ -1173,10 +1169,7 @@ mod tests {
             authorization: &consumer,
             rack_id: "dc-b",
             version: super::super::FIRST_TOPIC_ID_VERSION,
-            mode: super::FetchMode {
-                read_committed: false,
-                is_follower_fetch: false,
-            },
+            reader: FetchReader::Consumer(Isolation::ReadUncommitted),
             follower_id: -1,
             follower_broker_epoch: -1,
         };

@@ -9,7 +9,10 @@
 
 use {
     super::SharePartitionLeaderManager,
-    crate::{codes, error::BrokerError, share_partition::state::AcquisitionState},
+    crate::{
+        codes, error::BrokerError, share_coordinator::key::ShareKeyRef,
+        share_partition::state::AcquisitionState,
+    },
     std::sync::Arc,
     tokio::sync::Mutex,
     tracing::warn,
@@ -68,35 +71,26 @@ impl SharePartitionLeaderManager {
     /// replacement that another request already loaded stays cached.
     pub(crate) async fn persist_if_dirty(
         &self,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
+        key: ShareKeyRef<'_>,
         cell: Option<&Arc<Mutex<AcquisitionState>>>,
         st: &mut AcquisitionState,
     ) -> Result<(), i16> {
+        let ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        } = key;
         if !st.dirty {
             return Ok(());
         }
-        let (start, dcc, batches) = st.to_persist_batches();
-        let result = self
-            .persister
-            .write_state(
-                group,
-                topic_id,
-                partition,
-                (st.state_epoch, st.leader_epoch),
-                (start, dcc),
-                batches,
-            )
-            .await;
+        let result = self.persister.write_state(key, st.to_share_write()).await;
         match result {
             Ok(()) => {
                 st.dirty = false;
                 // The runs that went to `Archiving` are durable now, so their
                 // dead-letter writes may start (KIP-1191).
                 if let Some(cell) = cell {
-                    let key = (group.to_owned(), topic_id, partition);
-                    self.dispatch_dead_letters(&key, cell, st.take_pending_dlq());
+                    self.dispatch_dead_letters(key, cell, st.take_pending_dlq());
                 }
                 Ok(())
             }
@@ -138,10 +132,12 @@ impl SharePartitionLeaderManager {
         if *st == before {
             return code;
         }
-        match self
-            .persist_if_dirty(group, topic_id, partition, Some(cell), st)
-            .await
-        {
+        let key = ShareKeyRef {
+            group,
+            topic_id,
+            partition,
+        };
+        match self.persist_if_dirty(key, Some(cell), st).await {
             Ok(()) => code,
             Err(write_code) => {
                 *st = before;
@@ -224,13 +220,23 @@ mod tests {
         fixtures = [share_persister_failure: SharePersisterFailure]
     );
 
+    /// Partition 0 of a topic whose id repeats `topic_byte`, in group `g1`.
+    fn g1_partition_0(topic_byte: u8) -> ShareKeyRef<'static> {
+        ShareKeyRef {
+            group: "g1",
+            topic_id: uuid::Uuid::from_bytes([topic_byte; 16]),
+            partition: 0,
+        }
+    }
+
     #[tokio::test]
     async fn persist_if_dirty_is_noop_when_clean() {
         let mgr = manager();
-        let tid = uuid::Uuid::from_bytes([22; 16]);
         let mut st = AcquisitionState::new(Offset(0));
 
-        let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
+        let result = mgr
+            .persist_if_dirty(g1_partition_0(22), None, &mut st)
+            .await;
 
         assert!((result, st.dirty) == (Ok(()), false));
     }
@@ -241,13 +247,14 @@ mod tests {
         // share-state topic, so `write_state` answers COORDINATOR_NOT_AVAILABLE. A failed durable write
         // leaves `dirty` set so the sweeper or the next request retries.
         let mgr = manager();
-        let tid = uuid::Uuid::from_bytes([25; 16]);
         let mut st = acquired_state(krabka_log::Offset(4));
         // Acquisition alone writes nothing; an acknowledgement does.
         st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
             .expect("m1 holds 0-3");
 
-        let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
+        let result = mgr
+            .persist_if_dirty(g1_partition_0(25), None, &mut st)
+            .await;
 
         assert!((result, st.dirty) == (Err(codes::COORDINATOR_NOT_AVAILABLE), true));
     }

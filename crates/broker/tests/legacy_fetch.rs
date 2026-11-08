@@ -4,7 +4,9 @@
 //!   - Fetch v3, which gives `Magic::V1` and keeps the KIP-32 timestamps.
 //!   - Fetch v0, which gives `Magic::V0` and strips the per-message
 //!     timestamps.
-//!   - zstd-compressed batches, which the broker re-compresses as snappy.
+//!   - zstd-compressed batches, which v0 and v1 cannot carry: the broker
+//!     answers `UNSUPPORTED_COMPRESSION_TYPE`, as Kafka does, and returns the
+//!     batches before the first zstd batch when there are any.
 //!   - control batches, which the broker drops from the down-converted
 //!     response.
 #![cfg(test)]

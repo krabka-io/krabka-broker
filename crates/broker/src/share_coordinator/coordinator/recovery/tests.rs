@@ -11,7 +11,7 @@ use {
         share_coordinator::{
             config::ShareCoordinatorConfig,
             coordinator::{
-                ShareStateError, Term, message,
+                ShareStateError, ShareStateSummary, Term, message,
                 persist::AppendError,
                 test_support::{
                     CoordinatorWithRegistry, batch, coordinator, gated_state_partition,
@@ -120,7 +120,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
                 .err()
                 == unavailable.err()
         );
-        assert!(part.log_end_offset() == Offset(0));
+        assert!(part.log_end_offset().unwrap() == Offset(0));
 
         let leadership = state_partition_image(0, 1, 0);
         // A bounded recovery attempt before the writer is released must not
@@ -148,7 +148,12 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
             coordinator
                 .read_summary_checked(&image, "g", topic_id, 0)
                 .await
-                == Ok(Some((2, 0, Offset(10), 0)))
+                == Ok(Some(ShareStateSummary {
+                    state_epoch: 2,
+                    leader_epoch: 0,
+                    start_offset: Offset(10),
+                    delivery_complete_count: 0
+                }))
         );
         let writer = part.take_writer_handle().unwrap();
         writer.abort();
@@ -259,7 +264,12 @@ async fn recover_honors_nondefault_read_bound() {
         bounded
             .read_summary_checked(&topic_image, "bounded", topic_id, 0)
             .await
-            == Ok(Some((3, 5, Offset(7), 8)))
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 3,
+                leader_epoch: 5,
+                start_offset: Offset(7),
+                delivery_complete_count: 8
+            }))
     );
 
     let unbounded = Arc::new(ShareCoordinator::new(
@@ -275,7 +285,12 @@ async fn recover_honors_nondefault_read_bound() {
         unbounded
             .read_summary_checked(&topic_image, "bounded", topic_id, 0)
             .await
-            == Ok(Some((3, 5, Offset(7), 8)))
+            == Ok(Some(ShareStateSummary {
+                state_epoch: 3,
+                leader_epoch: 5,
+                start_offset: Offset(7),
+                delivery_complete_count: 8
+            }))
     );
 }
 
@@ -388,7 +403,16 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
             .await;
 
         actual.push((codec, stored, summary));
-        expected.push((codec, vec![codec], Ok(Some((2, 0, Offset(7), 0)))));
+        expected.push((
+            codec,
+            vec![codec],
+            Ok(Some(ShareStateSummary {
+                state_epoch: 2,
+                leader_epoch: 0,
+                start_offset: Offset(7),
+                delivery_complete_count: 0,
+            })),
+        ));
     }
     assert!(actual == expected);
 }
@@ -1003,7 +1027,7 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
 }
 
 /// What a successful replay of a state partition loads.
-type Loaded = HashMap<ShareStateKey3, SharePartitionState>;
+type Loaded = HashMap<ShareKey, SharePartitionState>;
 
 /// The share-state load skips and fails the records that Kafka's
 /// `CoordinatorLoaderImpl` does with a `ShareCoordinatorRecordSerde`: an
@@ -1062,11 +1086,19 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let truncated_update = update.encode().unwrap().slice(..10);
     let both_snapshots = HashMap::from([
         (
-            ("g".to_owned(), topic_id, 0),
+            ShareKey {
+                group: "g".to_owned(),
+                topic_id,
+                partition: 0,
+            },
             SharePartitionState::from_snapshot(&snapshot(0), Offset(0)),
         ),
         (
-            ("g".to_owned(), topic_id, 1),
+            ShareKey {
+                group: "g".to_owned(),
+                topic_id,
+                partition: 1,
+            },
             SharePartitionState::from_snapshot(&snapshot(10), Offset(2)),
         ),
     ]);

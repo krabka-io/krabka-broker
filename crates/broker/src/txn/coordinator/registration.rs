@@ -435,7 +435,7 @@ mod tests {
         )
         .await;
         check!(first == NONE);
-        check!(transaction_partition.log_end_offset().0 == 1);
+        check!(transaction_partition.log_end_offset().unwrap().0 == 1);
 
         // Kafka's optimization: every requested partition is already in this
         // Ongoing transaction's set, so the retry answers NONE without an
@@ -449,7 +449,7 @@ mod tests {
         )
         .await;
         check!(retry == NONE);
-        check!(transaction_partition.log_end_offset().0 == 1);
+        check!(transaction_partition.log_end_offset().unwrap().0 == 1);
 
         // A new partition in the same request still writes.
         let grown = register_fixture(
@@ -461,7 +461,7 @@ mod tests {
         )
         .await;
         check!(grown == NONE);
-        check!(transaction_partition.log_end_offset().0 == 2);
+        check!(transaction_partition.log_end_offset().unwrap().0 == 2);
 
         let stored = coordinator.get("tid-a").expect("registered entry");
         let stored = stored.lock().await;
@@ -478,7 +478,7 @@ mod tests {
         )
         .await;
         check!(stale == PRODUCER_FENCED);
-        check!(transaction_partition.log_end_offset().0 == 2);
+        check!(transaction_partition.log_end_offset().unwrap().0 == 2);
     }
 
     /// The no-write retry optimization requires the *current* state to be
@@ -500,7 +500,7 @@ mod tests {
         let code =
             register_fixture(&coordinator, ProducerId(7), 0, vec![requested.clone()], 3).await;
         check!(code == NONE);
-        check!(transaction_partition.log_end_offset().0 == 1);
+        check!(transaction_partition.log_end_offset().unwrap().0 == 1);
         let stored = coordinator.get("tid-a").expect("registered entry");
         let stored = stored.lock().await;
         check!(stored.state == TxnState::Ongoing);

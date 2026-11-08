@@ -144,7 +144,7 @@ enum Change {
 
 async fn wait_for_log_end(partition: &Partition, end: Offset) {
     let deadline = Instant::now() + Duration::from_secs(10);
-    while partition.log_end_offset() < end {
+    while partition.log_end_offset().unwrap() < end {
         assert!(Instant::now() < deadline, "the record reaches the log");
         // intentional: the log has no awaiter for its end offset.
         sleep(Duration::from_millis(5)).await;
@@ -152,7 +152,7 @@ async fn wait_for_log_end(partition: &Partition, end: Offset) {
 }
 
 async fn catch_up(partition: &Partition) {
-    partition.replica_state.lock().await.hw = partition.log_end_offset();
+    partition.replica_state.lock().await.hw = partition.log_end_offset().unwrap();
     partition.hw_advance_notify.notify_waiters();
 }
 

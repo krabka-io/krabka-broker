@@ -9,6 +9,7 @@ use {
         barrier::scheduler::run as run_barrier_scheduler,
         broker::{
             Broker, BrokerHandle, DisklessRuntime,
+            audit::{AuditSigner, load_audit_signer},
             coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
             finish::{
                 BrokerCoordinatorSet, BrokerMetadataHandles, BrokerStorageStartup,
@@ -172,6 +173,7 @@ impl Broker {
         TailFuture: Future<Output = Result<BrokerHandle, BrokerError>>,
     {
         config.validate()?;
+        let audit_signer = load_audit_signer(&config)?;
         assemble(&mut config).map_err(|error| BrokerError::Startup(error.to_string()))?;
         // Binds the default data-plane listener now, and publishes its real
         // port into `config`, when the config asks for one and the caller
@@ -259,6 +261,7 @@ impl Broker {
                 controller_admin_router,
                 raft_handshake_audit,
                 auto_join,
+                audit_signer,
             })),
         )
         .await
@@ -285,6 +288,7 @@ impl Broker {
             controller_admin_router,
             raft_handshake_audit,
             auto_join,
+            audit_signer,
         } = joined;
 
         // 1b. KIP-853 controller auto-join. Spawned BEFORE the leader-wait in
@@ -375,6 +379,7 @@ impl Broker {
                 diskless_runtime: &diskless_runtime,
                 metrics,
                 health: Some(health.clone()),
+                audit_signer,
             },
         )
         .await?;
@@ -560,6 +565,8 @@ struct JoinedQuorum {
     controller_admin_router: Option<Arc<BrokerControllerAdminRouter>>,
     raft_handshake_audit: AuditLogArc,
     auto_join: DropGuard,
+    /// The audit checkpoint signing key, loaded before any side effect.
+    audit_signer: Option<AuditSigner>,
 }
 
 /// Wait for the first heartbeat answer that says this broker is unfenced, as

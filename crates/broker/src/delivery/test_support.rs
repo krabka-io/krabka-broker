@@ -11,7 +11,7 @@ use {
         log_dir::partition_dir,
         partition::{
             Partition, WriterGate, WriterMessage, empty_marker_materialization,
-            initial_replication_target, unreported_leader_log_start,
+            initial_replication_target, unchecked_log_start, unreported_leader_log_start,
         },
         partition_registry::PartitionRegistry,
         replica_state::ReplicaState,
@@ -228,6 +228,7 @@ pub fn partition_with_batches(
         replication_target: initial_replication_target(None),
         diskless: false,
         reported_leader_log_start: unreported_leader_log_start(),
+        log_start_checked_epoch: unchecked_log_start(),
         writer_handle: Arc::new(Mutex::new(Some(writer))),
     })
 }

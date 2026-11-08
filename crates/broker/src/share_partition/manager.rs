@@ -27,7 +27,7 @@ use {
         metadata_source::MetadataSource,
         partition_registry::PartitionRegistry,
         remote_reader::RemoteReader,
-        share_coordinator::persister_client::SharePersister,
+        share_coordinator::{key::ShareKey, persister_client::SharePersister},
         share_partition::{dlq::DlqSink, session::ShareSessionCache, state::AcquisitionState},
     },
     dashmap::DashMap,
@@ -52,9 +52,6 @@ mod toggle;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-/// Live acquisition-state machines keyed by `(group, topic_id, partition)`.
-type LeaderKey = (String, uuid::Uuid, i32);
-
 /// Per-broker owner of the share-partition acquisition state machines.
 ///
 /// The manager owns one machine for each `(group, topic, partition)` triple
@@ -66,7 +63,8 @@ pub(crate) struct SharePartitionLeaderManager {
     persister: Arc<SharePersister>,
     config: Arc<ShareGroupConfig>,
     sessions: ShareSessionCache,
-    leaders: DashMap<LeaderKey, Arc<Mutex<AcquisitionState>>>,
+    /// Live acquisition-state machines by share key.
+    leaders: DashMap<ShareKey, Arc<Mutex<AcquisitionState>>>,
     /// Where the records of a group's dead-letter queue are written
     /// (KIP-1191).
     dlq: Arc<dyn DlqSink>,

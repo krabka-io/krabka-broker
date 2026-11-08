@@ -12,7 +12,7 @@ use {
         delivery::DeliveryHandles,
         partition::{
             Partition, WriterGate, WriterMessage, empty_marker_materialization,
-            initial_replication_target, unreported_leader_log_start,
+            initial_replication_target, unchecked_log_start, unreported_leader_log_start,
         },
         partition_writer::{WriterServices, run},
         replica_state::ReplicaState,
@@ -21,9 +21,12 @@ use {
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig},
-    std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, AtomicU64},
+    std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicI32, AtomicU64},
+        },
+        thread,
     },
     tempfile::tempdir,
     tokio::{
@@ -58,6 +61,7 @@ pub fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::T
         replication_target: initial_replication_target(None),
         diskless: false,
         reported_leader_log_start: unreported_leader_log_start(),
+        log_start_checked_epoch: unchecked_log_start(),
         writer_handle: Arc::new(Mutex::new(Some(writer))),
     };
     (p, dir)
@@ -154,4 +158,17 @@ pub(super) fn append_records(p: &Partition, setup: PartitionRecordsSetup) {
         .expect("log mutex")
         .append(&mut batch)
         .expect("append");
+}
+
+/// Panic on another thread while it holds `partition`'s log, which leaves the
+/// mutex poisoned, as a task that panicked mid-append would.
+pub fn poison_log(partition: &Partition) {
+    let log = Arc::clone(&partition.log);
+    let panicked = thread::spawn(move || {
+        let _guard = log.lock();
+        panic!("poison the log mutex");
+    })
+    .join();
+    assert2::assert!(panicked.is_err());
+    assert2::assert!(partition.log.is_poisoned());
 }

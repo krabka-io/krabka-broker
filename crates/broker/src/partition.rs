@@ -27,7 +27,7 @@ use {
     std::{
         path::PathBuf,
         sync::{
-            Arc, Mutex,
+            Arc, Mutex, MutexGuard,
             atomic::{AtomicI32, AtomicI64, AtomicU64},
         },
     },
@@ -205,6 +205,11 @@ pub struct Partition {
     /// pass lowers the floor to it only when the archive does not enforce the
     /// floor: see `remote_log_manager::follow_unenforced_floor`.
     pub(crate) reported_leader_log_start: Arc<AtomicI64>,
+    /// The leader epoch in which the remote-log manager last checked this
+    /// replica's log start against what the tiers hold, or -1 when it has not
+    /// checked one. Kafka checks once per leadership: see
+    /// `remote_log_manager::raise_start_over_unheld_offsets`.
+    pub(crate) log_start_checked_epoch: Arc<AtomicI64>,
     /// Retained so broker shutdown can abort and await the writer task after
     /// all request handlers have drained.
     pub(crate) writer_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -212,6 +217,9 @@ pub struct Partition {
 
 /// New partitions begin with no leader log start recorded below their floor.
 pub fn unreported_leader_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
+
+/// New partitions begin with their log start unchecked in every leader epoch.
+pub fn unchecked_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
 
 /// New partitions begin with no transaction-marker resolutions owed to group actors.
 pub fn empty_marker_materialization() -> Arc<sync::Mutex<OwedMarkerResolutions>> {
@@ -280,20 +288,39 @@ impl Partition {
             replication_target: initial_replication_target(None),
             diskless: false,
             reported_leader_log_start: unreported_leader_log_start(),
+            log_start_checked_epoch: unchecked_log_start(),
             writer_handle: Arc::new(Mutex::new(Some(writer))),
         }
+    }
+
+    /// The partition's [`Log`], locked. Every `Partition` query on the log
+    /// goes through here, so each answers a poisoned mutex the same way.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the mutex is poisoned,
+    /// that is, if a task panicked while it held the log. A query does not
+    /// read what that task left half-written. The error maps to
+    /// `NOT_LEADER_OR_FOLLOWER`, so a client retries against the next leader.
+    pub(crate) fn lock_log(&self) -> Result<MutexGuard<'_, Log>, BrokerError> {
+        self.log
+            .lock()
+            .map_err(|_| BrokerError::PartitionWriterDied {
+                topic: self.topic.clone(),
+                partition: self.index.0,
+            })
     }
 
     /// Next offset the underlying [`Log`] will assign. Cheap: takes the
     /// `Arc<Mutex<Log>>` briefly. Replicators call this before each Fetch
     /// to compute `fetch_offset`.
     ///
-    /// Returns 0 if the log mutex is poisoned, that is, if the writer task
-    /// panicked. The caller treats that as no progress, and the
-    /// writer-died path later reports a clearer error.
-    #[must_use]
-    pub fn log_end_offset(&self) -> Offset {
-        self.log.lock().map_or(Offset(0), |g| g.log_end_offset())
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub fn log_end_offset(&self) -> Result<Offset, BrokerError> {
+        Ok(self.lock_log()?.log_end_offset())
     }
 
     /// Last Stable Offset at `high_watermark`: Kafka's
@@ -302,25 +329,36 @@ impl Partition {
     /// transaction's first offset. See [`Log::last_stable_offset`].
     /// Cheap: takes the `Arc<Mutex<Log>>` briefly.
     ///
-    /// Returns 0 if the log mutex is poisoned, that is, if the writer task
-    /// panicked. The caller treats that as no progress, and the
-    /// writer-died path later reports a clearer error.
-    #[must_use]
-    pub fn last_stable_offset(&self, high_watermark: Offset) -> Offset {
-        self.log
-            .lock()
-            .map_or(Offset(0), |mut g| g.last_stable_offset(high_watermark))
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub fn last_stable_offset(&self, high_watermark: Offset) -> Result<Offset, BrokerError> {
+        Ok(self.lock_log()?.last_stable_offset(high_watermark))
     }
 
     /// First absolute offset still present in the underlying [`Log`].
-    /// Cheap: takes the `Arc<Mutex<Log>>` briefly.
+    /// Cheap: takes the `Arc<Mutex<Log>>` briefly. `TxnCoordinator::recover`
+    /// uses this to seed the replay scan offset.
     ///
-    /// Returns 0 if the log mutex is poisoned, that is, if the writer task
-    /// panicked. `TxnCoordinator::recover` uses this to seed the replay scan
-    /// offset.
-    #[must_use]
-    pub(crate) fn log_start_offset(&self) -> Offset {
-        self.log.lock().map_or(Offset(0), |g| g.log_start_offset())
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub(crate) fn log_start_offset(&self) -> Result<Offset, BrokerError> {
+        Ok(self.lock_log()?.log_start_offset())
+    }
+
+    /// The log start and log end offsets, read under one hold of the lock, for
+    /// a caller that replays everything the log holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::PartitionWriterDied`] if the log mutex is
+    /// poisoned; see [`Partition::lock_log`].
+    pub(crate) fn log_offsets(&self) -> Result<(Offset, Offset), BrokerError> {
+        let log = self.lock_log()?;
+        Ok((log.log_start_offset(), log.log_end_offset()))
     }
 
     /// The additional internal stamp coordinate that covers `offset`. Returns
@@ -330,15 +368,20 @@ impl Partition {
     ///
     /// Locks the `Arc<Mutex<Log>>` briefly. This is a server-side query only.
     /// No produce or fetch handler consults it, so the stamp cannot leak into
-    /// any client-facing response. Returns `None` if the mutex is poisoned.
+    /// any client-facing response. Returns `None` too if the mutex is
+    /// poisoned; see [`Partition::lock_log`].
     #[cfg(test)]
     #[must_use]
     pub fn stamp_for_offset(&self, offset: Offset) -> Option<u64> {
-        self.log.lock().ok()?.stamp_for_offset(offset)
+        self.lock_log().ok()?.stamp_for_offset(offset)
     }
 
     /// Fence the log and then remove and return the writer task handle, for a
     /// caller that is about to delete the partition's directory.
+    ///
+    /// This is the one place that takes a poisoned log rather than failing:
+    /// the fence is how this partition fails closed, so it must land on a
+    /// log some task panicked over too.
     ///
     /// An append can run on a request's own task while the writer is idle
     /// (see [`WriterGate`]), so aborting the writer does not stop every
@@ -372,15 +415,15 @@ impl Partition {
     /// # Errors
     ///
     /// Returns [`BrokerError::Log`] if the underlying [`Log::read`] fails,
-    /// for example when `offset < log_start_offset()`.
+    /// for example when `offset < log_start_offset()`, and
+    /// [`BrokerError::PartitionWriterDied`] if the log mutex is poisoned; see
+    /// [`Partition::lock_log`].
     pub(crate) fn read_log(
         &self,
         offset: Offset,
         max_size: ByteSize,
     ) -> Result<ReadOutput, BrokerError> {
-        self.log
-            .lock()
-            .map_err(|_| BrokerError::Txn("log mutex poisoned".into()))?
+        self.lock_log()?
             .read(offset, max_size)
             .map_err(BrokerError::from)
     }
@@ -391,7 +434,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            partition::test_support::{append_records, test_partition},
+            partition::test_support::{append_records, poison_log, test_partition},
             test_support::{PartitionRecordsSetup, RecordCount},
         },
         assert2::{assert, check},
@@ -450,6 +493,43 @@ mod tests {
         ];
         for (needle, expected) in cases {
             assert!(s.contains(needle) == expected, "needle {needle:?} in {s:?}");
+        }
+    }
+
+    /// Every query on a poisoned log answers `PartitionWriterDied` for this
+    /// partition. None of them answers offset 0, which is a real offset and
+    /// would send a replicator, a transaction-state replay or a
+    /// `read_committed` fetch back to the start of the log.
+    #[tokio::test]
+    async fn every_query_on_a_poisoned_log_reports_the_writer_died() {
+        let (p, _dir) = test_partition(Arc::new(Notify::new()));
+        append_records(&p, PartitionRecordsSetup {
+            count: RecordCount(3),
+            ..Default::default()
+        });
+        poison_log(&p);
+        let died = Err(BrokerError::PartitionWriterDied {
+            topic: p.topic.clone(),
+            partition: p.index.0,
+        }
+        .to_string());
+        let shown = |answer: Result<(), BrokerError>| answer.map_err(|e| e.to_string());
+        let answers = [
+            ("lock_log", shown(p.lock_log().map(drop))),
+            ("log_end_offset", shown(p.log_end_offset().map(drop))),
+            (
+                "last_stable_offset",
+                shown(p.last_stable_offset(Offset(3)).map(drop)),
+            ),
+            ("log_start_offset", shown(p.log_start_offset().map(drop))),
+            ("log_offsets", shown(p.log_offsets().map(drop))),
+            (
+                "read_log",
+                shown(p.read_log(Offset(0), krabka_units::mebibytes(1)).map(drop)),
+            ),
+        ];
+        for (query, answer) in answers {
+            check!(answer == died, "{query}");
         }
     }
 }

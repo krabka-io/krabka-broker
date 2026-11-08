@@ -165,8 +165,13 @@ async fn completions_after_real_markers_preserve_closed_state_and_restart_decisi
             state
                 .commit("t", PartitionIndex(0), (42, 3), (2, 1), (2, 102, true))
                 .await;
-            let mut batch =
-                build_marker_batch(ProducerId(42), epoch, partition.log_end_offset(), marker, 0);
+            let mut batch = build_marker_batch(
+                ProducerId(42),
+                epoch,
+                partition.log_end_offset().unwrap(),
+                marker,
+                0,
+            );
             batch.base_timestamp = 900;
             batch.max_timestamp = 900;
             partition.produce_control_batch(batch).await.unwrap();

@@ -316,7 +316,7 @@ mod tests {
         )
         .await;
 
-        assert!(source.partition.log_end_offset() == 3);
+        assert!(source.partition.log_end_offset().unwrap() == 3);
         assert!(
             canonicalize_or_self(&source.partition.log_dir.load_full())
                 == canonicalize_or_self(target.path())
@@ -407,7 +407,7 @@ mod tests {
         )
         .await;
 
-        assert!(part.log_end_offset() == 4);
+        assert!(part.log_end_offset().unwrap() == 4);
     }
 
     /// A partition of `t-0` holding five one-record batches of ten bytes, and
@@ -508,7 +508,7 @@ mod tests {
         for _ in 0..2 {
             append_value_batch().part(&part).call();
         }
-        assert!(part.log_end_offset() == Offset(5));
+        assert!(part.log_end_offset().unwrap() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
 
         finish_replaced_move(
@@ -535,7 +535,9 @@ mod tests {
         for _ in 0..2 {
             append_epoch_batch().part(&part).leader_epoch(2).call();
         }
-        assert!(part.log_end_offset() == fixture.future_log.lock().unwrap().log_end_offset());
+        assert!(
+            part.log_end_offset().unwrap() == fixture.future_log.lock().unwrap().log_end_offset()
+        );
 
         finish_replaced_move(
             &part,
@@ -561,7 +563,7 @@ mod tests {
         for _ in 0..3 {
             append_value_batch().part(&part).call();
         }
-        assert!(part.log_end_offset() == Offset(5));
+        assert!(part.log_end_offset().unwrap() == Offset(5));
         let (ack, outcome) = oneshot::channel();
         part.writer_tx
             .send(WriterMessage::SwapFutureLog {

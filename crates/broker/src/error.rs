@@ -442,6 +442,26 @@ pub enum BrokerError {
     #[error("invalid runtime configuration: {0}")]
     InvalidRuntimeConfig(String),
 
+    /// `[audit.signing]` names a checkpoint signing key that does not load.
+    /// A configured key stops the broker in every audit failure mode, so an
+    /// operator who asked for attested checkpoints never runs without them.
+    #[error("audit signing key {path:?} did not load: {source}")]
+    AuditSigningKey {
+        /// The configured `[audit.signing] key_path`.
+        path: PathBuf,
+        /// Why the key did not load.
+        #[source]
+        source: krabka_audit::AuditError,
+    },
+
+    /// `[audit] failure_mode` is `fail-closed` and no `[audit.signing]` key is
+    /// configured, so no checkpoint would ever attest the audit chain.
+    #[error(
+        "[audit] failure_mode = \"fail-closed\" needs an [audit.signing] key: without one no \
+         checkpoint attests the audit chain"
+    )]
+    AuditSigningKeyRequired,
+
     #[error("controlled shutdown did not complete within {0:?}")]
     ShutdownTimeout(Duration),
 }
