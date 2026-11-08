@@ -161,6 +161,36 @@ impl Fixture {
         coordinator
     }
 
+    /// Replace the cluster's metadata with `records`, and let `coordinator`
+    /// recompute which state partitions it leads.
+    pub(crate) async fn replace_metadata(
+        &self,
+        coordinator: &BarrierCoordinator,
+        records: &[MetadataRecord],
+    ) {
+        self.source.set_records(records);
+        coordinator
+            .refresh_leader_partitions(&self.source.current_image())
+            .await;
+    }
+
+    /// Hand every state partition to node 2, so `coordinator`, which is node
+    /// 1, coordinates no group.
+    pub(crate) async fn hand_state_partitions_to_another_broker(
+        &self,
+        coordinator: &BarrierCoordinator,
+    ) {
+        self.replace_metadata(
+            coordinator,
+            &[
+                topic_records(STATE_TOPIC, 4, NodeId(2)),
+                topic_records("orders", 2, NodeId(1)),
+            ]
+            .concat(),
+        )
+        .await;
+    }
+
     /// Start the coordinator and create a group before driving its protocol.
     pub(crate) async fn coordinator_with_group(
         &self,

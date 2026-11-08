@@ -10,7 +10,9 @@
 //! client in another language does not need this api key.
 //!
 //! A group that another broker coordinates gets `NOT_COORDINATOR` (16), and a
-//! group that no coordinator holds gets `RESOURCE_NOT_FOUND` (91).
+//! group that no coordinator holds gets `RESOURCE_NOT_FOUND` (91). Before
+//! `__barrier_state` exists no broker holds any group, so every group gets
+//! `RESOURCE_NOT_FOUND`.
 //!
 //! Authorization: `Describe` on `Cluster("kafka-cluster")`. On a deny the
 //! response carries `CLUSTER_AUTHORIZATION_FAILED` (31).
@@ -52,12 +54,9 @@ pub async fn handle(
     };
 
     let coordinator = &broker.barrier_coordinator;
-    if !coordinator.is_coordinator_for(&req.group).await {
+    if let Err(error) = coordinator.require_coordinator(&req.group).await {
         return encode_response(
-            &ListBarrierCutsResponse::error(
-                codes::NOT_COORDINATOR,
-                Some("this broker does not coordinate the barrier group".to_owned()),
-            ),
+            &ListBarrierCutsResponse::error(error_code(&error), Some(error_text(&error))),
             version,
         );
     }

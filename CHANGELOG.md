@@ -51,6 +51,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A barrier request that names a group before `__barrier_state` exists answers `RESOURCE_NOT_FOUND` (91), as KFC-4 documents, instead of `NOT_COORDINATOR` (16): no broker can hold a group yet. `TriggerBarrier`, `ListBarrierCuts`, `DescribeBarrierGroups` and the group edits share the check. Once the topic exists, a group that another broker coordinates still gets `NOT_COORDINATOR`.
+- A barrier group create refused at `barrier_max_groups` no longer leaves an empty entry behind, so the cap holds at its configured value instead of letting the count grow by one per refused create. KFC-4 now describes the enforced group limits and their `INVALID_CONFIG` refusals.
 - The controller refuses to start on a latest metadata checkpoint it cannot read or decode, and reports the read error. It used to read such a checkpoint as "no voters", which could change the bootstrap mode and fail later with a misleading message.
 - `krabka-barrier trigger --timeout` sends a timeout past `i32::MAX` ms as `i32::MAX`, so the broker clamps it to its ceiling, instead of as 0, the broker's default. It refuses a negative timeout and a non-zero one that rounds to 0 ms.
 - Concurrent Streams topology-description writes use separate staging files, preventing a delayed writer from corrupting an already published description. Coordinator ownership still requires host-side fencing.
