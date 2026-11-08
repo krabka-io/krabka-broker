@@ -35,11 +35,21 @@ use {
         create_acls_request::CreateAclsRequest,
         create_acls_response::{AclCreationResult, CreateAclsResponse},
     },
-    std::{
-        cmp::Reverse,
-        time::{Duration, Instant},
-    },
+    rustix::time::{ClockId, clock_gettime},
+    std::{cmp::Reverse, time::Duration},
 };
+
+/// The CPU time this thread has used so far.
+///
+/// A bound on CPU time, unlike one on wall-clock time, does not move when a
+/// loaded runner deschedules the thread.
+fn thread_cpu_time() -> Duration {
+    let now = clock_gettime(ClockId::ThreadCPUTime);
+    Duration::new(
+        u64::try_from(now.tv_sec).expect("a thread's CPU time is not negative"),
+        u32::try_from(now.tv_nsec).expect("tv_nsec is below one second"),
+    )
+}
 
 /// The row Kafka's `AclApis.handleCreateAcls` sends for a committed
 /// creation: a bare `AclCreationResult`, whose generated `ErrorMessage`
@@ -480,6 +490,10 @@ async fn handle_accepts_cidr_host_on_a_freshly_bootstrapped_cluster() {
 /// repeat 12,000 ACLs, 2,000 of which the image holds, takes hash probes, not
 /// a scan of the request and of the image for every binding: a scan makes it
 /// tens of billions of comparisons on an async worker.
+///
+/// The bound is on the CPU time of the counting thread, so a loaded CI runner
+/// that deschedules the thread cannot fail it. The count itself takes well
+/// under a second, and a scan takes many times the bound.
 #[test]
 fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
     let acl = |n: usize| allow_acl().resource_name(&format!("topic-{n}")).call();
@@ -494,12 +508,12 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
         })
         .collect();
 
-    let started = Instant::now();
+    let started = thread_cpu_time();
     let counted = super::count_new_acls(&image, &to_submit);
-    let elapsed = started.elapsed();
+    let used = thread_cpu_time().saturating_sub(started);
 
     check!(counted == 10_000);
-    check!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    check!(used < Duration::from_secs(5), "{used:?} of CPU time");
 }
 
 async fn drive_cidr_request(broker: &Broker) -> CreateAclsResponse {

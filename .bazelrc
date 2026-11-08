@@ -37,6 +37,10 @@ common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
 
 test --test_output=errors
+# The console drops a test's output past 1 MiB, the default. A failing
+# `//crates/broker:broker_test` writes about 1.1 MB, so CI logs showed only
+# "FAILED" with no test name. 16 MiB keeps the failure in the log.
+common --experimental_ui_max_stdouterr_bytes=16777216
 
 # Clippy, as an aspect over the targets the build already has.
 #
