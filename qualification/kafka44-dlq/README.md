@@ -376,3 +376,12 @@ Both variants assert the actual coordinator summary remains start0/count3
 after rejecting three source records. BDD cases observe completed progress as
 SPSO plus the delivery-complete count, allowing either a retained terminal
 prefix or an already-pruned prefix, including the share.version1 control.
+
+## Phase-2 persistence crash model follow-up (2026-11-08)
+
+The [updated bounded model](phase2-model-20261108/README.md) follows the manager's
+persist-before-prune order and checks failed ARCHIVED persistence, terminal
+refusal after retry, and restart cuts. This is acquisition-machine evidence,
+not another live oracle or distributed ACL/fault execution. Failed phase-2
+persistence can replay a previously appended DLQ copy; exactly-once archival
+remains unsupported.

@@ -1,0 +1,55 @@
+{
+  "baseline_revision": "234dadc776e574fd91b0ec9c4d2d84cfa1a0c33e",
+  "scope": "bounded production acquisition-state model; no live oracle or distributed ACL execution",
+  "source_file": "crates/broker/src/share_partition/dlq_model.rs",
+  "source_sha256": "958f046b9586e01669e8a94eeefbc96b695ab42a2dce2033e2d654952775b368",
+  "test_binary_sha256": "0800c35b6a5261d4866b74b707ff99c94c7b213dcfd6d4c0fe6d8dc96bfa2533",
+  "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "bazel": "9.3.1",
+  "command": "bazel test //crates/broker:broker_test --test_arg=share_partition::state::dlq_model --test_output=all --jobs=2 --local_resources=memory=8192",
+  "direct_output_command": "bazel-bin/crates/broker/broker_test share_partition::state::dlq_model --nocapture",
+  "tests_passed": 4,
+  "tests_failed": 0,
+  "normal_graph": {
+    "unique": 128,
+    "generated": 185,
+    "maximum_observed_depth": 11
+  },
+  "lost_recovery_mutant": {
+    "unique": 46,
+    "generated": 67,
+    "maximum_observed_depth": 8,
+    "counterexample": [
+      "Persist",
+      "Crash"
+    ],
+    "failed_invariants": [
+      "no_stranded_archiving",
+      "recovered_archiving_has_work"
+    ]
+  },
+  "bounds": {
+    "depth": 32,
+    "generated_states": 10000,
+    "offsets": 1,
+    "crashes": 1,
+    "attempts_per_operation": 2
+  },
+  "exactly_once_archival": false,
+  "checks": [
+    "4 targeted tests passed",
+    "nightly rustfmt targeted check passed",
+    "git diff --check passed"
+  ],
+  "limitations": [
+    "Terminal authorization denial modeled as transport outcome, not ACL evaluation",
+    "No multi-broker protocol or persister execution",
+    "No power-loss durability proof",
+    "No broader full-parity claim"
+  ],
+  "excluded_runs": [
+    "Initial too-narrow test filter selected zero tests and is not accepted evidence",
+    "First actual four-test execution failed only outdated unique-state pins; pins updated from observed counts before final execution"
+  ],
+  "build_note": "Bazel resolver-only MODULE.bazel.lock churn reversed after verification; no dependency changes retained"
+}
