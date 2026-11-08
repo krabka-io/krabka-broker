@@ -129,7 +129,12 @@ fn start_runtime_watchers(
     // KIP-13's `quota.window.num` * `quota.window.size.seconds`: the window a
     // client's byte rate is averaged over, which is also the burst a bucket
     // allows before it throttles (#418).
-    let quota_buckets = Arc::new(QuotaBuckets::with_window(config.quota_window));
+    let quota_buckets = Arc::new(
+        QuotaBuckets::configured()
+            .client_quota_window(config.client_quota_window())
+            .connection_burst_window(config.quota_window)
+            .call(),
+    );
     tokio::spawn(run_quota_refresh(
         controller.watch_image(),
         Arc::clone(&quota_buckets),

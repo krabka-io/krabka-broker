@@ -49,10 +49,7 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: IpAddr) -> Option<Time
     if rate <= 0.0 {
         return None;
     }
-    let bucket =
-        broker
-            .quota_buckets
-            .get_or_create(QuotaType::ConnectionCreation, &entity_key, rate);
+    let bucket = broker.quota_buckets.connection_bucket(&entity_key, rate);
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))
 }
