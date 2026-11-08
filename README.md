@@ -79,6 +79,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-bdd` | The BDD layer over rstest-bdd: house-style feature lint, generated scenario tests and their runner, hooks, step attributes, `Attempt`, `StepParam` and `Given<T>`. |
 | `krabka-bdd-model` | The Gherkin model behind `krabka-bdd`: loading, rule flattening, outline expansion, the tag glossary and the house-style lint. |
 | `krabka-bdd-macros` | The proc macros behind `krabka-bdd`: `scenarios!`, the step and hook attributes, and `#[derive(StepParam)]`. |
+| `krabka-bdd-cli` | The `krabka-bdd` command-line tool: the Gherkin lint with its ratchet baseline, example maps, living documentation and the glossary report. |
 | `krabka-bench-driver` | Load driver and report aggregator for the cluster benchmark harness under `bench/`. |
 | `krabka-log-iobench` | Bench-only crate: measures the log read path against mmap. |
 

@@ -39,7 +39,9 @@ mod unavailable;
 mod worm;
 
 #[cfg(feature = "clap")]
-pub use archive_args::{ArchiveArgs, ArchiveArgsError, DEFAULT_S3_REGION};
+pub use archive_args::{ArchiveArgs, ArchiveArgsError};
+#[cfg(not(target_family = "wasm"))]
+pub use build::S3Settings;
 #[cfg(not(target_family = "wasm"))]
 pub use multipart::{IncompleteMultipartUpload, list_s3_multipart_uploads};
 #[cfg(target_family = "wasm")]

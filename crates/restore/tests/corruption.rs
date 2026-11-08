@@ -16,20 +16,18 @@
 //! everything else restores intact.
 #![cfg(test)]
 
-#[path = "support/archive_fixture.rs"]
-mod archive_fixture;
-#[path = "support/args.rs"]
-mod cli_args;
+#[path = "support/archived_log.rs"]
+mod archived_log;
 
 use {
+    archived_log::{archive_segment, archive_segment_at, restore_args},
     assert2::{assert, check},
-    bytes::Bytes,
     clap::Parser as _,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig, name},
-    krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch},
-    krabka_remote_storage::{LocalTieredStorage, TopicIdPartition, kafka_uuid},
-    krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore},
+    krabka_protocol::records::CRC_COVERAGE_START,
+    krabka_remote_storage::kafka_uuid,
+    krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreError, restore},
     std::{
         fs,
         fs::OpenOptions,
@@ -37,125 +35,6 @@ use {
     },
     uuid::Uuid,
 };
-
-/// A `LogConfig` whose `segment_size` is shrunk to a 1-byte equivalent, so a
-/// second `append` always rolls the first batch into its own sealed segment
-/// that [`Log::tierable_segments`] will hand back.
-///
-/// `krabka-restore` depends on `krabka-log` but not on `krabka-units`
-/// directly, so this crate has no path to name `krabka_units::ByteSize` or
-/// call `krabka_units::prelude::bytes`. Scaling the default 1 GiB
-/// `segment_size` down through `Div<f64>` -- implemented on every `uom`
-/// quantity `krabka-units` wraps, and reachable here purely through operator
-/// syntax without naming the type -- gets the same tiny segment size the
-/// sibling `jvm_tiered_storage.rs` fixture builds with `bytes(1)`.
-fn tiny_segment_config() -> LogConfig {
-    let default = LogConfig::default();
-    LogConfig {
-        segment_size: default.segment_size / 1_073_741_824.0,
-        ..default
-    }
-}
-
-/// One record batch with a 256-byte value, long enough that a corruption
-/// offset deep in the body is nowhere near the batch's boundaries.
-fn long_batch() -> RecordBatch {
-    RecordBatch {
-        records: vec![Record {
-            value: Some(Bytes::from(vec![b'x'; 256])),
-            ..Record::default()
-        }],
-        ..RecordBatch::default()
-    }
-}
-
-/// One archived segment, and the exact batches the local log held for it
-/// before archiving -- what a correct restore must reproduce.
-struct ArchivedSegment {
-    segment_id: Uuid,
-    original_batches: Vec<RecordBatch>,
-}
-
-/// Build a real, two-batch krabka log, roll it so the first batch seals into
-/// its own segment, and archive that sealed segment into `archive_root`
-/// through the same `LocalTieredStorage::copy_log_segment_data` call the
-/// broker's remote-log-manager uses. The second (still-active) batch is never
-/// tiered, matching a real broker: only sealed segments are copied.
-fn archive_segment(
-    archive_root: &StdPath,
-    topic: &str,
-    partition: i32,
-    topic_id: Uuid,
-    segment_id: Uuid,
-) -> ArchivedSegment {
-    archive_segment_at(archive_root, topic, partition, topic_id, segment_id, 0)
-}
-
-fn archive_segment_at(
-    archive_root: &StdPath,
-    topic: &str,
-    partition: i32,
-    topic_id: Uuid,
-    segment_id: Uuid,
-    base_offset: i64,
-) -> ArchivedSegment {
-    let local = tempfile::tempdir().expect("local log tempdir");
-    let mut log = Log::open(local.path(), tiny_segment_config()).expect("open local log");
-    log.reset_to(Offset(base_offset)).unwrap();
-    log.append(&mut long_batch()).expect("append first batch");
-    log.append(&mut long_batch())
-        .expect("append second batch, rolling the first into a sealed segment");
-
-    log.sync().unwrap();
-    let export = log
-        .tierable_segments()
-        .into_iter()
-        .next()
-        .expect("one sealed segment after the roll");
-
-    // The full local log holds both batches; only the sealed one (the first)
-    // was archived, so the comparison fixture keeps just that range.
-    let full_read = log
-        .read(Offset(base_offset), LogConfig::default().segment_size)
-        .expect("read back the local log");
-    let original_batches: Vec<RecordBatch> = full_read
-        .batches
-        .into_iter()
-        .filter(|batch| {
-            let last = batch.base_offset + i64::from(batch.last_offset_delta);
-            batch.base_offset >= export.base_offset.0 && last <= export.last_offset.0
-        })
-        .collect();
-    assert!(
-        !original_batches.is_empty(),
-        "the sealed segment's batch must survive the range filter"
-    );
-
-    let storage = LocalTieredStorage::new(archive_root);
-    archive_fixture::archive_segment(
-        &storage,
-        TopicIdPartition::new(topic_id, topic, partition),
-        segment_id,
-        &export,
-    );
-
-    ArchivedSegment {
-        segment_id,
-        original_batches,
-    }
-}
-
-/// Build `RestoreArgs` with a valid target-side flag set (`--node-id`,
-/// `--standalone`, `--controller-listener`) so `format_target` succeeds and
-/// the pipeline reaches segment verification, plus whatever `extra` flags a
-/// scenario needs.
-fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> RestoreArgs {
-    let argv = cli_args::restore_argv(archive_root, log_dir, cli_args::RestoreOptions {
-        extra,
-        ..Default::default()
-    });
-    Cli::try_parse_from(argv).expect("valid command line").args
-}
 
 /// Recursively collect every file under `dir`.
 fn collect_files(dir: &StdPath, out: &mut Vec<PathBuf>) {
@@ -307,7 +186,7 @@ async fn a_missing_timeindex_is_a_torn_copy_naming_the_right_artifact() {
     let archive = tempfile::tempdir().expect("archive root");
     let target_parent = tempfile::tempdir().expect("target parent");
     let segment_id = Uuid::from_u128(0x71E5);
-    let segment = archive_segment(archive.path(), "orders", 0, Uuid::from_u128(3), segment_id);
+    archive_segment(archive.path(), "orders", 0, Uuid::from_u128(3), segment_id);
 
     let time_index_path = find_one_file(archive.path(), |p| has_extension(p, "timeindex"));
     fs::remove_file(&time_index_path).expect("remove the .timeindex artifact");
@@ -329,7 +208,7 @@ async fn a_missing_timeindex_is_a_torn_copy_naming_the_right_artifact() {
     };
     check!(topic == "orders");
     check!(*partition == 0);
-    check!(*reported_id == segment.segment_id);
+    check!(*reported_id == segment_id);
     check!(artifact == ".timeindex");
     check!(exit_code == EXIT_INTEGRITY);
 }
@@ -340,19 +219,20 @@ async fn continue_on_corrupt_skips_only_the_damaged_segment_and_restores_the_res
     let target_parent = tempfile::tempdir().expect("target parent");
     let log_dir = target_parent.path().join("restored");
 
-    let clean = archive_segment(
+    let clean_batches = archive_segment(
         archive.path(),
         "orders-clean",
         0,
         Uuid::from_u128(10),
         Uuid::from_u128(0xC1EA),
     );
-    let damaged = archive_segment(
+    let damaged_id = Uuid::from_u128(0xBAD5);
+    archive_segment(
         archive.path(),
         "orders-damaged",
         0,
         Uuid::from_u128(20),
-        Uuid::from_u128(0xBAD5),
+        damaged_id,
     );
 
     let damaged_log = find_one_file(archive.path(), |p| {
@@ -369,7 +249,7 @@ async fn continue_on_corrupt_skips_only_the_damaged_segment_and_restores_the_res
     let skipped = &report.skipped[0];
     check!(skipped.topic == "orders-damaged");
     check!(skipped.partition == 0);
-    check!(skipped.segment_id == damaged.segment_id);
+    check!(skipped.segment_id == damaged_id);
     check!(
         skipped.reason.contains("checksum"),
         "reason was {:?}",
@@ -383,7 +263,7 @@ async fn continue_on_corrupt_skips_only_the_damaged_segment_and_restores_the_res
     let read_back = restored_clean
         .read(Offset(0), LogConfig::default().segment_size)
         .expect("read restored clean partition");
-    check!(read_back.batches == clean.original_batches);
+    check!(read_back.batches == clean_batches);
 
     // The damaged partition's only segment was skipped before any write, so
     // `write_segment` never created a directory for it.
@@ -401,7 +281,7 @@ async fn continue_on_corrupt_preserves_both_sides_of_an_interior_gap() {
     let mut damaged_id = Uuid::nil();
     for base in 0..3 {
         let segment_id = Uuid::new_v4();
-        let segment = archive_segment_at(archive.path(), "orders", 0, topic_id, segment_id, base);
+        let batches = archive_segment_at(archive.path(), "orders", 0, topic_id, segment_id, base);
         if base == 1 {
             damaged_id = segment_id;
             let log = find_one_file(archive.path(), |path| {
@@ -410,7 +290,7 @@ async fn continue_on_corrupt_preserves_both_sides_of_an_interior_gap() {
             });
             corrupt_crc_covered_byte(&log);
         } else {
-            expected.extend(segment.original_batches);
+            expected.extend(batches);
         }
     }
     let report = restore(&restore_args(archive.path(), &log_dir, &[

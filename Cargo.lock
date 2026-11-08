@@ -3780,6 +3780,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "krabka-bdd-cli"
+version = "1.1.5"
+dependencies = [
+ "assert2",
+ "clap",
+ "gherkin",
+ "krabka-bdd-model",
+ "rstest",
+]
+
+[[package]]
 name = "krabka-bdd-macros"
 version = "1.1.5"
 dependencies = [
@@ -4306,12 +4317,15 @@ dependencies = [
  "assert2",
  "bon",
  "krabka-bdd",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rstest",
  "rstest-bdd",
  "rstest-bdd-macros",
  "serde_json",
  "time",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "yare",
 ]
@@ -4593,6 +4607,7 @@ dependencies = [
  "futures-util",
  "krabka-audit",
  "krabka-backup",
+ "krabka-bdd",
  "krabka-broker",
  "krabka-cli-connection",
  "krabka-client-admin",

@@ -1080,10 +1080,10 @@
     },
     "FileRemoteStorageS3Config": {
       "additionalProperties": false,
-      "description": "TOML shape of `[remote_storage.s3]`. Maps to\n[`krabka_remote_storage::S3Config`].",
+      "description": "TOML shape of `[remote_storage.s3]`. Maps to\n[`krabka_remote_storage::S3Config`].\n\nThe broker builds the store from its `AWS_*` environment variables and\napplies this table on top: a key set here wins, and a variable fills only a\nkey the table omits. `region` comes from the table, then `AWS_REGION`, then\n`AWS_DEFAULT_REGION`, then `us-east-1`. `endpoint` comes from the table,\nthen `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or `AWS_ENDPOINT`. The\nbucket, `allow_http`, `conditional_put`, `checksum_sha256` and the retry and\ntimeout bounds always come from the table.\n\nThe credentials are the first of these that is present: `access_key_id`\nwith `secret_access_key`; `AWS_ACCESS_KEY_ID` with `AWS_SECRET_ACCESS_KEY`\nand an optional `AWS_SESSION_TOKEN`; web identity (IRSA) from\n`AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`, and optional\n`AWS_ROLE_SESSION_NAME` and `AWS_ENDPOINT_URL_STS`; an ECS task role from\n`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; EKS Pod Identity from\n`AWS_CONTAINER_CREDENTIALS_FULL_URI` with\n`AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`; and last the EC2 instance\nmetadata service. A static key in the table makes the broker ignore the\nthree `AWS_*` key variables, so half a key in the table is refused rather\nthan completed from the environment. The shared `~/.aws` config and\ncredentials files are not read.",
       "properties": {
         "access_key_id": {
-          "description": "Explicit access key id. Falls back to the AWS credential chain\n(env vars, instance profile, …) when omitted.",
+          "description": "Explicit access key id. Set it together with `secret_access_key`; the\npair wins over every `AWS_*` credential variable. When both are\nomitted, the AWS credential chain above applies.",
           "type": [
             "string",
             "null"
@@ -1124,7 +1124,7 @@
           ]
         },
         "endpoint": {
-          "description": "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).",
+          "description": "Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2). When\nomitted, `AWS_ENDPOINT_URL_S3`, then `AWS_ENDPOINT_URL` or\n`AWS_ENDPOINT`, applies, and with none of them the AWS endpoint for the\nregion.",
           "type": [
             "string",
             "null"
@@ -1165,8 +1165,11 @@
           ]
         },
         "region": {
-          "description": "AWS region. Required even for non-AWS endpoints (use any value).",
-          "type": "string"
+          "description": "AWS region. When omitted, `AWS_REGION`, then `AWS_DEFAULT_REGION`,\napplies, and with neither `us-east-1`, which `MinIO` and R2 accept.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "request_timeout": {
           "default": null,
@@ -1187,7 +1190,7 @@
           ]
         },
         "secret_access_key": {
-          "description": "Explicit secret access key. Falls back to the AWS credential chain\nwhen omitted.",
+          "description": "Explicit secret access key. Set it together with `access_key_id`.\nWhen both are omitted, the AWS credential chain applies.",
           "type": [
             "string",
             "null"
@@ -1195,8 +1198,7 @@
         }
       },
       "required": [
-        "bucket",
-        "region"
+        "bucket"
       ],
       "type": "object"
     },

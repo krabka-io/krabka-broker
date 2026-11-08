@@ -29,12 +29,23 @@ let otlp = OtlpConfig::from_env(
     env!("CARGO_PKG_VERSION"),
     "krabka-broker",
 );
-let guard = init(otlp, "info", "info", "krabka-broker")?;
+let gcp_project_id = std::env::var("KRABKA_GCP_PROJECT_ID").ok();
+let guard = init(otlp, "info", "info", "krabka-broker", gcp_project_id)?;
 tracing::info!("tracing is configured");
 guard.shutdown();
 # Ok(())
 # }
 ```
+
+## Cloud Logging trace correlation
+
+The last `init` argument names the Google Cloud project whose Cloud Trace
+holds the traces. With a project id and OTLP export both on, each stdout entry
+written inside a traced span carries `logging.googleapis.com/trace` as
+`projects/<project id>/traces/<trace id>`, `logging.googleapis.com/spanId` and
+`logging.googleapis.com/trace_sampled`, so Cloud Logging links the entry to its
+trace. The span context comes from the OTLP tracing layer, so with OTLP off no
+entry carries the keys. With no project id, entries carry no trace keys.
 
 ## Runtime log levels
 
@@ -48,7 +59,7 @@ restart. A change applies to the process that served it and is not persisted.
 use krabka_telemetry::{init, LogLevel};
 
 # fn run() -> Result<(), Box<dyn std::error::Error>> {
-let guard = init(None, "krabka_broker=info,info", "info", "krabka-broker")?;
+let guard = init(None, "krabka_broker=info,info", "info", "krabka-broker", None)?;
 let levels = guard.log_levels();
 
 // Every logger this process knows, with its effective level.

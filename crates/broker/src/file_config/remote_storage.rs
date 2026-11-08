@@ -138,7 +138,8 @@ fn s3_config(s3: &FileRemoteStorageS3Config) -> krabka_remote_storage::S3Config 
     let defaults = krabka_remote_storage::S3Config::default();
     krabka_remote_storage::S3Config {
         bucket: s3.bucket.clone(),
-        region: s3.region.clone(),
+        // An omitted region stays empty, which leaves it to the environment.
+        region: s3.region.clone().unwrap_or_default(),
         prefix: s3.prefix.clone(),
         endpoint: s3.endpoint.clone(),
         access_key_id: s3.access_key_id.clone(),

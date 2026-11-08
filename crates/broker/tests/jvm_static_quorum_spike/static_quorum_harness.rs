@@ -28,7 +28,9 @@ pub fn kafka_cluster_id_string(id: Uuid) -> String {
 /// 3-voter set, with the shared cluster id. `i` is 0-indexed, and the id is
 /// `i+1`.
 pub use crate::support::jvm_static_voter_config as krabka_controller_config;
-use crate::support::{JvmBrokerSetup, bind_and_drop_ports, controller_voters, format_jvm_voter};
+use crate::support::{
+    JvmBrokerSetup, ReservedPorts, controller_voters, format_jvm_voter, reserve_ports,
+};
 
 /// Formats a Krabka voter's log directory at Kafka 4.0's `metadata.version`.
 ///
@@ -84,8 +86,9 @@ pub fn start_jvm_controller(
 /// Endpoints for two host voters and one published JVM voter.
 pub struct MixedQuorum {
     pub(crate) ports: [u16; 3],
-    clients: Vec<SocketAddr>,
-    controllers: Vec<SocketAddr>,
+    /// Holds every port until the Krabka voters have bound theirs and the JVM
+    /// voter's has been published.
+    reserved: ReservedPorts,
 }
 
 /// The two started Krabka voters and the directories that back them.
@@ -95,6 +98,9 @@ pub struct StartedPair {
 }
 
 impl MixedQuorum {
+    /// Starts the two Krabka voters. The returned [`ReservedPorts`] still holds
+    /// JVM voter 3's controller port, `ports[2]`: keep it until
+    /// [`start_jvm_controller`] has published that port.
     pub(crate) async fn start(
         cluster_id: Uuid,
         fetch_timeout: Option<krabka_units::Time>,
@@ -102,18 +108,18 @@ impl MixedQuorum {
         [u16; 3],
         [krabka_broker::BrokerHandle; 2],
         [tempfile::TempDir; 2],
+        ReservedPorts,
     ) {
-        let endpoints = Self::allocate().await;
+        let endpoints = Self::allocate();
         let StartedPair { brokers, dirs } = endpoints.start_pair(cluster_id, fetch_timeout).await;
-        (endpoints.ports, brokers, dirs)
+        (endpoints.ports, brokers, dirs, endpoints.reserved)
     }
 
-    pub(crate) async fn allocate() -> Self {
-        let (clients, controllers) = bind_and_drop_ports(3).await;
+    pub(crate) fn allocate() -> Self {
+        let reserved = reserve_ports(3);
         Self {
-            ports: array::from_fn(|index| controllers[index].port()),
-            clients,
-            controllers,
+            ports: array::from_fn(|index| reserved.controllers[index].port()),
+            reserved,
         }
     }
 
@@ -124,6 +130,7 @@ impl MixedQuorum {
     ) -> StartedPair {
         let dirs: [tempfile::TempDir; 2] = array::from_fn(|_| tempfile::tempdir().unwrap());
         let voters: Vec<_> = self
+            .reserved
             .controllers
             .iter()
             .enumerate()
@@ -137,8 +144,8 @@ impl MixedQuorum {
                     node: krabka_broker::NodeId(
                         u64::try_from((index) + 1).expect("one-based node id"),
                     ),
-                    listen: self.clients[index],
-                    advertised: (self.clients[index]).to_string(),
+                    listen: self.reserved.clients[index],
+                    advertised: (self.reserved.clients[index]).to_string(),
                     controller: bind,
                     voters: controller_voters(&voters),
                 })

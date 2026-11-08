@@ -1,0 +1,157 @@
+"""Hold every Gherkin feature to the house style, and the guide's tag table to the glossary.
+
+`krabka_bdd::scenarios!` lints the features it runs at compile time; the
+features still run by plain rstest-bdd macros get no such check. This task runs
+`krabka-bdd lint` over every feature under `crates/`, against the committed
+baseline, so a new finding anywhere fails and a fixed one has to leave the
+baseline. It then checks that the tag table in the Gherkin style guide is the
+one `krabka-bdd tags-table` renders from the glossary.
+
+    aspect check-gherkin
+"""
+
+BASELINE = "crates/bdd-cli/gherkin-baseline.tsv"
+GUIDE = "docs/style_guides/gherkin_style_guide.md"
+GLOSSARY = "crates/bdd-model/glossary.toml"
+
+# `bazel run`, as the docgen steps of CI's `checks` job do: that job has Bazel
+# and no Rust toolchain. `--symlink_prefix=/` keeps `bazel-*` symlinks, and the
+# third-party `.feature` files under them, out of the tree the lint walks. The
+# tool resolves its paths against `BUILD_WORKSPACE_DIRECTORY`, which `bazel run`
+# sets to the repository root.
+_CLI = ["bazel", "run", "--ui_event_filters=-info,-stdout,-stderr", "--noshow_progress", "--symlink_prefix=/", "//crates/bdd-cli:krabka-bdd", "--"]
+LINT_ARGV = _CLI + ["lint", "--baseline", BASELINE, "crates"]
+TAGS_TABLE_ARGV = _CLI + ["tags-table"]
+
+_TAGS_HEADING = "## Tags"
+_TABLE_HEADER = "| Tag | Meaning |"
+
+def _output(stdout, stderr):
+    """The command's two streams as one block, without surrounding blank lines."""
+    return "\n".join([text.strip() for text in [stdout, stderr] if text.strip()])
+
+def lint_problem(code, stdout, stderr):
+    """The complaint about a `krabka-bdd lint` run, or "" when it passed.
+
+    The CLI exits 0 when clean, 1 on new findings or stale baseline entries and
+    2 on a usage or IO error. Any other code -- a Bazel build failure, or `None`
+    for a run a signal ended -- is Bazel's or the system's failure.
+    """
+    if code == 0:
+        return ""
+    output = _output(stdout, stderr)
+    if code == 1:
+        return "\n".join([
+            "krabka-bdd lint found new findings or stale baseline entries:",
+            output,
+            "Fix each new finding in its feature. Remove each stale entry from %s." % BASELINE,
+        ])
+    if code == 2:
+        return "krabka-bdd lint could not run (usage or IO error):\n" + output
+    return "`%s` exited with %s:\n%s" % (" ".join(LINT_ARGV), code, output)
+
+def guide_tags_table(text):
+    """The lines of the Markdown table under `## Tags`, or `None` when it has none.
+
+    The table opens at the first `| Tag | Meaning |` line of the section and
+    runs to the first line that is not a table row.
+    """
+    in_section = False
+    table = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if table:
+            if not line.startswith("|"):
+                break
+            table.append(line)
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            in_section = line == _TAGS_HEADING
+            continue
+        if in_section and line == _TABLE_HEADER:
+            table.append(line)
+    return table or None
+
+def generated_table(output):
+    """The lines `krabka-bdd tags-table` printed, without trailing whitespace or blank lines."""
+    lines = [line.rstrip() for line in output.splitlines()]
+    for _ in range(len(lines)):
+        if lines and not lines[-1]:
+            lines.pop()
+    return lines
+
+def table_mismatch(guide, generated):
+    """The complaint about the guide's table differing from the rendered one, or "".
+
+    Each differing line shows as a `-` line from the guide and a `+` line from
+    the glossary, numbered from the table's header.
+    """
+    if guide == generated:
+        return ""
+    found = [
+        "The tag table in %s does not match `krabka-bdd tags-table`:" % GUIDE,
+    ]
+    for index in range(max(len(guide), len(generated))):
+        have = guide[index] if index < len(guide) else None
+        want = generated[index] if index < len(generated) else None
+        if have == want:
+            continue
+        found.append("  table line %d:" % (index + 1))
+        if have != None:
+            found.append("  - " + have)
+        if want != None:
+            found.append("  + " + want)
+    found.append(
+        "Regenerate the table from %s: replace it with the output of `%s`." % (
+            GLOSSARY,
+            " ".join(TAGS_TABLE_ARGV),
+        ),
+    )
+    return "\n".join(found)
+
+def tags_table_problem(code, stdout, stderr, guide_text):
+    """The complaint about the `tags-table` run and the guide's table, or ""."""
+    if code != 0:
+        return "`%s` exited with %s:\n%s" % (" ".join(TAGS_TABLE_ARGV), code, _output(stdout, stderr))
+    guide = guide_tags_table(guide_text)
+    if guide == None:
+        return "%s has no `%s` table under `%s`" % (GUIDE, _TABLE_HEADER, _TAGS_HEADING)
+    return table_mismatch(guide, generated_table(stdout))
+
+def _capture(ctx, argv, root):
+    result = (
+        ctx.std.process.command(argv[0])
+            .args(argv[1:])
+            .current_dir(root)
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    return result.status.code, result.stdout, result.stderr
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    code, stdout, stderr = _capture(ctx, LINT_ARGV, root)
+    problems = []
+    lint = lint_problem(code, stdout, stderr)
+    if lint:
+        problems.append(lint)
+
+    code, stdout, stderr = _capture(ctx, TAGS_TABLE_ARGV, root)
+    table = tags_table_problem(code, stdout, stderr, ctx.std.fs.read_to_string(root + "/" + GUIDE))
+    if table:
+        problems.append(table)
+
+    for problem in problems:
+        ctx.std.io.stderr.write(problem + "\n")
+    if problems:
+        return 1
+    ctx.std.io.stdout.write("check-gherkin: features clean against %s; tag table matches %s\n" % (BASELINE, GLOSSARY))
+    return 0
+
+check_gherkin = task(
+    summary = "Lint every Gherkin feature and check the guide's tag table against the glossary",
+    implementation = _impl,
+    args = {},
+)

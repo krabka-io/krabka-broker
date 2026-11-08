@@ -1,0 +1,130 @@
+"""Unit tests for `check_gherkin.axl`."""
+
+load(
+    "./check_gherkin.axl",
+    "LINT_ARGV",
+    "TAGS_TABLE_ARGV",
+    "generated_table",
+    "guide_tags_table",
+    "lint_problem",
+    "table_mismatch",
+    "tags_table_problem",
+)
+load("./testing.axl", "check_contains", "check_eq", "suite", "suite_task")
+
+_TABLE = [
+    "| Tag | Meaning |",
+    "| :--- | :--- |",
+    "| `@docker` | Needs a container. |",
+    "| `@journey` | An end-to-end flow. |",
+]
+
+_GUIDE = "\n".join([
+    "# Gherkin style guide",
+    "",
+    "## Rules",
+    "",
+    "| Tag | Meaning |",
+    "| :--- | :--- |",
+    "| `@elsewhere` | A table outside the Tags section. |",
+    "",
+    "## Tags",
+    "",
+    "A tag is an index entry.",
+    "",
+] + _TABLE + [
+    "",
+    "The tags live in one glossary.",
+    "",
+    "| Tag | Meaning |",
+    "| :--- | :--- |",
+    "| `@later` | A second table in the section. |",
+    "",
+    "## Journeys",
+])
+
+def _test_lint_passes_on_zero(_ctx):
+    check_eq("clean", lint_problem(0, "ignored output", ""), "")
+
+def _test_lint_findings_fail_with_their_output(_ctx):
+    problem = lint_problem(1, "crates/log/tests/features/a.feature:3:5 step-tense ...\n", "")
+    check_contains("names the cause", problem, "new findings or stale baseline entries")
+    check_contains("carries the output", problem, "a.feature:3:5 step-tense")
+    check_contains("names the baseline", problem, "crates/bdd-cli/gherkin-baseline.tsv")
+
+def _test_lint_usage_error(_ctx):
+    problem = lint_problem(2, "", "error: unreadable baseline\n")
+    check_eq("usage error", problem, "krabka-bdd lint could not run (usage or IO error):\nerror: unreadable baseline")
+
+def _test_lint_other_codes_are_the_build_or_the_system(_ctx):
+    for code in [101, None]:
+        problem = lint_problem(code, "", "error: could not compile\n")
+        check_contains("names the command", problem, " ".join(LINT_ARGV))
+        check_contains("names the code", problem, "exited with %s" % code)
+        check_contains("carries stderr", problem, "could not compile")
+
+def _test_guide_tags_table(_ctx):
+    check_eq("the first table under ## Tags, to its end", guide_tags_table(_GUIDE), _TABLE)
+    check_eq("trailing whitespace does not count", guide_tags_table(_GUIDE.replace("| :--- | :--- |", "| :--- | :--- |  ")), _TABLE)
+    check_eq("no Tags section", guide_tags_table("## Rules\n\n| Tag | Meaning |\n| :--- | :--- |\n"), None)
+    check_eq("a Tags section without the table", guide_tags_table("## Tags\n\nNo table here.\n\n## Journeys\n"), None)
+
+def _test_generated_table(_ctx):
+    check_eq("trailing newlines dropped", generated_table("\n".join(_TABLE) + "\n\n"), _TABLE)
+
+def _test_equal_tables_pass(_ctx):
+    check_eq("equal", table_mismatch(_TABLE, list(_TABLE)), "")
+
+def _test_a_changed_row_is_shown_as_a_diff(_ctx):
+    generated = _TABLE[:3] + ["| `@journey` | An end-to-end flow across many rules. |"]
+    check_eq(
+        "the one differing line, both sides, and how to fix it",
+        table_mismatch(_TABLE, generated),
+        "\n".join([
+            "The tag table in docs/style_guides/gherkin_style_guide.md does not match `krabka-bdd tags-table`:",
+            "  table line 4:",
+            "  - | `@journey` | An end-to-end flow. |",
+            "  + | `@journey` | An end-to-end flow across many rules. |",
+            "Regenerate the table from crates/bdd-model/glossary.toml: " +
+            "replace it with the output of `%s`." % " ".join(TAGS_TABLE_ARGV),
+        ]),
+    )
+
+def _test_a_missing_row_is_shown_once(_ctx):
+    generated = _TABLE + ["| `@manual` | Checked by a person. |"]
+    problem = table_mismatch(_TABLE, generated)
+    check_contains("the added row", problem, "  table line 5:\n  + | `@manual` | Checked by a person. |\nRegenerate")
+    check_eq("no guide side for a line the guide lacks", problem.find("  - "), -1)
+
+def _test_tags_table_problem(_ctx):
+    check_eq("matching guide", tags_table_problem(0, "\n".join(_TABLE) + "\n", "", _GUIDE), "")
+    check_contains(
+        "a failed run",
+        tags_table_problem(2, "", "error: unreadable glossary", _GUIDE),
+        "tags-table` exited with 2:\nerror: unreadable glossary",
+    )
+    check_contains(
+        "a guide without the table",
+        tags_table_problem(0, "\n".join(_TABLE), "", "## Tags\n"),
+        "has no `| Tag | Meaning |` table under `## Tags`",
+    )
+    check_contains(
+        "a stale guide",
+        tags_table_problem(0, "\n".join(_TABLE[:3]), "", _GUIDE),
+        "  table line 4:\n  - | `@journey` | An end-to-end flow. |\nRegenerate",
+    )
+
+check_gherkin_tests = suite("check-gherkin", [
+    _test_lint_passes_on_zero,
+    _test_lint_findings_fail_with_their_output,
+    _test_lint_usage_error,
+    _test_lint_other_codes_are_the_build_or_the_system,
+    _test_guide_tags_table,
+    _test_generated_table,
+    _test_equal_tables_pass,
+    _test_a_changed_row_is_shown_as_a_diff,
+    _test_a_missing_row_is_shown_once,
+    _test_tags_table_problem,
+])
+
+test_check_gherkin = suite_task(check_gherkin_tests)

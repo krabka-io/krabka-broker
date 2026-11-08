@@ -1,36 +1,63 @@
 //! Reserving ephemeral loopback ports for a multi-broker test cluster.
 //!
 //! Both helpers hand back one client address and one controller address per
-//! broker. [`bind_and_hold_ports`] also returns the listeners it bound, so
-//! nothing can take a port between the reservation and the broker that adopts
-//! it; [`bind_and_drop_ports`] is the older form, for callers that let
-//! `Broker::start` re-bind the address itself.
+//! broker, and keep each port held until the caller lets it go, so nothing can
+//! take a port between the reservation and the listener that binds it.
+//! [`bind_and_hold_ports`] returns listeners for a caller that hands them to
+//! `Broker::start_with_listeners`. [`reserve_ports`] returns non-listening
+//! reservations for a caller whose listener binds the address itself: a
+//! `Broker::start`, or a JVM container published with `docker run -p`.
 
-use {std::net::SocketAddr, tokio::net::TcpListener};
+use {
+    super::reserved_port::reserve_port,
+    std::net::{Ipv4Addr, SocketAddr},
+    tokio::net::{TcpListener, TcpSocket},
+};
 
-/// Reserve `n` pairs of ephemeral loopback ports, one client port and one
-/// controller port per broker, with the bind-and-drop trick. Bind a
-/// `TcpListener` on `127.0.0.1:0`, read its assigned port, then drop the
-/// listener. The OS does not immediately reuse the port for another bind, so
-/// the caller can pass it to `Broker::start` and the broker re-binds it on the
-/// same address.
+/// `n` client and `n` controller loopback ports, held by [`reserve_port`]
+/// reservations until this is dropped.
 ///
-/// This avoids the Linux `TIME_WAIT` problem that fixed ports hit when many
-/// tests in the same binary boot 3-broker clusters back-to-back.
-pub async fn bind_and_drop_ports(n: usize) -> (Vec<SocketAddr>, Vec<SocketAddr>) {
-    let mut client_addrs = Vec::with_capacity(n);
-    let mut controller_addrs = Vec::with_capacity(n);
-    for _ in 0..n {
-        let cl = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        client_addrs.push(cl.local_addr().unwrap());
-        let ct = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        controller_addrs.push(ct.local_addr().unwrap());
-        drop((cl, ct));
-    }
-    (client_addrs, controller_addrs)
+/// Keep it until every listener that binds these addresses has bound them. A
+/// listener with `SO_REUSEADDR` can bind a reserved port, whether on the
+/// loopback address or on `0.0.0.0`; a socket without it cannot. Tokio and
+/// mio set it on every listener, the JDK sets it on Kafka's, and the proxy
+/// that `docker run -p` starts sets it too.
+pub struct ReservedPorts {
+    /// The client address of each broker, by index.
+    pub clients: Vec<SocketAddr>,
+    /// The controller address of each broker, index-aligned with `clients`.
+    pub controllers: Vec<SocketAddr>,
+    /// The sockets that hold the ports; never read.
+    _reservations: Vec<TcpSocket>,
 }
 
-/// Race-free replacement for [`bind_and_drop_ports`]. It binds `n` pairs of
+/// Reserve `n` pairs of ephemeral loopback ports, one client port and one
+/// controller port per broker. The ports stay held, and refuse connections,
+/// until the returned [`ReservedPorts`] is dropped.
+///
+/// It replaces binding a listener on `127.0.0.1:0`, reading its port and
+/// dropping it: a port dropped that way is free again at once, and under
+/// parallel test binaries another `bind(0)` can be handed it before the broker
+/// binds it, which fails the broker's start with `AddrInUse`.
+pub fn reserve_ports(n: usize) -> ReservedPorts {
+    let mut reservations = Vec::with_capacity(2 * n);
+    let mut clients = Vec::with_capacity(n);
+    let mut controllers = Vec::with_capacity(n);
+    for _ in 0..n {
+        for addresses in [&mut clients, &mut controllers] {
+            let (socket, address) = reserve_port((Ipv4Addr::LOCALHOST, 0));
+            reservations.push(socket);
+            addresses.push(address);
+        }
+    }
+    ReservedPorts {
+        clients,
+        controllers,
+        _reservations: reservations,
+    }
+}
+
+/// Binds `n` pairs of
 /// ephemeral loopback listeners, one client and one controller per broker, and
 /// returns their concrete addrs **alongside the still-open listeners**,
 /// index-aligned.
@@ -38,15 +65,12 @@ pub async fn bind_and_drop_ports(n: usize) -> (Vec<SocketAddr>, Vec<SocketAddr>)
 /// Hand `client_listeners[i]` and `controller_listeners[i]` to
 /// [`krabka_broker::Broker::start_with_listeners`] or
 /// `start_with_controller_listener`, so the OS port is never released before
-/// the broker adopts it. That closes the [`bind_and_drop_ports`] TOCTOU window
-/// in which a concurrently-running test binary steals the freed port
-/// (`AddrInUse`) under parallel `cargo nextest`.
+/// the broker adopts it.
 ///
 /// The returned `SocketAddr`s are the listeners' real `local_addr()`s, so the
-/// caller builds its static voter set and advertised addresses from them
-/// exactly as with [`bind_and_drop_ports`]. The only call-site change is to
-/// pass the matching listener into `start_with_listeners` instead of letting
-/// `Broker::start` re-bind the address.
+/// caller builds its static voter set and advertised addresses from them as it
+/// would from [`reserve_ports`]. Use [`reserve_ports`] instead when something
+/// other than `start_with_listeners` binds the address.
 #[allow(dead_code)] // not every test binary that includes `support` uses this
 pub async fn bind_and_hold_ports(
     n: usize,

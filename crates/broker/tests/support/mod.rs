@@ -102,6 +102,7 @@ pub mod produce;
 pub mod producer;
 pub mod quorum;
 pub mod records;
+mod reserved_port;
 pub mod retry;
 pub mod sasl;
 pub mod share;
@@ -167,7 +168,8 @@ pub use self::{
         sasl_client, sasl_plain_security, start_with_operator_key, start_with_operator_keys,
         start_with_operator_keys_sasl,
     },
-    ports::{bind_and_drop_ports, bind_and_hold_ports},
+    ports::{ReservedPorts, bind_and_hold_ports, reserve_ports},
+    reserved_port::reserve_port,
     sasl::{sasl_plaintext_config, sasl_plaintext_with_users, start_broker},
     single_broker::{
         GroupCoordinatorBoot, InProcess, boot_single, heartbeat_config, standalone_broker, start,

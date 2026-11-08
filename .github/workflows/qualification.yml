@@ -45,7 +45,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       - name: require completed evidence
         run: aspect check-qualification --manifest "${MANIFEST}" --final
       - name: verify source revisions, branches and OCI digests still exist
@@ -96,7 +96,7 @@ jobs:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       - name: freeze candidate inputs
         env:
           MANIFEST: ${{ inputs.manifest || 'qualification/ecosystem-eight-gate-baseline.json' }}
@@ -147,7 +147,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: qualification-input
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
@@ -193,7 +193,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: qualification-input
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
         with:
           bazelisk-cache: true
       - name: execute the disaster-recovery drill
@@ -257,7 +257,7 @@ jobs:
         with:
           pattern: qualification-*
           path: qualification-downloads
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       - name: assemble and validate exact candidate receipts
         run: |
           set -euo pipefail
@@ -305,7 +305,7 @@ jobs:
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/reclaim-disk
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      - uses: aspect-build/setup-aspect@ccc445383a7d4cea499744d823a7698ae077a407 # 2026.45
       # Each node advertises host.docker.internal to its peers and to the
       # executor's clients, as in the ci.yml soak job.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts

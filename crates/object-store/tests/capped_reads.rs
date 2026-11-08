@@ -297,7 +297,7 @@ fn reports_not_found(capped_read_scenario: &CappedReadScenario, object: ArchiveO
 
 #[rstest_bdd_macros::then("the read fails with a store error")]
 fn fails_with_store_error(capped_read_scenario: &CappedReadScenario) {
-    assert2::assert!(let Err(ObjectStoreError::Backend(_)) = capped_read_scenario.read.get());
+    assert2::assert!(let Err(ObjectStoreError::Unavailable(_)) = capped_read_scenario.read.get());
 }
 
 #[rstest_bdd_macros::then(

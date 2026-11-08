@@ -63,7 +63,10 @@ async fn caught_up_quorum(contested: &mut ContestedElection, id: String) {
     let cluster_id = Uuid::parse_str(&id).expect("cluster UUID");
     let cid_str = kafka_cluster_id_string(cluster_id);
 
-    let ([p1, p2, p3], [c1, c2], dirs) = MixedQuorum::start(cluster_id, Some(secs(2))).await;
+    // `_reserved` holds JVM voter 3's port until `start_jvm_controller` below
+    // has published it.
+    let ([p1, p2, p3], [c1, c2], dirs, _reserved) =
+        MixedQuorum::start(cluster_id, Some(secs(2))).await;
 
     // JVM voter id 3: release the dead leader fast, self-nominate slowly.
     let props = jvm_controller_properties(

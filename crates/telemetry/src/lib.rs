@@ -19,6 +19,17 @@
 //! on. `OTEL_SDK_DISABLED=true` turns OTLP off and overrides the other
 //! variables.
 //!
+//! ## Cloud Logging trace correlation
+//!
+//! [`init`] takes the Google Cloud project id whose Cloud Trace holds the
+//! traces. With a project id and OTLP export both on, each stdout entry that a
+//! traced span encloses carries `logging.googleapis.com/trace` as
+//! `projects/<project id>/traces/<trace id>`, `logging.googleapis.com/spanId`
+//! and `logging.googleapis.com/trace_sampled`. Cloud Logging then links the
+//! entry to its trace. The span context comes from the `tracing-opentelemetry`
+//! layer, so with OTLP off no entry carries the keys. With no project id,
+//! entries carry no trace keys.
+//!
 //! ## WebAssembly
 //!
 //! On `wasm32-wasip1` the crate has no OTLP exporter and no profiling admin

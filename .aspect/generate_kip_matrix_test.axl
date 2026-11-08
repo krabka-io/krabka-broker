@@ -4,9 +4,13 @@ load(
     "./generate_kip_matrix.axl",
     "annotation_bodies",
     "api_versions_rows",
+    "bdd_directory_bindings",
+    "bdd_directory_features",
     "bdd_feature_scenarios",
+    "bdd_generated_test_names",
     "bdd_scenario_bindings",
     "bdd_step_matches",
+    "bdd_test_name",
     "built_image_keys",
     "calls_function",
     "catalog_outside_annotations",
@@ -37,6 +41,7 @@ load(
     "link_citations",
     "lock_for",
     "log_contract_rows",
+    "macro_argument_words",
     "parse_annotations",
     "parse_divergences",
     "parse_inventory",
@@ -880,6 +885,159 @@ def _test_bdd_feature_outline(_ctx):
     check_eq("structured input expands with its example", steps[7].table[1], ["modern"])
     check_eq("docstring does not add a Given binding", steps[3].kind, "then")
 
+def _test_bdd_feature_rules(_ctx):
+    feature = "\n".join([
+        "Feature: Ruled clients",
+        "  Background:",
+        "    Given a ready broker",
+        "  Scenario: before any rule",
+        "    Then every request succeeds",
+        "  Rule: modern clients negotiate",
+        "    Background:",
+        "      Given pinned clients select topics",
+        "    Scenario: modern negotiation",
+        "      When clients request Fetch",
+        "      Then the modern client negotiates",
+        "  Rule: classic clients join",
+        "    Scenario: classic join",
+        "      When clients request JoinGroup",
+    ])
+    scenarios = bdd_feature_scenarios(feature)
+    check_eq("every scenario, under a rule or not, counts", sorted(scenarios), ["before any rule", "classic join", "modern negotiation"])
+    check_eq(
+        "feature Background, then rule Background, then the scenario",
+        [(step.kind, step.text) for step in scenarios["modern negotiation"]],
+        [
+            ("given", "a ready broker"),
+            ("given", "pinned clients select topics"),
+            ("when", "clients request Fetch"),
+            ("then", "the modern client negotiates"),
+        ],
+    )
+    check_eq(
+        "a rule Background does not reach the next rule",
+        [step.text for step in scenarios["classic join"]],
+        ["a ready broker", "clients request JoinGroup"],
+    )
+    check_eq(
+        "a rule Background does not reach a scenario before the rule",
+        [step.text for step in scenarios["before any rule"]],
+        ["a ready broker", "every request succeeds"],
+    )
+
+def _test_bdd_directory_bindings(_ctx):
+    suite = "\n".join([
+        "// krabka_bdd::scenarios!(\"tests/features/commented\");",
+        'krabka_bdd::scenarios!("tests/features/clients/", fixtures = [clients: Clients]);',
+        "krabka_bdd::scenarios!(",
+        '    dir = "tests/features/named",',
+        '    runtime = "tokio-multi-thread",',
+        ");",
+        'rstest_bdd_macros::scenarios!("tests/features/plain");',
+    ])
+    check_eq(
+        "positional and named directories, without a trailing slash; comments and plain rstest-bdd skipped",
+        bdd_directory_bindings(suite),
+        ["tests/features/clients", "tests/features/named"],
+    )
+    check_eq(
+        "only feature files under the directory itself",
+        bdd_directory_features("tests/features/clients", {
+            "tests/features/clients/b.feature": "",
+            "tests/features/clients/nested/a.feature": "",
+            "tests/features/clients/README.md": "",
+            "tests/features/clients_more/c.feature": "",
+        }),
+        ["tests/features/clients/b.feature", "tests/features/clients/nested/a.feature"],
+    )
+
+def _test_macro_argument_words(_ctx):
+    check_eq(
+        "the call's words outside strings, stopping at its closing parenthesis",
+        macro_argument_words('"tests/features/tags = x", tags = "@a", fixtures = [c: C(1)]);\nfn tags() {}'),
+        ["tags", "fixtures", "c", "C", "1"],
+    )
+    check_eq(
+        "no tags argument",
+        "tags" in macro_argument_words('"tests/features/clients", runtime = "tokio-multi-thread");'),
+        False,
+    )
+
+def _test_bdd_generated_test_names(_ctx):
+    suite = 'krabka_bdd::scenarios!("tests/features/clients", fixtures = [clients: Clients]);'
+    features = {"tests/features/clients/pinned.feature": _BDD_FEATURE}
+    check_eq(
+        "one name per scenario, as scenarios! names its tests",
+        sorted(bdd_generated_test_names(suite, features)),
+        sorted([bdd_test_name(title) for title in bdd_feature_scenarios(_BDD_FEATURE)]),
+    )
+    check_eq(
+        "the modern consumer scenario is among them",
+        "modern_consumer" in bdd_generated_test_names(suite, features),
+        True,
+    )
+
+def _test_bdd_test_name(_ctx):
+    for title, want in [
+        ("modern consumer", "modern_consumer"),
+        ("Fetch v13 uses topic IDs", "fetch_v13_uses_topic_ids"),
+        ("camelCase step", "camel_case_step"),
+        ("2 clients", "_2_clients"),
+        ("match", "r_match"),
+        ("--", "unnamed"),
+    ]:
+        check_eq("test name of %r" % title, bdd_test_name(title), want)
+
+_BDD_DIRECTORY_SUITE = "\n".join([
+    '#[krabka_bdd::given("a ready broker")]',
+    "async fn broker() {}",
+    "#[krabka_bdd::given(",
+    '    "pinned clients select topics"',
+    ")]",
+    "async fn selected_clients(#[datatable] rows: Rows<ClientInput>) {",
+    "    for row in rows { CLIENTS.iter().find(|client| client.image == row.image); }",
+    "}",
+    '#[krabka_bdd::when("clients request {api}")]',
+    "fn request(api: String) {}",
+    '#[krabka_bdd::then("every request succeeds")]',
+    "fn succeeds() {}",
+    '#[krabka_bdd::then("the modern client negotiates")]',
+    "fn modern() {",
+    "    &CLIENTS[1]",
+    "}",
+    'krabka_bdd::scenarios!("tests/features/clients", fixtures = [clients: Clients]);',
+])
+
+def _test_bdd_directory_client_evidence(_ctx):
+    ruled = "\n".join([
+        "Feature: Ruled clients",
+        "  Background:",
+        "    Given a ready broker",
+        "  Rule: the modern client is selected",
+        "    Background:",
+        "      Given pinned clients select topics",
+        "        | image | program | library |",
+        "        | docker.io/krabka-io/kcat:librdkafka-2.15.0 | kcat | librdkafka 2.15.0 |",
+        "    Scenario: ruled modern fetch",
+        "      When clients request Fetch",
+        "      Then the modern client negotiates",
+        "  Rule: no client is selected",
+        "    Scenario: ruled plain request",
+        "      When clients request Metadata",
+        "      Then every request succeeds",
+    ])
+    features = {
+        "tests/features/clients/client.feature": _BDD_FEATURE,
+        "tests/features/clients/ruled.feature": ruled,
+        "tests/features/other/unbound.feature": "Feature: unbound\n  Scenario: never read\n    Given nothing binds this",
+    }
+    driven = client_cases_by_function(_BDD_DIRECTORY_SUITE, 2, features = features, clients = _CLIENTS)
+    check_eq("a directory scenario is evidence under its generated name", driven["modern_consumer"], [1])
+    check_eq("its table still selects the clients", driven["classic_consumers"], [0, 1])
+    check_eq("a rule Background table narrows only that rule's scenario", driven["ruled_modern_fetch"], [1])
+    check_eq("a scenario reaching no client has none", driven["ruled_plain_request"], [])
+    check_eq("a feature outside the directory binds nothing", "never_read" in driven, False)
+
 def _test_bdd_client_evidence(_ctx):
     driven = client_cases_by_function(_BDD_SUITE, 2, features = {"tests/client.feature": _BDD_FEATURE}, clients = _CLIENTS)
     check_eq("modern scenario gets exactly its client, never the table-wide catalog", driven["modern_consumer"], [1])
@@ -1132,6 +1290,12 @@ generate_kip_matrix_tests = suite("generate-kip-matrix", [
     _test_bdd_step_matches,
     _test_bdd_feature_scenarios,
     _test_bdd_feature_outline,
+    _test_bdd_feature_rules,
+    _test_bdd_directory_bindings,
+    _test_macro_argument_words,
+    _test_bdd_generated_test_names,
+    _test_bdd_test_name,
+    _test_bdd_directory_client_evidence,
     _test_bdd_client_evidence,
     _test_bdd_client_selection_is_scenario_local,
     _test_client_evidence,

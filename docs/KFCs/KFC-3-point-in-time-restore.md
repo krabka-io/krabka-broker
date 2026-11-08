@@ -80,7 +80,7 @@ Three flag combinations are rejected. A partition named twice by `--to-offset` i
 
 `--dry-run` runs discovery, verification, and the bound, and checks the format against a throwaway directory. It writes nothing to `--log-dir`, so the real run that follows it can use the same directory. It still refuses a `--log-dir` that is not empty, as a real run does, and it produces the same report a real run produces with `dry_run` set. Without `--cluster-id`, each run generates its own cluster id, so the plan names an id the restored cluster does not get; pass `--cluster-id` to pin it. An operator who wants to see what a bound will do runs it and reads the counts.
 
-`--continue-on-corrupt` turns a segment that fails verification into a skipped segment in the report instead of an error. `--report text|json` selects the rendering.
+`--continue-on-corrupt` turns a damaged segment into a skipped segment in the report instead of an error. `--report text|json` selects the rendering.
 
 ### Exit Codes
 
@@ -220,6 +220,8 @@ A segment that fails verification stops the whole restore, and the error names t
 `--continue-on-corrupt` is the escape, and it is honest about what it costs. Each skipped segment appears in the report with the reason, and a skipped segment leaves a hole in the partition that the restore cannot fill. An operator who takes that trade is choosing the records they can still have, and the report tells them exactly which ones they cannot. The flag never catches an authenticity failure.
 
 The flag does not rescue a materialization failure. A target that will not accept a write is not a damaged segment, and continuing past it would produce nothing.
+
+Nor does it rescue an archive that cannot be read. Damage is a batch that fails its CRC or ends early, a copy missing an artifact, or an artifact the listing named that the archive no longer holds. A throttled store, a server error, a timeout or a refused credential says nothing about the segment, which may be intact. Skipping it would report records as lost that a later run can read. So the restore stops with exit `4`, as it does without the flag.
 
 ### What the Archive Holds Bounds the Restore
 
