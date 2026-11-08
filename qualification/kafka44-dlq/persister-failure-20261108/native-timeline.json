@@ -1,0 +1,7 @@
+{
+  "held": "client=krabka-broker-dlq-1 api=0 version=13 correlation=1 response_bytes=62 response_sha256=804fc3509d87201d2056363d20d78057e215f9f2bfb761baf7b1478175ae6270 held_ms=1794115298190\n",
+  "state3_observed_ns": 1794115300017166641,
+  "state_quorum_stopped_ns": 1794115300017240439,
+  "persister_failure_observed_ns": 1794115330064229557,
+  "kill_completed_ns": 1794115330068168352
+}

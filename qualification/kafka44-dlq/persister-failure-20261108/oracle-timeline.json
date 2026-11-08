@@ -1,0 +1,7 @@
+{
+  "held": "client=ShareGroupDLQManager-client-1 api=0 version=13 correlation=0 response_bytes=62 response_sha256=cdd09d1e0361cbcd3f812261585d0e9c606006ee8ab8b762a358e6d70f6c3b7e held_ms=1794115388728\n",
+  "state3_observed_ns": 1794115390552569146,
+  "state_quorum_stopped_ns": 1794115390616042199,
+  "persister_failure_observed_ns": 1794115420852575785,
+  "kill_completed_ns": 1794115421517319481
+}

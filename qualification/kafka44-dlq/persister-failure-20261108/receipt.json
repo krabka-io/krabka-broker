@@ -1,0 +1,75 @@
+{
+  "status": "paired-live-rf3-phase2-persister-transport-failure-recovery-pass",
+  "date": "2026-11-08",
+  "private_artifacts": "/home/matt/.openclaw/workspace/coordinator/.private/dlq-rf3-persister-final-20261108",
+  "candidate": {
+    "source_revision": "c51d444b3c290b307bb9cb43b2f4faed9344a603",
+    "broker_sha256": "07495afa62f59249f7006561209cd1c09b132f49a0dad4e2f461a654fb41bfbd",
+    "formatter_sha256": "fea274ad80f93339cb7b5fbd4ad4fdcc30e2674c5efd5b196cd598968d0bd5e8",
+    "combined_tree_executable": false,
+    "manager_dead_letter_and_persistence_sources_unchanged": true
+  },
+  "oracle_image": "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f",
+  "observed": {
+    "native_failure": "phase-two persister connection/API negotiation times out after30s; error returned to manager before SIGKILL",
+    "oracle_failure": "actual WRITE_SHARE_GROUP_STATE in-flight request cancelled after30s; higher-level retries may still be pending at SIGKILL",
+    "both": [
+      "one intact DLQ copy and durable ARCHIVING observed before outage",
+      "RF3/minISR2 state peers2/3 paused before DLQ success confirmation released",
+      "source killed only after actual persister transport failure observed",
+      "recovered 15-second share polls empty; native two intact DLQ copies, oracle one, both lag0",
+      "three replica logs each effective ARCHIVED/start0/deliveryCompleteCount1 after single-offset delta replay"
+    ]
+  },
+  "checks": [
+    "fixture javac compilation",
+    "paired live setup/count/resume/verify",
+    "verify.py failure timelines and six effective replica states after delta replay",
+    "native broker and formatter immutable hashes",
+    "git diff --check; Python compilation"
+  ],
+  "limits": [
+    "not a combined-tree binary run",
+    "native persister connection failure and oracle WRITE_SHARE_GROUP_STATE timeout are distinct cut points",
+    "no application error response injection, disk EIO or power cut",
+    "controller quorum also paused",
+    "one record, one partition, one outage/crash per peer; no exhaustive schedule or exactly-once claim",
+    "initial fixed-two-copy oracle verifier rejected actualone-copy result; failure retained; exact one-copy verifier after owned restart passed",
+    "oracle state RPC committed after source kill: timeout does not prove write failure",
+    "initial interrupted oracle-final-callback pilot retained separately at .private/dlq-rf3-persister-20261108; not a passing pair"
+  ],
+  "shutdown": "owned processes and three oracle containers stopped; paused peers resumed; data and containers retained",
+  "artifacts_sha256": {
+    "README.md": "59336a2aa258fdd2c5cfff48f75b756bd69039f8001dfe6d563acc7ae68c8ae8",
+    "ShareFaultRf3.java": "b0fb0f021e4d44851b8a33e9eaebe161a43b7dbca1363c6b71e6dc0a1c793163",
+    "native-count.txt": "f533be2b3dab817745cb0ca5008731aa487f62089224accb92ce2d9f75d6c7a5",
+    "native-resume.txt": "a5d42e28ccafa4bbd044d14f893d135fcd76a3a0af0ceb2607664e6a6410abad",
+    "native-setup.txt": "2bdf3149c8a6b11766f3f3aa102a44f19ff60b7b47031541c755587b8e4e6fe6",
+    "native-source-failure.txt": "b2155dc7e3d1e6aa48028853cde15e8151382b96797c72b365ce7f2fbfe069ed",
+    "native-state-before.txt": "fa9dece815f545a8f15cd9b54e600cb6b0c67855cecbb4daa9ce560cd23b5c78",
+    "native-timeline.json": "2b8e9994d0aa9d73c632b65fecf4af33a91464ebbe9fb68b9e96128b7fb071d6",
+    "native-verify.txt": "a451f7296248496959f21ed5333ed1ec6eea744b0705ce458860335f4d500c71",
+    "native1-state-after.txt": "9bd08e6c652b64cd970f6b5f24016fc416749bda3c89606305b8451c9e4be53d",
+    "native2-state-after.txt": "a12be1014542ce934a07506ab1d6ed3764bc7cbbf2aa552049dc0fd725ace4aa",
+    "native3-state-after.txt": "76255e0f0a07f3927531f22498623e6919b51f64ecb892a2c1498c348b59431e",
+    "oracle-count.txt": "f533be2b3dab817745cb0ca5008731aa487f62089224accb92ce2d9f75d6c7a5",
+    "oracle-resume-postrestart-final.txt": "a5d42e28ccafa4bbd044d14f893d135fcd76a3a0af0ceb2607664e6a6410abad",
+    "oracle-resume.txt": "a5d42e28ccafa4bbd044d14f893d135fcd76a3a0af0ceb2607664e6a6410abad",
+    "oracle-setup.txt": "2bdf3149c8a6b11766f3f3aa102a44f19ff60b7b47031541c755587b8e4e6fe6",
+    "oracle-source-failure.txt": "93e1c51f8b159003c0d65e65754c98769437b6fb2ae6aad98cd370aca798bef1",
+    "oracle-state-before.txt": "66ab287598361cbb246676a732b316dae560cae1a2b0b50d3d7f212012a794b7",
+    "oracle-timeline.json": "7057d9e97d1da8749525d9c63e602fa7398926951d729db1cbb2a41f54c72449",
+    "oracle-verify-expected2-failed.txt": "e614e72d83ec38470355a44bc3dd088c091d16684ed0b42a476e8ee5446f8ece",
+    "oracle-verify-postrestart-final.txt": "b599708f5acabef6b16e5b9576cbb2f0649cd531796c2c0a99fb5aedfa93eef0",
+    "oracle-verify.txt": "b599708f5acabef6b16e5b9576cbb2f0649cd531796c2c0a99fb5aedfa93eef0",
+    "oracle1-state-after.txt": "0051c3d824170f806814b7a11d8eff596f9f77e573b152a3337b0a13671fab7b",
+    "oracle2-state-after.txt": "2827c81510fa8cf7bf14e191c8359faf0ea9922473265665769ec48c08774066",
+    "oracle3-state-after.txt": "f39f083a57959abe03272239ac95565f90c5a7292252bb16429abbae0e470ea2",
+    "results.json": "0a1df033b4579ca2bbe51be0f86c03ad9afeb4963c5a4469d3434040df181123",
+    "run.py": "94f1385031e29f863c3b69c5ccabc013af66c6daa0f2840585ee3405e395a5b8",
+    "verification.txt": "5cf142e25107ebc04af96198fd7dae898a5067e969a0c4992d817c8d4b1334d8",
+    "verify.py": "7ba79528f32a9cc14cf3ec6a8925c22c398108d941a1e626a2755c29e2dfffee"
+  },
+  "harness_status": "original run completed stepwise after fixed-two-copy oracle assertion rejected legitimate one-copy result; corrected harness syntax checked, not rerun end-to-end",
+  "universal_qualification_pass": false
+}
