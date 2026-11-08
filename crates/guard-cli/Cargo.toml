@@ -29,6 +29,8 @@ krabka-audit = { workspace = true }
 # `--bootstrap-server` and `--command-config`, shared with every operator CLI.
 krabka-cli-connection = { path = "../cli-connection" }
 krabka-client-core = { version = "0.8.0" }
+# `epoch_ms`, the epoch-millisecond clock a signed freeze record carries.
+krabka-log = { version = "1.1.5", path = "../log" }
 krabka-protocol = { version = "0.8.0" }
 krabka-units = { workspace = true }
 
