@@ -20,3 +20,7 @@ No remote publication, merge, release or production change was performed.
 5. [Active-member plugin-removal restart](streams-assignor-active-restart-20261108/README.md) is now measured on both peers for a clean single-broker restart. Arbitrary fault schedules and inconsistent plugins across nodes remain unqualified.
 
 The combined tree was assembled without conflicts. The subsequent [Java-extension qualification](jvm-extensions-20261108/README.md) passes the combined broker-library suite (9,157 default passes plus all 7 ignored JVM checks in separate lanes) and broker-library Clippy. No whole-workspace/all-targets Clippy run or refreshed combined live-broker qualification is claimed. The retained base is intentionally pinned, not silently rebased onto a moving remote main.
+
+## Combined candidate rerun (2026-11-09)
+
+The [fresh paired persister run](kafka44-dlq/combined-persister-20261109/README.md) supersedes the stale-executable and corrected-harness-not-rerun limitations above for this one schedule. Locked combined broker/formatter build passed; both peer runners and all six replica-state assertions passed. Native observed two DLQ copies and oracle one, both lag zero. The remaining transport-cut-point, negative-response, deployment and durability limits remain unchanged.

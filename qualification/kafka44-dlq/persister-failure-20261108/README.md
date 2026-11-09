@@ -70,3 +70,7 @@ then owned restart, live passthrough gate, rejoin/15s empty polling, and exact
 one-copy/lag-zero verification. Logs preserve that distinction. Earlier failed
 postrestart probes ran without a live advertised gate and are retained privately;
 they are not successful broker assertions.
+
+## Later rerun
+
+[2026-11-09 combined-tree evidence](../combined-persister-20261109/README.md) completes the corrected harness end-to-end. Scripts here now use unique container names and validate the observed permitted oracle count. This directory’s original receipt hashes describe the historical script versions at `86afb6fdd`; new script hashes are retained in the later receipt. Historical results and limitations above are preserved.

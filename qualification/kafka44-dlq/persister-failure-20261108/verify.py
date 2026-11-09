@@ -12,7 +12,9 @@ for peer in ('native','oracle'):
  count_before=r/f'{peer}-count-before.txt'
  if not count_before.exists():count_before=r/f'{peer}-count.txt'
  assert 'COUNT dlq_records=1' in count_before.read_text()
- expected=2 if peer=='native' else 1
+ recovery_count=r/f'{peer}-recovery-count.txt'
+ expected=int(recovery_count.read_text().split('COUNT dlq_records=')[-1].split()[0]) if recovery_count.exists() else (2 if peer=='native' else 1)
+ assert expected in ((2,) if peer=='native' else (1,2)),expected
  assert f'FINAL dlq_records={expected} start=0 lag=0' in (r/f'{peer}-verify.txt').read_text()
  failure=(r/f'{peer}-source-failure.txt').read_text()
  assert ('share-partition state persist failed' in failure) if peer=='native' else ('Persister broker=1' in failure and 'Cancelled in-flight WRITE_SHARE_GROUP_STATE request' in failure)

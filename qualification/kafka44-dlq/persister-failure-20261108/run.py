@@ -21,6 +21,7 @@ def wait(pred,seconds=90):
  raise RuntimeError('timed out waiting for condition')
 call(['javac','-cp',f'{a.libs}/*','-d',r/'classes',q/'ShareBoundary.java',q/'WireResponseGate.java',r/'ShareFaultRf3.java'],'javac.txt')
 results={}
+container_prefix=f'dlq-rf3-persist-{uuid.uuid4().hex[:12]}'
 for peer,base in [('native',64800),('oracle',64900)]:
  ports={i:base+i for i in (1,2,3)};ctrl={i:base+10+i for i in (1,2,3)};gateport=base+20
  for port in [*ports.values(),*ctrl.values(),gateport]:
@@ -44,7 +45,7 @@ for peer,base in [('native',64800),('oracle',64900)]:
   for i in ports:
    if peer=='native':launch_native(i)
    else:
-    name=f'dlq-rf3-persist08-final-{i}';containers.append(name);call(['docker','run','-d','--name',name,'--network','host','--user','0','-e','KAFKA_HEAP_OPTS=-Xms128m -Xmx384m','-e','LOG_DIR=/evidence/logs','-v',f'{r}/{peer}{i}:/evidence','--entrypoint','/opt/kafka/bin/kafka-server-start.sh',image,'/evidence/broker.properties'],f'{peer}{i}-start.txt')
+    name=f'{container_prefix}-{i}';containers.append(name);call(['docker','run','-d','--name',name,'--network','host','--user','0','-e','KAFKA_HEAP_OPTS=-Xms128m -Xmx384m','-e','LOG_DIR=/evidence/logs','-v',f'{r}/{peer}{i}:/evidence','--entrypoint','/opt/kafka/bin/kafka-server-start.sh',image,'/evidence/broker.properties'],f'{peer}{i}-start.txt')
   def listening():
    try:
     for port in ports.values():
