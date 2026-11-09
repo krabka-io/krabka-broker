@@ -110,6 +110,19 @@ fn format_with_add_scram_writes_credential_record() {
 }
 
 #[test]
+fn format_low_iterations_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_format(&dir, &[
+        "--node-id",
+        "1",
+        "--add-scram",
+        "SCRAM-SHA-512=[name=admin,password=p,iterations=1]",
+    ]);
+    assert2::assert!(!out.status.success());
+    assert2::assert!(out.status.code() == Some(2));
+}
+
+#[test]
 fn no_initial_controllers_writes_offset_zero_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let out = run_format(&dir, &["--node-id", "1", "--no-initial-controllers"]);

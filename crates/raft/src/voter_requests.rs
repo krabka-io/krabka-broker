@@ -336,13 +336,17 @@ pub fn update_voter_current_leader(quorum: &QuorumStateSnapshot) -> CurrentLeade
 /// The voter operation a request asked for, which its refusal names as Kafka's
 /// `AddVoterHandler` and `RemoveVoterHandler` do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[cfg_attr(test, derive(krabka_bdd::StepParam))]
 #[enum_str(as_str = gerund)]
 pub enum VoterOperation {
     #[enum_str(name = "adding")]
+    #[cfg_attr(test, step_param("AddVoter"))]
     Add,
     #[enum_str(name = "removing")]
+    #[cfg_attr(test, step_param("RemoveVoter"))]
     Remove,
     #[enum_str(name = "updating")]
+    #[cfg_attr(test, step_param("UpdateVoter"))]
     Update,
 }
 
@@ -795,12 +799,8 @@ mod tests {
     }
 
     #[given("a voter change {operation} for voter 3 is refused at kraft.version {level}")]
-    fn unsupported_operation(request: &mut VoterRequests, operation: String, level: u16) {
-        request.change = match operation.as_str() {
-            "AddVoter" => VoterOperation::Add,
-            "RemoveVoter" => VoterOperation::Remove,
-            _ => panic!("unknown voter change: {operation}"),
-        };
+    fn unsupported_operation(request: &mut VoterRequests, operation: VoterOperation, level: u16) {
+        request.change = operation;
         request.operation = Some(Err(RaftError::UnsupportedKraftVersion(level)));
     }
 

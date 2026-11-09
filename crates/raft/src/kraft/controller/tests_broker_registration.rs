@@ -208,7 +208,7 @@ struct RegistrationHistory {
     records: Vec<KafkaRecord>,
     registration: Option<krabka_metadata::BrokerRegistrationRecord>,
     registered: Option<krabka_metadata::BrokerRegistrationRecord>,
-    appended_at: Option<Offset>,
+    appended_at: krabka_bdd::Given<Offset>,
 }
 
 #[rstest::fixture]
@@ -220,7 +220,10 @@ fn registration_history() -> RegistrationHistory {
         records: vec![],
         registration: None,
         registered: None,
-        appended_at: None,
+        appended_at: krabka_bdd::Given::new(
+            "appended_at",
+            "When broker 7 performs registration transition <transition>",
+        ),
     }
 }
 
@@ -290,7 +293,7 @@ fn apply_registration_transition(registration_history: &mut RegistrationHistory,
         .try_recv()
         .expect("submission completed")
         .expect("registration transition committed");
-    registration_history.appended_at = Some(start);
+    registration_history.appended_at.set(start);
     registration_history.records = kafka_records_from(&registration_history.engine, start);
     registration_history.registration =
         registration_history.engine.image.broker(NodeId(7)).cloned();
@@ -363,9 +366,7 @@ fn registration_change_record(
 
 #[then("the broker epoch is the offset its registration was appended at")]
 fn epoch_is_registration_offset(registration_history: &RegistrationHistory) {
-    let appended_at = registration_history
-        .appended_at
-        .expect("broker 7 registered");
+    let appended_at = registration_history.appended_at.get();
     check!(
         registration_history
             .registration

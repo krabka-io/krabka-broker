@@ -19,10 +19,15 @@ Feature: A broker checkpoints its audit chain at the configured cadence
         | one past the count  | 4      | 1           |
         | twice the count     | 6      | 2           |
 
-    Scenario: A count checkpoint covers the event that reached the count
+    Scenario Outline: A count checkpoint covers the event that reached the count
       Given the broker checkpoints every 3 audit events
-      When the broker writes 3 audit events
-      Then the last checkpoint signs the chain head at sequence 2
+      When the broker writes <events> audit events
+      Then the last checkpoint signs the chain head at sequence <sequence>
+
+      Examples:
+        | case              | events | sequence |
+        | exactly the count | 3      | 2        |
+        | twice the count   | 6      | 5        |
 
   Rule: An elapsed interval checkpoints only events written since the last checkpoint
 

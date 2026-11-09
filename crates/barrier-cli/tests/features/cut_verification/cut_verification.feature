@@ -49,5 +49,5 @@ Feature: Operators verify a cut against the log
   Rule: Only a defined group can be verified
 
     Scenario: Verifying a cut of a group nobody defined is refused
-      When an operator tries to verify cut 1 of a group nobody defined
+      When an operator verifies cut 1 of a group nobody defined
       Then the tool refuses because the broker knows no such group

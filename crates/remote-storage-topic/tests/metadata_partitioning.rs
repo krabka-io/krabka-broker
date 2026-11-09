@@ -138,8 +138,10 @@ fn every_lands_in(partitioning: &PartitioningScenario, expected: i32) {
 
 #[krabka_bdd::then("the placement is refused because the metadata topic has {count} partitions")]
 fn refused(placement: &Placement, count: i32) {
-    assert2::assert!(let MetadataLogError::NonPositivePartitionCount { count: refused } = placement.failed());
-    assert2::assert!(*refused == count);
+    // MetadataLogError has no PartialEq, so the matcher spells out the whole value.
+    placement.assert_failed_with(|error| {
+        matches!(error, MetadataLogError::NonPositivePartitionCount { count: refused } if *refused == count)
+    });
 }
 
 krabka_bdd::scenarios!(

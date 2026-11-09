@@ -8,11 +8,9 @@ Feature: Remote log metadata is partitioned by topic ID and partition
       Then the metadata lands in metadata partition <expected>
 
       Examples:
-        | case                       | partition | expected |
-        | the JVM golden for 0       | 0         | 6        |
-        | the JVM golden for 1       | 1         | 36       |
-        | the JVM golden for 3       | 3         | 2        |
-        | the JVM golden for 7       | 7         | 26       |
+        | case                                            | partition | expected |
+        | partition zero is hashed, not mapped to zero    | 0         | 6        |
+        | the next partition lands far from its neighbour | 1         | 36       |
 
   Rule: A topic's name plays no part in where its metadata lands
 

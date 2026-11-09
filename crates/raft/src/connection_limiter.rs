@@ -348,8 +348,6 @@ mod tests {
         assert2::assert!(quotas.max_connections_for(ip("::ffff:10.0.0.1")) == 0);
     }
 
-    use rstest_bdd_macros::{given, then, when};
-
     /// A listener's connection counts under the quotas a scenario sets, and
     /// the connections its clients hold.
     struct ConnectionQuotaScenario {
@@ -392,22 +390,22 @@ mod tests {
         }
     }
 
-    #[given("max.connections is {cap}")]
+    #[krabka_bdd::given("max.connections is {cap}")]
     fn max_connections(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
         connection_quotas.quotas.settings.max_connections = cap;
     }
 
-    #[given("the listener max.connections is {cap}")]
+    #[krabka_bdd::given("the listener max.connections is {cap}")]
     fn listener_max_connections(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
         connection_quotas.quotas.settings.listener_max_connections = cap;
     }
 
-    #[given("max.connections.per.ip is {cap}")]
+    #[krabka_bdd::given("max.connections.per.ip is {cap}")]
     fn max_connections_per_ip(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
         connection_quotas.quotas.settings.max_connections_per_ip = cap;
     }
 
-    #[given("max.connections.per.ip.overrides gives {address} a cap of {cap}")]
+    #[krabka_bdd::given("max.connections.per.ip.overrides gives {address} a cap of {cap}")]
     fn per_ip_override(
         connection_quotas: &mut ConnectionQuotaScenario,
         address: String,
@@ -418,7 +416,7 @@ mod tests {
         connection_quotas.quotas.per_ip_overrides = Arc::new(overrides);
     }
 
-    #[given("a client at {address} holds a connection on listener {listener}")]
+    #[krabka_bdd::given("a client at {address} holds a connection on listener {listener}")]
     fn held_connection(
         connection_quotas: &mut ConnectionQuotaScenario,
         address: String,
@@ -439,7 +437,7 @@ mod tests {
         connection_quotas.held.push(held);
     }
 
-    #[when("a client at {address} connects on listener {listener}")]
+    #[krabka_bdd::when("a client at {address} connects on listener {listener}")]
     fn client_connects(
         connection_quotas: &mut ConnectionQuotaScenario,
         address: String,
@@ -451,7 +449,7 @@ mod tests {
         });
     }
 
-    #[when("a client at {address} connects on the inter-broker listener {listener}")]
+    #[krabka_bdd::when("a client at {address} connects on the inter-broker listener {listener}")]
     fn client_connects_inter_broker(
         connection_quotas: &mut ConnectionQuotaScenario,
         address: String,
@@ -463,22 +461,22 @@ mod tests {
         });
     }
 
-    #[then("the connection is accepted")]
+    #[krabka_bdd::then("the connection is accepted")]
     fn connection_accepted(connection_quotas: &ConnectionQuotaScenario) {
         connection_quotas.assert_outcome(None);
     }
 
-    #[then("the connection is refused by max.connections")]
+    #[krabka_bdd::then("the connection is refused by max.connections")]
     fn refused_by_max_connections(connection_quotas: &ConnectionQuotaScenario) {
         connection_quotas.assert_outcome(Some(ConnectionLimit::Global));
     }
 
-    #[then("the connection is refused by the listener max.connections")]
+    #[krabka_bdd::then("the connection is refused by the listener max.connections")]
     fn refused_by_listener_max_connections(connection_quotas: &ConnectionQuotaScenario) {
         connection_quotas.assert_outcome(Some(ConnectionLimit::Listener));
     }
 
-    #[then("the connection is refused by max.connections.per.ip")]
+    #[krabka_bdd::then("the connection is refused by max.connections.per.ip")]
     fn refused_by_max_connections_per_ip(connection_quotas: &ConnectionQuotaScenario) {
         connection_quotas.assert_outcome(Some(ConnectionLimit::PerIp));
     }

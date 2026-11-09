@@ -153,9 +153,12 @@ pub fn scram_alteration_decision(facts: ScramAlterationFacts) -> ScramAlteration
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ScramAlterationDecision, ScramAlterationFacts, ScramAlterationKind, ScramPriorState,
-        scram_alteration_decision,
+    use {
+        super::{
+            ScramAlterationDecision, ScramAlterationFacts, ScramAlterationKind, ScramPriorState,
+            scram_alteration_decision,
+        },
+        krabka_bdd::Given,
     };
 
     fn valid_upsert() -> ScramAlterationFacts {
@@ -183,16 +186,47 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
+    /// A SCRAM mechanism as a scenario names it: by its Kafka name.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum ScramMechanism {
+        #[step_param("SCRAM-SHA-256")]
+        Sha256,
+        #[step_param("SCRAM-SHA-512")]
+        Sha512,
+    }
+
+    impl ScramMechanism {
+        /// The KIP-554 wire code of the mechanism.
+        const fn code(self) -> i8 {
+            match self {
+                Self::Sha256 => 1,
+                Self::Sha512 => 2,
+            }
+        }
+    }
+
+    impl From<ScramMechanism> for ScramAlterationDecision {
+        fn from(mechanism: ScramMechanism) -> Self {
+            match mechanism {
+                ScramMechanism::Sha256 => Self::AcceptSha256,
+                ScramMechanism::Sha512 => Self::AcceptSha512,
+            }
+        }
+    }
+
     struct ScramValidation {
-        facts: Option<ScramAlterationFacts>,
+        facts: Given<ScramAlterationFacts>,
         decision: Option<ScramAlterationDecision>,
     }
 
     #[rstest::fixture]
     fn alteration() -> ScramValidation {
         ScramValidation {
-            ..ScramValidation::default()
+            facts: Given::new(
+                "facts",
+                "Given an upsert or a deletion of a <mechanism> credential",
+            ),
+            decision: None,
         }
     }
 
@@ -218,7 +252,7 @@ mod tests {
             "maximum-integer" => i32::MAX,
             _ => iterations.parse().expect("iteration count is an integer"),
         };
-        alteration.facts = Some(ScramAlterationFacts {
+        alteration.facts.set(ScramAlterationFacts {
             prior,
             authorized,
             name_empty: empty_name,
@@ -230,38 +264,50 @@ mod tests {
 
     #[rstest_bdd_macros::when("the SCRAM upsert is validated")]
     fn validate_upsert(alteration: &mut ScramValidation) {
-        alteration.decision = Some(scram_alteration_decision(
-            alteration.facts.expect("a SCRAM upsert was given"),
-        ));
+        alteration.decision = Some(scram_alteration_decision(*alteration.facts.get()));
     }
 
     #[rstest_bdd_macros::given(
-        "a SCRAM deletion of a mechanism {mechanism} credential that does not exist"
+        "an authorized upsert of a {mechanism} credential with {iterations} iterations"
     )]
-    fn deletion_of_missing_credential(alteration: &mut ScramValidation, mechanism: i8) {
-        alteration.facts = Some(deletion(mechanism, false));
+    fn authorized_upsert(
+        alteration: &mut ScramValidation,
+        mechanism: ScramMechanism,
+        iterations: i32,
+    ) {
+        alteration.facts.set(ScramAlterationFacts {
+            mechanism: mechanism.code(),
+            iterations,
+            ..valid_upsert()
+        });
     }
 
-    #[rstest_bdd_macros::given("a SCRAM deletion of an existing mechanism {mechanism} credential")]
-    fn deletion_of_existing_credential(alteration: &mut ScramValidation, mechanism: i8) {
-        alteration.facts = Some(deletion(mechanism, true));
+    #[rstest_bdd_macros::given("a deletion of a {mechanism} credential that does not exist")]
+    fn deletion_of_missing_credential(alteration: &mut ScramValidation, mechanism: ScramMechanism) {
+        alteration.facts.set(deletion(mechanism.code(), false));
     }
 
-    #[rstest_bdd_macros::when("the SCRAM deletion is validated")]
+    #[rstest_bdd_macros::given("a deletion of an existing {mechanism} credential")]
+    fn deletion_of_existing_credential(
+        alteration: &mut ScramValidation,
+        mechanism: ScramMechanism,
+    ) {
+        alteration.facts.set(deletion(mechanism.code(), true));
+    }
+
+    #[rstest_bdd_macros::when("the deletion is validated")]
     fn validate_deletion(alteration: &mut ScramValidation) {
-        alteration.decision = Some(scram_alteration_decision(
-            alteration.facts.expect("a SCRAM deletion was given"),
-        ));
+        alteration.decision = Some(scram_alteration_decision(*alteration.facts.get()));
     }
 
-    #[rstest_bdd_macros::then("the SCRAM alteration is accepted as {accepted}")]
-    fn scram_accepted(alteration: &ScramValidation, accepted: String) {
-        let expected = match accepted.as_str() {
-            "SCRAM-SHA-256" => ScramAlterationDecision::AcceptSha256,
-            "SCRAM-SHA-512" => ScramAlterationDecision::AcceptSha512,
-            _ => panic!("unknown SCRAM mechanism: {accepted}"),
-        };
-        assert2::check!(alteration.decision == Some(expected));
+    #[rstest_bdd_macros::then("the alteration is accepted as a {mechanism} credential")]
+    fn scram_accepted(alteration: &ScramValidation, mechanism: ScramMechanism) {
+        assert2::check!(alteration.decision == Some(mechanism.into()));
+    }
+
+    #[rstest_bdd_macros::then("the deletion is refused because no such credential exists")]
+    fn deletion_refused_as_missing(alteration: &ScramValidation) {
+        assert2::check!(alteration.decision == Some(ScramAlterationDecision::MissingCredential));
     }
 
     #[rstest_bdd_macros::then("the SCRAM response preserves {outcome}")]
@@ -274,7 +320,6 @@ mod tests {
             "an-unsupported-mechanism-error" => ScramAlterationDecision::UnsupportedMechanism,
             "a-too-few-iterations-error" => ScramAlterationDecision::TooFewIterations,
             "a-too-many-iterations-error" => ScramAlterationDecision::TooManyIterations,
-            "a-missing-credential-error" => ScramAlterationDecision::MissingCredential,
             _ => panic!("unknown SCRAM response outcome: {outcome}"),
         };
         assert2::check!(alteration.decision == Some(expected));

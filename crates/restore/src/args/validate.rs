@@ -130,6 +130,16 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_two_bounds_on_one_partition() {
+        let args =
+            args_from(&["--to-offset", "orders:0=10", "--to-offset", "orders:0=20"]).expect("args");
+        check!(matches!(
+            args.validate(),
+            Err(RestoreError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
     fn validate_accepts_bounds_on_distinct_partitions() {
         let args =
             args_from(&["--to-offset", "orders:0=10", "--to-offset", "orders:1=20"]).expect("args");

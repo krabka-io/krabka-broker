@@ -122,12 +122,12 @@ fn acl_authorization() -> AclAuthorizationScenario {
     }
 }
 
-#[rstest_bdd_macros::given("the broker sets allow.everyone.if.no.acl.found to {allow}")]
+#[krabka_bdd::given("the broker sets allow.everyone.if.no.acl.found to {allow}")]
 fn broker_sets_allow_everyone(acl_authorization: &mut AclAuthorizationScenario, allow: bool) {
     acl_authorization.cluster.allow_everyone_if_no_acl_found = allow;
 }
 
-#[rstest_bdd_macros::given("an ACL {permission} {principal} to Read topic {topic}")]
+#[krabka_bdd::given("an ACL {permission} {principal} to Read topic {topic}")]
 fn an_acl(
     acl_authorization: &mut AclAuthorizationScenario,
     permission: Permission,
@@ -139,7 +139,7 @@ fn an_acl(
         .add_topic_acl(permission, &principal, AclOperation::Read, &topic);
 }
 
-#[rstest_bdd_macros::when("{principal} requests to Read topic {topic}")]
+#[krabka_bdd::when("{principal} requests to Read topic {topic}")]
 fn principal_requests(
     acl_authorization: &mut AclAuthorizationScenario,
     principal: String,
@@ -151,7 +151,7 @@ fn principal_requests(
     acl_authorization.decision.set(decision);
 }
 
-#[rstest_bdd_macros::then("the request is {decision}")]
+#[krabka_bdd::then("the request is {decision}")]
 fn the_request_is(acl_authorization: &AclAuthorizationScenario, decision: Decision) {
     assert2::assert!(*acl_authorization.decision.get() == AuthorizationResult::from(decision));
 }
