@@ -232,27 +232,6 @@ async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
     check!(error.exit_code() == EXIT_INTEGRITY);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_capture_that_finds_nothing_is_a_failure_and_not_an_empty_capture() {
-    let empty = tempfile::tempdir().expect("an empty log dir");
-    let archive_root = tempfile::tempdir().expect("archive root");
-    let args = archive_args(archive_root.path());
-
-    let message = capture(empty.path(), &args)
-        .await
-        .result
-        .expect_err("a capture that finds nothing fails")
-        .to_string();
-    check!(message.contains("captured nothing"), "got: {message}");
-    check!(
-        run::list(&args)
-            .await
-            .result
-            .expect("list the captures")
-            .is_empty()
-    );
-}
-
 #[tokio::test]
 async fn capture_returns_missing_artifacts_without_another_archive_read() {
     let node = node_with_rlmm();

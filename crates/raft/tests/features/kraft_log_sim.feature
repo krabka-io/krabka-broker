@@ -9,8 +9,3 @@ Feature: KRaft consensus over real on-disk logs
     And a follower has received a conflicting epoch seven tail
     When the leader writes authoritative records and the follower reconnects
     Then the follower's log and epoch match the leader after truncation
-
-  Scenario: Committed watermarks fit in every voter log
-    Given three disk-backed voters with an elected leader
-    When the disk-backed leader appends 3 records and replication settles
-    Then the committed high watermark is at least 3 and within every log

@@ -1,12 +1,12 @@
 //! Placing a freeze and reading the registry back, which is the safe direction.
 //!
 //! It covers the whole `freeze set` and `freeze list` loop, signed and
-//! unsigned, and the one scope the broker will not accept at all.
+//! unsigned. The scope the broker will not accept at all is a scenario in
+//! `tests/features/freezing`.
 
 use {
     crate::support::{
-        PREFIX, PRINCIPAL, REFUSED, TOPIC, cli, cluster, set_signed_freeze, signed_as,
-        verify_registry,
+        PREFIX, PRINCIPAL, TOPIC, cli, cluster, set_signed_freeze, signed_as, verify_registry,
     },
     assert2::check,
 };
@@ -58,21 +58,5 @@ async fn the_freeze_loop_runs_end_to_end() {
     check!(
         verify_registry(&bootstrap, key.trust_file.to_str().expect("utf-8 path")).await == 0,
         "a mixed registry still verifies"
-    );
-}
-
-/// A scope that reaches an internal topic would take the cluster down, so the
-/// broker refuses it. It is an ordinary refusal, and not one of the two codes a
-/// runbook branches on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_scope_that_reaches_an_internal_topic_is_an_ordinary_refusal() {
-    let (_broker, _dir, bootstrap, _key) = cluster().await;
-
-    check!(
-        cli(&bootstrap, &[
-            "freeze", "set", "--prefix", "__", "--reason", "no"
-        ],)
-        .await
-            == REFUSED
     );
 }

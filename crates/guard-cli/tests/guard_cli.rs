@@ -10,11 +10,9 @@
 //! verifies inside that broker, and that the exit code reports what happened.
 //!
 //! - [`freeze`] — the safe direction: `freeze set` and `freeze list`, signed
-//!   and unsigned, and the scope the broker refuses.
+//!   and unsigned.
 //! - [`thaw`] — the dangerous direction: the refusals `freeze clear` reports
-//!   when an approval is missing or a signature does not hold.
-//! - [`verification`] — `freeze list --verify-signatures` against local key
-//!   material that cannot prove the entry.
+//!   when a signature does not hold.
 //! - [`break_glass`] — a proposal proposed, approved, and withdrawn, and one
 //!   that never existed.
 //! - [`transport`] — a bootstrap address nothing listens on.
@@ -47,5 +45,3 @@ mod support;
 mod thaw;
 #[path = "guard_cli/transport.rs"]
 mod transport;
-#[path = "guard_cli/verification.rs"]
-mod verification;

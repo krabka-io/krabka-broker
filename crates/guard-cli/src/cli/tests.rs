@@ -30,14 +30,14 @@ krabka_macros::duration_parser_fixture!(
 /// `--ttl` reaches the broker in whole milliseconds, where zero means "take
 /// the cap". A lifetime that would send zero is refused, so only an omitted
 /// flag asks for the cap.
+///
+/// A bare zero, a number with no unit, and a lifetime under the cap are
+/// scenarios in `tests/features/two_person_rule`.
 #[yare::parameterized(
-    zero = { "0", None },
     zero_with_a_unit = { "0s", None },
     rounds_to_zero = { "400us", None },
     one_millisecond = { "1ms", Some(1) },
     rounds_to_one = { "600us", Some(1) },
-    thirty_minutes = { "30m", Some(1_800_000) },
-    missing_unit = { "30", None },
 )]
 fn a_lifetime_that_would_send_zero_is_refused(raw: &str, expected: Option<i64>) {
     check!(

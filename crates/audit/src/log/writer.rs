@@ -465,36 +465,6 @@ mod tests {
         MemoryWriter { log, sink, handle }
     }
 
-    struct SignedWriterFixture {
-        public_key: Vec<u8>,
-        directory: tempfile::TempDir,
-        writer: MemoryWriter,
-    }
-
-    #[bon::builder]
-    fn signed_writer(
-        #[builder(into, default = QueueCapacity (16))] capacity: QueueCapacity,
-        #[builder(default = CheckpointFrequency::Every(AuditEventCount(1_000_000)))]
-        frequency: CheckpointFrequency,
-    ) -> SignedWriterFixture {
-        let TestSigner { signer, public_key } = test_signer();
-        let directory = tempfile::tempdir().unwrap();
-        let writer = memory_writer()
-            .directory(directory.path())
-            .capacity(capacity)
-            .checkpoints(CheckpointSetup {
-                signer: Some(signer),
-                frequency,
-                ..Default::default()
-            })
-            .call();
-        SignedWriterFixture {
-            public_key,
-            directory,
-            writer,
-        }
-    }
-
     struct PendingLossWriter {
         log: Arc<AuditLog>,
         receiver: AuditReceiver,
@@ -608,78 +578,6 @@ mod tests {
         ]
         .map(|(class, seq, prev)| (class, Some(seq.to_owned()), Some(prev.to_owned())));
         check!(headers == golden);
-    }
-
-    #[tokio::test]
-    async fn checkpoints_emitted_by_count_and_verify_against_recomputed_head() {
-        // checkpoint every 2 records; long interval so only count triggers
-        let SignedWriterFixture {
-            public_key: pubkey,
-            directory: _dir,
-            writer:
-                MemoryWriter {
-                    log,
-                    sink,
-                    handle: h,
-                },
-        } = signed_writer()
-            .capacity(64)
-            .frequency(CheckpointFrequency::Every(AuditEventCount(2)))
-            .call();
-        for i in 0..4 {
-            log.emit(life(NodeId(i)));
-        }
-        finish_writer(log, h).await; // closes channel -> final checkpoint (none pending here: 4 % 2 == 0)
-
-        let recs = sink.records();
-        // 4 chained + 2 checkpoints (after record 2 and record 4)
-        let checkpoints = recs
-            .iter()
-            .filter(|r| r.class == AuditEventClass::Checkpoint)
-            .count();
-        check!(checkpoints == 2);
-
-        // recompute the chain over the non-checkpoint records and verify each checkpoint
-        let mut head = GENESIS_HEAD;
-        let mut seq = 0u64;
-        for r in &recs {
-            if r.class == AuditEventClass::Checkpoint {
-                let v: serde_json::Value = serde_json::from_slice(&r.value).unwrap();
-                let cp = Checkpoint::from_value(&v).expect("cp");
-                check!(
-                    (cp.verify(&pubkey), cp.chain_head, cp.seq_high) == (true, head, Seq(seq - 1))
-                );
-            } else {
-                head = chain_hash(&head, seq, &r.value);
-                seq += 1;
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn shutdown_emits_final_checkpoint_for_pending_tail() {
-        // every_n large so only the shutdown path emits
-        let SignedWriterFixture {
-            public_key: pubkey,
-            directory: _dir,
-            writer:
-                MemoryWriter {
-                    log,
-                    sink,
-                    handle: h,
-                },
-        } = signed_writer().call();
-        finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2), NodeId(3)]).await;
-
-        let recs = sink.records();
-        let cps: Vec<_> = recs
-            .iter()
-            .filter(|r| r.class == AuditEventClass::Checkpoint)
-            .collect();
-        check!(cps.len() == 1); // single final checkpoint at shutdown
-        let v: serde_json::Value = serde_json::from_slice(&cps[0].value).unwrap();
-        let cp = Checkpoint::from_value(&v).unwrap();
-        check!((cp.verify(&pubkey), cp.seq_high) == (true, Seq(2)));
     }
 
     /// A timer whose backend is gone: it refuses every registration.

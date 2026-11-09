@@ -6,10 +6,7 @@ use {
     super::*,
     crate::kraft::controller::{
         recovery::replay_committed,
-        test_support::{
-            ControllerSetup, build, elect_leader_with_helper, submit_change_with_timeout,
-            topic_record,
-        },
+        test_support::{ControllerSetup, build, elect_leader_with_helper, topic_record},
     },
     assert2::{assert, check},
     krabka_protocol::records::metadata,
@@ -20,27 +17,6 @@ use {
     },
     tokio::time,
 };
-
-#[test]
-fn broker_registration_epoch_is_assigned_from_appended_offset() {
-    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
-
-    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
-
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("anchor"));
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-
-    let base = engine.log.log_end_offset();
-    let reg = MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-        fenced: false,
-        log_dirs: vec![],
-        ..new_registration()
-    });
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &[reg]);
-
-    assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    assert!(engine.image.broker_epoch(NodeId(7)) == Some(base.0));
-}
 
 #[test]
 fn broker_registration_projection_preserves_existing_epoch() {
@@ -67,48 +43,6 @@ fn broker_registration_projection_preserves_existing_epoch() {
     let stored = engine.image.broker(NodeId(7)).unwrap();
     assert2::assert!(stored.broker_epoch == assigned_epoch);
     assert2::assert!(stored.log_dirs.is_empty());
-}
-
-#[tokio::test]
-async fn broker_registration_epoch_equals_commit_offset() {
-    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
-    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
-
-    let reg = |id: u64| {
-        vec![MetadataRecord::V1BrokerRegistration(
-            BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(id),
-                broker_epoch: -1, // stamped by the leader at append
-                incarnation_id: uuid::Uuid::from_u128(u128::from(id)),
-                host: "h".into(),
-                port: 9092,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: BTreeMap::new(),
-            },
-        )]
-    };
-
-    let base1 = ctrl.quorum_state().await.unwrap().log_end_offset;
-    submit_change_with_timeout(&ctrl, reg(7), "first broker registration")
-        .await
-        .expect("first registration");
-    let e1 = ctrl.current_image().broker_epoch(NodeId(7));
-    assert2::assert!(e1 == Some(base1));
-
-    let base2 = ctrl.quorum_state().await.unwrap().log_end_offset;
-    submit_change_with_timeout(&ctrl, reg(7), "broker re-registration")
-        .await
-        .expect("re-registration");
-    let e2 = ctrl.current_image().broker_epoch(NodeId(7));
-    assert2::assert!(e2 == Some(base2));
-    assert2::assert!(base2 > base1 && e2 > e1);
-
-    ctrl.shutdown().await;
 }
 
 /// A new registration of broker 7 at no epoch yet, for the leader to stamp.
@@ -274,6 +208,7 @@ struct RegistrationHistory {
     records: Vec<KafkaRecord>,
     registration: Option<krabka_metadata::BrokerRegistrationRecord>,
     registered: Option<krabka_metadata::BrokerRegistrationRecord>,
+    appended_at: Option<Offset>,
 }
 
 #[rstest::fixture]
@@ -285,6 +220,7 @@ fn registration_history() -> RegistrationHistory {
         records: vec![],
         registration: None,
         registered: None,
+        appended_at: None,
     }
 }
 
@@ -354,6 +290,7 @@ fn apply_registration_transition(registration_history: &mut RegistrationHistory,
         .try_recv()
         .expect("submission completed")
         .expect("registration transition committed");
+    registration_history.appended_at = Some(start);
     registration_history.records = kafka_records_from(&registration_history.engine, start);
     registration_history.registration =
         registration_history.engine.image.broker(NodeId(7)).cloned();
@@ -421,6 +358,20 @@ fn registration_change_record(
                 in_controlled_shutdown: shutting_down,
                 ..registered.clone()
             })
+    );
+}
+
+#[then("the broker epoch is the offset its registration was appended at")]
+fn epoch_is_registration_offset(registration_history: &RegistrationHistory) {
+    let appended_at = registration_history
+        .appended_at
+        .expect("broker 7 registered");
+    check!(
+        registration_history
+            .registration
+            .as_ref()
+            .map(|registration| registration.broker_epoch)
+            == Some(appended_at.0)
     );
 }
 

@@ -26,5 +26,3 @@ mod replica_fetch_mutation_fences_every_input_and_selects_one_action;
 mod fetch_visibility_matches_kafka_fetch_scenarios;
 
 mod arithmetic_edges_are_explicit;
-
-mod fetch_visibility_window_for_each_reader;

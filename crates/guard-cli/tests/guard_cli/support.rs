@@ -25,8 +25,6 @@ pub const REFUSED: i32 = 1;
 /// The exit code for a transport failure, where nothing is known about the
 /// request's outcome.
 pub const UNREACHABLE: i32 = 2;
-/// The exit code for an action that needs an approval which does not exist.
-pub const NO_APPROVAL: i32 = 4;
 /// The exit code for a signature that did not verify.
 pub const BAD_SIGNATURE: i32 = 5;
 

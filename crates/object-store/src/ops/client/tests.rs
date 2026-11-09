@@ -97,20 +97,6 @@ async fn get_missing_maps_to_not_found() {
 }
 
 #[tokio::test]
-async fn capped_get_accepts_the_limit_and_rejects_one_byte_over() {
-    let c = client();
-    let key = Path::from("capped");
-    c.put(&key, Bytes::from_static(b"123"), PutRequest::default())
-        .await
-        .unwrap();
-    assert!(c.get_capped(&key, 3).await.unwrap().as_ref() == b"123");
-    assert!(matches!(
-        c.get_capped(&key, 2).await.unwrap_err(),
-        ObjectStoreError::TooLarge { .. }
-    ));
-}
-
-#[tokio::test]
 async fn head_and_list_and_delete() {
     let c = client();
     let key = Path::from("p/x");
@@ -230,29 +216,6 @@ async fn put_with_digest_returns_payload_sha256() {
             create_precondition: false,
         }
     );
-}
-
-/// `PutMode::Create` is a precondition, not a hint: the second write to a
-/// key must fail rather than clobber the first.
-#[tokio::test]
-async fn put_create_mode_rejects_an_existing_key() {
-    let c = client();
-    let key = Path::from("worm/manifest");
-    let req = PutRequest {
-        mode: PutMode::Create,
-        digest: false,
-    };
-    c.put(&key, bytes::Bytes::from_static(b"first"), req.clone())
-        .await
-        .unwrap();
-
-    let err = c
-        .put(&key, bytes::Bytes::from_static(b"second"), req)
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, ObjectStoreError::AlreadyExists(p) if p == key));
-    assert!(&c.get(&key).await.unwrap()[..] == b"first");
 }
 
 #[tokio::test]

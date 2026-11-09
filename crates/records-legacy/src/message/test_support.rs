@@ -1,8 +1,7 @@
-//! The three `Message` fixtures that both halves of the codec's tests build on.
+//! The three `Message` fixtures that the codec's round-trip tests build on.
 //!
-//! `message_roundtrips` encodes `fixture_v1` and `rejects_bad_crc` corrupts the
-//! bytes that same fixture produces, so the fixtures sit beside the two modules
-//! rather than inside either one.
+//! `round_trip` encodes a message and decodes it back, so the fixtures and the
+//! helper sit beside the two codec modules rather than inside either one.
 
 use {
     super::{Magic, Message},

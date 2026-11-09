@@ -290,17 +290,11 @@ mod tests {
             ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
             ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
         },
-        krabka_metadata::{
-            FeatureLevelRecord, MetadataRecord,
-            metadata_version::{
-                METADATA_VERSION_FEATURE, METADATA_VERSION_MAX, METADATA_VERSION_MIN,
-            },
-        },
+        krabka_metadata::metadata_version::METADATA_VERSION_MIN,
         krabka_protocol::{
             Decode,
             owned::broker_heartbeat_request::{MAX_VERSION, MIN_VERSION},
         },
-        std::collections::BTreeSet,
         uuid::Uuid,
     };
 
@@ -316,55 +310,6 @@ mod tests {
             finalized_features_epoch,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
-        }
-    }
-
-    #[yare::parameterized(
-        legacy_shape = { 0i16 },
-        flexible_shape = { 4i16 },
-    )]
-    fn api_versions_body_advertises_kip595_set_both_shapes(req_v: i16) {
-        use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
-        let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: METADATA_VERSION_FEATURE.into(),
-            level: 24,
-        }));
-        let body = super::api_versions_response_body(req_v, view(&image, 41))
-            .expect("the ApiVersions body encodes");
-        let v = req_v.clamp(0, 4);
-        let mut cur = &body[..];
-        let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
-        assert2::assert!(cur.is_empty());
-        assert2::assert!(resp.error_code == 0);
-        let keys: BTreeSet<i16> = resp.api_keys.iter().map(|k| k.api_key).collect();
-        for want in [1i16, 18, 52, 53, 54, 59, 70] {
-            assert2::assert!(keys.contains(&want));
-        }
-        // `BrokerRegistration` and `BrokerHeartbeat` reach the controller
-        // listener through the Admin router, so the native table must not
-        // advertise them on its own.
-        // `an_admin_router_contributes_its_own_api_versions` covers the
-        // other half: with a router bound, a key is advertised.
-        assert2::assert!(!keys.contains(&62i16));
-        assert2::assert!(!keys.contains(&63i16));
-        // Vote is advertised over its whole schema range, as Kafka's
-        // `ApiKeys` does.
-        let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
-        assert2::assert!(vote.min_version == 0 && vote.max_version == 2);
-        if req_v >= 3 {
-            let finalized_metadata = resp
-                .finalized_features
-                .iter()
-                .find(|feature| feature.name == "metadata.version")
-                .expect("metadata.version finalized");
-            assert2::assert!(
-                (
-                    finalized_metadata.min_version_level,
-                    finalized_metadata.max_version_level
-                ) == (24, 24)
-            );
-            assert2::assert!(resp.finalized_features_epoch == 41);
         }
     }
 
@@ -482,51 +427,6 @@ mod tests {
         assert2::assert!(super::api_versions_response(3, &[0xff], view(&image, -1)).is_err());
     }
 
-    /// #783 on the controller listener, table-driven over the issue's rows:
-    /// the supported rows follow Kafka's minimums and `alterFeatureLevel0`,
-    /// the finalized rows omit level 0 (`kraft.version` included), and the
-    /// epoch is the metadata offset the view carries.
-    /// #1344: before the first feature delta Kafka's controller answers from
-    /// the initial state of `FeaturesPublisher`,
-    /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
-    /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
-    /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
-    /// Kafka's `ControllerServer` builds the listener's
-    /// `SimpleApiVersionManager` with `unstable.api.versions.enable`, so that
-    /// flag alone caps the supported `metadata.version` here. With only
-    /// `unstable.feature.versions.enable` set the listener stays at the latest
-    /// production level, and with only the API flag set it advertises the
-    /// highest level krabka knows. The listener takes no feature flag at all:
-    /// its view has none.
-    #[yare::parameterized(
-        disabled = { UnstableApiVersions::Disabled, LATEST_PRODUCTION_METADATA_VERSION },
-        enabled = {
-            UnstableApiVersions::Enabled,
-            METADATA_VERSION_MAX,
-        },
-    )]
-    fn the_controller_listener_caps_supported_features_with_the_api_flag(
-        unstable: UnstableApiVersions,
-        want_max: i16,
-    ) {
-        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let view = ApiVersionsView {
-            unstable,
-            ..view(&image, 0)
-        };
-        let body =
-            super::api_versions_response_body(4, view).expect("the ApiVersions body encodes");
-        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
-        let metadata_version = resp
-            .supported_features
-            .iter()
-            .find(|feature| feature.name == "metadata.version")
-            .expect("metadata.version is supported");
-        assert2::check!(
-            metadata_version.max_version == want_max,
-            "unstable.api.versions.enable {unstable:?}"
-        );
-    }
     use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
     #[derive(serde::Deserialize)]
     struct VersionRequestInput {

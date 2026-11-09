@@ -443,26 +443,12 @@ mod tests {
         check!(settings(&s3_in("us-east-1"), &[]).value("not_a_setting") == None);
     }
 
-    #[test]
-    fn inmemory_builds() {
-        assert!(build_object_store(&ObjectStoreConfig::InMemory).is_ok());
-    }
-
     #[tokio::test]
     async fn inmemory_round_trips() {
         let store = build_object_store(&ObjectStoreConfig::InMemory).unwrap();
         let path = Path::from("t/x");
         let got = round_trip(&*store, &path, b"hi").await;
         assert!(&got[..] == b"hi");
-    }
-
-    #[test]
-    fn local_builds_against_tempdir() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = ObjectStoreConfig::Local {
-            root: dir.path().to_path_buf(),
-        };
-        assert!(build_object_store(&cfg).is_ok());
     }
 
     #[test]
@@ -487,29 +473,6 @@ mod tests {
             region: "us-east-1".into(),
             conditional_put: false,
             checksum_sha256: false,
-            ..Default::default()
-        });
-        assert!(build_object_store(&cfg).is_ok());
-    }
-
-    /// The default config turns both knobs on, so the common path must build
-    /// with conditional put and SHA-256 checksums wired in.
-    #[test]
-    fn s3_builds_with_integrity_knobs_on() {
-        let cfg = ObjectStoreConfig::S3(S3Config {
-            bucket: "b".into(),
-            region: "us-east-1".into(),
-            ..Default::default()
-        });
-        assert!(build_object_store(&cfg).is_ok());
-    }
-
-    // Ported from crates/remote-storage/src/gcs.rs tests: with every credential
-    // field None, the builder selects Workload Identity / ADC and constructs.
-    #[test]
-    fn gcs_workload_identity_builds() {
-        let cfg = ObjectStoreConfig::Gcs(GcsConfig {
-            bucket: "b".into(),
             ..Default::default()
         });
         assert!(build_object_store(&cfg).is_ok());

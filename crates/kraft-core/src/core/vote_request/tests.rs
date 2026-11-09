@@ -75,25 +75,6 @@ fn an_observer_denies_a_vote_request() {
     );
 }
 
-/// A candidate at our own epoch is not fenced.
-///
-/// Fencing is for a candidate *behind* us. Treating "equal" as behind
-/// would deny every first-round vote, because a candidate that bumps to
-/// epoch E asks replicas still at E.
-#[test]
-fn a_candidate_at_our_own_epoch_is_not_fenced() {
-    let mut m = three_voter_machine();
-    let log = FakeLog::new(5, 0);
-    // Both sides at epoch 0, the bootstrap epoch.
-    check!(m.quorum_state().leader_epoch == 0);
-    let actions = m.on_event(vote_event(NodeId(2), 0, false, 0, 5), &log, SimInstant(0));
-    check!(
-        actions
-            .iter()
-            .any(|a| matches!(a, Action::ReplyVote { granted: true, .. }))
-    );
-}
-
 /// A vote or a pre-vote from a higher epoch moves us to that epoch before the
 /// grant is decided, as `KafkaRaftClient.handleVoteRequest` does for both.
 #[yare::parameterized(
@@ -508,9 +489,7 @@ fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
     );
     let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
     check!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. })),
+        has_vote_reply(&actions, NodeId(3), false),
         "another candidate"
     );
 }
@@ -684,16 +663,6 @@ fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
 }
 
 #[test]
-fn denies_standard_vote_when_already_voted_for_other() {
-    let mut m = three_voter_machine();
-    // vote for 2 first
-    receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
-    // now 3 asks in the same epoch
-    let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
-    assert2::assert!(has_vote_reply(&actions, NodeId(3), false));
-}
-
-#[test]
 fn fenced_when_candidate_epoch_below_current() {
     let mut m = three_voter_machine();
     m.force_epoch(5); // test helper
@@ -730,15 +699,6 @@ fn vote_addressed_to_other_voter_rejected() {
         .event(),
     );
     assert_vote_ignored(&m, &actions);
-}
-
-#[test]
-fn vote_from_voter_addressed_to_us_still_granted() {
-    // C-2 must not break the legitimate path: a voter candidate addressing
-    // us is still granted.
-    let mut m = three_voter_machine();
-    let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
-    assert_binding_vote(&m, &actions, NodeId(3));
 }
 
 #[test]

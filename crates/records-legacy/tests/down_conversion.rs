@@ -252,6 +252,15 @@ fn control_batch_with_commit_marker(down_conversion: &mut DownConversion) {
     down_conversion.batch.set(commit_marker_batch());
 }
 
+#[given("a v2 zstd control batch with a commit marker")]
+fn zstd_control_batch_with_commit_marker(down_conversion: &mut DownConversion) {
+    let marker = commit_marker_batch();
+    down_conversion.batch.set(RecordBatch {
+        attributes: marker.attributes.with_compression(CompressionType::Zstd),
+        ..marker
+    });
+}
+
 #[given(
     "a v2 batch at base offset {base_offset} whose record at offset delta {offset_delta} has a key, a value and headers"
 )]
@@ -298,6 +307,16 @@ fn compressed_batch(down_conversion: &mut DownConversion, codec: BatchCodec) {
         BASE_TIMESTAMP,
         Attributes::default().with_compression(codec.into()),
         three_records(),
+    ));
+}
+
+#[given("a v2 batch compressed with zstd that holds no records")]
+fn empty_zstd_batch(down_conversion: &mut DownConversion) {
+    down_conversion.batch.set(batch_of(
+        BASE_OFFSET,
+        BASE_TIMESTAMP,
+        Attributes::default().with_compression(CompressionType::Zstd),
+        Vec::new(),
     ));
 }
 

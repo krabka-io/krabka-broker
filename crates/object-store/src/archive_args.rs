@@ -201,10 +201,8 @@ impl ArchiveArgs {
 mod tests {
     use {
         super::*,
-        crate::prefixed_key,
         assert2::check,
         clap::Parser,
-        object_store::path::Path,
         std::{iter, path},
     };
 
@@ -451,17 +449,9 @@ mod tests {
     }
 
     #[yare::parameterized(
-        absent = { None, None },
-        empty = { Some(""), None },
-        slash = { Some("/"), None },
         repeated_slashes = { Some("///"), None },
-        whitespace = { Some("   "), None },
-        bare = { Some("tier"), Some("tier") },
         leading_slash = { Some("/tier"), Some("tier") },
         trailing_slash = { Some("tier/"), Some("tier") },
-        both_slashes = { Some("/tier/"), Some("tier") },
-        surrounding_whitespace = { Some(" /tier/ "), Some("tier") },
-        nested_prefix = { Some("prod/tier"), Some("prod/tier") },
     )]
     fn prefixes_normalize_to_one_spelling(input: Option<&str>, expected: Option<&str>) {
         check!(
@@ -477,17 +467,5 @@ mod tests {
             ..ArchiveArgs::default()
         };
         check!(args.normalized_prefix().as_deref() == Some("prod/tier"));
-    }
-
-    #[test]
-    fn a_key_carries_the_prefix_when_there_is_one() {
-        check!(
-            prefixed_key(Some("prod/tier"), "restore-inputs/1/manifest.json")
-                == Path::from("prod/tier/restore-inputs/1/manifest.json")
-        );
-        check!(
-            prefixed_key(None, "restore-inputs/1/manifest.json")
-                == Path::from("restore-inputs/1/manifest.json")
-        );
     }
 }

@@ -695,30 +695,4 @@ mod tests {
     }
 
     krabka_bdd::scenarios!("tests/features/log_policy", fixtures = [log_policy: LogPolicyScenario]);
-
-    #[test]
-    fn default_cleanup_policy_is_delete() {
-        let c = LogConfig::default();
-        assert2::assert!(c.cleanup_policy == CleanupPolicy::Delete);
-    }
-
-    #[test]
-    fn default_compression_is_producer_passthrough() {
-        let c = LogConfig::default();
-        assert2::assert!(c.compression_type == None);
-    }
-
-    #[test]
-    fn delivery_is_immediate_with_a_quarter_second_clock_bound() {
-        let c = LogConfig::default();
-        assert2::check!(c.delivery_policy == DeliveryPolicy::Immediate);
-        assert2::check!(c.delivery_clock_uncertainty.millis_i64() == 250);
-    }
-
-    #[test]
-    fn default_local_retention_is_none() {
-        let c = LogConfig::default();
-        assert2::assert!(c.local_retention == None);
-        assert2::assert!(c.local_retention_size == None);
-    }
 }

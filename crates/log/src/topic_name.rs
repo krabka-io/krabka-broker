@@ -99,9 +99,11 @@ fn unify_collision_byte(byte: u8) -> u8 { if byte == b'.' { b'_' } else { byte }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, std::collections::BTreeSet};
+    use {super::*, assert2::check, krabka_bdd::Given, std::collections::BTreeSet};
 
-    #[derive(Default)]
+    const EXISTING: &str = "Given a topic named <existing> exists";
+    const CHECKED: &str = "When a topic named <requested> is checked for a collision";
+
     struct TopicNameScenario {
         name: String,
         checked: Option<Result<(), InvalidTopicName>>,
@@ -109,13 +111,20 @@ mod tests {
         rendered: String,
         bytes: Vec<u8>,
         legal: Option<BTreeSet<u8>>,
+        existing: Given<String>,
+        collides: Given<bool>,
     }
     #[rstest::fixture]
     fn topic_name() -> TopicNameScenario {
-        let name = String::new();
         TopicNameScenario {
-            name,
-            ..TopicNameScenario::default()
+            name: String::new(),
+            checked: None,
+            error: None,
+            rendered: String::new(),
+            bytes: Vec::new(),
+            legal: None,
+            existing: Given::new("existing", EXISTING),
+            collides: Given::new("collides", CHECKED),
         }
     }
     #[rstest_bdd_macros::given("log topic name {name}")]
@@ -211,20 +220,25 @@ mod tests {
         check!(topic_name.bytes.len() == 256);
         check!(topic_name.legal == Some(expected));
     }
+    #[krabka_bdd::given("a topic named {existing} exists")]
+    fn existing_topic(topic_name: &mut TopicNameScenario, existing: String) {
+        topic_name.existing.set(existing);
+    }
+    #[krabka_bdd::when("a topic named {requested} is checked for a collision")]
+    fn check_topic_collision(topic_name: &mut TopicNameScenario, requested: String) {
+        let collides = topic_names_collide(topic_name.existing.get(), &requested);
+        topic_name.collides.set(collides);
+    }
+    #[krabka_bdd::then("the topic names collide")]
+    fn topic_names_do_collide(topic_name: &TopicNameScenario) {
+        assert2::assert!(*topic_name.collides.get());
+    }
+    #[krabka_bdd::then("the topic names do not collide")]
+    fn topic_names_do_not_collide(topic_name: &TopicNameScenario) {
+        assert2::assert!(!*topic_name.collides.get());
+    }
     krabka_bdd::scenarios!(
         "tests/features/log_topic_names",
         fixtures = [topic_name: TopicNameScenario],
     );
-
-    #[yare::parameterized(
-        dot_to_underscore = { "a.b", "a_b", true },
-        underscore_to_dot = { "a_b", "a.b", true },
-        equal_dot = { "a.b", "a.b", true },
-        hyphen_differs = { "a.b", "a-b", false },
-        longer_name_differs = { "a.b", "a.bc", false },
-        distinct_names = { "orders", "orders2", false },
-    )]
-    fn topic_names_collide_unifies_dot_and_underscore(a: &str, b: &str, expected: bool) {
-        check!(topic_names_collide(a, b) == expected, "{a} {b}");
-    }
 }

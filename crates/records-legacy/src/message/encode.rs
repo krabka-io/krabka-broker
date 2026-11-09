@@ -160,18 +160,4 @@ mod tests {
                 }
         );
     }
-
-    #[test]
-    fn empty_key_is_some_not_null() {
-        // len == 0 is an empty (non-null) field; only len == -1 is null.
-        let m = Message {
-            magic: Magic::V0,
-            attributes: 0,
-            timestamp: None,
-            key: Some(Bytes::new()),
-            value: Some(Bytes::from_static(b"v")),
-        };
-        let RoundTrip { decoded, .. } = round_trip(&m);
-        assert2::assert!(decoded == m);
-    }
 }

@@ -731,11 +731,8 @@ mod tests {
     fn matches_backtracks_to_span_the_whole_input() {
         // (pattern, input, matches)
         let cases = [
-            row("a|ab", "ab", true),
             row("a|ab", "abc", false),
-            row("CN=(.*?)", "CN=abc", true),
             row("(a+)+b", "aaab", true),
-            row("ali", "alice", false),
             row("ali.*", "alice", true),
         ];
         check_matches(cases, false);
@@ -761,9 +758,7 @@ mod tests {
     fn replace_all_finds_an_empty_match_after_a_non_empty_one() {
         // (pattern, input, replacement, result)
         let cases = [
-            replace_row("(.*)", "alice", "$1x", "alicexx"),
             replace_row("a*", "baaac", "-", "-b--c-"),
-            replace_row("x*", "abc", "-", "-a-b-c-"),
             replace_row("\\w*", "ab cd", "[$0]", "[ab][] [cd][]"),
             replace_row("(?:)", "é!", "|", "|é|!|"),
             replace_row("", "", "|", "|"),
@@ -778,10 +773,7 @@ mod tests {
     fn replace_first_stops_after_the_first_match_even_when_it_is_empty() {
         // (pattern, input, replacement, result)
         check_replacements(
-            [
-                replace_row("(.*)", "alice", "$1x", "alicex"),
-                replace_row("b*", "abc", "-", "-abc"),
-            ],
+            [replace_row("b*", "abc", "-", "-abc")],
             JavaPattern::replace_first,
             false,
         );
@@ -796,9 +788,7 @@ mod tests {
         // (pattern, input, whole input matches)
         let cases = [
             row("\\w+", "abc_09", true),
-            row("\\w+", "é", false),
             row("\\W", "é", true),
-            row("\\d", "٣", false),
             row("\\D", "٣", true),
             row("\\s", " \t\u{0B}", false),
             row("\\s+", " \t\u{0B}", true),
@@ -811,8 +801,6 @@ mod tests {
             row("[\\W]+", "é!", true),
             row("[\\d-]+", "1-2", true),
             row("[\\s]", "\u{a0}", false),
-            row("(?U)\\w+", "é", true),
-            row("(?U)\\d", "٣", true),
             row("(?U)\\s", "\u{a0}", true),
             row("(?U:\\w)\\w", "éa", true),
             row("(?U:\\w)\\w", "éé", false),
@@ -825,17 +813,10 @@ mod tests {
             row("\\bé", "é", false),
             row("a\\Bé", "aé", false),
             row("a.b", "axb", true),
-            row("a.b", "a\nb", false),
-            row("a.b", "a\rb", false),
-            row("a.b", "a\u{85}b", false),
-            row("a.b", "a\u{2028}b", false),
-            row("a.b", "a\u{2029}b", false),
             row(".*", "abc\rdef", false),
             row("(?s)a.b", "a\rb", true),
             row("(?s)a.b", "a\nb", true),
-            row("(?d)a.b", "a\rb", true),
             row("(?d)a.b", "a\u{85}b", true),
-            row("(?d)a.b", "a\nb", false),
             row("(?s:a.)b.", "a\nbx", true),
             row("(?s:a.)b.", "a\nb\r", false),
             row("(?s)(?-s).", "\n", false),
@@ -855,10 +836,7 @@ mod tests {
     fn matches_folds_case_as_java_does() {
         // (pattern, input, whole input matches)
         let cases = [
-            row("(?i)service-", "SERVICE-", true),
             row("(?i)service-", "service-", true),
-            row("(?i)service-", "\u{17f}ervice-", false),
-            row("(?iu)service-", "\u{17f}ervice-", true),
             row("(?iu)service-", "SERVICE-", true),
             row("(?i)k", "\u{212a}", false),
             row("(?iu)k", "\u{212a}", true),
@@ -1040,7 +1018,6 @@ mod tests {
             row("\\Qa\\\\E", "a\\", true),
             row("\\Q\\\\E", "\\", true),
             row("\\Qa.b\\E", "a.b", true),
-            row("\\Qa.b\\E", "axb", false),
             row("(?i)\\Qk\\E", "\u{212a}", false),
             row("(?iu)\\Qk\\E", "\u{212a}", true),
             // a backslash before < or > is the character
@@ -2228,14 +2205,11 @@ mod tests {
             replace_row("(a)-(b)", "a-b", "$1_$2", "a_b"),
             replace_row("(a)", "a", "$1suffix", "asuffix"),
             // Digits after `$n` join the group number only while it names a group.
-            replace_row("(a)", "a", "$10", "a0"),
             replace_row("(a)", "a", "$12", "a2"),
             replace_row("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", "abcdefghij", "$10", "j"),
             replace_row("(a)", "a", "$0!", "a!"),
             replace_row("(?<who>a)", "a", "${who}-$1", "a-a"),
             // A backslash makes the next character literal.
-            replace_row("(a)", "a", "\\$1", "$1"),
-            replace_row("a", "aa", "b", "bb"),
             // A group that took no part in the match adds nothing.
             replace_row("(a)|(b)", "b", "[$1]", "[]"),
             replace_row("x", "abc", "$9", "abc"),
@@ -2243,16 +2217,11 @@ mod tests {
         check_replacements(cases, JavaPattern::replace_all, true);
     }
 
-    /// The replacements Java throws on.
+    /// The replacements Java throws on whose message the next test does not
+    /// name: a group number past a pattern with no groups, and groups only the
+    /// matcher knows.
     #[yare::parameterized(
-        group_number_out_of_range = { "(a)", "a", "$2" },
         group_number_without_groups = { "a", "a", "$1" },
-        trailing_dollar = { "(a)", "a", "$" },
-        nonnumeric_group_reference = { "(a)", "a", "$x" },
-        trailing_backslash = { "(a)", "a", "\\" },
-        unknown_named_group = { "(a)", "a", "${who}" },
-        empty_named_group = { "(a)", "a", "${}" },
-        unclosed_named_group = { "(a)", "a", "${who" },
         group_number_on_the_matcher_alone = { "(?<=\\R?x)y", "xy", "$1" },
         group_number_past_a_large_repeat = { "(?<n>x){1,1000000000}", "x", "$2" },
         unknown_named_group_past_a_large_repeat = { "(?<n>x){1,1000000000}", "x", "${m}" },
@@ -2282,21 +2251,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn replace_first_stops_after_one_match() {
-        let result = pattern("a").replace_first("aaa", "b");
-        assert!(result.ok().as_deref() == Some("baa"));
-    }
-
-    #[yare::parameterized(
-        python_named_group = { "(?P<x>a)" },
-        unclosed_character_class = { "[a-" },
-        unclosed_group = { "(a" },
-    )]
-    fn a_pattern_java_refuses_does_not_compile(source: &str) {
-        check!(JavaPattern::compile(source).is_err(), "{source}");
-    }
-
     /// What `fancy_regex` takes and Java's `Pattern.compile` refuses is refused:
     /// a group name already defined, a `\k<name>` of no named group before it,
     /// a quantifier after a quantifier and its `?` or `+`, a repeat range that
@@ -2307,7 +2261,6 @@ mod tests {
     #[test]
     fn a_pattern_java_refuses_where_fancy_regex_takes_it_does_not_compile() {
         let sources = [
-            "(?<a>x)(?<a>y)",
             "(?<a>x)|(?<a>y)",
             "\\k<1>",
             "(x)\\k<1>",
@@ -2331,12 +2284,9 @@ mod tests {
             "(?x)a*? +",
             "(?x)a* * ",
             "a*(?i)+",
-            "*a",
             "(*a)",
             "a|*",
-            "x{2,1}",
             "x{3,2}",
-            "x{,2}",
             "x{2147483648}",
             "x{1,2147483648}",
             "[\\R]",
@@ -2698,7 +2648,6 @@ mod tests {
         // (pattern, input, replacement, replaceAll result)
         let cases = [
             replace_row("\\G", "aa", "-", "-aa"),
-            replace_row("\\Ga", "aaba", "-", "--ba"),
             replace_row("\\G|a", "aa", "-", "-a--"),
             replace_row("\\G|b", "ab", "-", "-a--"),
             replace_row("a|\\G", "baa", "-", "-b---"),

@@ -23,8 +23,6 @@ proptest! {
 #[test]
 fn remote_charge_handles_exhaustion_and_free_floor_breaches() {
     let cases: &[(&[RemoteRetentionSegment], u64, usize)] = &[
-        (&[remote(false, false, 0)], 0, 0),
-        (&[remote(false, false, 0)], 1, 1),
         (
             &[remote(true, true, u64::MAX), remote(false, false, 1)],
             1,

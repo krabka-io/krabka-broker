@@ -12,7 +12,6 @@ use {
         test_support::{admin, authentication, denied, privileged_freeze},
     },
     assert2::check,
-    krabka_metadata::krabka_version::KrabkaVersion,
     std::str,
 };
 
@@ -292,16 +291,6 @@ fn lifecycle_maps_to_6002() {
             serde_json::json!("1"),
         )
     );
-}
-
-#[yare::parameterized(
-    below_the_level = { 0, OcsfVersion::V1 },
-    at_the_1_0_0_formats = { 1, OcsfVersion::V1 },
-    one_level_below = { 2, OcsfVersion::V1 },
-    at_the_level = { 3, OcsfVersion::V2 },
-)]
-fn ocsf_version_follows_the_finalized_krabka_version(level: i16, expected: OcsfVersion) {
-    check!(OcsfVersion::at(KrabkaVersion::new(level)) == expected);
 }
 
 #[test]

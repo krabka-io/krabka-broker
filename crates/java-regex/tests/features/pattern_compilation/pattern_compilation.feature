@@ -13,12 +13,14 @@ Feature: A client metrics match pattern compiles as Java's Pattern.compile does
 
       Examples:
         | case                         | pattern         |
-        | duplicate group name         | (?<n>a)(?<n>b) |
-        | dangling quantifier          | *app           |
-        | backwards repeat range       | app{3,1}       |
-        | repeat without a least count | app{,3}        |
-        | unknown property             | \\p{Foo}       |
-        | unclosed group               | (app           |
+        | duplicate group name         | (?<n>a)(?<n>b)  |
+        | Python named group syntax    | (?P<n>app)      |
+        | dangling quantifier          | *app            |
+        | backwards repeat range       | app{3,1}        |
+        | repeat without a least count | app{,3}         |
+        | unknown property             | \\p{Foo}        |
+        | unclosed group               | (app            |
+        | unclosed character class     | app-[0-         |
 
   Rule: Syntax that only Java has keeps its Java meaning
 

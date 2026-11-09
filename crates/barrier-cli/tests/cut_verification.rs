@@ -12,6 +12,9 @@ use {
     support::GROUP,
 };
 
+/// A group name no step defines.
+const UNDEFINED_GROUP: &str = "never-defined";
+
 /// The offset the first cut's marker took in `partition` of `topic`.
 fn marker_offset(barrier: &BarrierScenario, topic: &str, partition: i32) -> i64 {
     let cut = barrier.cuts.first().expect("a Given took a cut");
@@ -77,6 +80,13 @@ async fn verify(barrier: &mut BarrierScenario, epoch: i64) {
 
 #[when("the operator tries to verify cut {epoch} of the group")]
 async fn try_verify(barrier: &mut BarrierScenario, epoch: i64) { verify(barrier, epoch).await; }
+
+#[when("an operator tries to verify cut {epoch} of a group nobody defined")]
+async fn try_verify_undefined(barrier: &mut BarrierScenario, epoch: i64) {
+    let cluster = barrier.cluster.get().await;
+    let transcript = cluster.operator().verify(UNDEFINED_GROUP, epoch).await;
+    barrier.transcript.set(transcript);
+}
 
 #[then("the cut verifies with {markers} markers in the log")]
 fn verifies(barrier: &BarrierScenario, markers: usize) {
@@ -158,6 +168,21 @@ fn refuses_missing_epoch(barrier: &BarrierScenario, epoch: i64) {
         transcript
             .stderr
             .contains(&format!("{GROUP} has no retained cut at epoch {epoch}")),
+        "{transcript:?}"
+    );
+}
+
+/// `RESOURCE_NOT_FOUND` (91) is what KFC-4 gives for a group that is not live,
+/// and verifying one is a refusal, not a cut the log contradicts.
+#[then("the tool refuses because the broker knows no such group")]
+fn refuses_unknown_group(barrier: &BarrierScenario) {
+    let transcript = barrier.transcript.get();
+    check!(transcript.exit == 1, "{transcript:?}");
+    check!(transcript.stdout.is_empty(), "{transcript:?}");
+    check!(
+        transcript.stderr.starts_with(&format!(
+            "cannot read the cuts of {UNDEFINED_GROUP}: error 91"
+        )),
         "{transcript:?}"
     );
 }

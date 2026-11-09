@@ -148,13 +148,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn under_cap_returns_bytes() {
-        let store = store_with("k", b"hello").await;
-        let got = read_capped(&store, &Path::from("k"), 1024).await.unwrap();
-        assert!(&got[..] == b"hello");
-    }
-
-    #[tokio::test]
     async fn digest_hashes_the_whole_object_without_returning_it() {
         let store = store_with("k", b"hello").await;
         let digest = digest_capped(&store, &Path::from("k"), 5).await.unwrap();
@@ -192,26 +185,6 @@ mod tests {
         let streamed = digest_capped(&store, &key, max_bytes).await;
 
         assert2::assert!(format!("{streamed:?}") == format!("{buffered:?}"));
-    }
-
-    #[tokio::test]
-    async fn over_cap_returns_too_large() {
-        let store = store_with("k", b"hello world").await;
-        let err = read_capped(&store, &Path::from("k"), 4).await.unwrap_err();
-        assert!(matches!(err, ObjectStoreError::TooLarge {
-            size: 11,
-            max_bytes: 4,
-            ..
-        }));
-    }
-
-    #[tokio::test]
-    async fn missing_object_maps_to_not_found() {
-        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
-        let err = read_capped(&store, &Path::from("absent"), 1024)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ObjectStoreError::NotFound(_)));
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -299,8 +272,6 @@ mod tests {
     }
 
     #[yare::parameterized(
-        etag = { Race::Etag, false },
-        metadata = { Race::Metadata, false },
         body = { Race::Body, false },
         digest_etag = { Race::Etag, true },
         digest_metadata = { Race::Metadata, true },

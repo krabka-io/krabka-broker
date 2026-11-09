@@ -1499,30 +1499,6 @@ mod tests {
             .unwrap();
     }
 
-    /// A node directory, a fresh archive root, the arguments that open it, and the id of the capture of the node taken into it.
-    struct CapturedNode {
-        node: tempfile::TempDir,
-        archive_root: tempfile::TempDir,
-        args: ArchiveArgs,
-        id: String,
-    }
-
-    async fn captured_node() -> CapturedNode {
-        let node = node_with_both_inputs();
-        let archive_root = tempfile::tempdir().expect("archive root");
-        let args = archive_args(archive_root.path());
-        let id = capture(Some(node.path()), None, &args)
-            .await
-            .result
-            .expect("capture the node");
-        CapturedNode {
-            node,
-            archive_root,
-            args,
-            id,
-        }
-    }
-
     async fn capture_manifest(store: &Archive, id: &str) -> Manifest {
         serde_json::from_slice(
             &store
@@ -1681,32 +1657,6 @@ mod tests {
                 .await
                 .is_err()
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_capture_records_both_snapshots_with_their_digests() {
-        let CapturedNode {
-            node: _node,
-            archive_root: _archive_root,
-            args,
-            id,
-        } = captured_node().await;
-
-        let store = Archive::open(&args).expect("open the archive");
-        let manifest = capture_manifest(&store, &id).await;
-        check!(manifest.capture_id == id);
-        check!(manifest.bootstrap_server == None);
-        check!(
-            manifest.artifact(RLMM_SNAPSHOT).map(|a| a.sha256.clone())
-                == Some(sha256_hex(RLMM_BYTES))
-        );
-        check!(
-            manifest
-                .artifact(METADATA_CHECKPOINT)
-                .map(|a| a.sha256.clone())
-                == Some(sha256_hex(CHECKPOINT_BYTES))
-        );
-        check!(manifest.artifact(GROUP_OFFSETS) == None);
     }
 
     /// The name `krabka format` gives its offset-zero checkpoint.
@@ -1932,28 +1882,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_capture_that_finds_nothing_names_the_flags_that_would_have_helped() {
-        let archive_root = tempfile::tempdir().expect("archive root");
-        let args = archive_args(archive_root.path());
-
-        let message = capture(None, None, &args)
-            .await
-            .result
-            .expect_err("a capture with no source fails")
-            .to_string();
-        check!(message.contains("pass --log-dir"), "got: {message}");
-
-        let empty = tempfile::tempdir().expect("an empty log dir");
-        let message = capture(Some(empty.path()), None, &args)
-            .await
-            .result
-            .expect_err("a capture that found nothing fails")
-            .to_string();
-        check!(message.contains("is absent"), "got: {message}");
-        check!(message.contains("checkpoint"), "got: {message}");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn a_capture_that_finds_nothing_reports_the_exact_reasons() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
@@ -2068,44 +1996,6 @@ mod tests {
         assert!(let [BackupEvent::Listed { id, manifest }] = report.events.as_slice());
         check!(id == "0000000000000001");
         check!(matches!(manifest, Err(BackupError::Json { .. })));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn verify_accepts_a_capture_it_just_wrote_under_either_selector() {
-        let CapturedNode {
-            node: _node,
-            archive_root: _archive_root,
-            args,
-            id,
-        } = captured_node().await;
-
-        check!(verify("latest", &args).await.result.is_ok());
-        check!(verify(&id, &args).await.result.is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
-        let CapturedNode {
-            node: _node,
-            archive_root,
-            args,
-            id,
-        } = captured_node().await;
-
-        // What a half-finished upload leaves behind, and exactly what a
-        // restore must not be handed.
-        fs::write(
-            archive_root.path().join(capture_key(&id, RLMM_SNAPSHOT)),
-            b"rlmm snapshot byt",
-        )
-        .expect("truncate the captured snapshot");
-
-        let error = verify("latest", &args)
-            .await
-            .result
-            .expect_err("a truncated artifact fails verification");
-        assert!(let BackupError::Integrity(_) = &error, "got: {error}");
-        check!(error.to_string().contains(RLMM_SNAPSHOT), "got: {error}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

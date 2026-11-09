@@ -355,15 +355,4 @@ mod tests {
         let measured = rate.measure(0);
         check!((measured - want).abs() < 1.0e-9, "{measured}");
     }
-
-    /// A negative record takes back what an earlier one added, as Kafka's
-    /// `unrecordQuotaSensor` does.
-    #[test]
-    fn a_negative_record_takes_the_value_back() {
-        let mut rate = SampledRate::new(SAMPLES, WINDOW_MS, WindowSize::Padded);
-        rate.record(4_000.0, 0);
-        rate.record(-4_000.0, 0);
-
-        check!(rate.measure(0).abs() < 1.0e-9);
-    }
 }

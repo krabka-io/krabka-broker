@@ -16,13 +16,6 @@ Feature: Kafka fetch visibility
     And its visible prefix ends at 6 with stable offset 6 and abort metadata included
     And fetch reports high watermark 8 and stable offset 6
 
-  Scenario: Consumer visibility respects retention, isolation and delivery (3: boundary below log start, start 2)
-    Given fetch watermarks start 2 high 8 stable 6 end 10 deliverable 8
-    When a consumer using read-uncommitted fetches offset 1
-    Then the fetch offset is out-of-range and the computed window is nonempty
-    And its visible prefix ends at 8 with stable offset 6 and abort metadata omitted
-    And fetch reports high watermark 8 and stable offset 6
-
   Scenario: Consumer visibility respects retention, isolation and delivery (4: boundary lso capped at high watermark, start 2)
     Given fetch watermarks start 2 high 8 stable 9 end 10 deliverable 8
     When a consumer using read-committed fetches offset 3
@@ -153,13 +146,6 @@ Feature: Kafka fetch visibility
     Given fetch watermarks start 2 high 8 stable 6 end 10 deliverable 8
     When a follower using read-uncommitted fetches offset 8
     Then the fetch offset is in-range and the computed window is nonempty
-    And its visible prefix ends at 10 with stable offset 6 and abort metadata omitted
-    And fetch reports high watermark 8 and stable offset 6
-
-  Scenario: Follower visibility reaches the log end regardless of consumer isolation (2: boundary caught up follower, start 2)
-    Given fetch watermarks start 2 high 8 stable 6 end 10 deliverable 8
-    When a follower using read-uncommitted fetches offset 10
-    Then the fetch offset is in-range and the computed window is empty
     And its visible prefix ends at 10 with stable offset 6 and abort metadata omitted
     And fetch reports high watermark 8 and stable offset 6
 

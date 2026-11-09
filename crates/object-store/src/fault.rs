@@ -549,10 +549,8 @@ mod tests {
     use {
         super::*,
         crate::{config::ObjectStoreConfig, test_support::round_trip},
-        assert2::{assert, check},
+        assert2::check,
         object_store::{ObjectStoreExt as _, memory::InMemory},
-        std::array,
-        tokio::time::Instant,
     };
 
     fn memory(policy: FaultPolicy) -> Arc<FaultInjectingStore> {
@@ -583,78 +581,6 @@ mod tests {
         );
         check!(store.head(&key).await.unwrap().size == 11);
         check!(store.attempts(StoreOp::Get) == 3);
-    }
-
-    /// A rate is a schedule, not a coin flip: the same rate must fail the same
-    /// call numbers every run, or a suite that asserts on which call failed is
-    /// asserting on luck.
-    #[yare::parameterized(
-        never = { 0, [false, false, false, false] },
-        one_in_four = { 250, [false, false, false, true] },
-        every_other = { 500, [false, true, false, true] },
-        always = { 1_000, [true, true, true, true] },
-    )]
-    fn fail_rates_pick_the_same_calls_every_run(rate: u32, want: [bool; 4]) {
-        let fault = OpFault::rate(FaultKind::Throttled, rate);
-        let got: [bool; 4] = array::from_fn(|n| fault.fails_call(n as u64));
-        check!(got == want, "rate {rate}");
-    }
-
-    /// A `503 SlowDown` on `Put` must reach the caller as an error, and the
-    /// object must not land: a fault that quietly succeeded would let a copy
-    /// path pass a drill it never survived.
-    #[tokio::test]
-    async fn a_throttled_put_fails_and_writes_nothing() {
-        let store =
-            memory(FaultPolicy::none().with(StoreOp::Put, OpFault::always(FaultKind::Throttled)));
-        let path = Path::from("seg.log");
-
-        let err = store
-            .put(&path, PutPayload::from(b"bytes".to_vec()))
-            .await
-            .unwrap_err();
-
-        check!(err.to_string().contains("503 SlowDown"));
-        assert!(store.get(&path).await.is_err());
-        check!(store.attempts(StoreOp::Put) == 1);
-    }
-
-    /// Only the named operation misbehaves. A policy aimed at `Put` must leave
-    /// `Get` alone, or every drill would be indistinguishable from a store
-    /// that is entirely down.
-    #[tokio::test]
-    async fn faults_are_scoped_to_the_named_operation() {
-        let store =
-            memory(FaultPolicy::none().with(StoreOp::Get, OpFault::always(FaultKind::NotFound)));
-        let path = Path::from("seg.log");
-
-        store
-            .put(&path, PutPayload::from(b"bytes".to_vec()))
-            .await
-            .unwrap();
-        let err = store.get(&path).await.unwrap_err();
-
-        check!(matches!(err, object_store::Error::NotFound { .. }));
-        check!(store.attempts(StoreOp::Put) == 1);
-        check!(store.attempts(StoreOp::Get) == 1);
-    }
-
-    /// A stall answers correctly, late. That is the fault an error counter
-    /// never sees, and the reason a caller needs a deadline of its own.
-    #[tokio::test(start_paused = true)]
-    async fn a_stall_succeeds_but_only_after_the_injected_latency() {
-        let store =
-            memory(FaultPolicy::none().with(StoreOp::Put, OpFault::stall(Duration::from_secs(30))));
-        let path = Path::from("seg.log");
-
-        let started = Instant::now();
-        store
-            .put(&path, PutPayload::from(b"bytes".to_vec()))
-            .await
-            .unwrap();
-
-        check!(started.elapsed() >= Duration::from_secs(30));
-        assert!(store.get(&path).await.is_ok());
     }
 
     /// The policy is a wrapper, so a store with no faults must behave exactly

@@ -326,29 +326,6 @@ fn checkpoint_len(log_dir: &path::Path) -> u64 {
     fs::metadata(path).map_or(0, |m| m.len())
 }
 
-/// Any one of the three quorum flags selects a dynamic format, and their
-/// absence selects the static one. The offset-zero checkpoint is written
-/// only for a dynamic format, so its presence is the observable.
-#[yare::parameterized(
-    static_format = { &[], false },
-    standalone = { &["--standalone", "--controller-listener", "controller-1:9093"], true },
-    explicit_controllers = {
-        &["--initial-controllers", "1@host:9093:00000000-0000-0000-0000-000000000003"],
-        true,
-    },
-    no_initial_controllers = { &["--no-initial-controllers"], true },
-)]
-#[test_macro(tokio::test)]
-async fn each_quorum_flag_on_its_own_selects_a_dynamic_format(argv: &[&str], dynamic: bool) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let FormatRun { code, log_dir } = format_into(tmp.path(), NODE_ID, argv).await;
-    assert2::check!(code == EXIT_OK, "exit {code}");
-    assert2::check!(
-        (checkpoint_len(&log_dir) > 0) == dynamic,
-        "checkpoint present should be {dynamic}"
-    );
-}
-
 /// The voter set rides in the checkpoint only when there is one. Both of
 /// these formats are dynamic, so both write a checkpoint -- what separates
 /// them is whether it also carries voters, and the one that does is bigger.
@@ -476,31 +453,6 @@ async fn a_non_empty_log_dir_is_refused() {
     check!(code == EXIT_DIRTY_LOG_DIR);
 }
 
-/// The writers are only observable through the files they leave, so a
-/// mutant emptying one out to `Ok(())` survives until something reads the
-/// directory. A boot needs all of these.
-#[tokio::test]
-async fn a_standalone_format_writes_what_a_boot_reads() {
-    let DataDirectory {
-        root: _tmp,
-        path: log_dir,
-    } = fresh_data_directory();
-
-    let code = run_from_args(standalone_argv(&log_dir, &[])).await;
-    check!(code == EXIT_OK);
-
-    for name in [META_PROPERTIES, "bootstrap.records.bin", "bootstrap.json"] {
-        let path = log_dir.join(name);
-        let len = fs::metadata(&path).map_or(0, |m| m.len());
-        check!(len > 0, "{name} should exist and carry bytes, got {len}");
-    }
-
-    // KIP-853 dynamic quorum: the voter set lives in the offset-zero
-    // checkpoint, not in the bootstrap record stream.
-    let len = checkpoint_len(&log_dir);
-    check!(len > 0, "offset-zero checkpoint should carry the voter set");
-}
-
 fn standalone_argv(log_dir: &path::Path, extra: &[&str]) -> Vec<String> {
     let mut argv = [
         "krabka-format",
@@ -516,45 +468,6 @@ fn standalone_argv(log_dir: &path::Path, extra: &[&str]) -> Vec<String> {
     .to_vec();
     argv.extend(extra.iter().map(|s| (*s).to_owned()));
     argv
-}
-
-/// `--ignore-formatted` is what lets a Kubernetes init container run the
-/// formatter unconditionally: the second run is a no-op that exits 0 and
-/// leaves the first run's identity in place, while the same directory without
-/// the flag is still refused.
-#[tokio::test]
-async fn ignore_formatted_makes_a_second_format_a_no_op() {
-    let DataDirectory {
-        root: _tmp,
-        path: log_dir,
-    } = fresh_data_directory();
-    let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
-
-    check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
-    let formatted = fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
-
-    // Without the flag the same directory is still a dirty log dir.
-    check!(crate::run_from_args(argv(&[])).await == EXIT_DIRTY_LOG_DIR);
-
-    // With it the run succeeds and rewrites nothing: a regenerated cluster or
-    // directory id would strand the node's replicated identity.
-    check!(crate::run_from_args(argv(&["--ignore-formatted"])).await == EXIT_OK);
-    let after = fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
-    check!(after == formatted);
-}
-
-/// An unformatted directory is formatted normally under the flag: it means
-/// "ignore an existing format", not "skip formatting".
-#[tokio::test]
-async fn ignore_formatted_still_formats_a_fresh_directory() {
-    let DataDirectory {
-        root: _tmp,
-        path: log_dir,
-    } = fresh_data_directory();
-
-    let code = run_from_args(standalone_argv(&log_dir, &["--ignore-formatted"])).await;
-    check!(code == EXIT_OK);
-    check!(log_dir.join(META_PROPERTIES).is_file());
 }
 
 /// A format that fails partway leaves no marker, so the next run redoes it

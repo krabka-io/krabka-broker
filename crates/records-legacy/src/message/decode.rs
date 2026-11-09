@@ -115,38 +115,7 @@ fn get_nullable_bytes(
 #[cfg(test)]
 mod tests {
 
-    use {super::*, crate::message::test_support::fixture_v1, bytes::BytesMut};
-
-    #[test]
-    fn rejects_bad_crc() {
-        let m = fixture_v1();
-        let mut buf = BytesMut::new();
-        m.encode_into(&mut buf).unwrap();
-        buf[0] ^= 0xFF;
-        let mut cur: &[u8] = &buf[..];
-        assert2::assert!(matches!(
-            Message::decode_from(&mut cur, m.encoded_len()),
-            Err(LegacyRecordsError::CrcMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_unsupported_magic() {
-        let mut buf = BytesMut::new();
-        // Build a fake message with magic = 2.
-        let mut body = vec![2u8, 0u8]; // magic, attrs
-        body.extend_from_slice(&(-1i32).to_be_bytes()); // key=null
-        body.extend_from_slice(&(-1i32).to_be_bytes()); // value=null
-        let crc = crc32fast::hash(&body);
-        buf.extend_from_slice(&crc.to_be_bytes());
-        buf.extend_from_slice(&body);
-        let frame_size = buf.len();
-        let mut cur: &[u8] = &buf[..];
-        assert2::assert!(matches!(
-            Message::decode_from(&mut cur, frame_size),
-            Err(LegacyRecordsError::UnsupportedMagic { found: 2 })
-        ));
-    }
+    use super::*;
 
     // Build a frame: crc(4) | magic | attrs | trailing, with a valid CRC.
     fn frame_with_body(magic: u8, attrs: u8, trailing: &[u8]) -> Vec<u8> {

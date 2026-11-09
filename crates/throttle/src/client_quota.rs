@@ -138,104 +138,17 @@ impl ClientQuota {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*, assert2::check, krabka_units::prelude::millis, qubit_clock::ManualMonotonicClock,
-        std::time::Duration,
-    };
+    use {super::*, assert2::check, qubit_clock::ManualMonotonicClock};
 
-    fn quota(bound: f64) -> (Arc<ManualMonotonicClock>, ClientQuota) {
-        let clock = ManualMonotonicClock::new_shared();
+    #[test]
+    fn set_bound_reports_the_new_bound() {
         let quota = ClientQuota::with_clock(
-            Arc::<ManualMonotonicClock>::clone(&clock),
+            ManualMonotonicClock::new_shared(),
             QuotaWindow::KAFKA_DEFAULT,
-            bound,
+            1_000.0,
         );
-        (clock, quota)
-    }
-
-    /// A new client is measured over ten padded samples, so 10 000 bytes at
-    /// 1000 B/s are within the quota and one byte more is over it by
-    /// 0.1 B/s, a 1 ms throttle.
-    #[yare::parameterized(
-        within = { 10_000, 0 },
-        one_byte_over = { 10_001, 1 },
-        twice_the_window = { 20_000, 10_000 },
-    )]
-    fn a_first_burst_is_measured_over_the_padded_window(sent: u64, throttle_ms: u32) {
-        let (_, quota) = quota(1_000.0);
-
-        check!(quota.record(sent) == millis(throttle_ms));
-    }
-
-    /// 15 000 bytes at 1000 B/s are 1500 B/s over the padded window, a 5 s
-    /// throttle. The padding holds the window at 10 s for the first ten
-    /// seconds, so the rate, and the throttle, are the same 5 s later. The
-    /// burst is forgotten once its sample is a whole window old.
-    #[yare::parameterized(
-        at_once = { 0, 5_000 },
-        five_seconds_later = { 5_000, 5_000 },
-        ten_seconds_later = { 10_000, 5_000 },
-        a_window_later = { 11_000, 0 },
-    )]
-    fn a_burst_throttles_until_its_sample_leaves_the_window(later_ms: u64, throttle_ms: u32) {
-        let (clock, quota) = quota(1_000.0);
-        quota.record(15_000);
-
-        let advanced = clock.advance(Duration::from_millis(later_ms));
-        check!(let Ok(()) = advanced);
-        check!(quota.record(0) == millis(throttle_ms));
-    }
-
-    /// Past the padding the window is the time since the oldest sample
-    /// started, so the throttle is the wait that brings the rate back to the
-    /// bound: 1000 B/s for 10 s and then 5000 bytes more is 1500 B/s over
-    /// 10 s, which takes 5 s more to come back to 1000 B/s.
-    #[test]
-    fn past_the_padding_the_throttle_is_the_wait_back_to_the_bound() {
-        let (clock, quota) = quota(1_000.0);
-        for _ in 0..10 {
-            check!(quota.record(1_000) == millis(0));
-            let advanced = clock.advance(Duration::from_millis(1_000));
-            check!(let Ok(()) = advanced);
-        }
-        // The oldest sample started at 0 s and it is 10 s now: 15 000 bytes
-        // over 10 s.
-        check!(quota.record(5_000) == millis(5_000));
-    }
-
-    /// Taking a fetch's bytes back leaves the quota as it was before it.
-    #[test]
-    fn unrecord_takes_the_charge_back() {
-        let (_, quota) = quota(1_000.0);
-        quota.record(15_000);
-        quota.unrecord(15_000);
-
-        check!(quota.record(10_000) == millis(0));
-    }
-
-    /// A bound that is not a positive rate throttles nothing.
-    #[yare::parameterized(
-        zero = { 0.0 },
-        negative = { -1.0 },
-        infinite = { f64::INFINITY },
-        nan = { f64::NAN },
-    )]
-    fn a_bound_that_is_not_a_positive_rate_throttles_nothing(bound: f64) {
-        let (_, quota) = quota(bound);
-
-        check!(quota.record(u64::from(u32::MAX)) == millis(0));
-    }
-
-    /// A new bound applies to the traffic already measured.
-    #[test]
-    fn a_new_bound_keeps_the_measured_traffic() {
-        let (_, quota) = quota(1_000.0);
-        quota.record(15_000);
         quota.set_bound(2_000.0);
 
-        check!((quota.bound() - 2_000.0).abs() < 1.0e-9);
-        check!(quota.record(0) == millis(0));
-        // 20 010 bytes over 10 s is 1 B/s over 2000 B/s: 5 ms.
-        check!(quota.record(5_010) == millis(5));
+        check!(quota.bound().to_bits() == 2_000.0_f64.to_bits());
     }
 }

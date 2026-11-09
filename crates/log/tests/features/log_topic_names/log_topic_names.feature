@@ -64,3 +64,24 @@ Feature: Kafka topic-name validation in log storage
     Given all 256 possible topic-name byte values
     When the topic-name byte lookup table classifies them
     Then only ASCII letters digits dot underscore and hyphen are legal topic bytes
+
+  Scenario Outline: Topic names that differ only by dot and underscore collide
+    Given a topic named <existing> exists
+    When a topic named <requested> is checked for a collision
+    Then the topic names collide
+
+    Examples:
+      | case                         | existing | requested |
+      | a dot against an underscore  | a.b      | a_b       |
+      | an underscore against a dot  | a_b      | a.b       |
+      | the same name                | a.b      | a.b       |
+
+  Scenario Outline: Topic names that differ otherwise do not collide
+    Given a topic named <existing> exists
+    When a topic named <requested> is checked for a collision
+    Then the topic names do not collide
+
+    Examples:
+      | case                         | existing | requested |
+      | a hyphen is not a dot        | a.b      | a-b       |
+      | a longer name                | a.b      | a.bc      |

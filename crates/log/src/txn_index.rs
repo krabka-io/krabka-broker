@@ -271,6 +271,7 @@ mod tests {
     use {
         super::*,
         crate::{index::IndexFixture, test_support::aborted_txn},
+        krabka_bdd::Given,
         std::{fs, iter, path::Path},
         tempfile::TempDir,
     };
@@ -289,13 +290,12 @@ mod tests {
     fn retry_entry() -> AbortedTxn { aborted_txn().bounds(Offset(5)..=Offset(7)).stable(8).call() }
 
     /// One transaction covers offsets 10 through 20 for fetch-boundary checks.
-    #[bon::builder]
-    fn ranged_index(#[builder(default = "00.txnindex")] name: &'_ str) -> IndexFixture<TxnIndex> {
-        populated_index(name, &[aborted_txn()
+    fn ranged_txn() -> AbortedTxn {
+        aborted_txn()
             .producer(1)
             .bounds(Offset(10)..=Offset(20))
             .stable(21)
-            .call()])
+            .call()
     }
 
     /// A malformed entry and the name of what is wrong with it.
@@ -331,11 +331,17 @@ mod tests {
         fs::write(path, raw.as_bytes()).unwrap();
     }
 
+    const INDEXED: &str = "Given an aborted transaction spanning offsets 10 to 20 has been indexed";
+    const FETCHED: &str =
+        "When a fetch from offset <start> up to offset <end> collects aborted transactions";
+
     struct TransactionIndexScenario {
         directory: TempDir,
         entries: Vec<AbortedTxn>,
         bytes: Vec<u8>,
         reopened: Option<Vec<AbortedTxn>>,
+        ranged: Given<IndexFixture<TxnIndex>>,
+        fetched: Given<Vec<AbortedTxn>>,
     }
     #[rstest::fixture]
     fn transaction_index() -> TransactionIndexScenario {
@@ -345,6 +351,8 @@ mod tests {
             entries: Vec::new(),
             bytes: Vec::new(),
             reopened: None,
+            ranged: Given::new("ranged", INDEXED),
+            fetched: Given::new("fetched", FETCHED),
         }
     }
     #[rstest_bdd_macros::given("aborted transaction index entries")]
@@ -401,6 +409,37 @@ mod tests {
         assert2::assert!(transaction_index.bytes.len() == 3 * ENTRY_BYTES);
         assert2::assert!(transaction_index.reopened.as_ref() == Some(&transaction_index.entries));
     }
+    #[krabka_bdd::given("an aborted transaction spanning offsets 10 to 20 has been indexed")]
+    fn ranged_aborted_transaction(transaction_index: &mut TransactionIndexScenario) {
+        transaction_index
+            .ranged
+            .set(populated_index("00.txnindex", &[ranged_txn()]));
+    }
+    #[krabka_bdd::when(
+        "a fetch from offset {start} up to offset {end} collects aborted transactions"
+    )]
+    fn fetch_aborted_transactions(
+        transaction_index: &mut TransactionIndexScenario,
+        start: i64,
+        end: i64,
+    ) {
+        let fetched = transaction_index
+            .ranged
+            .get()
+            .index
+            .aborted_in_range(Offset(start), Offset(end))
+            .copied()
+            .collect();
+        transaction_index.fetched.set(fetched);
+    }
+    #[krabka_bdd::then("the fetch reports the aborted transaction")]
+    fn fetch_reports_the_transaction(transaction_index: &TransactionIndexScenario) {
+        assert2::assert!(*transaction_index.fetched.get() == [ranged_txn()]);
+    }
+    #[krabka_bdd::then("the fetch reports no aborted transaction")]
+    fn fetch_reports_no_transaction(transaction_index: &TransactionIndexScenario) {
+        assert2::assert!(*transaction_index.fetched.get() == []);
+    }
     krabka_bdd::scenarios!(
         "tests/features/transaction_index_wire",
         fixtures = [transaction_index: TransactionIndexScenario],
@@ -419,28 +458,6 @@ mod tests {
         bytes.extend_from_slice(&4_i64.to_be_bytes());
         fs::write(&path, bytes).unwrap();
         assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(path).unwrap_err());
-    }
-
-    /// The range end is exclusive: an aborted transaction that begins exactly
-    /// where the fetch ends is not in it.
-    ///
-    /// A consumer uses this list to skip aborted records inside the batch range
-    /// it was handed. Including one that starts past the end makes it skip
-    /// records it was never sent.
-    #[test]
-    fn an_aborted_txn_starting_at_the_range_end_is_outside_it() {
-        let IndexFixture {
-            dir: _dir,
-            path: _path,
-            index,
-        } = ranged_index().name("00000000000000000000.txnindex").call();
-
-        let found =
-            |start: i64, end: i64| index.aborted_in_range(Offset(start), Offset(end)).count();
-        assert2::check!(found(0, 10) == 0, "a fetch ending where the txn begins");
-        assert2::check!(found(0, 11) == 1, "a fetch reaching one past its start");
-        assert2::check!(found(20, 30) == 1, "a fetch starting on its last offset");
-        assert2::check!(found(21, 30) == 0, "a fetch starting past its last offset");
     }
 
     #[test]
@@ -556,51 +573,6 @@ mod tests {
         assert2::assert!(index.entries() == [original]);
         assert2::assert!(let LogError::Io(_) = index.truncate_from(Offset(0)).unwrap_err());
         assert2::assert!(index.entries() == [original]);
-    }
-
-    #[test]
-    fn empty_or_inverted_fetch_range_matches_no_aborted_interval() {
-        let IndexFixture {
-            dir: _dir,
-            path: _path,
-            index,
-        } = ranged_index().call();
-        assert2::assert!(index.aborted_in_range(Offset(10), Offset(10)).count() == 0);
-        assert2::assert!(index.aborted_in_range(Offset(20), Offset(10)).count() == 0);
-    }
-
-    #[test]
-    fn append_round_trips_through_disk() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.txnindex");
-        let mut idx = TxnIndex::open(path.clone()).unwrap();
-        idx.append(retry_entry()).unwrap();
-        idx.append(
-            aborted_txn()
-                .bounds(Offset(10)..=Offset(12))
-                .stable(13)
-                .call(),
-        )
-        .unwrap();
-
-        let idx2 = TxnIndex::open(path).unwrap();
-        assert2::assert!(
-            idx2.entries()
-                == &[
-                    AbortedTxn {
-                        start_offset: Offset(5),
-                        last_offset: Offset(7),
-                        producer_id: ProducerId(1000),
-                        last_stable_offset: Offset(8)
-                    },
-                    AbortedTxn {
-                        start_offset: Offset(10),
-                        last_offset: Offset(12),
-                        producer_id: ProducerId(1000),
-                        last_stable_offset: Offset(13)
-                    },
-                ]
-        );
     }
 
     #[test]

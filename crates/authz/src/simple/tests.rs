@@ -1,5 +1,8 @@
 //! Decision-order tests for [`SimpleAclAuthorizer`]: super-user bypass,
-//! deny-wins, resource-pattern matching, and the default-deny fallback.
+//! resource-pattern matching, and authorization by resource type.
+//!
+//! Default deny, deny-wins and `allow.everyone.if.no.acl.found` are
+//! illustrated by `tests/features/acl_authorization`.
 //!
 //! The tests that cover which stored entries apply at all live beside those
 //! predicates in [`super::matching`].
@@ -9,8 +12,8 @@ use {
     crate::{
         authorize_topics,
         simple::test_support::{
-            AclSetup, AliceAuthorizer, acl_image, addr, alice, check_resource_type_access,
-            check_topic_access, img, no_super, one_super, req, topic_acl,
+            AclSetup, AliceAuthorizer, acl_image, addr, alice, check_resource_type_access, img,
+            no_super, one_super, req, topic_acl,
         },
     },
     krabka_metadata::{AclOperation, MetadataRecord, PatternType},
@@ -72,16 +75,6 @@ fn check_resource_auth_context(
     assert2::assert!(authorize(&image, &authorizer, &principal, &host) == expected);
 }
 
-#[test]
-fn empty_image_with_no_super_users_defaults_to_deny() {
-    // There is no compat shim that returns Allow in this case —
-    // `SimpleAclAuthorizer` is default-deny when nothing matches.
-    // Operators who want "allow everything" should configure
-    // `AllowAllAuthorizer` explicitly.
-    let img = img();
-    check_topic_access(&img, "foo", AclOperation::Read, AuthorizationResult::Deny);
-}
-
 #[yare::parameterized(
     default_flag = { None::<bool> },
     allow_everyone_disabled = { Some(false) },
@@ -133,15 +126,6 @@ fn allow_pattern_matches_only_matching_name(
     let img = acl_image([topic_acl().pattern(pattern).name(acl_name).call()]);
     let caller = AliceAuthorizer::default();
     assert2::assert!(caller.authorize(&img, resource, AclOperation::Read) == expected);
-}
-
-#[test]
-fn deny_wins_over_allow() {
-    let img = acl_image([
-        topic_acl().call(),
-        topic_acl().permission(PermissionType::Deny).call(),
-    ]);
-    check_topic_access(&img, "foo", AclOperation::Read, AuthorizationResult::Deny);
 }
 
 #[test]
@@ -590,61 +574,4 @@ mod authorize_by_resource_type {
             },
         );
     }
-}
-
-/// #650: `allow.everyone.if.no.acl.found` (default `false`) allows a
-/// request only when NO ACL at all applies to the resource -- by resource
-/// type, name, and LITERAL/PREFIXED/wildcard pattern, regardless of
-/// principal, host, operation, or permission type. If at least one ACL
-/// applies to the resource and none of them matches the request, the
-/// request is still denied.
-#[yare::parameterized(
-    no_acl_flag_off = { vec![], false, AuthorizationResult::Deny },
-    no_acl_flag_on = { vec![], true, AuthorizationResult::Allow },
-    resource_acl_other_principal_flag_off = {
-        vec![topic_acl().principal("User:bob").call()],
-        false,
-        AuthorizationResult::Deny,
-    },
-    resource_acl_other_principal_flag_on = {
-        vec![topic_acl().principal("User:bob").call()],
-        true,
-        AuthorizationResult::Deny,
-    },
-    other_resource_flag_off = {
-        vec![topic_acl().name("other").call()],
-        false,
-        AuthorizationResult::Deny,
-    },
-    other_resource_flag_on = {
-        vec![topic_acl().name("other").call()],
-        true,
-        AuthorizationResult::Allow,
-    },
-    matching_allow_flag_off = { vec![topic_acl().call()], false, AuthorizationResult::Allow },
-    matching_allow_flag_on = { vec![topic_acl().call()], true, AuthorizationResult::Allow },
-    matching_deny_flag_off = {
-        vec![topic_acl().permission(PermissionType::Deny).call()],
-        false,
-        AuthorizationResult::Deny,
-    },
-    matching_deny_flag_on = {
-        vec![topic_acl().permission(PermissionType::Deny).call()],
-        true,
-        AuthorizationResult::Deny,
-    },
-)]
-fn allow_everyone_if_no_acl_found_applies_only_when_no_acl_touches_the_resource(
-    entries: Vec<krabka_metadata::AclEntry>,
-    flag: bool,
-    expected: AuthorizationResult,
-) {
-    check_resource_auth_context(
-        entries,
-        flag,
-        expected,
-        |image, authorizer, principal, host| {
-            authorizer.authorize(image, &req().p(principal).host(host).call())
-        },
-    );
 }

@@ -357,21 +357,6 @@ fn follower_reconverges(disk: &mut DiskScenario) {
     );
 }
 
-#[then("the committed high watermark is at least {minimum} and within every log")]
-fn safe_watermark(disk: &DiskScenario, minimum: i64) {
-    let StableSim { sim, leader } = disk
-        .stable
-        .as_ref()
-        .expect("a disk-backed cluster was given");
-    let leader = *leader;
-
-    let hwm = sim.leader_high_watermark(leader);
-    assert2::assert!(hwm >= minimum);
-    for v in sim.voters() {
-        assert2::assert!(hwm <= sim.log_end_offset(v));
-    }
-}
-
 krabka_bdd::scenarios!(
     "tests/features/kraft_log_sim.feature",
     fixtures = [disk: DiskScenario],

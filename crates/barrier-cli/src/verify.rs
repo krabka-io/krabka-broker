@@ -364,12 +364,6 @@ mod tests {
         check!(reason.contains(expected), "got {reason}");
     }
 
-    #[test]
-    fn the_matching_marker_is_accepted() {
-        let good = marker_batch("orders-cut", 7, 42);
-        check!(check_batch(Some(&good), "orders-cut", 7, 42).is_ok());
-    }
-
     /// A transaction marker is a control batch too, and its key parses to a
     /// different control type, so it must not pass as a barrier.
     #[test]

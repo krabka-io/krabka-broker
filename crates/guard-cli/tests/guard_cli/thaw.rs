@@ -1,43 +1,15 @@
 //! Clearing a freeze, which is the dangerous direction and the one the broker
 //! guards hardest.
 //!
-//! Each case drives `freeze clear` at a refusal and asserts the exit code a
-//! runbook branches on: a missing approval and a signature the broker will not
-//! act on are told apart, and neither reaches the operator as a plain refusal.
+//! The case drives `freeze clear` with signatures the broker will not act on and
+//! asserts that each reaches the operator as the signature exit code, not as a
+//! plain refusal. The missing-approval refusals are scenarios in
+//! `tests/features/thawing`.
 
 use {
-    crate::support::{
-        BAD_SIGNATURE, KEY_ID, NO_APPROVAL, PRINCIPAL, TOPIC, cli, cluster,
-        frozen_cluster_with_stranger, set_signed_freeze, signed_as,
-    },
-    assert2::{assert, check},
+    crate::support::{BAD_SIGNATURE, KEY_ID, PRINCIPAL, TOPIC, cli, frozen_cluster_with_stranger},
+    assert2::check,
 };
-
-/// A thaw is the dangerous direction. A signed one that names no approved
-/// proposal is refused with the code a runbook branches on, and not with a
-/// generic refusal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_thaw_with_no_approval_reports_that_an_approval_is_missing() {
-    let (_broker, _dir, bootstrap, key) = cluster().await;
-    let signing = signed_as(&key, PRINCIPAL);
-
-    assert!(set_signed_freeze(&bootstrap, &signing).await == 0);
-
-    let nobody_approved = uuid::Uuid::new_v4().to_string();
-    let mut clear = vec![
-        "freeze",
-        "clear",
-        "--topic",
-        TOPIC,
-        "--proposal",
-        &nobody_approved,
-    ];
-    clear.extend_from_slice(&signing);
-    check!(cli(&bootstrap, &clear).await == NO_APPROVAL);
-
-    // The freeze is still there, which is the point of the refusal.
-    check!(cli(&bootstrap, &["freeze", "list", "--scope", TOPIC]).await == 0);
-}
 
 /// Every one of these is a signature the broker will not act on, and each has
 /// to reach the operator as the signature exit code rather than as a plain

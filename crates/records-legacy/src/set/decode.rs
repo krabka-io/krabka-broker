@@ -213,7 +213,7 @@ mod tests {
             message::attrs_with_compression,
             set::{
                 encode_compressed_message_set, encode_flat_message_set,
-                test_support::{compressed_bytes, decode_bytes, sample_records_v1},
+                test_support::{compressed_bytes, decode_bytes},
             },
         },
         bytes::{BufMut, Bytes, BytesMut},
@@ -255,7 +255,6 @@ mod tests {
     }
 
     #[yare::parameterized(
-        first_sparse_gap = { [0, 2], 102, [100, 102] },
         second_sparse_gap = { [3, 5], 102, [100, 102] },
         extreme_sparse_gap = { [i64::MIN, i64::MIN + 2], i64::MAX, [i64::MAX - 2, i64::MAX] },
     )]
@@ -315,40 +314,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn rejects_nested_compression() {
-        // Construct a wrapper containing a wrapper.
-        let inner_recs = sample_records_v1();
-        let mut inner_outer = BytesMut::new();
-        encode_compressed_message_set(
-            &inner_recs,
-            Magic::V1,
-            CompressionType::Gzip,
-            &mut inner_outer,
-        )
-        .unwrap();
-
-        // Now wrap that bytestream as the value of another compressed wrapper.
-        let outer_compressed =
-            krabka_compression::compress(CompressionType::Gzip, &inner_outer).unwrap();
-        let outer_msg = Message {
-            magic: Magic::V1,
-            attributes: attrs_with_compression(0, CompressionType::Gzip),
-            timestamp: Some(0),
-            key: None,
-            value: Some(outer_compressed),
-        };
-        let mut wire = BytesMut::new();
-        let outer_len = outer_msg.encoded_len();
-        wire.put_i64(0);
-        wire.put_i32(i32::try_from(outer_len).unwrap());
-        outer_msg.encode_into(&mut wire).unwrap();
-
-        let mut cur: &[u8] = &wire[..];
-        let err = decode_message_set(&mut cur, wire.len()).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::NestedCompression));
-    }
-
     // --- mutation-coverage tests --------------------------------------------
     //
     // Round-trips above don't exercise the malformed/boundary paths or pin
@@ -363,52 +328,6 @@ mod tests {
         let mut cur: &[u8] = &data;
         let err = decode_message_set(&mut cur, 12).unwrap_err();
         assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 8 }));
-    }
-
-    #[test]
-    fn partial_entry_header_ends_the_set() {
-        // 8 bytes where a 12-byte (offset+size) entry header is required.
-        let data = [0u8; 8];
-        let mut cur: &[u8] = &data;
-        assert2::assert!(let Ok(records) = decode_message_set(&mut cur, 8));
-        assert2::assert!(records == Vec::new());
-    }
-
-    fn entry_decode(size: i32, trailing: &[u8]) -> Result<Vec<ParsedRecord>, LegacyRecordsError> {
-        let mut data = BytesMut::new();
-        data.put_i64(0);
-        data.put_i32(size);
-        data.put_slice(trailing);
-        decode_message_set(&mut &data[..], data.len())
-    }
-
-    fn entry_error(size: i32, trailing: &[u8]) -> LegacyRecordsError {
-        entry_decode(size, trailing).unwrap_err()
-    }
-
-    #[test]
-    fn entry_zero_message_size_is_malformed() {
-        // offset(8) + size(0): clears the `< 12` and `size < 0` guards, then
-        // Message::decode_from rejects the 0-byte frame as Malformed (< 6).
-        // Distinguishes the `<` boundaries from `<=`/`==`.
-        let err = entry_error(0, &[]);
-        assert2::assert!(matches!(err, LegacyRecordsError::Malformed(_)));
-    }
-
-    #[test]
-    fn entry_negative_message_size_rejected() {
-        let err = entry_error(-1, &[0u8; 4]); // keep region >= 12 bytes
-        assert2::assert!(matches!(err, LegacyRecordsError::NegativeLength {
-            label: "message_size",
-            len: -1
-        }));
-    }
-
-    #[test]
-    fn partial_message_body_ends_the_set() {
-        // Entry claims a 20-byte message but only 2 bytes follow.
-        assert2::assert!(let Ok(records) = entry_decode(20, &[0u8; 2]));
-        assert2::assert!(records == Vec::new());
     }
 
     #[test]

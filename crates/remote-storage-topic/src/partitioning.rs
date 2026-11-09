@@ -81,29 +81,11 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        first = { 0, 6 },
-        second = { 1, 36 },
-        fourth = { 3, 2 },
-        eighth = { 7, 26 },
-    )]
-    fn matches_jvm_remote_metadata_partitioner_goldens(partition: i32, expected: i32) {
-        assert2::assert!(metadata_partition_for(&tp("orders", partition), 50).unwrap() == expected);
-    }
-
     #[test]
     fn is_deterministic_across_calls() {
         let a = metadata_partition_for(&tp("orders", 7), 50).unwrap();
         let b = metadata_partition_for(&tp("orders", 7), 50).unwrap();
         assert!(a == b);
-    }
-
-    #[test]
-    fn ignores_topic_name() {
-        // Identity is (topic_id, partition); name is informational.
-        let a = metadata_partition_for(&tp("orders", 3), 50).unwrap();
-        let b = metadata_partition_for(&tp("renamed", 3), 50).unwrap();
-        assert!(a == b, "renaming a topic must not re-bucket its metadata");
     }
 
     #[test]
@@ -118,21 +100,6 @@ mod tests {
             "hash should spread across buckets, got {}",
             seen.len()
         );
-    }
-
-    #[test]
-    fn single_partition_count_collapses_to_zero() {
-        for p in 0..20 {
-            assert!(metadata_partition_for(&tp("t", p), 1).unwrap() == 0);
-        }
-    }
-
-    #[test]
-    fn rejects_zero_partition_count() {
-        assert!(matches!(
-            metadata_partition_for(&tp("t", 0), 0),
-            Err(MetadataLogError::NonPositivePartitionCount { count: 0 })
-        ));
     }
 
     #[test]

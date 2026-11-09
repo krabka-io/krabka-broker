@@ -445,6 +445,7 @@ impl Cluster {
                 fs::write(&path, "operator_keys = []\n").expect("write the empty trust file");
                 path
             }
+            LocalKeys::NoTrustFile => self.dir.path().join("absent-trust-file.toml"),
         }
     }
 

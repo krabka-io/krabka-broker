@@ -480,22 +480,6 @@ mod tests {
         fixtures = [uuid_text: UuidTextScenario, uuid_rules: UuidRulesScenario],
     );
 
-    /// The command line also takes the hyphenated form, and only a string of
-    /// exactly that shape is read as hex.
-    #[yare::parameterized(
-        kafka_form = { "AQIDBAUGBwgJCgsMDQ4PEA" },
-        lowercase_hex = { "01020304-0506-0708-090a-0b0c0d0e0f10" },
-        uppercase_hex = { "01020304-0506-0708-090A-0B0C0D0E0F10" },
-    )]
-    fn the_command_line_accepts_both_forms(input: &str) {
-        let id = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        assert2::check!(ClusterId::parse_cli(input) == Ok(ClusterId(id)), "{input}");
-        assert2::check!(
-            DirectoryId::parse_cli(input) == Ok(DirectoryId(id)),
-            "{input}"
-        );
-    }
-
     #[test]
     fn the_command_line_refuses_malformed_hex_and_other_uuid_spellings() {
         let not_hex = "01020304-0506-0708-090a-0b0c0d0e0f1g";

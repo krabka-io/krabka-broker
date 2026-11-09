@@ -47,6 +47,12 @@ Feature: Operators prove the freeze registry from their own machine
       When the operator verifies the registry
       Then the tool reports a signature failure
 
+    Scenario: A trust file that is not there stops the verification
+      Given the registry holds a freeze alice signed
+      And the operator's machine holds no trust file
+      When the operator verifies the registry
+      Then the tool reports a signature failure
+
   Rule: Each entry says what proves it, or why nothing does
 
     Scenario Outline: The operator reads what proves the freeze on the payments topic

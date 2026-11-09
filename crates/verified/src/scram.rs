@@ -172,6 +172,17 @@ mod tests {
         }
     }
 
+    // A deletion row carries no iteration count, so it sends zero.
+    fn deletion(mechanism: i8, target_exists: bool) -> ScramAlterationFacts {
+        ScramAlterationFacts {
+            kind: ScramAlterationKind::Delete,
+            mechanism,
+            iterations: 0,
+            deletion_target_exists: target_exists,
+            ..valid_upsert()
+        }
+    }
+
     #[derive(Default)]
     struct ScramValidation {
         facts: Option<ScramAlterationFacts>,
@@ -224,6 +235,35 @@ mod tests {
         ));
     }
 
+    #[rstest_bdd_macros::given(
+        "a SCRAM deletion of a mechanism {mechanism} credential that does not exist"
+    )]
+    fn deletion_of_missing_credential(alteration: &mut ScramValidation, mechanism: i8) {
+        alteration.facts = Some(deletion(mechanism, false));
+    }
+
+    #[rstest_bdd_macros::given("a SCRAM deletion of an existing mechanism {mechanism} credential")]
+    fn deletion_of_existing_credential(alteration: &mut ScramValidation, mechanism: i8) {
+        alteration.facts = Some(deletion(mechanism, true));
+    }
+
+    #[rstest_bdd_macros::when("the SCRAM deletion is validated")]
+    fn validate_deletion(alteration: &mut ScramValidation) {
+        alteration.decision = Some(scram_alteration_decision(
+            alteration.facts.expect("a SCRAM deletion was given"),
+        ));
+    }
+
+    #[rstest_bdd_macros::then("the SCRAM alteration is accepted as {accepted}")]
+    fn scram_accepted(alteration: &ScramValidation, accepted: String) {
+        let expected = match accepted.as_str() {
+            "SCRAM-SHA-256" => ScramAlterationDecision::AcceptSha256,
+            "SCRAM-SHA-512" => ScramAlterationDecision::AcceptSha512,
+            _ => panic!("unknown SCRAM mechanism: {accepted}"),
+        };
+        assert2::check!(alteration.decision == Some(expected));
+    }
+
     #[rstest_bdd_macros::then("the SCRAM response preserves {outcome}")]
     fn scram_response(alteration: &ScramValidation, outcome: String) {
         let expected = match outcome.as_str() {
@@ -234,49 +274,11 @@ mod tests {
             "an-unsupported-mechanism-error" => ScramAlterationDecision::UnsupportedMechanism,
             "a-too-few-iterations-error" => ScramAlterationDecision::TooFewIterations,
             "a-too-many-iterations-error" => ScramAlterationDecision::TooManyIterations,
+            "a-missing-credential-error" => ScramAlterationDecision::MissingCredential,
             _ => panic!("unknown SCRAM response outcome: {outcome}"),
         };
         assert2::check!(alteration.decision == Some(expected));
     }
 
     krabka_bdd::scenarios!("tests/features/migrated/src/scram.feature", fixtures = [alteration: ScramValidation]);
-
-    #[test]
-    fn accepts_only_supported_complete_rows() {
-        let facts = valid_upsert();
-        assert2::check!(scram_alteration_decision(facts) == ScramAlterationDecision::AcceptSha256);
-
-        let sha512 = ScramAlterationFacts {
-            mechanism: 2,
-            iterations: 16384,
-            ..facts
-        };
-        assert2::check!(scram_alteration_decision(sha512) == ScramAlterationDecision::AcceptSha512);
-
-        let missing = ScramAlterationFacts {
-            kind: ScramAlterationKind::Delete,
-            deletion_target_exists: false,
-            ..facts
-        };
-        assert2::check!(
-            scram_alteration_decision(missing) == ScramAlterationDecision::MissingCredential
-        );
-
-        let deletion = ScramAlterationFacts {
-            deletion_target_exists: true,
-            ..missing
-        };
-        assert2::check!(
-            scram_alteration_decision(deletion) == ScramAlterationDecision::AcceptSha256
-        );
-        // A deletion carries no iteration count, so neither bound applies.
-        let sha512_deletion = ScramAlterationFacts {
-            mechanism: 2,
-            iterations: 0,
-            ..deletion
-        };
-        assert2::check!(
-            scram_alteration_decision(sha512_deletion) == ScramAlterationDecision::AcceptSha512
-        );
-    }
 }

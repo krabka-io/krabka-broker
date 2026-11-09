@@ -128,15 +128,6 @@ reach the two-vote majority, so it cannot elect itself.
 mod tests {
     use {super::*, assert2::check};
 
-    #[test]
-    fn renders_sequence_diagrams_and_split_brain() {
-        let md = failure_scenarios_md();
-        check!(md.contains("sequenceDiagram"));
-        check!(md.contains("{% mermaid() %}"));
-        check!(md.contains("{% end %}"));
-        check!(md.contains("split-brain") || md.contains("Split-brain"));
-    }
-
     #[derive(Default)]
     struct DiagramScenario {
         traces: Vec<ScenarioTrace>,
@@ -181,11 +172,16 @@ mod tests {
     #[rstest_bdd_macros::then("three generated diagrams and the split-brain contrast are present")]
     fn generated_diagrams(diagrams: &DiagramScenario) {
         let md = &diagrams.markdown;
-        let mermaid_blocks = md.matches("{% mermaid() %}").count();
+        let blocks = [
+            md.matches("{% mermaid() %}").count(),
+            md.matches("sequenceDiagram").count(),
+            md.matches("{% end %}").count(),
+        ];
         check!(
-            mermaid_blocks == 4,
-            "expected 3 generated diagrams + 1 contrast, got {mermaid_blocks}"
+            blocks == [4; 3],
+            "expected 3 generated diagrams + 1 contrast, each opened, typed and closed"
         );
+        check!(md.contains("split-brain"));
         check!(md.matches("participant N").count() >= 6);
         check!(md.contains("->>"));
         // Keep the public renderer covered as well as each trace's rendering.

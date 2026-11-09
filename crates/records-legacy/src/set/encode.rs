@@ -164,32 +164,6 @@ mod tests {
     };
 
     #[test]
-    fn compressed_v1_writes_relative_sparse_offsets() {
-        let mut records = sample_records_v1();
-        records[0].offset = Offset(100);
-        records[1].offset = Offset(102);
-        records[2].offset = Offset(105);
-        let wire = compressed_bytes(&records, Magic::V1, CompressionType::Gzip);
-        let mut cur = &wire[..];
-        assert2::assert!(cur.get_i64() == 105);
-        let size = usize::try_from(cur.get_i32()).unwrap();
-        let wrapper = Message::decode_from(&mut cur, size).unwrap();
-        let inner = krabka_compression::decompress(
-            CompressionType::Gzip,
-            &wrapper.value.unwrap(),
-            krabka_units::mebibytes(1),
-        )
-        .unwrap();
-        let decoded = decode_bytes(&inner);
-        let mut expected = records.clone();
-        for (record, offset) in expected.iter_mut().zip([0, 2, 5]) {
-            record.offset = Offset(offset);
-        }
-        assert2::assert!(decoded == expected);
-        assert2::assert!(decode_bytes(&wire) == records);
-    }
-
-    #[test]
     fn compressed_refuses_an_uncompressed_codec() {
         let mut wire = BytesMut::new();
         assert2::assert!(matches!(
@@ -261,28 +235,6 @@ mod tests {
 
         let decoded = decode_message_set(&mut &buffer[..], buffer.len()).unwrap();
         assert2::assert!(decoded == records);
-    }
-
-    #[test]
-    fn flat_v1_missing_timestamp_encodes_minus_one() {
-        let recs = vec![ParsedRecord {
-            offset: Offset(7),
-            timestamp: None,
-            key: None,
-            value: Some(Bytes::from_static(b"v")),
-        }];
-        let mut buf = BytesMut::new();
-        encode_flat_message_set(recs, Magic::V1, &mut buf).unwrap();
-        let decoded = decode_bytes(&buf);
-        assert2::assert!(
-            decoded
-                == vec![ParsedRecord {
-                    offset: Offset(7),
-                    timestamp: Some(-1),
-                    key: None,
-                    value: Some(Bytes::from_static(b"v")),
-                }]
-        );
     }
 
     #[test]

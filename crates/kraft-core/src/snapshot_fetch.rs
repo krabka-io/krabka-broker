@@ -289,16 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn accepted_chunks_complete_the_latched_snapshot() {
-        let mut s = SnapshotFetchState::new(SnapshotId::new(10, 1), NodeId(2));
-        start_three_byte_chunk(&mut s);
-        assert2::assert!(
-            s.on_chunk(SnapshotId::new(10, 1), 6, 3, b"def")
-                == SnapshotFetchStep::Complete(Bytes::from_static(b"abcdef"))
-        );
-    }
-
-    #[test]
     fn fresh_transfer_can_accept_a_different_declared_size() {
         let mut fresh = SnapshotFetchState::new(SnapshotId::new(10, 1), NodeId(2));
         assert2::assert!(

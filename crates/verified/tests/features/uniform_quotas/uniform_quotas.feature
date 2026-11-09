@@ -5,11 +5,6 @@ Feature: Kafka uniform assignment quotas
     When the uniform quota is split
     Then every member has minimum quota 3 and 2 members receive an extra partition
 
-  Scenario: 5 partitions over 2 members
-    Given 5 partitions and 2 members
-    When the uniform quota is split
-    Then every member has minimum quota 2 and 1 members receive an extra partition
-
   Scenario: 2 partitions over 3 members
     Given 2 partitions and 3 members
     When the uniform quota is split

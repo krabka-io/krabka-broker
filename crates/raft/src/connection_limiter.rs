@@ -285,7 +285,6 @@ mod tests {
     };
 
     const A: &str = "10.0.0.1";
-    const B: &str = "10.0.0.2";
 
     fn ip(address: &str) -> IpAddr { address.parse().unwrap() }
 
@@ -343,66 +342,149 @@ mod tests {
         check!(lock(&limiter.counts).per_listener.is_empty());
     }
 
-    /// With one connection from `A` held on `PLAINTEXT`, which listener and
-    /// address the next connection may come from.
-    #[yare::parameterized(
-        global_cap = { |q: &mut ConnectionQuotas| q.settings.max_connections = 1, B, PLAINTEXT, Some(ConnectionLimit::Global) },
-        protected_listener_skips_global_cap = {
-            |q: &mut ConnectionQuotas| q.settings.max_connections = 1,
-            B,
-            AcceptingListener { name: "REPLICATION", protected: true },
-            None
-        },
-        listener_cap = { |q: &mut ConnectionQuotas| q.settings.listener_max_connections = 1, B, PLAINTEXT, Some(ConnectionLimit::Listener) },
-        listener_cap_ignores_case = {
-            |q: &mut ConnectionQuotas| q.settings.listener_max_connections = 1,
-            B,
-            AcceptingListener { name: "plaintext", protected: false },
-            Some(ConnectionLimit::Listener)
-        },
-        listener_cap_counts_its_own_listener = {
-            |q: &mut ConnectionQuotas| q.settings.listener_max_connections = 1,
-            B,
-            AcceptingListener { name: "EXTERNAL", protected: false },
-            None
-        },
-        per_ip_cap = { |q: &mut ConnectionQuotas| q.settings.max_connections_per_ip = 1, A, PLAINTEXT, Some(ConnectionLimit::PerIp) },
-        per_ip_cap_other_address = { |q: &mut ConnectionQuotas| q.settings.max_connections_per_ip = 1, B, PLAINTEXT, None },
-        override_raises_the_cap = {
-            |q: &mut ConnectionQuotas| {
-                q.settings.max_connections_per_ip = 1;
-                q.per_ip_overrides = Arc::new(HashMap::from([(ip(A), 2)]));
-            },
-            A,
-            PLAINTEXT,
-            None
-        },
-        override_of_zero_refuses_the_address = {
-            |q: &mut ConnectionQuotas| q.per_ip_overrides = Arc::new(HashMap::from([(ip(B), 0)])),
-            B,
-            PLAINTEXT,
-            Some(ConnectionLimit::PerIp)
-        },
-    )]
-    fn the_next_connection_meets_each_cap(
-        customise: fn(&mut ConnectionQuotas),
-        from: &str,
-        listener: AcceptingListener<'static>,
-        refused: Option<ConnectionLimit>,
-    ) {
-        let limiter = ConnectionLimiter::new(usize::MAX, usize::MAX);
-        let _held = limiter
-            .try_acquire_within(ip(A), PLAINTEXT, &quotas(|_| {}))
-            .unwrap();
-        let next = limiter.try_acquire_within(ip(from), listener, &quotas(customise));
-        assert2::assert!(next.as_ref().err().copied() == refused);
-        // A refusal reserves nothing.
-        assert2::assert!(limiter.total() == 1 + usize::from(refused.is_none()));
-    }
-
     #[test]
     fn a_v4_mapped_peer_meets_its_v4_override() {
         let quotas = quotas(|q| q.per_ip_overrides = Arc::new(HashMap::from([(ip(A), 0)])));
         assert2::assert!(quotas.max_connections_for(ip("::ffff:10.0.0.1")) == 0);
     }
+
+    use rstest_bdd_macros::{given, then, when};
+
+    /// A listener's connection counts under the quotas a scenario sets, and
+    /// the connections its clients hold.
+    struct ConnectionQuotaScenario {
+        limiter: ConnectionLimiter,
+        quotas: ConnectionQuotas,
+        held: Vec<ConnectionGuard>,
+        refusal: krabka_bdd::Given<Option<ConnectionLimit>>,
+    }
+
+    impl ConnectionQuotaScenario {
+        /// One connection from `address` on `listener`, under the scenario's
+        /// quotas. An accepted connection is held until the scenario ends.
+        fn connect(&mut self, address: &str, listener: AcceptingListener<'_>) {
+            let accepted = self
+                .limiter
+                .try_acquire_within(ip(address), listener, &self.quotas);
+            self.refusal.set(accepted.as_ref().err().copied());
+            self.held.extend(accepted.ok());
+        }
+
+        /// The refusal the last connection met, and the connections the
+        /// broker counts after it: a refused connection reserves nothing.
+        fn assert_outcome(&self, refusal: Option<ConnectionLimit>) {
+            assert2::assert!(
+                (*self.refusal.get(), self.limiter.total()) == (refusal, self.held.len())
+            );
+        }
+    }
+
+    #[rstest::fixture]
+    fn connection_quotas() -> ConnectionQuotaScenario {
+        ConnectionQuotaScenario {
+            limiter: ConnectionLimiter::new(usize::MAX, usize::MAX),
+            quotas: quotas(|_| {}),
+            held: Vec::new(),
+            refusal: krabka_bdd::Given::new(
+                "refusal",
+                "When a client at <address> connects on listener <listener>",
+            ),
+        }
+    }
+
+    #[given("max.connections is {cap}")]
+    fn max_connections(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
+        connection_quotas.quotas.settings.max_connections = cap;
+    }
+
+    #[given("the listener max.connections is {cap}")]
+    fn listener_max_connections(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
+        connection_quotas.quotas.settings.listener_max_connections = cap;
+    }
+
+    #[given("max.connections.per.ip is {cap}")]
+    fn max_connections_per_ip(connection_quotas: &mut ConnectionQuotaScenario, cap: usize) {
+        connection_quotas.quotas.settings.max_connections_per_ip = cap;
+    }
+
+    #[given("max.connections.per.ip.overrides gives {address} a cap of {cap}")]
+    fn per_ip_override(
+        connection_quotas: &mut ConnectionQuotaScenario,
+        address: String,
+        cap: usize,
+    ) {
+        let mut overrides = HashMap::clone(&connection_quotas.quotas.per_ip_overrides);
+        overrides.insert(ip(&address), cap);
+        connection_quotas.quotas.per_ip_overrides = Arc::new(overrides);
+    }
+
+    #[given("a client at {address} holds a connection on listener {listener}")]
+    fn held_connection(
+        connection_quotas: &mut ConnectionQuotaScenario,
+        address: String,
+        listener: String,
+    ) {
+        // The held connection is accepted whatever the scenario's caps say.
+        let held = connection_quotas
+            .limiter
+            .try_acquire_within(
+                ip(&address),
+                AcceptingListener {
+                    name: &listener,
+                    protected: false,
+                },
+                &quotas(|_| {}),
+            )
+            .expect("an unlimited listener accepts the connection");
+        connection_quotas.held.push(held);
+    }
+
+    #[when("a client at {address} connects on listener {listener}")]
+    fn client_connects(
+        connection_quotas: &mut ConnectionQuotaScenario,
+        address: String,
+        listener: String,
+    ) {
+        connection_quotas.connect(&address, AcceptingListener {
+            name: &listener,
+            protected: false,
+        });
+    }
+
+    #[when("a client at {address} connects on the inter-broker listener {listener}")]
+    fn client_connects_inter_broker(
+        connection_quotas: &mut ConnectionQuotaScenario,
+        address: String,
+        listener: String,
+    ) {
+        connection_quotas.connect(&address, AcceptingListener {
+            name: &listener,
+            protected: true,
+        });
+    }
+
+    #[then("the connection is accepted")]
+    fn connection_accepted(connection_quotas: &ConnectionQuotaScenario) {
+        connection_quotas.assert_outcome(None);
+    }
+
+    #[then("the connection is refused by max.connections")]
+    fn refused_by_max_connections(connection_quotas: &ConnectionQuotaScenario) {
+        connection_quotas.assert_outcome(Some(ConnectionLimit::Global));
+    }
+
+    #[then("the connection is refused by the listener max.connections")]
+    fn refused_by_listener_max_connections(connection_quotas: &ConnectionQuotaScenario) {
+        connection_quotas.assert_outcome(Some(ConnectionLimit::Listener));
+    }
+
+    #[then("the connection is refused by max.connections.per.ip")]
+    fn refused_by_max_connections_per_ip(connection_quotas: &ConnectionQuotaScenario) {
+        connection_quotas.assert_outcome(Some(ConnectionLimit::PerIp));
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/connection_quotas",
+        fixtures = [connection_quotas: ConnectionQuotaScenario],
+    );
 }

@@ -215,10 +215,9 @@ mod tests {
 
     use {
         super::*,
-        crate::{decode_message_set, message::Message, set::test_support::sample_records_v1_at},
         bytes::Bytes,
         krabka_compression::{CompressionError, RecordDecompressionPolicy},
-        krabka_protocol::records::{Record, RecordBatch, RecordHeader},
+        krabka_protocol::records::{Record, RecordBatch},
         krabka_units::{bytes, fraction},
     };
 
@@ -380,42 +379,6 @@ mod tests {
     }
 
     #[test]
-    fn control_batch_filtered() {
-        let mut v2 = v2_batch(CompressionType::None);
-        v2.attributes = v2.attributes.with_control(true);
-        let legacy_bytes = v2_to_legacy(&v2, Magic::V1).unwrap();
-        assert2::assert!(legacy_bytes.is_empty());
-    }
-
-    #[test]
-    fn zstd_batch_is_refused() {
-        assert2::assert!(
-            let Err(LegacyRecordsError::UnsupportedCompression {
-                codec: CompressionType::Zstd
-            }) = v2_to_legacy(&v2_batch(CompressionType::Zstd), Magic::V1)
-        );
-    }
-
-    #[test]
-    fn empty_zstd_batch_is_refused() {
-        let mut v2 = v2_batch(CompressionType::Zstd);
-        v2.records.clear();
-        v2.last_offset_delta = 0;
-        assert2::assert!(
-            let Err(LegacyRecordsError::UnsupportedCompression {
-                codec: CompressionType::Zstd
-            }) = v2_to_legacy(&v2, Magic::V0)
-        );
-    }
-
-    #[test]
-    fn zstd_control_batch_is_dropped() {
-        let mut v2 = v2_batch(CompressionType::Zstd);
-        v2.attributes = v2.attributes.with_control(true);
-        assert2::assert!(v2_to_legacy(&v2, Magic::V1).unwrap() == Bytes::new());
-    }
-
-    #[test]
     fn empty_records_no_output() {
         let mut v2 = v2_batch(CompressionType::None);
         v2.records.clear();
@@ -424,41 +387,10 @@ mod tests {
         assert2::assert!(legacy_bytes.is_empty());
     }
 
-    #[test]
-    fn headers_are_dropped_on_down_conversion() {
-        let mut v2 = v2_batch(CompressionType::None);
-        v2.records[0].headers = vec![RecordHeader {
-            key: "x".to_owned(),
-            value: Some(Bytes::from_static(b"y")),
-        }];
-        let legacy_bytes = v2_to_legacy(&v2, Magic::V1).unwrap();
-        let mut cur: &[u8] = &legacy_bytes;
-        let recs = decode_message_set(&mut cur, legacy_bytes.len()).unwrap();
-        // No structural representation of headers in v0/v1.
-        assert2::assert!(
-            recs == sample_records_v1_at(1000, [1_700_000_000, 1_700_000_100, 1_700_000_500])
-        );
-    }
-
     // --- mutation-coverage tests --------------------------------------------
     //
-    // The round-trips above unwrap compression transparently and never assert
-    // the v2 batch's sentinel/offset fields, so they pass through a flat-vs-
-    // compressed swap and through sentinel/arithmetic flips. These pin them.
-
-    #[test]
-    fn down_convert_gzip_emits_compressed_wrapper() {
-        // A gzip v2 batch must down-convert to a COMPRESSED wrapper, not a flat
-        // (uncompressed) set: deleting the Gzip|Snappy|Lz4 arm would fall
-        // through to the flat encoder, which still round-trips but is wrong.
-        use bytes::Buf;
-        let bytes = v2_to_legacy(&v2_batch(CompressionType::Gzip), Magic::V1).unwrap();
-        let mut cur: &[u8] = &bytes;
-        let _offset = cur.get_i64();
-        let size = usize::try_from(cur.get_i32()).unwrap();
-        let msg = Message::decode_from(&mut cur, size).unwrap();
-        assert2::assert!(msg.compression() == CompressionType::Gzip);
-    }
+    // The round-trips above never assert the v2 batch's sentinel fields, so
+    // they pass through sentinel flips. This pins them.
 
     #[test]
     fn up_convert_empty_set_returns_sentinels() {

@@ -22,7 +22,7 @@ Feature: Recovered controller feature compatibility
     Given unstable feature versions are enabled: true
     And the recovered metadata image finalizes these feature levels:
       | name | level |
-      | metadata.version | 33 |
+      | metadata.version | 34 |
     When the controller checks recovered feature compatibility
     Then every recovered feature level is supported
 

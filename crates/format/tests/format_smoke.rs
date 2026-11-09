@@ -109,41 +109,6 @@ fn format_with_add_scram_writes_credential_record() {
     assert2::assert!(!offset_zero_checkpoint(&dir).exists());
 }
 
-/// `krabka.version` bootstraps at level 0, which writes no record, unless
-/// `--feature krabka.version=N` overrides it.
-#[yare::parameterized(
-    default_is_omitted = { &[][..], None },
-    level_one_is_seeded = { &["--feature", "krabka.version=1"][..], Some(1) },
-    level_zero_is_omitted = { &["--feature", "krabka.version=0"][..], None },
-)]
-fn format_seeds_krabka_version_only_when_overridden(flags: &[&str], expected: Option<i16>) {
-    let dir = tempfile::tempdir().unwrap();
-    let mut args = vec!["--node-id", "1"];
-    args.extend_from_slice(flags);
-    let out = run_format(&dir, &args);
-    assert2::assert!(out.status.success(), "{flags:?}: {out:?}");
-    let seeded = bootstrap_records(&dir)
-        .into_iter()
-        .find_map(|record| match record {
-            MetadataRecord::V1FeatureLevel(f) if f.name == "krabka.version" => Some(f.level),
-            _ => None,
-        });
-    assert2::assert!(seeded == expected, "{flags:?}");
-}
-
-#[test]
-fn format_low_iterations_fails() {
-    let dir = tempfile::tempdir().unwrap();
-    let out = run_format(&dir, &[
-        "--node-id",
-        "1",
-        "--add-scram",
-        "SCRAM-SHA-512=[name=admin,password=p,iterations=1]",
-    ]);
-    assert2::assert!(!out.status.success());
-    assert2::assert!(out.status.code() == Some(2));
-}
-
 #[test]
 fn no_initial_controllers_writes_offset_zero_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
@@ -188,36 +153,6 @@ fn initial_controllers_persists_the_local_listed_directory_id() {
 }
 
 #[yare::parameterized(
-    local_controller_missing = {
-        &[
-            "--node-id",
-            "3",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002",
-        ][..],
-    },
-    duplicate_node_id = {
-        &[
-            "--node-id",
-            "2",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002,2@other.example:9093:00000000-0000-0000-0000-000000000003",
-        ][..],
-    },
-    duplicate_directory_id = {
-        &[
-            "--node-id",
-            "2",
-            "--initial-controllers",
-            "2@two.example:9093:00000000-0000-0000-0000-000000000002,3@three.example:9093:00000000-0000-0000-0000-000000000002",
-        ][..],
-    },
-)]
-fn initial_controllers_rejects_ambiguous_or_missing_local_identity(args: &[&str]) {
-    check_refused_case(args, 4);
-}
-
-#[yare::parameterized(
     standalone_and_none = { &["--node-id", "1", "--standalone", "--no-initial-controllers"][..] },
     explicit_and_none = {
         &[
@@ -240,12 +175,13 @@ fn initial_controllers_rejects_ambiguous_or_missing_local_identity(args: &[&str]
 )]
 fn dynamic_modes_are_mutually_exclusive(args: &[&str]) { check_refused_case(args, 2); }
 
+/// A dynamic format that asks for `kraft.version` 0 is refused. A static format
+/// that asks for 1 or 2 is refused with the same code, and those rows are in the
+/// crate's whole-format table, `exit_code_for_each_argv`.
 #[yare::parameterized(
     nonzero_with_no_controllers = {
         &["--node-id", "1", "--no-initial-controllers", "--feature", "kraft.version=0"][..]
     },
-    version_one_without_quorum_mode = { &["--node-id", "1", "--feature", "kraft.version=1"][..] },
-    version_two_without_quorum_mode = { &["--node-id", "1", "--feature", "kraft.version=2"][..] },
 )]
 fn kraft_version_must_match_the_selected_format_mode(args: &[&str]) { check_refused_case(args, 5); }
 

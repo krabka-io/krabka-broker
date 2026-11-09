@@ -45,3 +45,9 @@ Feature: Operators verify a cut against the log
       Given a barrier group over the orders topic has been cut once
       When the operator tries to verify cut 99 of the group
       Then the tool refuses because the group has no retained cut at epoch 99
+
+  Rule: Only a defined group can be verified
+
+    Scenario: Verifying a cut of a group nobody defined is refused
+      When an operator tries to verify cut 1 of a group nobody defined
+      Then the tool refuses because the broker knows no such group

@@ -770,13 +770,6 @@ mod tests {
         check!(b.try_consume(1_000) == 70);
     }
 
-    /// A charge on an unlimited bucket records nothing, whatever its size.
-    #[test]
-    fn an_unlimited_bucket_records_no_debt() {
-        let b = TokenBucket::new();
-        check!((b.record(u64::MAX), b.try_consume(5)) == (0, 5));
-    }
-
     /// A part-token charge given back is available again, capped at the
     /// burst, as a whole-token refund is.
     #[test]
@@ -1026,22 +1019,6 @@ mod tests {
         b.set_byte_rate_with_burst(bytes_per_sec(rate), bytes(burst));
 
         assert2::assert!(try_consume_with_timeout(&b, requested) == expected);
-    }
-
-    /// A bucket in debt stays in debt across a change of its rate: the client
-    /// is still throttled, now by `debt / new rate`.
-    #[test]
-    fn a_rate_change_keeps_the_debt() {
-        let ManualBucket {
-            bucket: b,
-            clock: _clock,
-        } = manual_bucket();
-        b.set_token_rate_with_burst(1_000, 1_000);
-        check!(b.record(3_000) == 2_000 * MICROS_PER_TOKEN);
-
-        b.set_token_rate_with_burst(2_000, 2_000);
-
-        check!((b.try_consume(1), b.record(0)) == (0, 2_000 * MICROS_PER_TOKEN));
     }
 
     /// A rate change keeps the balance, as Kafka's

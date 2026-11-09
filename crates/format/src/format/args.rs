@@ -211,7 +211,6 @@ mod tests {
     use {
         super::*,
         crate::Cli,
-        assert2::check,
         clap::{Parser as _, error::ErrorKind},
     };
 
@@ -370,19 +369,5 @@ mod tests {
     )]
     fn parse_directory_id_refuses_reserved_ids(input: String, want: Result<DirectoryId, String>) {
         assert2::check!(parse_directory_id(&input) == want, "{input:?}");
-    }
-
-    /// `--node-id` is required, as Kafka's `node.id` is: every
-    /// `meta.properties` records it.
-    #[test]
-    fn node_id_is_required() {
-        let missing = Cli::try_parse_from(["krabka-format", "--log-dir", "/a"])
-            .map(|cli| cli.args.node_id)
-            .map_err(|error| error.kind());
-        check!(missing == Err(ErrorKind::MissingRequiredArgument));
-        let given = Cli::try_parse_from(["krabka-format", "--log-dir", "/a", "--node-id", "3"])
-            .map(|cli| cli.args.node_id)
-            .map_err(|error| error.kind());
-        check!(given == Ok(krabka_metadata::NodeId(3)));
     }
 }

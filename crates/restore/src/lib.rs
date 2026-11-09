@@ -486,23 +486,10 @@ mod tests {
         check!(ensure_empty_log_dir(target.path()).is_ok());
     }
 
-    #[test]
-    fn a_target_that_holds_anything_is_refused() {
-        let target = tempfile::tempdir().expect("temp dir");
-        fs::write(target.path().join("meta.properties"), b"version=1\n").expect("write");
-        let refused = ensure_empty_log_dir(target.path());
-        check!(matches!(refused, Err(RestoreError::LogDirNotEmpty(_))));
-        check!(refused.expect_err("refused").exit_code() == EXIT_DIRTY_LOG_DIR);
-    }
-
+    /// An unknown flag, `--help`, and a non-empty target are checked through
+    /// the binary in `tests/cli_surface.rs`.
     #[tokio::test]
-    async fn help_renders_and_succeeds() {
-        check!(run_from_args(["krabka-restore", "--help"]).await == EXIT_OK);
-    }
-
-    #[tokio::test]
-    async fn a_malformed_command_line_is_a_bad_argument() {
-        check!(run_from_args(["krabka-restore", "--not-a-flag"]).await == EXIT_BAD_ARGUMENTS);
+    async fn a_command_line_with_no_archive_is_a_bad_argument() {
         check!(run_from_args(["krabka-restore"]).await == EXIT_BAD_ARGUMENTS);
     }
 }

@@ -273,6 +273,8 @@ pub enum LocalKeys {
     AnotherKeyUnderAlicesId,
     #[step_param("a trust file with no operator keys")]
     NoOperatorKeys,
+    #[step_param("no trust file")]
+    NoTrustFile,
 }
 
 /// Whether a step expects its action to land (`signs`) or may see it refused

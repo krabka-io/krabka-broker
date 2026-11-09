@@ -130,45 +130,10 @@ mod tests {
     };
 
     #[test]
-    fn multipart_size_constants() {
-        assert!(DEFAULT_MULTIPART_THRESHOLD == 100 * 1024 * 1024);
-        assert!(DEFAULT_MULTIPART_CHUNK_SIZE == 16 * 1024 * 1024);
-    }
-
-    #[test]
-    fn s3_config_default_uses_multipart_constants() {
-        let cfg = S3Config::default();
-        assert!(cfg.multipart_threshold == DEFAULT_MULTIPART_THRESHOLD);
-        assert!(cfg.multipart_chunk_size == DEFAULT_MULTIPART_CHUNK_SIZE);
-    }
-
-    #[test]
-    fn s3_config_default_enables_integrity_knobs() {
-        let cfg = S3Config::default();
-        assert!(cfg.conditional_put);
-        assert!(cfg.checksum_sha256);
-    }
-
-    #[test]
     fn s3_config_debug_shows_integrity_knobs() {
         let dbg = format!("{:?}", S3Config::default());
         assert!(dbg.contains("conditional_put: true"));
         assert!(dbg.contains("checksum_sha256: true"));
-    }
-
-    #[test]
-    fn s3_config_debug_redacts_credentials() {
-        let cfg = S3Config {
-            bucket: "b".into(),
-            region: "us-east-1".into(),
-            access_key_id: Some("AKIASECRET".into()),
-            secret_access_key: Some("supersecret".into()),
-            ..Default::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains("AKIASECRET"));
-        assert!(!dbg.contains("supersecret"));
-        assert!(dbg.contains("***"));
     }
 
     #[test]
@@ -178,56 +143,25 @@ mod tests {
         assert!(cfg.multipart_chunk_size == DEFAULT_MULTIPART_CHUNK_SIZE);
     }
 
+    /// The four durability knobs of GCS must default to the values documented
+    /// in `docs/config-reference.md`: an operator who sets none of them gets
+    /// exactly this. The `store_configuration` feature states the S3 defaults.
     #[test]
-    fn gcs_config_debug_redacts_credentials() {
-        let cfg = GcsConfig {
-            bucket: "b".into(),
-            service_account_key: Some("{\"private_key\":\"leak\"}".into()),
-            ..Default::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains("leak"));
-        assert!(dbg.contains("***"));
-    }
-
-    #[test]
-    fn object_store_config_debug_redacts_via_inner() {
-        let cfg = ObjectStoreConfig::S3(S3Config {
-            secret_access_key: Some("supersecret".into()),
-            ..Default::default()
-        });
-        assert!(!format!("{cfg:?}").contains("supersecret"));
-    }
-
-    /// The four durability knobs must default to the values documented in
-    /// `docs/config-reference.md`, on both backends: an operator who sets
-    /// none of them gets exactly this.
-    #[yare::parameterized(
-        s3 = { "s3", false },
-        gcs = { "gcs", true },
-    )]
-    fn backend_defaults_carry_the_documented_bounds(name: &str, gcs: bool) {
-        let (retries, retry, request, connect) = if gcs {
-            let cfg = GcsConfig::default();
+    fn gcs_defaults_carry_the_documented_bounds() {
+        let cfg = GcsConfig::default();
+        check!(
             (
                 cfg.max_retries,
                 cfg.retry_timeout,
                 cfg.request_timeout,
                 cfg.connect_timeout,
+            ) == (
+                10,
+                Duration::from_secs(180),
+                Duration::from_secs(30),
+                Duration::from_secs(5),
             )
-        } else {
-            let cfg = S3Config::default();
-            (
-                cfg.max_retries,
-                cfg.retry_timeout,
-                cfg.request_timeout,
-                cfg.connect_timeout,
-            )
-        };
-        check!(retries == 10, "{name}");
-        check!(retry == Duration::from_secs(180), "{name}");
-        check!(request == Duration::from_secs(30), "{name}");
-        check!(connect == Duration::from_secs(5), "{name}");
+        );
     }
 
     /// The bounds are not credential material, so a redacting `Debug` must

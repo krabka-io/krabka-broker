@@ -16,6 +16,11 @@ Feature: v2 record batches down-convert to legacy message sets
       When the broker down-converts the batch to magic 1
       Then the legacy message set is empty
 
+    Scenario: A zstd transaction marker down-converts to nothing
+      Given a v2 zstd control batch with a commit marker
+      When the broker down-converts the batch to magic 1
+      Then the legacy message set is empty
+
   Rule: Offsets, keys and values carry over and headers are dropped
 
     Scenario: A record with headers down-converts without them
@@ -58,6 +63,11 @@ Feature: v2 record batches down-convert to legacy message sets
     Scenario: A zstd batch is refused as an unsupported compression type
       Given a v2 batch compressed with zstd
       When the broker down-converts the batch to magic 1
+      Then the down-conversion is refused with UNSUPPORTED_COMPRESSION_TYPE
+
+    Scenario: A zstd batch with no records is refused as an unsupported compression type
+      Given a v2 batch compressed with zstd that holds no records
+      When the broker down-converts the batch to magic 0
       Then the down-conversion is refused with UNSUPPORTED_COMPRESSION_TYPE
 
   Rule: A LogAppendTime batch down-converts with its log append time

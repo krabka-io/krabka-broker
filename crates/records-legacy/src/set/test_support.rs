@@ -1,8 +1,7 @@
 //! The sample record sets both halves of the codec's tests round-trip.
 //!
-//! `message_set_roundtrips` encodes them and `rejects_nested_compression`
-//! decodes a wrapper built from them, so the fixtures sit beside the two
-//! modules rather than inside either one.
+//! `message_set_roundtrips` encodes them and decodes them back, so the
+//! fixtures sit beside the two modules rather than inside either one.
 
 use {super::ParsedRecord, crate::Magic, bytes::Bytes, krabka_ids::Offset};
 
@@ -10,7 +9,7 @@ pub(super) fn sample_records_v1() -> Vec<ParsedRecord> {
     sample_records_v1_at(100, [1_700_000_000, 1_700_000_010, 1_700_000_020])
 }
 
-pub fn sample_records_v1_at(base: i64, timestamps: [i64; 3]) -> Vec<ParsedRecord> {
+fn sample_records_v1_at(base: i64, timestamps: [i64; 3]) -> Vec<ParsedRecord> {
     [
         (0, Some(b"a"), b"1"),
         (1, Some(b"b"), b"2"),
