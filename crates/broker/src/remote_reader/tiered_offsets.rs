@@ -114,7 +114,7 @@ mod tests {
         crate::{
             remote_log_manager::test_support::local_backends,
             remote_reader::test_support::{
-                ReaderFixture, ReaderWithDir, not_ready_reader, reader_fixture,
+                ReaderWithDir, not_ready_reader,
                 reader_with_metadata as assigned_reader_with_metadata, tp,
             },
         },
@@ -238,7 +238,18 @@ mod tests {
                 LeaderEpoch(4) => Offset(35),
             })
             .call();
-        add_segment().reader(&reader).end(19).call();
+        add_segment()
+            .reader(&reader)
+            .start(10)
+            .end(19)
+            .epochs(maplit::btreemap! {LeaderEpoch(0) => Offset(10)})
+            .call();
+        // Unfinished copies below the lowest and above the highest finished
+        // segment: neither frontier may name them.
+        add_segment()
+            .reader(&reader)
+            .publication(SegmentPublication::Started)
+            .call();
         add_segment()
             .reader(&reader)
             .start(40)
@@ -247,7 +258,7 @@ mod tests {
             .publication(SegmentPublication::Started)
             .call();
 
-        assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(0));
+        assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(10));
         let expected = Some(TieredOffset {
             offset: 39,
             leader_epoch: LeaderEpoch(4),
@@ -298,75 +309,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn earliest_offset_returns_lowest_finished_start() {
-        let ReaderFixture {
-            local: _log_dir,
-            remote: _remote_dir,
-            reader,
-            log,
-        } = reader_fixture();
-        let exports = log.tierable_segments();
-        // Unwrap the log-layer `Offset` into this test's `i64` world at the seam.
-        let expected = exports.iter().map(|e| e.base_offset.0).min().unwrap();
-        let got = reader.earliest_offset(&tp()).await.unwrap();
-        assert!(got == Some(expected));
-    }
-
-    #[tokio::test]
     async fn earliest_offset_returns_none_when_no_finished_segments() {
         let remote_dir = tempfile::tempdir().unwrap();
         let fixtures::Backends { rsm, rlmm } = local_backends(remote_dir.path());
         let reader = RemoteReader::new(rsm, rlmm);
         assert!(reader.earliest_offset(&tp()).await.unwrap() == None);
-    }
-
-    #[tokio::test]
-    async fn latest_tiered_offset_uses_highest_finished_segment_and_its_epoch() {
-        let ReaderFixture {
-            local: _log_dir,
-            remote: _remote_dir,
-            reader,
-            log,
-        } = reader_fixture();
-        let expected = log
-            .tierable_segments()
-            .iter()
-            .map(|segment| segment.last_offset.0)
-            .max()
-            .unwrap();
-
-        let started_id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
-        reader
-            .rlmm
-            .add_remote_log_segment_metadata(
-                RemoteLogSegmentMetadata::new(
-                    started_id,
-                    expected + 1,
-                    expected + 100,
-                    0,
-                    1,
-                    0,
-                    krabka_remote_storage::RemoteLogSegmentDetails::new(
-                        1,
-                        RemoteLogSegmentState::CopySegmentStarted,
-                        maplit::btreemap! {LeaderEpoch(7) => expected + 1},
-                    ),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-        let got = reader
-            .latest_tiered_offset(&tp())
-            .await
-            .unwrap()
-            .expect("finished segments exist");
-        assert!(
-            got == TieredOffset {
-                offset: expected,
-                leader_epoch: LeaderEpoch(0),
-            }
-        );
     }
 
     #[tokio::test]

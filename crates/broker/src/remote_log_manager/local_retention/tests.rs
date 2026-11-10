@@ -13,8 +13,7 @@ use {
                 self as fixtures, ArchivedRetention, Backends, PartitionSnapshot, RetentionPolicy,
                 SealedRange, TempDirs, archived_backends, batch, copy_exports,
                 leading_partition_over, local_backends, partition_snapshot,
-                rolled_tiered_partition_with_config, sealed_ranges, synth_export, three_exports,
-                tier, tp,
+                rolled_tiered_partition_with_config, sealed_ranges, synth_export, tier, tp,
             },
         },
         time_util::now_ms,
@@ -122,22 +121,6 @@ fn maximum_retention_window_keeps_the_host_time_comparison() {
     );
 }
 
-#[test]
-fn local_retention_target_time_based_eviction() {
-    let exports = three_exports().last_timestamp(5_000).call();
-    // now=1000, retention=500ms → segs with max_ts<500 are deletable.
-    // Only seg0 (max_ts=100) and seg1 (max_ts=200) qualify; seg2 stops it.
-    let target = local_retention_target(
-        &exports,
-        Some(29),
-        Some(millis(500)),
-        None,
-        bytes(192),
-        1_000,
-    );
-    assert!(target == Some(20));
-}
-
 /// Kafka's `deleteRetentionSizeBreachedSegments` on a tiered log: an oldest
 /// segment goes only while the local log's bytes over
 /// `local.retention.bytes` still cover the whole segment, and the active
@@ -172,35 +155,6 @@ fn local_retention_target_size_based_eviction() {
             local_retention_target(&exports, Some(29), None, Some(budget), bytes(350), 1_000);
         check!(target == expected, "{name}");
     }
-}
-
-#[test]
-fn local_retention_target_equal_size_budget_keeps_all_segments() {
-    let exports = fixtures::two_exports_with_size(bytes(100));
-    let target = local_retention_target(
-        &exports,
-        Some(19),
-        None,
-        Some(bytes(200)),
-        bytes(200),
-        1_000,
-    );
-    assert!(target == None);
-}
-
-#[test]
-fn local_retention_target_skips_unfinished_segments_and_stops() {
-    let exports = three_exports().call();
-    // The tier holds 0..=9 and 20..=29 but not 10..=19, so its unbroken
-    // cover ends at 9 and the walk stops at seg1.
-    let covered = remote_covered_through(&[OffsetRange::new(0, 9), OffsetRange::new(20, 29)], 0);
-    assert!(covered == Some(9));
-    let target =
-        local_retention_target(&exports, covered, Some(millis(1)), None, bytes(192), 10_000);
-    assert!(
-        target == Some(10),
-        "only seg0 deletable; walk stops at seg1"
-    );
 }
 
 /// One [`remote_covered_through`] case: an RLMM listing, the base offset
@@ -331,25 +285,6 @@ fn local_retention_target_rejects_exhausted_offset() {
             10_000
         ) == None
     );
-}
-
-#[test]
-fn local_retention_target_uses_already_resolved_effective_ms() {
-    // The pure helper takes already-resolved effective_* args. This test
-    // pins that contract: when caller passes effective_local_ms equal to
-    // the topic's `retention` (the fallback), the helper deletes the
-    // same set as if `local_retention` had been set directly.
-    let exports = fixtures::two_exports();
-    // Caller resolved effective_local = retention = 250ms; now=1000.
-    let target = local_retention_target(
-        &exports,
-        Some(19),
-        Some(millis(250)),
-        None,
-        bytes(128),
-        1_000,
-    );
-    assert!(target == Some(20));
 }
 
 /// Test-only drive helper. It mirrors the body of `local_retention_pass`

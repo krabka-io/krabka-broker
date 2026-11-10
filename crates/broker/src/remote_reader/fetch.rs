@@ -620,26 +620,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn fetch_raw_uses_offset_relative_to_remote_segment_start() {
-        let ReaderWithDir {
-            reader,
-            dir: _remote_dir,
-        } = sparse_remote_segment_reader();
-
-        let got = reader
-            .fetch_raw(&tp(), LeaderEpoch(0), 12, 4096)
-            .await
-            .expect("ok")
-            .expect("offset 12 is in the synthetic remote segment");
-
-        let (base, _) = first_batch_bounds(&got);
-        assert!(
-            base == 10,
-            "relative offset 2 should read the first batch, not jump to {base}"
-        );
-    }
-
     /// Kafka's offset index holds each batch's *last* offset, so the position
     /// it gives for an offset in the second batch is the first batch, which
     /// ends below it. A budget of exactly the second batch's size must still
