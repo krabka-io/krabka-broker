@@ -2,7 +2,8 @@
 use {
     super::*,
     crate::coordinator::unified::streams::jvm_assignor::{JvmAssignorOptions, JvmTaskAssignor},
-    std::assert,
+    assert2::assert,
+    std::env,
 };
 
 #[tokio::test]
@@ -14,7 +15,7 @@ async fn jvm_assignor_released_jar_runs_through_heartbeat_and_persistence() {
         .register(Arc::new(
             JvmTaskAssignor::new("java-sticky".into(), JvmAssignorOptions {
                 java: "java".into(),
-                classpath: std::env::var("KAFKA44_JVM_CLASSPATH")
+                classpath: env::var("KAFKA44_JVM_CLASSPATH")
                     .expect("worker + Kafka libs/* classpath"),
                 class_name:
                     "org.apache.kafka.coordinator.group.streams.assignor.StickyTaskAssignor".into(),

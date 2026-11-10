@@ -236,15 +236,15 @@ async fn execute(
 mod tests {
     use {
         super::*,
+        assert2::assert,
         std::{fs, os::unix::fs::PermissionsExt},
         tempfile::TempDir,
+        tokio::time::sleep,
     };
 
+    #[cfg(test)]
     fn hanging_worker() -> (TempDir, JvmTaskAssignor) {
-        let test_root =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/jvm-assignor-tests");
-        fs::create_dir_all(&test_root).unwrap();
-        let dir = tempfile::tempdir_in(test_root).unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("java");
         let pid_file = dir.path().join("pid");
         fs::write(&script, format!("#!/usr/bin/env python3\nimport os,time\nopen({:?},'w').write(str(os.getpid()))\nwhile True: time.sleep(1)\n", pid_file.to_str().unwrap())).unwrap();
@@ -259,6 +259,7 @@ mod tests {
         (dir, adapter)
     }
 
+    #[cfg(test)]
     async fn worker_pid(dir: &TempDir) -> u32 {
         timeout(Duration::from_secs(5), async {
             loop {
@@ -267,21 +268,22 @@ mod tests {
                 {
                     break pid;
                 }
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                sleep(Duration::from_millis(5)).await;
             }
         })
         .await
         .expect("worker started")
     }
 
+    #[cfg(test)]
     async fn reaped(pid: u32) {
         timeout(Duration::from_secs(5), async {
             while PathBuf::from(format!("/proc/{pid}")).exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                sleep(Duration::from_millis(10)).await;
             }
         })
         .await
-        .expect("worker killed and reaped")
+        .expect("worker killed and reaped");
     }
 
     #[tokio::test]
@@ -336,17 +338,17 @@ mod tests {
         let mut input = AssignorInput::default();
         let original = request(&members, &input).unwrap();
         members.reverse();
-        assert_eq!(original, request(&members, &input).unwrap());
+        assert!(original == request(&members, &input).unwrap());
         members[0].task_offsets.insert(("s".into(), 0), i64::MAX);
-        assert_ne!(original, request(&members, &input).unwrap());
+        assert!(original != request(&members, &input).unwrap());
         members[0].task_offsets.clear();
         input.num_standby_replicas = 1;
-        assert_ne!(original, request(&members, &input).unwrap());
+        assert!(original != request(&members, &input).unwrap());
         input.num_standby_replicas = 0;
         input.tasks.insert("s".into(), vec![0]);
-        assert_ne!(original, request(&members, &input).unwrap());
+        assert!(original != request(&members, &input).unwrap());
         input.tasks.clear();
         members.pop();
-        assert_ne!(original, request(&members, &input).unwrap());
+        assert!(original != request(&members, &input).unwrap());
     }
 }

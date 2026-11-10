@@ -351,11 +351,19 @@ impl DlqSink for JvmDlqSink {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        crate::{metrics::BrokerMetrics, share_partition::dlq::test_support::RecordingDlq},
+        assert2::assert,
+        krabka_log::Offset,
+        krabka_metadata::NodeId,
+        std::{env, path::Path},
+    };
+    #[cfg(test)]
     fn options(class_name: &str) -> JvmExtensionOptions {
         JvmExtensionOptions {
             java: "java".into(),
-            classpath: std::env::var("KAFKA44_JVM_CLASSPATH")
+            classpath: env::var("KAFKA44_JVM_CLASSPATH")
                 .expect("worker + Kafka libs + fixture JAR"),
             class_name: class_name.into(),
             timeout: Duration::from_secs(5),
@@ -374,14 +382,14 @@ mod tests {
             subtopologies: vec![],
             global_stores: vec![],
         };
-        assert_eq!(backend.get("g", 2).await.unwrap(), None);
+        assert!(backend.get("g", 2).await.unwrap() == None);
         backend.set("g", 2, &description).await.unwrap();
-        assert_eq!(backend.get("g", 2).await.unwrap(), Some(description));
-        assert_eq!(backend.get("g", 3).await.unwrap(), None);
+        assert!(backend.get("g", 2).await.unwrap() == Some(description));
+        assert!(backend.get("g", 3).await.unwrap() == None);
         backend.delete("g").await.unwrap();
-        assert_eq!(backend.get("g", 2).await.unwrap(), None);
+        assert!(backend.get("g", 2).await.unwrap() == None);
         backend.close().await.unwrap();
-        assert_eq!(backend.get("g", 2).await, Err(StorageFailure::Transient));
+        assert!(backend.get("g", 2).await == Err(StorageFailure::Transient));
     }
     #[tokio::test]
     #[ignore = "requires released Kafka 4.4 jars and compiled ExtensionFixture"]
@@ -396,10 +404,7 @@ mod tests {
             subtopologies: vec![],
             global_stores: vec![],
         };
-        assert_eq!(
-            backend.set("caused", 1, &description).await,
-            Err(StorageFailure::Permanent)
-        );
+        assert!(backend.set("caused", 1, &description).await == Err(StorageFailure::Permanent));
         backend.close().await.unwrap();
         assert!(
             JvmDlqManagerFactory::new(options("missing.class.Name"))
@@ -426,13 +431,14 @@ mod tests {
                 .contains("fenced")
         );
     }
+    #[cfg(test)]
     fn request(cause: DlqCause) -> DlqRequest {
         DlqRequest {
             group: "g".into(),
             topic_id: "00112233-4455-6677-8899-aabbccddeeff".parse().unwrap(),
             source_partition: 3,
-            first: krabka_log::Offset(9_007_199_254_740_993),
-            last: krabka_log::Offset(i64::MAX),
+            first: Offset(9_007_199_254_740_993),
+            last: Offset(i64::MAX),
             delivery_count: 7,
             cause,
         }
@@ -444,9 +450,9 @@ mod tests {
             .await
             .unwrap();
         let context = DlqManagerContext {
-            broker: krabka_metadata::NodeId(1),
-            stock: Arc::new(crate::share_partition::dlq::test_support::RecordingDlq::default()),
-            metrics: crate::metrics::BrokerMetrics::new(),
+            broker: NodeId(1),
+            stock: Arc::new(RecordingDlq::default()),
+            metrics: BrokerMetrics::new(),
         };
         let sink = factory.create(context.clone()).unwrap();
         assert!(factory.create(context).is_err());
@@ -490,6 +496,6 @@ mod tests {
         );
         assert!(worker.shutdown().await.is_err()); // session fenced, cleanup still awaited
         #[cfg(target_os = "linux")]
-        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
     }
 }
