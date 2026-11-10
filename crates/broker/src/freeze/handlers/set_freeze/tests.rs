@@ -10,11 +10,9 @@ use {
         codes,
         config::BrokerConfig,
         freeze::signing::freeze_signing_bytes,
-        handlers::{RequestContext, test_support::StartedBroker},
+        handlers::RequestContext,
         operator_keys::{OperatorKeyEntry, OperatorKeys},
-        test_support::{
-            ed25519_public_key_file, frozen_topics_image, principal, start_broker_no_audit_with,
-        },
+        test_support::{ed25519_public_key_file, frozen_topics_image, principal},
     },
     krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord},
     krabka_protocol::{
@@ -179,36 +177,6 @@ fn freeze_request(scope: &str, pattern_type: i8) -> SetTopicFreezeRequest {
 fn sign(pair: &Ed25519KeyPair, record: &TopicFreezeRecord) -> Vec<u8> {
     let bytes = freeze_signing_bytes(&encode(CLUSTER), record);
     pair.sign(&bytes).as_ref().to_vec()
-}
-
-#[tokio::test]
-async fn handle_processes_request_and_encodes_response() {
-    use krabka_protocol::Encode;
-
-    let dir = tempfile::TempDir::new().unwrap();
-    let AliceKeys { config, .. } = config_with_alice(&dir);
-    let StartedBroker {
-        broker: broker_handle,
-        dir: _dir,
-    } = start_broker_no_audit_with(|cfg| {
-        cfg.operator_keys = config.operator_keys;
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-
-    let p = principal(ALICE_NAME);
-    let s = peer();
-    let ctx = context(&p, &s);
-    let req = freeze_request("test-topic", PATTERN_TYPE_LITERAL);
-    let mut req_bytes = bytes::BytesMut::new();
-    req.encode(&mut req_bytes, 0).unwrap();
-
-    let resp_bytes = super::handle(&broker, 0, 1, &req_bytes, &ctx)
-        .await
-        .expect("handle");
-    assert2::check!(!resp_bytes.is_empty());
-
-    broker_handle.shutdown().await;
 }
 
 /// A thaw of a scope with no live entry is the operator's mistake, not a

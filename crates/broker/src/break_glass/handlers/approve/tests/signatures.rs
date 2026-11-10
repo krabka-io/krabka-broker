@@ -1,8 +1,9 @@
 //! Tests for the detached operator signature that an approval can carry.
 //!
-//! A configured action refuses an unsigned approval, and every signature the
-//! broker stores is one it verified against the trusted key set under the
-//! approving principal.
+//! Every signature the broker stores is one it verified against the trusted
+//! key set under the approving principal. That a configured action refuses an
+//! unsigned approval is checked over the wire, in
+//! `tests/features/migrated/tests/break_glass/signatures.feature`.
 
 use {
     super::{attempt, pending},
@@ -45,25 +46,6 @@ fn operator_key(dir: &TempDir, key_id: &str, principal: &str) -> OperatorKey {
             public_key_path: path,
         },
     }
-}
-
-#[test]
-fn an_action_that_needs_a_signature_refuses_an_unsigned_approval() {
-    let config = BreakGlassConfig {
-        signed_actions: vec!["delete_topic".to_owned()],
-        ..config()
-    };
-    let policy = BreakGlassPolicy::new(&config);
-
-    let outcome = decide(
-        policy,
-        &OperatorKeys::default(),
-        &pending(),
-        &attempt("User:bob"),
-    );
-
-    assert!(let Err(refusal) = outcome);
-    check!(refusal.code == codes::OPERATOR_SIGNATURE_REQUIRED);
 }
 
 #[test]

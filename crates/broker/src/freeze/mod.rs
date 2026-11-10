@@ -77,42 +77,163 @@ pub fn scope_covers_internal_topic(pattern_type: PatternType, scope: &str) -> bo
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::internal_topics::INTERNAL_TOPICS, assert2::check};
+    use {
+        super::*,
+        crate::{
+            freeze::handlers::{FreezeFilter, pattern_type_concrete, pattern_type_filter},
+            internal_topics::INTERNAL_TOPICS,
+        },
+        assert2::check,
+        krabka_bdd::Given,
+    };
 
-    #[derive(Default)]
+    /// A Kafka ACL pattern type, spelled as `kafka-acls` prints it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum AclPatternType {
+        #[step_param("Literal")]
+        Literal,
+        #[step_param("Prefixed")]
+        Prefixed,
+    }
+
+    impl From<AclPatternType> for PatternType {
+        fn from(pattern: AclPatternType) -> Self {
+            match pattern {
+                AclPatternType::Literal => Self::Literal,
+                AclPatternType::Prefixed => Self::Prefixed,
+            }
+        }
+    }
+
+    /// The kind of freeze scope a request byte names, if it names one.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum ScopeKind {
+        Literal,
+        Prefixed,
+        None,
+    }
+
+    impl From<ScopeKind> for Option<PatternType> {
+        fn from(kind: ScopeKind) -> Self {
+            match kind {
+                ScopeKind::Literal => Some(PatternType::Literal),
+                ScopeKind::Prefixed => Some(PatternType::Prefixed),
+                ScopeKind::None => None,
+            }
+        }
+    }
+
+    /// The registry entries a describe filter selects.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Selection {
+        #[step_param("every entry")]
+        Every,
+        #[step_param("literal entries")]
+        Literal,
+        #[step_param("prefixed entries")]
+        Prefixed,
+        #[step_param("no entry")]
+        Nothing,
+    }
+
+    impl From<Selection> for FreezeFilter {
+        fn from(selection: Selection) -> Self {
+            match selection {
+                Selection::Every => Self::EveryPatternType,
+                Selection::Literal => Self::One(PatternType::Literal),
+                Selection::Prefixed => Self::One(PatternType::Prefixed),
+                Selection::Nothing => Self::Nothing,
+            }
+        }
+    }
+
+    /// One scenario's pattern type or request byte, and what the broker read.
     struct FreezeScopeVocabulary {
-        pattern: Option<PatternType>,
-        name: Option<&'static str>,
+        pattern: Given<PatternType>,
+        name: Given<&'static str>,
+        byte: Given<i8>,
+        kind: Given<Option<PatternType>>,
+        filter: Given<FreezeFilter>,
     }
 
     #[rstest::fixture]
     fn freeze_scope() -> FreezeScopeVocabulary {
-        // Scope type and its rendered operator vocabulary are scenario-local.
-        FreezeScopeVocabulary::default()
+        FreezeScopeVocabulary {
+            pattern: Given::new(
+                "pattern",
+                "Given a freeze scope uses Kafka ACL pattern type <pattern>",
+            ),
+            name: Given::new(
+                "name",
+                "When the scope's pattern type is rendered for an operator",
+            ),
+            byte: Given::new(
+                "byte",
+                "Given a freeze request carries pattern type byte <byte>",
+            ),
+            kind: Given::new(
+                "kind",
+                "When the broker reads the byte as the kind of a freeze scope",
+            ),
+            filter: Given::new(
+                "filter",
+                "When the broker reads the byte as a describe filter",
+            ),
+        }
     }
 
-    #[rstest_bdd_macros::given("a freeze scope uses Kafka ACL pattern type {pattern}")]
-    fn freeze_scope_pattern(freeze_scope: &mut FreezeScopeVocabulary, pattern: String) {
-        freeze_scope.pattern = Some(match pattern.as_str() {
-            "Literal" => PatternType::Literal,
-            "Prefixed" => PatternType::Prefixed,
-            other => panic!("unknown Kafka pattern type {other}"),
-        });
+    #[krabka_bdd::given("a freeze scope uses Kafka ACL pattern type {pattern}")]
+    fn freeze_scope_pattern(freeze_scope: &mut FreezeScopeVocabulary, pattern: AclPatternType) {
+        freeze_scope.pattern.set(pattern.into());
     }
 
-    #[rstest_bdd_macros::when("the scope's pattern type is rendered for an operator")]
+    #[krabka_bdd::when("the scope's pattern type is rendered for an operator")]
     fn render_freeze_scope_pattern(freeze_scope: &mut FreezeScopeVocabulary) {
-        freeze_scope.name = Some(pattern_type_name(
-            freeze_scope.pattern.expect("a pattern type was given"),
-        ));
+        freeze_scope
+            .name
+            .set(pattern_type_name(*freeze_scope.pattern.get()));
     }
 
-    #[rstest_bdd_macros::then("the operator-facing pattern type is {name}")]
+    #[krabka_bdd::then("the operator-facing pattern type is {name}")]
     fn operator_freeze_scope_pattern(freeze_scope: &FreezeScopeVocabulary, name: String) {
-        check!(freeze_scope.name == Some(name.as_str()));
+        check!(*freeze_scope.name.get() == name.as_str());
     }
 
-    rstest_bdd_macros::scenarios!(
+    #[krabka_bdd::given("a freeze request carries pattern type byte {byte}")]
+    fn freeze_request_byte(freeze_scope: &mut FreezeScopeVocabulary, byte: i8) {
+        freeze_scope.byte.set(byte);
+    }
+
+    #[krabka_bdd::given("a describe request carries pattern type filter byte {byte}")]
+    fn describe_filter_byte(freeze_scope: &mut FreezeScopeVocabulary, byte: i8) {
+        freeze_scope.byte.set(byte);
+    }
+
+    #[krabka_bdd::when("the broker reads the byte as the kind of a freeze scope")]
+    fn read_scope_kind(freeze_scope: &mut FreezeScopeVocabulary) {
+        freeze_scope
+            .kind
+            .set(pattern_type_concrete(*freeze_scope.byte.get()));
+    }
+
+    #[krabka_bdd::when("the broker reads the byte as a describe filter")]
+    fn read_describe_filter(freeze_scope: &mut FreezeScopeVocabulary) {
+        freeze_scope
+            .filter
+            .set(pattern_type_filter(*freeze_scope.byte.get()));
+    }
+
+    #[krabka_bdd::then("the freeze scope kind is {kind}")]
+    fn freeze_scope_kind(freeze_scope: &FreezeScopeVocabulary, kind: ScopeKind) {
+        check!(*freeze_scope.kind.get() == Option::<PatternType>::from(kind));
+    }
+
+    #[krabka_bdd::then("the filter selects {selection}")]
+    fn filter_selection(freeze_scope: &FreezeScopeVocabulary, selection: Selection) {
+        check!(*freeze_scope.filter.get() == FreezeFilter::from(selection));
+    }
+
+    krabka_bdd::scenarios!(
         "tests/features/migrated/src/freeze/mod.feature",
         fixtures = [freeze_scope: FreezeScopeVocabulary]
     );
