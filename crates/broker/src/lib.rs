@@ -224,6 +224,8 @@ mod profiling_server;
 pub(crate) mod oauth_introspection;
 pub(crate) mod oauth_jwks;
 pub use krabka_audit::operator_keys;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod jvm_extensions;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;
@@ -245,7 +247,6 @@ pub mod schema_validation;
 pub mod security_clients;
 pub mod share_coordinator;
 pub mod share_partition;
-pub mod jvm_extensions;
 pub(crate) mod signing_domains;
 pub(crate) mod site_placement;
 /// Three-site stretch-cluster model: site failure and network partition

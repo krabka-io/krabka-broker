@@ -343,16 +343,19 @@ fn confirmed_phase_two_persist_does_not_requeue() {
     };
     for outcome in [Action::Success, Action::AuthorizationDenied] {
         let mut state = model.init_states().remove(0);
-        for action in [
+        let schedule = [
             Action::Persist,
             Action::Send,
             outcome,
             Action::Finish,
             Action::Confirm,
             Action::Crash,
-        ] {
-            state = model.next_state(&state, action).expect("enabled schedule");
-        }
+        ];
+        state = schedule.into_iter().fold(state, |current, action| {
+            model
+                .next_state(&current, action)
+                .expect("confirmed schedule")
+        });
         assert!(
             (state.live.start_offset, state.live.take_pending_dlq()) == (Offset(1), Vec::new())
         );

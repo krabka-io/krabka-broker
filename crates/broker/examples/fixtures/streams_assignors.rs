@@ -29,9 +29,7 @@ struct FixtureAssignor {
     failure: bool,
 }
 impl TaskAssignor for FixtureAssignor {
-    fn name(&self) -> &'static str {
-        self.name
-    }
+    fn name(&self) -> &'static str { self.name }
 
     fn assign(
         &self,

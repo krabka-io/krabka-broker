@@ -137,8 +137,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Isolated ACL/callback qualification only: privileged plaintext control
     // listener plus one synthetic SASL/PLAIN actor on LISTEN+2.
     if env::var_os("STREAMS_FIXTURE_ACL").is_some() {
-        use krabka_broker::{authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-        use krabka_security::{ListenerProtocol, SaslMechanism};
+        use {
+            krabka_broker::{authorizer::SimpleAclAuthorizer, config::ListenerSpec},
+            krabka_security::{ListenerProtocol, SaslMechanism},
+        };
         let mut sasl_addr = config.listen_addr;
         sasl_addr.set_port(sasl_addr.port().checked_add(2).ok_or("no SASL port")?);
         config.listeners = vec![
@@ -149,7 +151,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 protocol: ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
-                principal_mapper: Default::default(),
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             },
             ListenerSpec {
                 name: "SASL_PLAINTEXT".into(),
@@ -158,7 +160,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 protocol: ListenerProtocol::SaslPlaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
-                principal_mapper: Default::default(),
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             },
         ];
         config.inter_broker_listener_name = "PLAINTEXT".into();

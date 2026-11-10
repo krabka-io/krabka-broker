@@ -23,11 +23,11 @@ fn options(class_name: &str) -> JvmAssignorOptions {
 #[ignore = "requires compiled AssignorWorker and released Kafka 4.4 JARs; see tools/jvm-assignor/README.md"]
 async fn jvm_assignor_released_jar_installs_target_and_fences_changed_membership() {
     let mut actor = ActorState::new("java-group".into());
-    for id in ["a", "b"] {
+    ["a", "b"].into_iter().for_each(|id| {
         let mut member = StreamsMemberState::joining(id, "client", "host");
         member.process_id = id.into();
         actor.state.add_or_update_member(member);
-    }
+    });
     let topology = StreamsGroupTopologyValue {
         epoch: 1,
         subtopologies: vec![StoredSubtopology {
