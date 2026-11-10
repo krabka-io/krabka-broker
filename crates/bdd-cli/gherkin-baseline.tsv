@@ -31,8 +31,6 @@ crates/broker/tests/features/handler_acl_validation/validation.feature	case-colu
 crates/broker/tests/features/handler_broker_config_replacement/replacement.feature	case-column	the Examples table starts with column `resource`, not `case`	1
 crates/broker/tests/features/handler_broker_config_replacement/replacement.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/handler_broker_logger_refusals/logger.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/handler_broker_registration.feature	case-column	the Examples table starts with column `directories`, not `case`	1
-crates/broker/tests/features/handler_broker_registration.feature	case-column	the Examples table starts with column `ranges`, not `case`	1
 crates/broker/tests/features/handler_classic_group_state/state.feature	case-column	the Examples table starts with column `condition`, not `case`	1
 crates/broker/tests/features/handler_client_metrics_alteration/alteration.feature	case-column	the Examples table starts with column `key`, not `case`	1
 crates/broker/tests/features/handler_client_metrics_replacement/replacement.feature	case-column	the Examples table starts with column `subscription`, not `case`	1
@@ -86,9 +84,6 @@ crates/broker/tests/features/handler_describe_quota_filters/filter.feature	no-ba
 crates/broker/tests/features/handler_empty_fetch_charge/size.feature	case-column	the Examples table starts with column `version`, not `case`	1
 crates/broker/tests/features/handler_explicit_partition_assignment/assignment.feature	case-column	the Examples table starts with column `lists`, not `case`	1
 crates/broker/tests/features/handler_explicit_partition_assignment/assignment.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/handler_feature_planning/planning.feature	case-column	the Examples table starts with column `cluster`, not `case`	1
-crates/broker/tests/features/handler_feature_planning/planning.feature	case-column	the Examples table starts with column `levels`, not `case`	4
-crates/broker/tests/features/handler_feature_planning/planning.feature	case-column	the Examples table starts with column `range`, not `case`	1
 crates/broker/tests/features/handler_fetch_read_failures.feature	case-column	the Examples table starts with column `failure`, not `case`	1
 crates/broker/tests/features/handler_fetch_snapshot.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/handler_group_config/group_config.feature	case-column	the Examples table starts with column `group`, not `case`	1
@@ -545,9 +540,6 @@ crates/broker/tests/features/migrated/src/remote_log_manager/quota/tests.feature
 crates/broker/tests/features/migrated/src/remote_log_manager/quota/tests.feature	one-when	scenario `Later samples add to the measured byte rate` has 4 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/src/remote_log_manager/quota/tests.feature	one-when	scenario `Lowering an unlimited bound throttles existing history` has 4 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/src/remote_log_manager/quota/tests.feature	one-when	scenario `Raising the bound releases the previously recorded burst` has 4 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/src/remote_log_manager/remote_retention/tests.feature	case-column	the Examples table starts with column `timestamp`, not `case`	1
-crates/broker/tests/features/migrated/src/remote_log_manager/remote_retention/tests.feature	or-in-step	step `mutable archive retention is evaluated at millisecond 10000 without size or deletion-floor pressure` offers alternatives with `or`	1
-crates/broker/tests/features/migrated/src/remote_reader/lineage.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/replica_state.feature	max-steps	scenario `Follower fetch progress credits caught-up time without inventing progress` has 13 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/replica_state.feature	one-when	scenario `Follower fetch progress credits caught-up time without inventing progress` has 6 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/src/replicator/truncation/divergence.feature	case-column	the Examples table starts with column `input`, not `case`	1
