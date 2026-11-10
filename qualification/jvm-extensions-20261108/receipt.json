@@ -1,0 +1,56 @@
+{
+  "base": "99c239dbd",
+  "scope": "opt-in persistent released Java topology storage and custom no-argument DLQ managers",
+  "checks": {
+    "java_methods_passed": 10,
+    "rust_extension_tests_passed": 5,
+    "default_broker_passed": 9157,
+    "default_broker_ignored": 7,
+    "streams_include_ignored_passed": 301,
+    "unique_broker_library_tests_exercised": 9164,
+    "failed": 0,
+    "broker_library_clippy": "passed",
+    "targeted_nightly_rustfmt": "passed",
+    "shell_syntax": "passed",
+    "git_diff_check": "passed"
+  },
+  "binary": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/projects/kafka44-storage-gap/target/debug/deps/krabka_broker-914abe402724085f",
+    "sha256": "6d6a3aa07229b0b6dd98bbfd9d7560f6090ac0a42ca8664f2c40d66083b3cce4"
+  },
+  "jars": {
+    "kafka-group-coordinator-api-4.4.0.jar": "506c1bd3cf56b3dc3b39319eecfd0c8168062cb17bb0b7f45ce9f97ca36698e2",
+    "kafka-server-4.4.0.jar": "8ff196f798b55e4aef25981e10651c241669e8d89b4c1577070cc3e66947de84"
+  },
+  "source_and_evidence_sha256": {
+    "crates/broker/src/coordinator/unified/streams/jvm_assignor.rs": "0b8ec46db98ae9d9faa7f6d264990a0840bafa46cead60d98f3f82a4bda336b9",
+    "crates/broker/src/jvm_extensions.rs": "8d8a2c031cdfb3f8790ee49fce69513316937f13f36c1c91bef88c952bb5c142",
+    "crates/broker/src/lib.rs": "118f3fbba23dc7132d84af94cd8e327b94fdc1d71340b4f746821b00395ae82a",
+    "docs/compatibility/kafka-4.4-jvm-extensions.md": "79b3498dd07247d5135690d4f424e24e35fd21f678edc910c711685e5e1a68c6",
+    "docs/compatibility/kafka-4.4-native-dlq-manager.md": "ec41895a7aabb89f29d520a98f915c6b8f8914596c4e264e14d59c70bec026cd",
+    "docs/streams-topology-description-storage.md": "35fbe00089f68ca5221d9f589a16e34c382bf66a6c410c6b26544a15288af84a",
+    "qualification/jvm-extensions-20261108/README.md": "abeecba05d158c35f105b68245fc8be5f3b8ed429a3e3ab0f2c621f3d9e918f9",
+    "qualification/jvm-extensions-20261108/broker-suite-output.txt": "521cdc1f021edbe780112ebb4f5efc84937ba0129d29e8378f73f4b632473ef1",
+    "qualification/jvm-extensions-20261108/clippy-output.txt": "a2e4235d977089401ae77fcf0302548c003fea57e85737a0486ecbaed166c908",
+    "qualification/jvm-extensions-20261108/java-output.txt": "32d8d294465da0944760f4a4a5462f01334773c27e07877b406e984e852c3f44",
+    "qualification/jvm-extensions-20261108/released-signatures.txt": "9d5e2a25215ce189051e8a13d17f16606efe96209d50c91a3f135505f9f17423",
+    "qualification/jvm-extensions-20261108/rust-initial-output.txt": "bc799867d49506d487bfa0c3303311c65fdc80362da60a25da8ab2de70524a15",
+    "qualification/jvm-extensions-20261108/rust-output.txt": "8f2fb58dad1dc74ab59390e9e28e34b2339ad337080fa1eaa823ae5aa359c613",
+    "qualification/jvm-extensions-20261108/streams-output.txt": "909a2f0731bc01563eecf463c25b8c6f549eab6cba6513929c009b48052c613f",
+    "qualification/kafka44-followups-20261108.md": "fdaa8da193bb085ef714e4136cfdc54c550fd4a4ab32e3fc158efa4eb6c67149",
+    "qualification/native-extension-assessment-20261108/README.md": "231488fb059f8d1fa44b011c01dc19e2fb7c001abb2060b8a564a1ecc0f32738",
+    "tools/jvm-assignor/ExtensionWorker.java": "e339738ff6fc109508356dcc058dc752959c13ae852973e0b28f8cde18993c09",
+    "tools/jvm-assignor/README.md": "35c5a58adcfa0e28b97d64f70986427c8aecb67d87f87db0a09e762edd1b460f",
+    "tools/jvm-assignor/check.sh": "3c601de10c15bdf86573c8d14a7f2ff209059cf6db3cce6186a63ee29f313f17",
+    "tools/jvm-assignor/fixtures/ExtensionFixture.java": "e0f7014ee751c51e337e2a85a8054877f095f7094be63cbce43d6ed8239f5c77",
+    "tools/jvm-assignor/test_extensions.py": "79e676bea3e335df0a6509f63532d1ff5b76b43f5d7b5045575f18015ed84058"
+  },
+  "unsupported": [
+    "stock Java DLQ in-process broker services",
+    "native source topic-name missing in DLQ request",
+    "automatic CLI class loading or distributed plugin deployment",
+    "full assignor metadata fidelity",
+    "universal plugin IO durability",
+    "live distributed/power-loss qualification"
+  ]
+}

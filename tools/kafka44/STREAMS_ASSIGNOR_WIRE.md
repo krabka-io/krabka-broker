@@ -82,3 +82,33 @@ remains visible while `sticky` runs after plugin removal, followed by explicit
 override repair (11 matching scenario rows per broker).
 Native actor/model coverage and the released component probe remain separate
 supporting evidence, not substitutes for those executions.
+
+## Unknown-member output follow-up (2026-11-08)
+
+The [invalid-owner characterization](../../qualification/streams-assignor-invalid-20261108/README.md)
+adds an actual malformed-output wire case. Kafka 4.4 accepts a joining member
+when the custom callback returns tasks owned by a nonexistent member; native
+validation rejects that output. This is a retained **divergence**, not an
+invalid-output parity pass. Both modes exercise repair with a healthy callback.
+RF3 movement, combined ACL failures and other invalid-output classes remain open.
+
+## Active RF3 movement and ACL combinations (2026-11-08)
+
+The [RF3 active-member receipt](../../qualification/streams-assignor-movement-20261108/README.md)
+measures actual owner loss, preserved custom assignment and callback-driven
+reassignment on the new owner. The [ACL/callback receipt](../../qualification/streams-assignor-acl-20261108/README.md)
+measures matching group-denied, topic-denied and callback-failure precedence,
+failed-member absence and healthy repair. These bounded cases supersede the
+older unmeasured labels above only for the exact scenarios executed. Active-member
+plugin-removal restart, other malformed output, ACL races and arbitrary faults
+remain open.
+
+## Active-member plugin-removal restart (2026-11-08)
+
+The [active-restart receipt](../../qualification/streams-assignor-active-restart-20261108/README.md)
+now covers a clean single-broker restart without leaving either active member,
+removal of the selected custom plugin, restored previous target, and complete
+cooperative sticky reassignment after a third member joins (10 matching scenario
+rows per peer). It uses the pinned historical native candidate, not a combined
+build. Mixed-registry RF3 movement and the unknown-owner safety divergence remain
+open; this does not qualify arbitrary JVM-plugin loading.

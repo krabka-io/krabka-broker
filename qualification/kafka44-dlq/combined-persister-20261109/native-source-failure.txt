@@ -1,0 +1,36 @@
+{"bootstrap_mode":"Bootstrap","directory_id":"8fae566d-ba97-4dfa-95e0-8ceca9feddeb","log_dir":"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-continue-20261109/live/native1/data","message":"selected bootstrap mode","metadata_log_dir":"/home/matt/.openclaw/workspace/coordinator/.private/kafka44-continue-20261109/live/native1/data","severity":"INFO","target":"krabka_broker::startup","timestamp":"2026-11-09T07:21:04.554044Z"}
+{"message":"controller listener is PLAINTEXT: every peer is ANONYMOUS, and each controller RPC is authorized for that principal","severity":"WARNING","target":"krabka_broker::broker::metadata_phase","timestamp":"2026-11-09T07:21:04.554746Z"}
+{"message":"deriving static KIP-595 voters from controller_quorum_voters","mode":"Bootstrap","node_id":1,"severity":"INFO","target":"krabka_broker::broker::metadata_phase","timestamp":"2026-11-09T07:21:04.554875Z","voter_count":3}
+{"message":"loaded the bootstrap records of the bootstrap checkpoint","records":6,"severity":"INFO","target":"krabka_raft::kraft::controller::startup","timestamp":"2026-11-09T07:21:04.555772Z"}
+{"addr":"127.0.0.1:64811","message":"controller started","node_id":1,"severity":"INFO","target":"krabka_raft::controller::startup","timestamp":"2026-11-09T07:21:04.555983Z"}
+{"addr":"127.0.0.1:64811","message":"controller listener started","severity":"INFO","target":"krabka_raft::server","timestamp":"2026-11-09T07:21:04.556038Z"}
+{"groups":0,"message":"BarrierCoordinator recovery complete","severity":"INFO","target":"krabka_broker::barrier::coordinator::recovery","timestamp":"2026-11-09T07:21:05.926220Z"}
+{"message":"no audit signing key configured; checkpoints disabled","severity":"INFO","target":"krabka_broker::broker::audit","timestamp":"2026-11-09T07:21:05.927456Z"}
+{"interval_secs":60,"message":"disk scanner started","severity":"INFO","target":"krabka_broker::disk_scanner","timestamp":"2026-11-09T07:21:05.927917Z"}
+{"controller_listen_addr":"127.0.0.1:64811","listen_addr":"127.0.0.1:64801","message":"krabka-broker started","severity":"INFO","target":"krabka_broker::startup","timestamp":"2026-11-09T07:21:05.931731Z"}
+{"host":"127.0.0.1","leader_node_id":3,"message":"replicator.fetcher.started","port":64803,"severity":"INFO","target":"krabka_broker::replicator","timestamp":"2026-11-09T07:21:11.450310Z"}
+{"message":"partition leadership changed (observed in committed metadata)","new_epoch":0,"new_leader":1,"partition":0,"prev_epoch":0,"prev_leader":0,"severity":"INFO","target":"krabka_broker::partition::leadership","timestamp":"2026-11-09T07:21:11.456841Z","topic":"source-rf3persist08"}
+{"message":"partition leadership changed (observed in committed metadata)","new_epoch":0,"new_leader":2,"partition":0,"prev_epoch":0,"prev_leader":0,"severity":"INFO","target":"krabka_broker::partition::leadership","timestamp":"2026-11-09T07:21:11.459834Z","topic":"dlq.rf3persist08"}
+{"host":"127.0.0.1","leader_node_id":2,"message":"replicator.fetcher.started","port":64820,"severity":"INFO","target":"krabka_broker::replicator","timestamp":"2026-11-09T07:21:11.460572Z"}
+{"error":"request timed out after 1s","message":"heartbeat send failed","severity":"WARNING","target":"krabka_broker::heartbeat::client","timestamp":"2026-11-09T07:21:36.929313Z"}
+{"error":"request timed out after 30s","message":"replicator: client.send unexpected error; retrying after backoff","severity":"WARNING","target":"krabka_broker::replicator::fetch_loop","timestamp":"2026-11-09T07:22:03.662686Z"}
+{"error":"request timed out after 30s","message":"replicator: client.send unexpected error; retrying after backoff","severity":"WARNING","target":"krabka_broker::replicator::fetch_loop","timestamp":"2026-11-09T07:22:03.975689Z"}
+{"error":"network: request timed out after 30s","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985002Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985071Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985090Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985080Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985116Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985117Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985133Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985132Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985128Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985157Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985157Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985148Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985162Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985167Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985157Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985181Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985176Z"}
+{"error":"network: connection closed","severity":"ERROR","target":"krabka_raft::network::peer_sender","timestamp":"2026-11-09T07:22:03.985229Z"}
+{"code":-1,"error":"share: share-state connect to 127.0.0.1:64803: config: Connection::from_stream: request timed out after 30s","group":"group-rf3persist08","message":"share-partition state persist failed","partition":0,"severity":"WARNING","target":"krabka_broker::share_partition::manager::persistence","timestamp":"2026-11-09T07:22:04.032429Z","topic_id":"0fc1bc05-a93a-4077-882d-6e32657784e9"}

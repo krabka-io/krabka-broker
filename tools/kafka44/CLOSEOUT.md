@@ -23,8 +23,10 @@ a release publication, or a production deployment.
   shared-library ABI, or executable plugin hot-loading. Callback IO, cancellation
   cooperation and panic isolation are not proved by pure kernels or actor models.
 - Custom-assignor single-broker callback wire selection, reassignment, error and
-  retry now have a paired receipt. RF3 movement, combined ACL failures, invalid
-  output at the wire boundary and unavailable-name restart remain unmeasured.
+  retry now have a paired receipt. Subsequent
+  [follow-ups](../../qualification/kafka44-followups-20261108.md) measure RF3
+  movement, combined ACL failures, invalid wire output and clean active-member
+  unavailable-name restart within their retained bounds.
 - Topology storage movement covers the measured shared-backend empty-member case,
   not every active-member/concurrent-write schedule. [Native callback telemetry and bounded periodic cleanup/handoff tests](../../qualification/streams-storage-native-followup-20261105.md)
   now cover local behavior, not distributed scheduling or arbitrary owner overlap. A local filesystem is not automatically
@@ -33,8 +35,9 @@ a release publication, or a production deployment.
   The [ordering fix](../../qualification/kafka44-dlq/README.md#terminal-prefix-ordering-follow-up-2026-11-05) now persists ARCHIVED before live-cache pruning, with
   state-machine and actual-manager regressions. A [fresh paired run](../../qualification/kafka44-dlq/ordering-20261107/README.md) measures eight boundary cases per broker with matching persisted state 3 then 4, startOffset 0 and deliveryCompleteCount 1 before and after clean restart; this is not a crash-window or RF3 state-parity claim. Terminal errors can archive without a DLQ
   copy; lost confirmations can create duplicates. No exactly-once archive claim.
-- RF3 destination authorization denial and every Cartesian-product fault/ACL
-  permutation remain unmeasured. Bounded model/proof results do not establish
+- RF3 destination authorization denial and bounded phase-two transport failure
+  now have [follow-up evidence](../../qualification/kafka44-followups-20261108.md).
+  Every Cartesian-product fault/ACL permutation remains unmeasured. Bounded model/proof results do not establish
   arbitrary network schedules or plugin IO durability.
 - Historical failures are preserved. The later scheduled Jepsen36/36 valid run
   is subsequent regression evidence, not an exact replay of every earlier fault.

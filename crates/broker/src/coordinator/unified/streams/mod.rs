@@ -12,6 +12,8 @@ pub mod actor;
 pub mod assignor;
 pub mod config;
 pub mod description;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod jvm_assignor;
 pub(crate) mod migration;
 pub mod persistence;
 pub mod state;

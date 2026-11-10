@@ -6,6 +6,12 @@ Krabka embedders can implement `coordinator::unified::streams::assignor::TaskAss
 
 The extension receives resolved tasks, stateful subtopologies, standby count and current member/task state. It returns active and standby target maps. Implementations must be deterministic, non-blocking, non-panicking and return valid assignments. Unknown members/tasks, missing or duplicated active tasks, and process-collocated copies are rejected before installing a target. An assignment error retains the old target and leaves the group dirty for retry; it never silently switches algorithms. Selection changes take effect during the next assignment, through the existing revocation/reconciliation path. Describe v1 reports the selected implementation name.
 
+The stricter output validation is not identical to every released malformed-plugin
+outcome: the [unknown-member wire characterization](../qualification/streams-assignor-invalid-20261108/README.md)
+records Kafka 4.4 accepting a join when tasks are returned for a nonexistent
+member, while native validation rejects it. Valid callback compatibility does
+not imply parity for invalid plugin output.
+
 This API is a native Rust embedding interface, not a stable dynamic-library ABI. The stock executable does not load arbitrary JVM classes, native shared libraries or external processes. Kafka's Java `Configurable`/`AutoCloseable` lifecycle and arbitrary JVM plugins are not compatible with this mechanism. Native extension lifetime is owned by `Arc`; startup configuration belongs to the embedding application. Assignment offloading and panic isolation are not provided. Cross-broker deployments must register identical names and behavior on every broker before storing a group override. A bounded actual-broker [custom-callback wire differential](../tools/kafka44/STREAMS_ASSIGNOR_WIRE.md) now executes equivalent released-JVM and native implementations; arbitrary JVM-plugin ABI/lifecycle compatibility and the remaining distributed/authorization combinations are not claimed.
 
 
@@ -30,3 +36,10 @@ that name and tests its actual execution rather than silently choosing sticky.
 Names are bytewise unique. Group override values use Kafka STRING trimming;
 registration itself does not rewrite plugin-provided names. These measurements
 do not claim arbitrary JVM-plugin compatibility.
+
+A paired [active-member restart](../qualification/streams-assignor-active-restart-20261108/README.md)
+now measures clean reopening with the selected plugin removed: active members
+and previous targets survive, the raw override remains visible, and a new member
+triggers complete cooperative reassignment through sticky. This bounded result
+uses a pinned historical native candidate. Mixed-registry RF3 deployments remain
+outside the supported identical-plugin host contract.

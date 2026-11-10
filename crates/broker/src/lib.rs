@@ -224,6 +224,8 @@ mod profiling_server;
 pub(crate) mod oauth_introspection;
 pub(crate) mod oauth_jwks;
 pub use krabka_audit::operator_keys;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod jvm_extensions;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;

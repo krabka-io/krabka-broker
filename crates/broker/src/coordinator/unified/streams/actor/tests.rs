@@ -2893,3 +2893,6 @@ async fn task_assignor_registry_failure_returns_unknown_server_and_rolls_back_be
 }
 
 mod assignment_failure_model;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod jvm_bridge;

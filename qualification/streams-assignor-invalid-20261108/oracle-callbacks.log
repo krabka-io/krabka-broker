@@ -1,0 +1,9 @@
+ASSIGNOR_CALLBACK first a {0=[0, 1]}
+ASSIGNOR_CALLBACK unknown-member injected-unknown-member
+ASSIGNOR_CALLBACK first a {0=[0, 1]}
+ASSIGNOR_CALLBACK unknown-member injected-unknown-member
+ASSIGNOR_CALLBACK first a {0=[0, 1]}
+[2026-11-08 02:18:24,002] INFO [DynamicConfigPublisher broker id=1] Updating group invalid-assignor-oracle3 with new configuration : streams.assignor.name -> unknown-member (kafka.server.metadata.DynamicConfigPublisher)
+ASSIGNOR_CALLBACK unknown-member injected-unknown-member
+[2026-11-08 02:18:30,036] INFO [DynamicConfigPublisher broker id=1] Updating group invalid-assignor-oracle3 with new configuration : streams.assignor.name -> first (kafka.server.metadata.DynamicConfigPublisher)
+ASSIGNOR_CALLBACK first a {0=[0, 1]}

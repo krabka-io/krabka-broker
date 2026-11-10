@@ -1,0 +1,2 @@
+Exception in thread "main" java.lang.AssertionError: expected 2 DLQ copies, got 1
+	at ShareFaultRf3.main(ShareFaultRf3.java:73)

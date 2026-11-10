@@ -20,10 +20,15 @@ public class StreamsAssignorRestart extends StreamsAssignorWire {
         try (Admin admin = Admin.create(p)) {
             call(new FindCoordinatorRequest.Builder(new FindCoordinatorRequestData().setKeyType((byte)0)
                 .setCoordinatorKeys(List.of(group))).build((short)4));
-            if (args[2].equals("prepare")) {
+            if (args[2].equals("prepare") || args[2].equals("prepare-active")) {
                 admin.createTopics(List.of(new NewTopic(topic, 2, (short)1))).all().get();
                 join("a"); select(admin, "last"); join("b");
                 target("last", "b"); reconcile("b"); configured(admin, "last");
+                if (args[2].equals("prepare-active")) {
+                    require(describe().members().size() == 2, "active members missing");
+                    System.out.println("SCENARIO\tprepared-active-group\tPASS");
+                    return;
+                }
                 for (var m : describe().members()) {
                     var response = ((StreamsGroupHeartbeatResponse)call(new StreamsGroupHeartbeatRequest(
                         new StreamsGroupHeartbeatRequestData().setGroupId(group).setMemberId(m.memberId())
@@ -32,6 +37,51 @@ public class StreamsAssignorRestart extends StreamsAssignorWire {
                 }
                 require(describe().members().isEmpty(), "members did not leave");
                 System.out.println("SCENARIO\tprepared-empty-group\tPASS");
+            } else if (args[2].equals("verify-active")) {
+                configured(admin, "last");
+                require(describe().members().stream().map(m -> m.memberId()).collect(
+                    java.util.stream.Collectors.toSet()).equals(Set.of("a", "b")),
+                    "active members lost across restart");
+                target("sticky", "b"); reconcile("b");
+                System.out.println("SCENARIO\tactive-members-restored-with-previous-target\tPASS");
+                join("c");
+                for (int attempt = 0; attempt < 50; attempt++) {
+                    var g = describe();
+                    var tasks = new HashSet<Integer>();
+                    int count = 0;
+                    boolean settled = g.assignmentEpoch() == g.groupEpoch();
+                    for (var m : g.members()) {
+                        for (var t : m.targetAssignment().activeTasks()) {
+                            require(t.subtopologyId().equals("0"), "unknown subtopology");
+                            tasks.addAll(t.partitions()); count += t.partitions().size();
+                        }
+                        settled &= m.assignment().activeTasks().equals(m.targetAssignment().activeTasks());
+                        var retained = new ArrayList<StreamsGroupHeartbeatRequestData.TaskIds>();
+                        for (var active : m.assignment().activeTasks()) {
+                            var allowed = m.targetAssignment().activeTasks().stream()
+                                .filter(t -> t.subtopologyId().equals(active.subtopologyId())).findFirst();
+                            if (allowed.isPresent()) {
+                                var parts = active.partitions().stream().filter(allowed.get().partitions()::contains).toList();
+                                if (!parts.isEmpty()) retained.add(new StreamsGroupHeartbeatRequestData.TaskIds()
+                                    .setSubtopologyId(active.subtopologyId()).setPartitions(parts));
+                            }
+                        }
+                        var response = ((StreamsGroupHeartbeatResponse)call(new StreamsGroupHeartbeatRequest(
+                            new StreamsGroupHeartbeatRequestData().setGroupId(group).setMemberId(m.memberId())
+                                .setMemberEpoch(m.memberEpoch()).setActiveTasks(retained)
+                                .setStandbyTasks(List.of()).setWarmupTasks(List.of()), (short)1))).data();
+                        require(response.errorCode() == 0, response);
+                    }
+                    require(g.assignorName().equals("sticky"), "removed plugin selected");
+                    if (settled && count == 2 && tasks.equals(Set.of(0, 1))) {
+                        require(g.members().size() == 3, "new member missing");
+                        configured(admin, "last");
+                        System.out.println("SCENARIO\tactive-removal-sticky-reassignment-complete\tPASS");
+                        return;
+                    }
+                    Thread.sleep(100);
+                }
+                throw new IllegalStateException("sticky reassignment did not converge");
             } else if (args[2].equals("verify")) {
                 configured(admin, "last");
                 join("c"); target("sticky", "c"); reconcile("c");

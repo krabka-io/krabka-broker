@@ -44,7 +44,14 @@ a description and its epoch; golden-byte fixtures cover the initial reader/write
 and unknown versions are rejected. The directory is an explicitly selected
 plugin-private namespace, not an alteration of existing internal-topic or log
 formats. It uses an injective hex encoding of group IDs (no path traversal), and writes via a
-synced, exclusively created per-attempt staging file and rename. Independent
+synced, exclusively created per-attempt staging file and rename, followed by a
+parent-directory sync before reporting success. Deletion also syncs the backend
+directory, including retries when the group file is already absent. A failed
+sync returns a transient failure even if the visible mutation has already
+happened; retries remain safe. The operator must provision the backend directory
+and durably persist its ancestors before use. Filesystems/platforms that cannot
+open and sync a directory fail mutation callbacks rather than acknowledge an
+unsynced namespace change. Independent
 backend instances can concurrently publish identical group/epoch descriptions
 without reusing an open staging inode; a delayed writer cannot alter the bytes
 of an envelope already published by another attempt. This is atomic-publication
@@ -56,7 +63,8 @@ while no backend operations are running.
 Operators own directory access permissions, disk capacity, and backups. Filename
 length is bounded by the filesystem; long group IDs can fail storage. The format
 is private and not Kafka's JVM serialization format. Process restart is covered;
-power-loss durability and non-POSIX rename semantics are not qualified.
+file-and-directory sync ordering is implemented, but actual power-loss durability
+(including device write caches) and non-POSIX rename semantics are not qualified.
 
 A local disk directory does not follow a coordinator to another machine. Use a
 shared directory with atomic rename semantics, or implement a distributed native
@@ -174,3 +182,8 @@ Graceful shutdown drains admitted writes before replacement replay; arbitrary
 concurrent owners and stale backend writes still require host fencing. These
 native regressions do not replace an RF3 released-broker concurrent-write
 wire differential or establish filesystem power-loss guarantees.
+
+## Isolated Java embedding adapter
+
+A separate opt-in adapter is documented in [Java extensions](compatibility/kafka-4.4-jvm-extensions.md).
+The native SPI and CLI class-name boundary described above remain unchanged.

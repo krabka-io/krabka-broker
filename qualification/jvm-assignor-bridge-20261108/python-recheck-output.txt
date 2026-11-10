@@ -1,0 +1,13 @@
+Note: AssignorWorker.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+test_bad_version (test_bridge.BridgeTests.test_bad_version) ... ok
+test_cancellation_reaps (test_bridge.BridgeTests.test_cancellation_reaps) ... ok
+test_deadline (test_bridge.BridgeTests.test_deadline) ... ok
+test_exception_death_invalid_output (test_bridge.BridgeTests.test_exception_death_invalid_output) ... ok
+test_first_last_jar_and_conversion (test_bridge.BridgeTests.test_first_last_jar_and_conversion) ... ok
+test_released_sticky_assignor (test_bridge.BridgeTests.test_released_sticky_assignor) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 2.060s
+
+OK

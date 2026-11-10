@@ -1,0 +1,63 @@
+{
+  "base": "5dd04e2ef",
+  "scope": "opt-in broker-integrated pure deterministic Java/JAR assignor via exact-input-keyed async jobs",
+  "checks": {
+    "python_unittest_methods_passed": 6,
+    "streams_suite": {
+      "passed": 300,
+      "failed": 0,
+      "include_ignored": true,
+      "output": "streams-recheck-output.txt"
+    },
+    "targeted_nightly_rustfmt": "passed",
+    "git_diff_check": "passed",
+    "initial_recheck": "broker-recheck-output.txt retains missing-classpath setup failure; configured Streams suite subsequently passes"
+  },
+  "api_jar_sha256": "506c1bd3cf56b3dc3b39319eecfd0c8168062cb17bb0b7f45ce9f97ca36698e2",
+  "source_sha256": {
+    "tools/jvm-assignor/bridge.py": "9f7e357fefa10e1547c2d4b4d6d611550fb7fa6ae289fd34993afbce85e27116",
+    "tools/jvm-assignor/check.sh": "da584f58e9c301a8c404b68b99f73c6503d7be42c949a4713b7e78b7d8300786",
+    "tools/jvm-assignor/README.md": "87bf3bc22b522f15126e3bf8c6b8c837f927c8d6a1f726523eb00572c9d8ebb6",
+    "tools/jvm-assignor/AssignorWorker.java": "ed284b011c8d04847ddb7b0c24838a61266292a30651066c7ee47f3eb6eb0a75",
+    "tools/jvm-assignor/test_bridge.py": "ba27769f8bc20cf9864673afd3f4cd3e8f6c5cfb0a66bce3e13ccb19e7c96139",
+    "tools/jvm-assignor/.gitignore": "c7cd0fc55d4b88bc4ed87b1cdc33670d9046174ab762188a0f2ce10290bb56e0",
+    "tools/jvm-assignor/fixtures/Fixture.java": "d558815452ec79f3e6ea64114186fe9ae386239951b1198942d3b2d83d448dd3",
+    "crates/broker/Cargo.toml": "b164bcc8117d42a7c577b0581ee08d8c57a2f93f49d774a820f0b7143f68a6f2",
+    "crates/broker/src/coordinator/unified/streams/mod.rs": "1641534859808fb9f49cdbf26a69cb1fff6f4f07df1f89fb1e2d83222a05feac",
+    "crates/broker/src/coordinator/unified/streams/jvm_assignor.rs": "8f5c7d93b2088c72b6a37dc9a708837f3284fe31205c90d12faf754b99dcc2cf",
+    "crates/broker/src/coordinator/unified/streams/actor/reconciliation.rs": "876835a71ba84b12b90e527b4af4f624dcf234b0efec93a467f619fa10a3cd18",
+    "crates/broker/src/coordinator/unified/streams/actor/jvm_tests.rs": "16952fe62f905273bc06437ffe7838a811c039d6bdc3c639a0d79672edfb1d01",
+    "crates/broker/src/coordinator/unified/streams/actor/tests.rs": "e22ec42484cff4ab1c3bc00c0f95152a180fffbe6d36b431b4badb9c44f42203",
+    "crates/broker/src/coordinator/unified/streams/actor/tests/jvm_bridge.rs": "5688c8ce4817afd1e2520d9dfa504752a3c30ed83adc3ee799bea16c312e9a7e",
+    "qualification/native-extension-assessment-20261108/README.md": "cff801cdb8e03ac2f4430e5c9b41f343c52884e3c1e7567f5fcd82833996f7c5",
+    "crates/broker/src/coordinator/unified/streams/state/member.rs": "715187c4bcc0cf2483b5d47e3f3b989ae77d7caac1ad9a5d5406e8614f6039ab"
+  },
+  "unsupported": [
+    "topology storage Java plugin adapter",
+    "DLQ Java manager adapter",
+    "full metadata fidelity",
+    "automatic classpath distribution/class discovery",
+    "stateful nondeterministic assignors"
+  ],
+  "status": "qualified for bounded opt-in deterministic assignor scope; not universal JVM parity",
+  "broker_test_binary": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/projects/kafka44-storage-gap/target/debug/deps/krabka_broker-914abe402724085f",
+    "sha256": "f7132a82e50db2e55fc8d2adec46c00d80687958b878c99630c871556945b3ef"
+  },
+  "historical_checks": {
+    "python_unittest_methods_passed": 6,
+    "broker_tests": {
+      "passed": 4,
+      "failed": 1,
+      "failure": "first join without process_id livelocks on regenerated native fallback UUID after pending rollback"
+    },
+    "targeted_nightly_rustfmt": "passed",
+    "git_diff_check": "passed"
+  },
+  "historical_status": "unqualified broker integration; pending-state admission fix required",
+  "historical_broker_test_binary": {
+    "path": "/home/matt/.openclaw/workspace/coordinator/projects/kafka44-storage-gap/target/debug/deps/krabka_broker-914abe402724085f",
+    "sha256": "f7132a82e50db2e55fc8d2adec46c00d80687958b878c99630c871556945b3ef"
+  },
+  "retry_fix": "Omitted process IDs use the stable member identity, preserving exact-input job keys across rollback and actor recreation; explicit process IDs remain authoritative."
+}

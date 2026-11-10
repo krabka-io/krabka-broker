@@ -134,6 +134,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if env::var_os("STREAMS_FIXTURE_ASSIGNORS").is_some() {
         streams_assignors::register(&mut config.streams_group)?;
     }
+    // Isolated ACL/callback qualification only: privileged plaintext control
+    // listener plus one synthetic SASL/PLAIN actor on LISTEN+2.
+    if env::var_os("STREAMS_FIXTURE_ACL").is_some() {
+        use {
+            krabka_broker::{authorizer::SimpleAclAuthorizer, config::ListenerSpec},
+            krabka_security::{ListenerProtocol, SaslMechanism},
+        };
+        let mut sasl_addr = config.listen_addr;
+        sasl_addr.set_port(sasl_addr.port().checked_add(2).ok_or("no SASL port")?);
+        config.listeners = vec![
+            ListenerSpec {
+                name: "PLAINTEXT".into(),
+                bind_addr: config.listen_addr,
+                advertised: listen.clone(),
+                protocol: ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+            },
+            ListenerSpec {
+                name: "SASL_PLAINTEXT".into(),
+                bind_addr: sasl_addr,
+                advertised: sasl_addr.to_string(),
+                protocol: ListenerProtocol::SaslPlaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+            },
+        ];
+        config.inter_broker_listener_name = "PLAINTEXT".into();
+        config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+        config
+            .plain_credentials
+            .insert("actor".into(), "qualification-fixture-password".into());
+        config.super_users.insert("ANONYMOUS".into());
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+    }
     let broker = Broker::start(config).await?;
     println!("READY {}", broker.listen_addr());
     signal::ctrl_c().await?;

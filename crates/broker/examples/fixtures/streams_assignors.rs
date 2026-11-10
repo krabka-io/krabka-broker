@@ -12,6 +12,7 @@ pub fn register(config: &mut StreamsGroupConfig) -> Result<(), String> {
         ("first", false, false),
         ("last", true, false),
         ("failure", false, true),
+        ("unknown-member", false, false),
     ] {
         config.task_assignors.register(Arc::new(FixtureAssignor {
             name,
@@ -37,6 +38,13 @@ impl TaskAssignor for FixtureAssignor {
     ) -> Result<StreamsAssignment, String> {
         if self.failure {
             return Err("injected assignor failure".into());
+        }
+        if self.name == "unknown-member" {
+            eprintln!("ASSIGNOR_CALLBACK unknown-member injected-unknown-member");
+            return Ok(StreamsAssignment {
+                active: [("injected-unknown-member".into(), input.tasks.clone())].into(),
+                ..Default::default()
+            });
         }
         let mut ids: Vec<_> = members
             .iter()

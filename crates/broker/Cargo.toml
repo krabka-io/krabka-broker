@@ -149,6 +149,8 @@ exponential-backoff = "2.1.1"
 # validation, OTLP forwarding of client metrics, the metrics and health
 # servers.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Isolated Java Streams assignor worker; unavailable on WASI.
+tokio = { workspace = true, features = ["process"] }
 # The host name a wildcard-bound controller advertises. WASI has none.
 hostname = { workspace = true }
 # KFC-7 broker-side schema validation: the Confluent wire framing, the

@@ -1,0 +1,14 @@
+Compiled from "TaskAssignor.java"
+public interface org.apache.kafka.coordinator.group.api.streams.assignor.TaskAssignor {
+  public abstract java.lang.String name();
+  public abstract org.apache.kafka.coordinator.group.api.streams.assignor.GroupAssignment assign(org.apache.kafka.coordinator.group.api.streams.assignor.GroupSpec, org.apache.kafka.coordinator.group.api.streams.assignor.TopologyDescriber) throws org.apache.kafka.coordinator.group.api.streams.assignor.TaskAssignorException;
+}
+Compiled from "InMemoryTopologyDescriptionPlugin.java"
+public class org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin implements org.apache.kafka.coordinator.group.api.streams.StreamsGroupTopologyDescriptionPlugin {
+  public org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin();
+  public void configure(java.util.Map<java.lang.String, ?>);
+  public java.util.concurrent.CompletableFuture<java.lang.Void> setTopology(java.lang.String, int, org.apache.kafka.coordinator.group.api.streams.StreamsGroupTopologyDescription);
+  public java.util.concurrent.CompletableFuture<java.lang.Void> deleteTopology(java.lang.String);
+  public java.util.concurrent.CompletableFuture<org.apache.kafka.coordinator.group.api.streams.StreamsGroupTopologyDescription> getTopology(java.lang.String, int);
+  public void close();
+}

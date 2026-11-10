@@ -141,21 +141,23 @@ impl StreamsMemberState {
 
     /// Constructs a newly joining member at epoch 0 with no assignment.
     ///
-    /// When the client supplies no `process_id`, this method synthesizes a
-    /// random UUID. A caller that already knows the process id should set the
-    /// field afterwards.
+    /// When the client supplies no `process_id`, this method uses a
+    /// member-scoped identity. It must survive a rejected join and actor
+    /// recreation so asynchronous assignors can consume the retry result.
+    /// A caller that knows the process id should set the field afterwards.
     pub fn joining(
         member_id: impl Into<String>,
         client_id: impl Into<String>,
         client_host: impl Into<String>,
     ) -> Self {
+        let member_id = member_id.into();
         Self {
-            member_id: member_id.into(),
+            process_id: member_id.clone(),
+            member_id,
             instance_id: None,
             rack_id: None,
             client_id: client_id.into(),
             client_host: client_host.into(),
-            process_id: uuid::Uuid::new_v4().to_string(),
             user_endpoint: None,
             client_tags: Vec::new(),
             rebalance_timeout_ms: 0,

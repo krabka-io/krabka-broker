@@ -1,0 +1,12 @@
+
+running 4 tests
+test share_partition::state::dlq_model::confirmed_phase_two_persist_does_not_requeue ... ok
+test share_partition::state::dlq_model::failed_phase_two_persist_requeues_after_success_or_denial ... ok
+[dlq_archiving_mutant] unique_states=46 generated=67 max_depth=8
+[dlq_archiving_mutant] no_stranded_archiving fails at depth 2: [Persist, Crash]
+[dlq_archiving_mutant] recovered_archiving_has_work fails at depth 2: [Persist, Crash]
+test share_partition::state::dlq_model::dlq_model_detects_lost_recovery_mutant ... ok
+[dlq_archiving] unique_states=128 generated=185 max_depth=11
+test share_partition::state::dlq_model::dlq_archiving_fault_schedules ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 9149 filtered out; finished in 0.00s

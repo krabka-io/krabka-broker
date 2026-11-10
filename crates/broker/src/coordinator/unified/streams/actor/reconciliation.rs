@@ -351,10 +351,9 @@ mod custom_assignor_tests {
         },
         assert2::assert,
     };
-    #[test]
-    fn task_assignor_registry_reassignment_uses_cooperative_revocation_and_retains_target_on_error()
-    {
-        let mut actor = ActorState::new("custom-group".into());
+    #[cfg(test)]
+    pub(super) fn assignment_fixture(group: &str) -> (ActorState, StreamsGroupTopologyValue) {
+        let mut actor = ActorState::new(group.into());
         for id in ["a", "b"] {
             let mut member = StreamsMemberState::joining(id, "client", "host");
             member.process_id = id.into();
@@ -367,6 +366,12 @@ mod custom_assignor_tests {
                 ..Default::default()
             }],
         };
+        (actor, topology)
+    }
+    #[test]
+    fn task_assignor_registry_reassignment_uses_cooperative_revocation_and_retains_target_on_error()
+    {
+        let (mut actor, topology) = assignment_fixture("custom-group");
         let tasks = [("s".into(), 1)].into();
         let mut config = registered_config();
         compute_and_install_target(&mut actor, &config, &topology, &tasks).expect("assignment");
@@ -398,3 +403,7 @@ mod custom_assignor_tests {
         assert!(actor.state.dirty);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "jvm_tests.rs"]
+mod jvm_tests;
