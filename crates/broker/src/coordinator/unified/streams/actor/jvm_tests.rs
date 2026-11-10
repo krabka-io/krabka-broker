@@ -1,11 +1,7 @@
 //! Real released-JAR assignment through the production actor target installer.
 use {
     super::*,
-    crate::coordinator::unified::streams::{
-        jvm_assignor::{JvmAssignorOptions, JvmTaskAssignor},
-        persistence::StoredSubtopology,
-        state::StreamsMemberState,
-    },
+    crate::coordinator::unified::streams::jvm_assignor::{JvmAssignorOptions, JvmTaskAssignor},
     assert2::assert,
     std::{env, path::PathBuf, time::Duration},
     tokio::time::{sleep, timeout},
@@ -25,19 +21,7 @@ fn options(class_name: &str) -> JvmAssignorOptions {
 #[tokio::test]
 #[ignore = "requires compiled AssignorWorker and released Kafka 4.4 JARs; see tools/jvm-assignor/README.md"]
 async fn jvm_assignor_released_jar_installs_target_and_fences_changed_membership() {
-    let mut actor = ActorState::new("java-group".into());
-    for id in ["a", "b"] {
-        let mut member = StreamsMemberState::joining(id, "client", "host");
-        member.process_id = id.into();
-        actor.state.add_or_update_member(member);
-    }
-    let topology = StreamsGroupTopologyValue {
-        epoch: 1,
-        subtopologies: vec![StoredSubtopology {
-            subtopology_id: "s".into(),
-            ..Default::default()
-        }],
-    };
+    let (mut actor, topology) = custom_assignor_tests::assignment_fixture("java-group");
     let tasks = BTreeMap::from([("s".into(), 2)]);
     let mut config = StreamsGroupConfig::default();
     config
