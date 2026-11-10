@@ -71,7 +71,8 @@ public final class ExtensionWorker {
                     }
                     response.put("ok", true);
                 } catch (Exception e) {
-                    Throwable cause = e; while (cause.getCause() != null) cause = cause.getCause();
+                    Throwable cause = e;
+                    while ((cause instanceof java.util.concurrent.ExecutionException || cause instanceof java.util.concurrent.CompletionException) && cause.getCause() != null) cause = cause.getCause();
                     response.put("ok", false); response.put("permanent", cause instanceof StreamsTopologyDescriptionPermanentFailureException);
                 }
                 output.println(response); output.flush();

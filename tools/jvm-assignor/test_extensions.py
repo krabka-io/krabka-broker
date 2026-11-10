@@ -61,3 +61,11 @@ class Extensions(unittest.TestCase):
         self.assertTrue(response['permanent'])
         self.assertTrue(self.call(p, 'stop')['ok'])
         self.assertEqual(p.wait(timeout=5), 0)
+
+    def test_caused_permanent_and_transient_storage_failures(self):
+        p = self.start('storage', 'ExtensionFixture$PermanentStorageFixture')
+        for group, permanent in [('caused', True), ('transient', False)]:
+            with self.subTest(group=group):
+                response = self.call(p, 'set', group=group, epoch=1, description=dict(subtopologies=[], global_stores=[]))
+                self.assertFalse(response['ok'])
+                self.assertEqual(response['permanent'], permanent)

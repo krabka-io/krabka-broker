@@ -16,7 +16,10 @@ public final class ExtensionFixture implements ShareGroupDLQManager {
     public static class PermanentStorageFixture extends org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin {
     public PermanentStorageFixture() {}
     @Override public CompletableFuture<Void> setTopology(String group, int epoch, org.apache.kafka.coordinator.group.api.streams.StreamsGroupTopologyDescription topology) {
-        return CompletableFuture.failedFuture(new org.apache.kafka.coordinator.group.api.streams.StreamsTopologyDescriptionPermanentFailureException("permanent fixture rejection"));
+        var failure = new org.apache.kafka.coordinator.group.api.streams.StreamsTopologyDescriptionPermanentFailureException("permanent fixture rejection");
+        if (group.equals("caused")) failure.initCause(new IllegalStateException("underlying storage failure"));
+        if (group.equals("transient")) return CompletableFuture.failedFuture(new IllegalStateException("retryable fixture failure"));
+        return CompletableFuture.failedFuture(new CompletionException(failure));
     }
 }
 

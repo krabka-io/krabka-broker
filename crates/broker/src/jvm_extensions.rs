@@ -397,7 +397,7 @@ mod tests {
             global_stores: vec![],
         };
         assert_eq!(
-            backend.set("g", 1, &description).await,
+            backend.set("caused", 1, &description).await,
             Err(StorageFailure::Permanent)
         );
         backend.close().await.unwrap();
