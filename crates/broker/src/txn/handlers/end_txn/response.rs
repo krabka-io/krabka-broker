@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
         // (version, error code, expected code)
-        let cases = producer_fenced_cases(0);
+        let cases = producer_fenced_cases();
         for (version, error_code, expected) in cases {
             let expected = EndTxnResponse {
                 throttle_time_ms: 0,

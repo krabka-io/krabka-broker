@@ -1492,73 +1492,6 @@ mod tests {
         check!(shape[..6] == replace_member_shape(&first.member_id, &second.member_id)[..]);
     }
 
-    /// Kafka's `throwIfConsumerGroupIsFull` and
-    /// `throwIfClassicProtocolIsNotSupported`, which refuse a classic join to
-    /// a consumer group before anything else: (label, max size, protocol
-    /// type, protocol name) to the error, which carries only the code.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_classic_join_that_the_group_cannot_take_is_refused() {
-        let rows = [
-            (
-                "a full group",
-                2,
-                "consumer",
-                "range",
-                codes::GROUP_MAX_SIZE_REACHED,
-            ),
-            (
-                "another protocol type",
-                10,
-                "connect",
-                "range",
-                codes::INCONSISTENT_GROUP_PROTOCOL,
-            ),
-            (
-                "a protocol the classic member lacks",
-                10,
-                "consumer",
-                "roundrobin",
-                codes::INCONSISTENT_GROUP_PROTOCOL,
-            ),
-        ];
-        for (label, max_size, protocol_type, protocol_name, want) in rows {
-            let (coord, _log) = make_coordinator_with_topic_config("t", 2, NextGenConfig {
-                migration_policy: Policy::Bidirectional,
-                max_size,
-                ..NextGenConfig::assigning_at_once()
-            });
-            let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
-            native_join(&handle, "native", None).await;
-            assert!(
-                rpc::classic_join(&handle, "m-classic", "t")
-                    .await
-                    .error_code
-                    == codes::NONE,
-                "{label}"
-            );
-
-            let refused = send_join_at(
-                &handle,
-                join_request("m-new", None, protocol_type, protocol_name),
-                9,
-            )
-            .await;
-
-            check!(
-                refused
-                    == JoinResult {
-                        error_code: want,
-                        ..JoinResult::default()
-                    },
-                "{label}"
-            );
-            check!(
-                member_ids(&handle).await == ["m-classic", "native"],
-                "{label}"
-            );
-        }
-    }
-
     /// Kafka's `validateOnlineDowngradeWithReplacedMember`: a static classic
     /// member that replaces the group's last member of the consumer protocol
     /// downgrades the group in the join's own batch. The replacement records
@@ -1859,43 +1792,102 @@ mod tests {
         expected.sort_unstable();
         check!(hosted_classic_join.members_after.as_ref() == Some(&expected));
     }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "An empty consumer group becomes classic"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_join_against_a_consumer_group_follows_kafka(
-        hosted_classic_join: HostedClassicJoin,
-    ) {
+    /// A consumer group with a native and a classic member, and the code the
+    /// classic member's own join answered.
+    struct CapacityGroup {
+        _coordinator: Arc<GroupCoordinator>,
+        handle: Arc<GroupActorHandle>,
+        classic_join_code: i16,
     }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "A live consumer group refuses classic members when migration is disabled"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_consumer_join_admission_1(hosted_classic_join: HostedClassicJoin) {}
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "Bidirectional migration admits a dynamic classic member through member-id allocation"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_consumer_join_admission_2(hosted_classic_join: HostedClassicJoin) {}
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "An assigned static member cannot claim an unheld instance"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_static_classic_rejoin_with_a_member_id_is_checked_as_kafka_does(
-        hosted_classic_join: HostedClassicJoin,
-    ) {
+
+    /// What a new classic member's join answered, and the members after it.
+    struct CapacityJoin {
+        response: JoinResult,
+        members: Vec<String>,
     }
-    #[rstest_bdd_macros::scenario(
-        path = "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
-        name = "Another member cannot claim the held static instance"
-    )]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn another_classic_member_cannot_claim_a_held_instance(
-        hosted_classic_join: HostedClassicJoin,
-    ) {
+
+    /// A classic join to a consumer group that may not be able to take it.
+    struct GroupCapacity {
+        group: krabka_bdd::Given<CapacityGroup>,
+        join: krabka_bdd::Given<CapacityJoin>,
     }
+
+    #[rstest::fixture]
+    fn group_capacity() -> GroupCapacity {
+        GroupCapacity {
+            group: krabka_bdd::Given::new(
+                "group",
+                "Given consumer group g holds a native member and a classic member and at most \
+                 <limit> members",
+            ),
+            join: krabka_bdd::Given::new(
+                "join",
+                "When a new classic member joins g with protocol type <type> and protocol \
+                 <protocol>",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given(
+        "consumer group g holds a native member and a classic member and at most {limit} members"
+    )]
+    async fn consumer_group_with_a_member_limit(group_capacity: &mut GroupCapacity, limit: usize) {
+        let (coordinator, _log) = make_coordinator_with_topic_config("t", 2, NextGenConfig {
+            migration_policy: Policy::Bidirectional,
+            max_size: limit,
+            ..NextGenConfig::assigning_at_once()
+        });
+        let handle = coordinator.get_or_create_group("g", GroupKindTag::Consumer);
+        native_join(&handle, "native", None).await;
+        let classic = rpc::classic_join(&handle, "m-classic", "t").await;
+        group_capacity.group.set(CapacityGroup {
+            _coordinator: coordinator,
+            handle,
+            classic_join_code: classic.error_code,
+        });
+    }
+
+    #[krabka_bdd::when(
+        "a new classic member joins g with protocol type {protocol_type} and protocol {protocol}"
+    )]
+    async fn new_classic_member_joins(
+        group_capacity: &mut GroupCapacity,
+        protocol_type: String,
+        protocol: String,
+    ) {
+        let handle = &group_capacity.group.get().handle;
+        let response = send_join_at(
+            handle,
+            join_request("m-new", None, &protocol_type, &protocol),
+            9,
+        )
+        .await;
+        let members = member_ids(handle).await;
+        group_capacity.join.set(CapacityJoin { response, members });
+    }
+
+    #[krabka_bdd::then(
+        "the classic join answers only error {error} and the group keeps its two members"
+    )]
+    fn refused_classic_join(group_capacity: &GroupCapacity, error: i16) {
+        let join = group_capacity.join.get();
+        check!(group_capacity.group.get().classic_join_code == codes::NONE);
+        check!(
+            (&join.response, join.members.as_slice())
+                == (
+                    &JoinResult {
+                        error_code: error,
+                        ..JoinResult::default()
+                    },
+                    &["m-classic".to_owned(), "native".to_owned()][..]
+                )
+        );
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/actor/classic_join.feature",
+        fixtures = [hosted_classic_join: HostedClassicJoin, group_capacity: GroupCapacity],
+        runtime = "tokio-multi-thread",
+        workers = 2,
+    );
 }

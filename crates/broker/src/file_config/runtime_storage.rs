@@ -173,19 +173,6 @@ mod tests {
         assert!(cfg.log_config.delivery_clock_uncertainty == millis(750));
         assert!(cfg.log_config.delivery_clock_uncertainty.millis_i64() == 750);
     }
-    #[test]
-    fn message_max_bytes_round_trips_into_the_log_config() {
-        // Kafka's broker-wide `message.max.bytes` is the default behind every
-        // topic's `max.message.bytes`, and in krabka that default is the base
-        // `LogConfig` the produce gate reads when a topic sets none.
-        let cfg = configured(
-            "[runtime]\nmessage_max_bytes = \"2KiB\"\n",
-            "parse runtime config",
-        )
-        .expect("apply runtime config");
-
-        assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
-    }
 
     /// Zero is a value here, not a disabled key: it limits the read-ahead
     /// hint to the fetch's own range. A fractional byte count is refused.

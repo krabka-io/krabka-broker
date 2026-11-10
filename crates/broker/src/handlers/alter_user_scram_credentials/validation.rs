@@ -173,50 +173,25 @@ mod tests {
 
     use {
         super::*,
-        crate::{
-            broker::{Broker, BrokerHandle},
-            handlers::{
-                alter_user_scram_credentials::{
-                    answer,
-                    test_support::{
-                        KAFKA_UNACCEPTABLE_CREDENTIAL, KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion,
-                        expected_response, expected_result, process_deletion, process_upsertion,
-                        start_broker, test_context, valid_upsertion,
-                    },
+        crate::handlers::{
+            alter_user_scram_credentials::{
+                answer,
+                test_support::{
+                    KAFKA_UNACCEPTABLE_CREDENTIAL, deletion, expected_response, expected_result,
+                    process_deletion, process_upsertion, start_broker, test_context,
+                    valid_upsertion,
                 },
-                test_support::allow_all_authorizer,
             },
+            test_support::allow_all_authorizer,
         },
         assert2::assert,
+        krabka_bdd::{Given, Outcome, ScenarioSpec, World},
         krabka_metadata::{MetadataRecord, ScramCredentialRecord},
         krabka_protocol::owned::{
             alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
             alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
         },
-        std::sync::Arc,
     };
-
-    /// Deletion validation starts with an empty pending-record buffer.
-    struct DeletionFixture {
-        handle: BrokerHandle,
-        directory: tempfile::TempDir,
-        broker: Arc<Broker>,
-        records: Vec<MetadataRecord>,
-    }
-    async fn deletion_fixture() -> DeletionFixture {
-        let HandlerStartedBroker {
-            broker: handle,
-            dir: directory,
-        } = start_broker(allow_all_authorizer()).await;
-        let broker = handle.broker_arc_for_test();
-        let records = Vec::new();
-        DeletionFixture {
-            handle,
-            directory,
-            broker,
-            records,
-        }
-    }
 
     #[test]
     fn wire_to_mech_maps_both_scram_variants() {
@@ -231,107 +206,140 @@ mod tests {
         }
     }
 
-    #[test]
-    fn process_upsertion_rejects_unknown_mechanism_with_unsupported_sasl_mechanism() {
-        let mut records = Vec::new();
-        let mut upsertion = valid_upsertion("alice");
-        upsertion.mechanism = 99;
-
-        let r = process_upsertion(upsertion, true, &mut records);
-
-        assert!(
-            r == expected_result(
-                "alice",
-                KAFKA_UNSUPPORTED_SASL_MECHANISM,
-                Some("Unknown SCRAM mechanism"),
-            )
-        );
-        assert!(records.is_empty());
+    /// Whether the alteration holds cluster `ALTER` permission.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum ClusterAlter {
+        With,
+        Without,
     }
 
-    #[derive(Default)]
-    struct ScramIterationContract {
-        upsertion: Option<ScramCredentialUpsertion>,
-        authorized: bool,
+    /// The one credential alteration a scenario validates.
+    enum Alteration {
+        Upsertion(ScramCredentialUpsertion),
+        Deletion(ScramCredentialDeletion),
+    }
+
+    /// One alteration, the broker a deletion is checked against, and what
+    /// validating it answered and staged.
+    struct ScramValidation {
+        alteration: Given<Alteration>,
+        broker: Given<HandlerStartedBroker>,
         records: Vec<MetadataRecord>,
-        result: Option<AlterUserScramCredentialsResult>,
+        result: Given<AlterUserScramCredentialsResult>,
     }
 
     #[rstest::fixture]
-    fn scram_iterations() -> ScramIterationContract {
-        ScramIterationContract {
-            ..ScramIterationContract::default()
+    fn scram_validation() -> ScramValidation {
+        ScramValidation {
+            alteration: Given::new(
+                "alteration",
+                "Given alice supplies a credential upsertion of mechanism type <mechanism> with \
+                 <iterations> iterations",
+            ),
+            broker: Given::new(
+                "broker",
+                "Given alice asks to delete her mechanism type <mechanism> credential, which \
+                 does not exist",
+            ),
+            records: Vec::new(),
+            result: Given::new(
+                "result",
+                "When the controller validates the alteration <permission> cluster ALTER \
+                 permission",
+            ),
         }
     }
 
-    #[rstest_bdd_macros::given(
-        "alice supplies a SCRAM-SHA-256 credential upsertion with {iterations} iterations"
+    impl World for ScramValidation {
+        async fn after(&mut self, _scenario: &ScenarioSpec, _outcome: &Outcome) {
+            if self.broker.is_set() {
+                self.broker.take().broker.shutdown().await;
+            }
+        }
+    }
+
+    #[krabka_bdd::given(
+        "alice supplies a credential upsertion of mechanism type {mechanism} with {iterations} iterations"
     )]
-    fn scram_iteration_request(scram_iterations: &mut ScramIterationContract, iterations: i32) {
-        let mut upsertion = valid_upsertion("alice");
-        upsertion.iterations = iterations;
-        scram_iterations.upsertion = Some(upsertion);
-    }
-
-    #[rstest_bdd_macros::given("the SCRAM alteration has cluster ALTER permission")]
-    fn authorize_scram_iteration_request(scram_iterations: &mut ScramIterationContract) {
-        scram_iterations.authorized = true;
-    }
-
-    #[rstest_bdd_macros::when("the controller validates the SCRAM credential upsertion")]
-    fn validate_scram_iterations(scram_iterations: &mut ScramIterationContract) {
-        scram_iterations.result = Some(process_upsertion(
-            scram_iterations
-                .upsertion
-                .take()
-                .expect("a credential upsertion was given"),
-            scram_iterations.authorized,
-            &mut scram_iterations.records,
-        ));
-    }
-
-    #[rstest_bdd_macros::then(
-        "alice's SCRAM alteration returns error {code} with message {message}"
-    )]
-    fn scram_iteration_response(
-        scram_iterations: &ScramIterationContract,
-        code: i16,
-        message: String,
+    fn alice_supplies_upsertion(
+        scram_validation: &mut ScramValidation,
+        mechanism: i8,
+        iterations: i32,
     ) {
-        let message: Option<String> =
-            serde_json::from_str(&message).expect("nullable JSON diagnostic");
-        let expected = expected_result("alice", code, message.as_deref());
-        assert!(scram_iterations.result.as_ref() == Some(&expected));
+        let mut upsertion = valid_upsertion("alice");
+        upsertion.mechanism = mechanism;
+        upsertion.iterations = iterations;
+        scram_validation
+            .alteration
+            .set(Alteration::Upsertion(upsertion));
     }
 
-    #[rstest_bdd_macros::then("exactly {count} credential metadata records are staged")]
-    fn scram_iteration_records(scram_iterations: &ScramIterationContract, count: usize) {
-        assert!(scram_iterations.records.len() == count);
+    #[krabka_bdd::given(
+        "alice asks to delete her mechanism type {mechanism} credential, which does not exist"
+    )]
+    async fn alice_asks_deletion(scram_validation: &mut ScramValidation, mechanism: i8) {
+        let mut deletion = deletion("alice");
+        deletion.mechanism = mechanism;
+        scram_validation
+            .alteration
+            .set(Alteration::Deletion(deletion));
+        scram_validation
+            .broker
+            .set(start_broker(allow_all_authorizer()).await);
     }
 
-    rstest_bdd_macros::scenarios!("tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature", fixtures = [scram_iterations: ScramIterationContract]);
+    #[krabka_bdd::when(
+        "the controller validates the alteration {permission} cluster ALTER permission"
+    )]
+    fn validate_alteration(scram_validation: &mut ScramValidation, permission: ClusterAlter) {
+        let authorized = matches!(permission, ClusterAlter::With);
+        let result = match scram_validation.alteration.take() {
+            Alteration::Upsertion(upsertion) => {
+                process_upsertion(upsertion, authorized, &mut scram_validation.records)
+            }
+            Alteration::Deletion(deletion) => process_deletion(
+                &scram_validation.broker.get().broker.broker_arc_for_test(),
+                deletion,
+                authorized,
+                &mut scram_validation.records,
+            ),
+        };
+        scram_validation.result.set(result);
+    }
 
+    #[krabka_bdd::then("alice's SCRAM alteration is refused with error {code} saying {message}")]
+    fn alteration_refused(scram_validation: &ScramValidation, code: i16, message: String) {
+        assert!(scram_validation.result.get() == &expected_result("alice", code, Some(&message)));
+    }
+
+    #[krabka_bdd::then("no credential metadata record is staged")]
+    fn nothing_staged(scram_validation: &ScramValidation) {
+        assert!(scram_validation.records.is_empty());
+    }
+
+    #[krabka_bdd::then("alice's SCRAM alteration is accepted with one staged credential record")]
+    fn alteration_accepted(scram_validation: &ScramValidation) {
+        assert!(
+            (
+                scram_validation.result.get(),
+                scram_validation.records.len()
+            ) == (&expected_result("alice", 0, None), 1)
+        );
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature",
+        fixtures = [scram_validation: ScramValidation],
+        world = scram_validation,
+        runtime = "tokio-multi-thread",
+        workers = 2,
+    );
+
+    /// An accepted upsertion stages the credential Kafka derives from the
+    /// salted password: its stored and server keys, salt and iterations.
     #[test]
-    fn process_upsertion_validates_boundaries_and_records_success() {
+    fn process_upsertion_stages_the_derived_credential() {
         let mut records = Vec::new();
-
-        let rejections = [(
-            {
-                let mut u = valid_upsertion("too-few");
-                u.iterations = MIN_SCRAM_ITERATIONS - 1;
-                u
-            },
-            "Too few iterations",
-        )];
-        for (upsertion, msg) in rejections {
-            let user = upsertion.name.clone();
-            let r = process_upsertion(upsertion, true, &mut records);
-            assert!(
-                r == expected_result(&user, codes::UNACCEPTABLE_CREDENTIAL, Some(msg)),
-                "case: {user}"
-            );
-            assert!(records.is_empty(), "case: {user}");
-        }
 
         let r = process_upsertion(valid_upsertion("alice"), true, &mut records);
         assert!(r == expected_result("alice", 0, None));
@@ -348,89 +356,6 @@ mod tests {
             iterations: u32::try_from(MIN_SCRAM_ITERATIONS).expect("min fits"),
         })];
         assert!(records == expected_records);
-    }
-
-    #[test]
-    fn process_upsertion_rejects_unauthorized_users() {
-        let mut records = Vec::new();
-
-        let r = process_upsertion(valid_upsertion("bob"), false, &mut records);
-        let expected = expected_result(
-            "bob",
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("Request AlterUserScramCredentials needs ALTER permission."),
-        );
-        assert!(r == expected);
-        assert!(records.is_empty());
-    }
-
-    #[tokio::test]
-    async fn process_deletion_rejects_missing_credentials() {
-        let DeletionFixture {
-            handle: broker_handle,
-            directory: _dir,
-            broker,
-            mut records,
-        } = deletion_fixture().await;
-
-        let r = process_deletion(&broker, deletion("alice"), true, &mut records);
-        assert!(
-            r.error_code == 91,
-            "missing SCRAM deletion target must use Kafka RESOURCE_NOT_FOUND (91), got {}",
-            r.error_code
-        );
-        let expected = expected_result(
-            "alice",
-            codes::RESOURCE_NOT_FOUND,
-            Some("Attempt to delete a user credential that does not exist"),
-        );
-        assert!(r == expected);
-        assert!(records.is_empty());
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn process_deletion_rejects_unauthorized_users() {
-        let DeletionFixture {
-            handle: broker_handle,
-            directory: _dir,
-            broker,
-            mut records,
-        } = deletion_fixture().await;
-
-        let r = process_deletion(&broker, deletion("alice"), false, &mut records);
-        let expected = expected_result(
-            "alice",
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("Request AlterUserScramCredentials needs ALTER permission."),
-        );
-        assert!(r == expected);
-        assert!(records.is_empty());
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn process_deletion_rejects_unknown_mechanism_with_unsupported_sasl_mechanism() {
-        let DeletionFixture {
-            handle: broker_handle,
-            directory: _dir,
-            broker,
-            mut records,
-        } = deletion_fixture().await;
-        let mut deletion = deletion("alice");
-        deletion.mechanism = 99;
-
-        let r = process_deletion(&broker, deletion, true, &mut records);
-
-        assert!(
-            r == expected_result(
-                "alice",
-                KAFKA_UNSUPPORTED_SASL_MECHANISM,
-                Some("Unknown SCRAM mechanism"),
-            )
-        );
-        assert!(records.is_empty());
-        broker_handle.shutdown().await;
     }
 
     #[tokio::test]

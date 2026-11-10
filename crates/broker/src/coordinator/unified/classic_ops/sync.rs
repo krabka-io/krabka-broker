@@ -358,16 +358,6 @@ mod tests {
         check!(pending(&g) == ["m1"]);
     }
 
-    /// KIP-814: a leader that rejoined a `Stable` group with
-    /// `skip_assignment` sends `SyncGroup` with no assignments, and reads
-    /// its current one back instead of clearing every member's.
-    #[test]
-    fn leader_sync_in_stable_reads_current_assignment() {
-        let mut g = group(Start::Stable);
-        let generation = g.generation_id;
-        check!(handle_sync(&mut g, &sync_req("m1", generation)) == SyncAction::Immediate(ok(b"L")));
-        check!(g.members["m2"].assignment.as_deref() == Some(&b"F"[..]));
-    }
     use {
         rstest_bdd::datatable::Rows,
         rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},

@@ -29,9 +29,10 @@ use {
     krabka_log::ProducerId,
 };
 
-/// Independent expected wire codes shared by the utility and response tests.
+/// Independent expected wire codes for the `EndTxn` response tests, which
+/// drive [`producer_fenced_wire_code`] through the error response.
 #[cfg(test)]
-pub fn producer_fenced_cases(other_code_version: i16) -> [(i16, i16, i16); 5] {
+pub fn producer_fenced_cases() -> [(i16, i16, i16); 5] {
     use crate::codes::{CONCURRENT_TRANSACTIONS, INVALID_PRODUCER_EPOCH, PRODUCER_FENCED};
 
     [
@@ -39,27 +40,6 @@ pub fn producer_fenced_cases(other_code_version: i16) -> [(i16, i16, i16); 5] {
         (1, PRODUCER_FENCED, INVALID_PRODUCER_EPOCH),
         (2, PRODUCER_FENCED, PRODUCER_FENCED),
         (5, PRODUCER_FENCED, PRODUCER_FENCED),
-        (
-            other_code_version,
-            CONCURRENT_TRANSACTIONS,
-            CONCURRENT_TRANSACTIONS,
-        ),
+        (0, CONCURRENT_TRANSACTIONS, CONCURRENT_TRANSACTIONS),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use {super::*, assert2::check};
-
-    #[test]
-    fn producer_fenced_is_invalid_producer_epoch_below_version_2() {
-        // (version, code, expected code on the wire)
-        let cases = producer_fenced_cases(1);
-        for (version, code, expected) in cases {
-            check!(
-                producer_fenced_wire_code(version, code) == expected,
-                "v{version} {code}"
-            );
-        }
-    }
 }

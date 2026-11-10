@@ -268,7 +268,7 @@ mod tests {
         assert2::check!(join_group.request_errors == vec![expected]);
     }
     #[rstest_bdd_macros::given(
-        "an authorization failure join response has protocol name {protocol}"
+        "a join response to leader m-1 of a consumer group has protocol name {protocol}"
     )]
     fn join_response_protocol(join_group: &mut JoinGroupScenario, protocol: String) {
         join_group.protocol_name = match protocol.as_str() {
@@ -284,8 +284,12 @@ mod tests {
         for version in join_group_response::MIN_VERSION..=join_group_response::MAX_VERSION {
             let bytes = encode_response(
                 &respond(version, JoinGroupResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    error_code: codes::NONE,
+                    generation_id: 3,
+                    protocol_type: Some("consumer".into()),
                     protocol_name: join_group.protocol_name.clone(),
+                    leader: "m-1".into(),
+                    member_id: "m-1".into(),
                     ..Default::default()
                 }),
                 version,
@@ -299,7 +303,7 @@ mod tests {
         }
     }
     #[rstest_bdd_macros::then(
-        "the join response preserves its error fields and uses Kafka version-specific null protocol semantics"
+        "the join response keeps its other fields and uses Kafka version-specific null protocol semantics"
     )]
     fn check_join_response_versions(join_group: &JoinGroupScenario) {
         assert2::check!(
@@ -316,13 +320,14 @@ mod tests {
             };
             assert2::check!(
                 got == &krabka_broker_macros::unthrottled_wire!(JoinGroupResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    generation_id: -1,
-                    protocol_type: None,
+                    error_code: codes::NONE,
+                    generation_id: 3,
+                    // The field is on the wire from v7.
+                    protocol_type: (*version >= 7).then(|| "consumer".to_owned()),
                     protocol_name: want,
-                    leader: String::new(),
+                    leader: "m-1".into(),
                     skip_assignment: false,
-                    member_id: String::new(),
+                    member_id: "m-1".into(),
                     members: vec![]
                 }),
                 "v{version} {:?}",
@@ -331,21 +336,4 @@ mod tests {
         }
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_join_group",fixtures=[join_group:JoinGroupScenario]);
-
-    /// A response that names its protocol leaves `respond` unchanged.
-    #[test]
-    fn respond_passes_a_chosen_protocol_through() {
-        let resp = JoinGroupResponse {
-            error_code: codes::NONE,
-            generation_id: 1,
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            leader: "member-1".into(),
-            member_id: "member-1".into(),
-            members: vec![],
-            throttle_time_ms: 0,
-            ..Default::default()
-        };
-        assert2::check!(respond(5, resp.clone()) == resp);
-    }
 }

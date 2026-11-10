@@ -6,13 +6,21 @@ use {krabka_ids::PartitionIndex, krabka_log::ProducerId, std::collections::HashS
 /// `as_str` is the state's name as Kafka's `TransactionState` spells it on the
 /// wire, the string `DescribeTransactions` and `ListTransactions` report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
+#[cfg_attr(test, derive(krabka_bdd::StepParam))]
 pub enum TxnState {
+    #[cfg_attr(test, step_param("Empty"))]
     Empty,
+    #[cfg_attr(test, step_param("Ongoing"))]
     Ongoing,
+    #[cfg_attr(test, step_param("PrepareCommit"))]
     PrepareCommit,
+    #[cfg_attr(test, step_param("PrepareAbort"))]
     PrepareAbort,
+    #[cfg_attr(test, step_param("CompleteCommit"))]
     CompleteCommit,
+    #[cfg_attr(test, step_param("CompleteAbort"))]
     CompleteAbort,
+    #[cfg_attr(test, step_param("Dead"))]
     Dead,
 }
 
@@ -169,118 +177,91 @@ impl TxnEntry {
 mod tests {
     use {super::*, assert2::assert};
 
-    #[test]
-    fn empty_to_ongoing_allowed() {
-        assert!(TxnState::Empty.can_transition_to(TxnState::Ongoing));
-    }
-
-    #[test]
-    fn empty_to_prepare_commit_disallowed() {
-        assert!(!TxnState::Empty.can_transition_to(TxnState::PrepareCommit));
-    }
-
-    #[test]
-    fn ongoing_to_complete_commit_disallowed_without_prepare() {
-        assert!(!TxnState::Ongoing.can_transition_to(TxnState::CompleteCommit));
-    }
-
-    #[test]
-    fn complete_commit_to_empty_for_reuse() {
-        assert!(TxnState::CompleteCommit.can_transition_to(TxnState::Empty));
-    }
-
-    #[derive(Default)]
-    struct TransactionStatusRecord {
-        state: Option<TxnState>,
-        status: Option<i8>,
-        recovered: rstest_bdd::Slot<Option<TxnState>>,
+    /// One transaction state and what a scenario did with it.
+    struct TransactionStateScenario {
+        state: krabka_bdd::Given<TxnState>,
+        status: krabka_bdd::Given<i8>,
+        recovered: krabka_bdd::Given<Option<TxnState>>,
+        move_allowed: krabka_bdd::Given<bool>,
     }
 
     #[rstest::fixture]
-    fn transaction_status_record() -> TransactionStatusRecord {
-        // Each persistence record starts without a recovered transaction state.
-        TransactionStatusRecord::default()
-    }
-
-    fn named_transaction_state(name: &str) -> TxnState {
-        match name {
-            "Empty" => TxnState::Empty,
-            "Ongoing" => TxnState::Ongoing,
-            "PrepareCommit" => TxnState::PrepareCommit,
-            "PrepareAbort" => TxnState::PrepareAbort,
-            "CompleteCommit" => TxnState::CompleteCommit,
-            "CompleteAbort" => TxnState::CompleteAbort,
-            "Dead" => TxnState::Dead,
-            _ => panic!("unknown expected transaction state {name}"),
+    fn transaction_state() -> TransactionStateScenario {
+        TransactionStateScenario {
+            state: krabka_bdd::Given::new("state", "Given a transaction is in state <state>"),
+            status: krabka_bdd::Given::new(
+                "status",
+                "Given a transaction log record contains Kafka status byte <status>",
+            ),
+            recovered: krabka_bdd::Given::new(
+                "recovered",
+                "When the coordinator round-trips the transaction through the transaction log",
+            ),
+            move_allowed: krabka_bdd::Given::new(
+                "move_allowed",
+                "When the coordinator checks a move to state <to>",
+            ),
         }
     }
 
-    #[rstest_bdd_macros::given("a transaction is in state {state}")]
-    fn supplied_transaction_state(
-        transaction_status_record: &mut TransactionStatusRecord,
-        state: String,
-    ) {
-        transaction_status_record.state = Some(named_transaction_state(&state));
+    #[krabka_bdd::given("a transaction is in state {state}")]
+    fn in_state(transaction_state: &mut TransactionStateScenario, state: TxnState) {
+        transaction_state.state.set(state);
     }
 
-    #[rstest_bdd_macros::given("a transaction log record contains Kafka status byte {status}")]
-    fn supplied_transaction_status(
-        transaction_status_record: &mut TransactionStatusRecord,
-        status: i8,
-    ) {
-        transaction_status_record.status = Some(status);
+    #[krabka_bdd::given("a transaction log record contains Kafka status byte {status}")]
+    fn record_status(transaction_state: &mut TransactionStateScenario, status: i8) {
+        transaction_state.status.set(status);
     }
 
-    #[rstest_bdd_macros::when(
-        "the transaction state is persisted and recovered through its Kafka status byte"
-    )]
-    fn persist_transaction_status(transaction_status_record: &mut TransactionStatusRecord) {
-        let status = transaction_status_record
-            .state
-            .expect("transaction state was given")
-            .to_kafka_status();
-        transaction_status_record.status = Some(status);
-        transaction_status_record
+    #[krabka_bdd::when("the coordinator round-trips the transaction through the transaction log")]
+    fn persist_and_recover(transaction_state: &mut TransactionStateScenario) {
+        let status = transaction_state.state.get().to_kafka_status();
+        transaction_state.status.set(status);
+        transaction_state
             .recovered
             .set(TxnState::from_kafka_status(status));
     }
 
-    #[rstest_bdd_macros::when("the Kafka transaction status byte is recovered")]
-    fn recover_transaction_status(transaction_status_record: &mut TransactionStatusRecord) {
-        transaction_status_record
-            .recovered
-            .set(TxnState::from_kafka_status(
-                transaction_status_record
-                    .status
-                    .expect("record status was given"),
-            ));
+    #[krabka_bdd::when("the Kafka transaction status byte is recovered")]
+    fn recover(transaction_state: &mut TransactionStateScenario) {
+        let recovered = TxnState::from_kafka_status(*transaction_state.status.get());
+        transaction_state.recovered.set(recovered);
     }
 
-    #[rstest_bdd_macros::then(
-        "the persisted status byte is {status} and the recovered state is {state}"
-    )]
-    fn expected_transaction_status(
-        transaction_status_record: &TransactionStatusRecord,
-        status: i8,
-        state: String,
-    ) {
-        assert2::assert!(transaction_status_record.status == Some(status));
-        assert2::assert!(
-            transaction_status_record.recovered.get()
-                == Some(Some(named_transaction_state(&state)))
-        );
-        assert2::assert!(
-            transaction_status_record.recovered.get() == Some(transaction_status_record.state)
-        );
+    #[krabka_bdd::when("the coordinator checks a move to state {to}")]
+    fn check_move(transaction_state: &mut TransactionStateScenario, to: TxnState) {
+        let allowed = transaction_state.state.get().can_transition_to(to);
+        transaction_state.move_allowed.set(allowed);
     }
 
-    #[rstest_bdd_macros::then("the status byte has no modeled transaction state")]
-    fn unmodeled_transaction_status(transaction_status_record: &TransactionStatusRecord) {
-        assert2::assert!(transaction_status_record.recovered.get() == Some(None));
+    #[krabka_bdd::then("the transaction log holds status byte {status}")]
+    fn holds_status(transaction_state: &TransactionStateScenario, status: i8) {
+        assert!(*transaction_state.status.get() == status);
     }
 
-    rstest_bdd_macros::scenarios!(
+    #[krabka_bdd::then("the coordinator reads back state {state}")]
+    fn reads_back(transaction_state: &TransactionStateScenario, state: TxnState) {
+        assert!(*transaction_state.recovered.get() == Some(state));
+    }
+
+    #[krabka_bdd::then("the status byte has no modeled transaction state")]
+    fn no_modeled_state(transaction_state: &TransactionStateScenario) {
+        assert!(*transaction_state.recovered.get() == None);
+    }
+
+    #[krabka_bdd::then("the move is allowed")]
+    fn move_allowed(transaction_state: &TransactionStateScenario) {
+        assert!(*transaction_state.move_allowed.get());
+    }
+
+    #[krabka_bdd::then("the move is refused")]
+    fn move_refused(transaction_state: &TransactionStateScenario) {
+        assert!(!*transaction_state.move_allowed.get());
+    }
+
+    krabka_bdd::scenarios!(
         "tests/features/migrated/src/txn/state.feature",
-        fixtures = [transaction_status_record: TransactionStatusRecord]
+        fixtures = [transaction_state: TransactionStateScenario],
     );
 }

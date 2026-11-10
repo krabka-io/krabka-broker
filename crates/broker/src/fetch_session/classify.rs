@@ -210,144 +210,179 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        krabka_bdd::{Given, given, then, when},
         krabka_protocol::{
             owned::fetch_request::{FetchPartition, FetchTopic},
             primitives::uuid::Uuid as WireUuid,
         },
     };
 
-    #[test]
-    fn sessionless_request_is_classified_correctly() {
-        let cache = FetchSessionCache::new(10);
-        let r = req().session_epoch(FINAL_EPOCH).call();
-        assert!(matches!(
-            cache.classify(&r, NAME_FETCH_VERSION),
-            SessionDecision::Sessionless
-        ));
+    /// How a scenario's fetch was classified: the `SessionDecision` variant,
+    /// with an error decision named by its code.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Classification {
+        #[step_param("opening a new session")]
+        NewSession,
+        Sessionless,
+        /// An incremental fetch the session accepted.
+        Accepted,
+        #[step_param("FETCH_SESSION_ID_NOT_FOUND")]
+        FetchSessionIdNotFound,
+        #[step_param("INVALID_FETCH_SESSION_EPOCH")]
+        InvalidFetchSessionEpoch,
+        #[step_param("FETCH_SESSION_TOPIC_ID_ERROR")]
+        FetchSessionTopicIdError,
     }
 
-    #[test]
-    fn new_session_request_is_classified_correctly() {
-        let cache = FetchSessionCache::new(10);
-        let r = req()
-            .session_epoch(INITIAL_EPOCH)
-            .topics(vec![topic("t", &[krabka_ids::PartitionIndex(0)])])
-            .call();
-        assert!(matches!(
-            cache.classify(&r, NAME_FETCH_VERSION),
-            SessionDecision::NewSession
-        ));
-    }
-
-    #[test]
-    fn unknown_session_id_returns_not_found() {
-        let cache = FetchSessionCache::new(10);
-        let r = req()
-            .session_id(RequestSessionId(12345))
-            .session_epoch(1)
-            .call();
-        assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
-    }
-
-    #[test]
-    fn stale_epoch_returns_invalid_epoch() {
-        let AllocatedCache { cache, id } = allocated_cache().call();
-        // Session's expected next_epoch is 1; send epoch=99.
-        let r = req()
-            .session_id(RequestSessionId(id))
-            .session_epoch(99)
-            .call();
-        assert!(error_code(&cache, &r, NAME_FETCH_VERSION) == codes::INVALID_FETCH_SESSION_EPOCH);
-    }
-
-    /// Kafka's `FetchManager.newContext`: an incremental fetch whose version
-    /// does not match the topic-id use of the request that created its
-    /// session answers `FETCH_SESSION_TOPIC_ID_ERROR`, and a stale epoch
-    /// still wins over it. The table records the error code, or `None` for an
-    /// accepted incremental fetch, and the epoch the session expects next.
-    #[test]
-    fn an_incremental_fetch_must_match_the_topic_id_use_of_its_session() {
-        struct Case {
-            name: &'static str,
-            created_with_topic_ids: TopicAddressing,
-            epoch: i32,
-            version: i16,
-            want_error_code: Option<i16>,
-            want_next_epoch: i32,
-        }
-        let cases = [
-            Case {
-                name: "name session, v12 incremental",
-                created_with_topic_ids: TopicAddressing::Name,
-                epoch: 1,
-                version: 12,
-                want_error_code: None,
-                want_next_epoch: 2,
-            },
-            Case {
-                name: "name session, v13 incremental",
-                created_with_topic_ids: TopicAddressing::Name,
-                epoch: 1,
-                version: 13,
-                want_error_code: Some(codes::FETCH_SESSION_TOPIC_ID_ERROR),
-                want_next_epoch: 1,
-            },
-            Case {
-                name: "id session, v17 incremental",
-                created_with_topic_ids: TopicAddressing::Id,
-                epoch: 1,
-                version: 17,
-                want_error_code: None,
-                want_next_epoch: 2,
-            },
-            Case {
-                name: "id session, v12 incremental",
-                created_with_topic_ids: TopicAddressing::Id,
-                epoch: 1,
-                version: 12,
-                want_error_code: Some(codes::FETCH_SESSION_TOPIC_ID_ERROR),
-                want_next_epoch: 1,
-            },
-            Case {
-                name: "id session, v12 incremental at a stale epoch",
-                created_with_topic_ids: TopicAddressing::Id,
-                epoch: 7,
-                version: 12,
-                want_error_code: Some(codes::INVALID_FETCH_SESSION_EPOCH),
-                want_next_epoch: 1,
-            },
-        ];
-        for case in cases {
-            let cache = FetchSessionCache::new(10);
-            let key = session_key()
-                .topic_id(WireUuid([1; 16]))
-                .partition(0)
-                .call();
-            let id = allocate_session()
-                .cache(&cache)
-                .addressing(case.created_with_topic_ids)
-                .partitions(vec![(key, CachedPartitionState::default())])
-                .call();
-            let decision = cache.classify(
-                &req()
-                    .session_id(RequestSessionId(id))
-                    .session_epoch(case.epoch)
-                    .call(),
-                case.version,
-            );
-            let code = match decision {
-                SessionDecision::Error { code } => Some(code),
-                SessionDecision::Incremental { .. } => None,
-                other => panic!("{}: unexpected decision {other:?}", case.name),
-            };
-            let next_epoch = cache.inner.lock().expect("poisoned").sessions[&id].next_epoch;
-            check!(
-                (code, next_epoch) == (case.want_error_code, case.want_next_epoch),
-                "{}",
-                case.name
-            );
+    impl Classification {
+        fn of(decision: &SessionDecision) -> Self {
+            match decision {
+                SessionDecision::NewSession => Self::NewSession,
+                SessionDecision::Sessionless => Self::Sessionless,
+                SessionDecision::Incremental { .. } => Self::Accepted,
+                SessionDecision::Error { code } => match *code {
+                    codes::FETCH_SESSION_ID_NOT_FOUND => Self::FetchSessionIdNotFound,
+                    codes::INVALID_FETCH_SESSION_EPOCH => Self::InvalidFetchSessionEpoch,
+                    codes::FETCH_SESSION_TOPIC_ID_ERROR => Self::FetchSessionTopicIdError,
+                    other => panic!("unexpected fetch session error code {other}"),
+                },
+            }
         }
     }
+
+    /// How the request that opened a session named its topics.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum SessionTopics {
+        Names,
+        #[step_param("IDs")]
+        Ids,
+    }
+
+    impl From<SessionTopics> for TopicAddressing {
+        fn from(topics: SessionTopics) -> Self {
+            match topics {
+                SessionTopics::Names => Self::Name,
+                SessionTopics::Ids => Self::Id,
+            }
+        }
+    }
+
+    struct FetchClassification {
+        cache: FetchSessionCache,
+        session_id: Given<FetchSessionId>,
+        decision: Given<SessionDecision>,
+    }
+
+    #[rstest::fixture]
+    fn fetch_classification() -> FetchClassification {
+        FetchClassification {
+            cache: FetchSessionCache::new(10),
+            session_id: Given::new(
+                "session_id",
+                "Given a fetch request names an existing cached session",
+            ),
+            decision: Given::new(
+                "decision",
+                "When the name-based fetch is classified with session epoch <epoch>",
+            ),
+        }
+    }
+
+    #[given("a fetch request names an existing cached session")]
+    fn existing_classification_session(fetch_classification: &mut FetchClassification) {
+        let id = allocate_session().cache(&fetch_classification.cache).call();
+        fetch_classification.session_id.set(id);
+    }
+
+    #[given("a fetch request names uncached session id {id}")]
+    fn uncached_classification_session(fetch_classification: &mut FetchClassification, id: i32) {
+        fetch_classification.session_id.set(id);
+    }
+
+    #[given("a fetch session was opened with topic {topics}")]
+    fn session_opened_with(fetch_classification: &mut FetchClassification, topics: SessionTopics) {
+        let key = session_key()
+            .topic_id(WireUuid([1; 16]))
+            .partition(0)
+            .call();
+        let id = allocate_session()
+            .cache(&fetch_classification.cache)
+            .addressing(topics.into())
+            .partitions(vec![(key, CachedPartitionState::default())])
+            .call();
+        fetch_classification.session_id.set(id);
+    }
+
+    fn classify_at(fetch_classification: &mut FetchClassification, epoch: i32, version: i16) {
+        let request = req()
+            .session_id(RequestSessionId(*fetch_classification.session_id.get()))
+            .session_epoch(epoch)
+            .call();
+        let decision = fetch_classification.cache.classify(&request, version);
+        fetch_classification.decision.set(decision);
+    }
+
+    #[when("the name-based fetch is classified with session epoch {epoch}")]
+    fn classify_supplied_fetch(fetch_classification: &mut FetchClassification, epoch: i32) {
+        classify_at(fetch_classification, epoch, NAME_FETCH_VERSION);
+    }
+
+    #[when("an incremental fetch at epoch {epoch} is classified at Fetch v{version}")]
+    fn classify_incremental_at_version(
+        fetch_classification: &mut FetchClassification,
+        epoch: i32,
+        version: i16,
+    ) {
+        classify_at(fetch_classification, epoch, version);
+    }
+
+    fn check_classification(fetch_classification: &FetchClassification, expected: Classification) {
+        assert!(Classification::of(fetch_classification.decision.get()) == expected);
+    }
+
+    #[then("the fetch is classified as {classification}")]
+    fn classified_fetch(
+        fetch_classification: &FetchClassification,
+        classification: Classification,
+    ) {
+        check_classification(fetch_classification, classification);
+    }
+
+    #[then("the fetch fails with {error}")]
+    fn classified_failed_fetch(fetch_classification: &FetchClassification, error: Classification) {
+        check_classification(fetch_classification, error);
+    }
+
+    #[then("the incremental fetch is {outcome}")]
+    fn classified_incremental_fetch(
+        fetch_classification: &FetchClassification,
+        outcome: Classification,
+    ) {
+        check_classification(fetch_classification, outcome);
+    }
+
+    #[then("the session next expects epoch {epoch}")]
+    fn session_next_epoch(fetch_classification: &FetchClassification, epoch: i32) {
+        let id = fetch_classification.session_id.get();
+        let next = fetch_classification
+            .cache
+            .inner
+            .lock()
+            .expect("poisoned")
+            .sessions[id]
+            .next_epoch;
+        assert!(next == epoch);
+    }
+
+    #[then("the fetch session cache contains no sessions")]
+    fn empty_classification_cache(fetch_classification: &FetchClassification) {
+        assert!(fetch_classification.cache.len() == 0);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/fetch_session/classify.feature",
+        fixtures = [fetch_classification: FetchClassification]
+    );
 
     #[test]
     fn close_request_closes_the_session_inline() {
@@ -369,83 +404,6 @@ mod tests {
             .call();
         assert!(error_code(&cache, &r2, NAME_FETCH_VERSION) == codes::FETCH_SESSION_ID_NOT_FOUND);
     }
-
-    struct FetchClassification {
-        cache: FetchSessionCache,
-        session_id: Option<i32>,
-        decision: Option<SessionDecision>,
-    }
-
-    #[rstest::fixture]
-    fn fetch_classification() -> FetchClassification {
-        FetchClassification {
-            cache: FetchSessionCache::new(10),
-            session_id: None,
-            decision: None,
-        }
-    }
-
-    #[rstest_bdd_macros::given("a fetch request names an existing cached session")]
-    fn existing_classification_session(fetch_classification: &mut FetchClassification) {
-        fetch_classification.session_id =
-            Some(allocate_session().cache(&fetch_classification.cache).call());
-    }
-
-    #[rstest_bdd_macros::given("a fetch request names uncached session id {id}")]
-    fn uncached_classification_session(fetch_classification: &mut FetchClassification, id: i32) {
-        fetch_classification.session_id = Some(id);
-    }
-
-    #[rstest_bdd_macros::when("the name-based fetch is classified with session epoch {epoch}")]
-    fn classify_supplied_fetch(fetch_classification: &mut FetchClassification, epoch: i32) {
-        let request = req()
-            .session_id(RequestSessionId(
-                fetch_classification
-                    .session_id
-                    .expect("request session was given"),
-            ))
-            .session_epoch(epoch)
-            .call();
-        fetch_classification.decision = Some(
-            fetch_classification
-                .cache
-                .classify(&request, NAME_FETCH_VERSION),
-        );
-    }
-
-    #[rstest_bdd_macros::then("the fetch is classified as opening a new session")]
-    fn classified_new_fetch(fetch_classification: &FetchClassification) {
-        check!(matches!(
-            fetch_classification.decision,
-            Some(SessionDecision::NewSession)
-        ));
-    }
-
-    #[rstest_bdd_macros::then("the fetch is classified as sessionless")]
-    fn classified_sessionless_fetch(fetch_classification: &FetchClassification) {
-        check!(matches!(
-            fetch_classification.decision,
-            Some(SessionDecision::Sessionless)
-        ));
-    }
-
-    #[rstest_bdd_macros::then("the fetch fails with FETCH_SESSION_ID_NOT_FOUND")]
-    fn classified_missing_fetch(fetch_classification: &FetchClassification) {
-        let Some(SessionDecision::Error { code }) = fetch_classification.decision else {
-            panic!("uncached incremental fetch must fail");
-        };
-        check!(code == codes::FETCH_SESSION_ID_NOT_FOUND);
-    }
-
-    #[rstest_bdd_macros::then("the fetch session cache contains no sessions")]
-    fn empty_classification_cache(fetch_classification: &FetchClassification) {
-        check!(fetch_classification.cache.len() == 0);
-    }
-
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/fetch_session/classify.feature",
-        fixtures = [fetch_classification: FetchClassification]
-    );
 
     #[test]
     fn incremental_merges_request_topics_and_bumps_epoch() {

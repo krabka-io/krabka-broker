@@ -410,20 +410,4 @@ mod tests {
         let c = creation("bad\0name", "User:alice", OPERATION_READ);
         assert!(validate(&c).map(|entry| entry.resource_name) == Ok("bad\0name".to_owned()));
     }
-
-    /// Kafka 4.3.1 has no host check, so every host is stored as the text it
-    /// arrived as: the wildcard, an address, a range, a malformed range and
-    /// the empty string.
-    #[test]
-    fn validate_accepts_any_host_without_the_trunk_check() {
-        for host in ["*", "10.0.0.1", "10.0.0.0/8", "10.0.0.0/33", "a/b", ""] {
-            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
-            c.host = host.into();
-            assert!(
-                super::validate(&c, HostCheck::Unchecked).map(|entry| entry.host)
-                    == Ok(host.to_owned()),
-                "host {host:?}"
-            );
-        }
-    }
 }

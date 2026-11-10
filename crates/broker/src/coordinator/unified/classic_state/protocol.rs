@@ -82,120 +82,11 @@ impl ClassicGroup {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::coordinator::unified::classic_state::test_support::member_with_protocols,
-        assert2::assert,
+        super::*,
+        crate::coordinator::unified::classic_state::test_support::member_with_protocols,
+        krabka_bdd::Given,
+        std::{convert::Infallible, str::FromStr},
     };
-
-    fn one_range_first_member() -> HashMap<String, super::super::member::Member> {
-        HashMap::from([(
-            "m1".to_owned(),
-            member_with_protocols("m1", vec![("range", b""), ("cooperative_sticky", b"")]),
-        )])
-    }
-
-    #[test]
-    fn select_protocol_single_member_picks_first() {
-        let members = one_range_first_member();
-        assert!(select_protocol(&members).as_deref() == Some("range"));
-    }
-
-    #[test]
-    fn select_protocol_intersection_empty_returns_none() {
-        let mut members = HashMap::new();
-        members.insert(
-            "m1".to_owned(),
-            member_with_protocols("m1", vec![("range", b"")]),
-        );
-        members.insert(
-            "m2".to_owned(),
-            member_with_protocols("m2", vec![("cooperative_sticky", b"")]),
-        );
-        assert!(select_protocol(&members) == None);
-    }
-
-    #[test]
-    fn select_protocol_max_votes_wins() {
-        let mut members = one_range_first_member();
-        members.insert(
-            "m2".to_owned(),
-            member_with_protocols("m2", vec![("range", b""), ("cooperative_sticky", b"")]),
-        );
-        members.insert(
-            "m3".to_owned(),
-            member_with_protocols("m3", vec![("cooperative_sticky", b""), ("range", b"")]),
-        );
-        assert!(select_protocol(&members).as_deref() == Some("range"));
-    }
-
-    #[test]
-    fn select_protocol_tie_breaks_lexicographically() {
-        let mut members = one_range_first_member();
-        members.insert(
-            "m2".to_owned(),
-            member_with_protocols("m2", vec![("cooperative_sticky", b""), ("range", b"")]),
-        );
-        assert!(select_protocol(&members).as_deref() == Some("cooperative_sticky"));
-    }
-
-    #[test]
-    fn select_protocol_empty_members_returns_none() {
-        let members = HashMap::new();
-        assert!(select_protocol(&members) == None);
-    }
-
-    /// #788: Kafka's `ClassicGroupMember.vote`. Each member votes for its
-    /// most preferred protocol among the ones every member supports, also
-    /// when its first choice is not one of them.
-    #[test]
-    fn each_member_votes_for_its_most_preferred_candidate() {
-        type Prefs = &'static [&'static str];
-        struct Row {
-            name: &'static str,
-            prefs: &'static [Prefs],
-            want: Option<&'static str>,
-        }
-
-        let rows: [Row; 4] = [
-            Row {
-                name: "one member",
-                prefs: &[&["range", "sticky"]],
-                want: Some("range"),
-            },
-            Row {
-                name: "first choices outside the intersection still vote",
-                prefs: &[
-                    &["roundrobin", "sticky", "range"],
-                    &["cooperative", "sticky", "range"],
-                    &["range", "sticky"],
-                ],
-                want: Some("sticky"),
-            },
-            Row {
-                name: "majority of first choices",
-                prefs: &[&["range", "sticky"], &["range", "sticky"], &[
-                    "sticky", "range",
-                ]],
-                want: Some("range"),
-            },
-            Row {
-                name: "no shared protocol",
-                prefs: &[&["range"], &["sticky"]],
-                want: None,
-            },
-        ];
-        for Row { name, prefs, want } in rows {
-            let members: HashMap<String, Member> = prefs
-                .iter()
-                .enumerate()
-                .map(|(i, names)| {
-                    let id = format!("m{i}");
-                    let protocols = names.iter().map(|n| (*n, &b""[..])).collect();
-                    (id.clone(), member_with_protocols(&id, protocols))
-                })
-                .collect();
-            assert!(select_protocol(&members).as_deref() == want, "{name}");
-        }
-    }
 
     /// #788: Kafka's `ClassicGroup.supportsProtocols`.
     fn empty_protocol_group() -> ClassicGroup { ClassicGroup::new("g") }
@@ -212,7 +103,7 @@ mod tests {
         stable
     }
 
-    use rstest_bdd_macros::{given, scenarios, then, when};
+    use rstest_bdd_macros::{given, then, when};
     #[derive(Default)]
     struct ProtocolNegotiation {
         group: Option<ClassicGroup>,
@@ -252,5 +143,83 @@ mod tests {
     fn compatible_protocols(negotiation: &ProtocolNegotiation, compatible: bool) {
         assert2::assert!(negotiation.supported == Some(compatible));
     }
-    scenarios!("tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",fixtures=[negotiation:ProtocolNegotiation]);
+
+    /// Each member's protocol names in its order of preference, as a scenario
+    /// writes them: members apart by ` / `, names by `,`, and `none` for a
+    /// group with no members.
+    struct ProtocolPreferences(Vec<Vec<String>>);
+
+    impl FromStr for ProtocolPreferences {
+        type Err = Infallible;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            if text == "none" {
+                return Ok(Self(Vec::new()));
+            }
+            Ok(Self(
+                text.split(" / ")
+                    .map(|names| names.split(',').map(str::to_owned).collect())
+                    .collect(),
+            ))
+        }
+    }
+
+    /// The members of a group and the protocol the vote picks for it.
+    struct ProtocolVote {
+        members: Given<HashMap<String, Member>>,
+        selected: Given<Option<String>>,
+    }
+
+    #[rstest::fixture]
+    fn protocol_vote() -> ProtocolVote {
+        ProtocolVote {
+            members: Given::new(
+                "members",
+                "Given the members of a classic group prefer the protocols <preferences>",
+            ),
+            selected: Given::new(
+                "selected",
+                "When the coordinator selects the group protocol",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given("the members of a classic group prefer the protocols {preferences}")]
+    fn members_prefer_protocols(
+        protocol_vote: &mut ProtocolVote,
+        preferences: ProtocolPreferences,
+    ) {
+        let members = preferences
+            .0
+            .iter()
+            .enumerate()
+            .map(|(index, names)| {
+                let id = format!("m{index}");
+                let protocols = names.iter().map(|name| (name.as_str(), &b""[..])).collect();
+                (id.clone(), member_with_protocols(&id, protocols))
+            })
+            .collect();
+        protocol_vote.members.set(members);
+    }
+
+    #[krabka_bdd::when("the coordinator selects the group protocol")]
+    fn select_group_protocol(protocol_vote: &mut ProtocolVote) {
+        let selected = select_protocol(protocol_vote.members.get());
+        protocol_vote.selected.set(selected);
+    }
+
+    #[krabka_bdd::then("the group protocol is {protocol}")]
+    fn group_protocol_is(protocol_vote: &ProtocolVote, protocol: String) {
+        assert2::assert!(*protocol_vote.selected.get() == Some(protocol));
+    }
+
+    #[krabka_bdd::then("the group has no protocol")]
+    fn group_has_no_protocol(protocol_vote: &ProtocolVote) {
+        assert2::assert!(*protocol_vote.selected.get() == None);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature",
+        fixtures = [negotiation: ProtocolNegotiation, protocol_vote: ProtocolVote]
+    );
 }

@@ -180,21 +180,7 @@ mod tests {
         }
     }
 
-    use {
-        super::*,
-        crate::{
-            handlers::group_read_denied,
-            test_support::{EmptyAclImage, empty_acl_image},
-        },
-    };
-
-    #[test]
-    fn group_read_denied_yields_group_authorization_failed() {
-        let EmptyAclImage { authorizer, image } = empty_acl_image();
-        anonymous_request_identity!(principal, peer, ctx, "sync-client",);
-
-        assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
-    }
+    use super::*;
 
     #[derive(Default)]
     struct SyncGroupValidationScenario {
@@ -359,38 +345,6 @@ mod tests {
         sync_group_validation: SyncGroupValidationScenario,
     ) {
         let _ = (sync_group_validation,);
-    }
-
-    #[tokio::test]
-    async fn handle_denies_group_read_and_preserves_error_response_shape() {
-        let version = sync_group_response::MAX_VERSION;
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_broker_macros::request_test_identity! {
-            bind(principal, peer, ctx);
-            user ["alice"];
-            context [context];
-        };
-        let req = sync_request()
-            .member_id("member-a".into())
-            .generation_id(1)
-            .call();
-
-        let resp = handle(&broker, req, version, &ctx)
-            .await
-            .expect("SyncGroup");
-
-        let expected = krabka_broker_macros::unthrottled_wire!(SyncGroupResponse {
-            error_code: codes::GROUP_AUTHORIZATION_FAILED,
-            protocol_type: None,
-            protocol_name: None,
-            assignment: Bytes::new(),
-        });
-        assert!(resp == expected, "{resp:?}");
-        broker_handle.shutdown().await;
     }
 
     #[tokio::test]

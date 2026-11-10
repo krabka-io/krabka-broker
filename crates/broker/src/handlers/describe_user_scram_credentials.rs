@@ -202,45 +202,22 @@ fn sasl_mechanism_to_byte(m: SaslMechanism) -> i8 {
 #[cfg(test)]
 mod tests {
     use {
-        assert2::assert,
-        krabka_metadata::{AclOperation, MetadataRecord, ResourceType, ScramCredentialRecord},
-        std::sync::Arc,
-    };
-
-    #[derive(Debug)]
-    struct ClusterDescribeOnly;
-
-    krabka_broker_macros::test_authorizer!(ClusterDescribeOnly, req; {
-        if req.resource_type == ResourceType::Cluster
-            && req.resource_name == acl_wire::CLUSTER_RESOURCE_NAME
-            && req.operation == AclOperation::Describe
-        {
-            return AuthorizationResult::Allow;
-        }
-
-        AuthorizationResult::Deny
-    });
-
-    use {
         super::*,
-        crate::{
-            authorizer::AuthorizationResult,
-            handlers::acl_wire,
-            test_support::{DenyAll, start_broker_with_authorizer},
-        },
-        krabka_protocol::owned::describe_user_scram_credentials_request,
-        std::collections::HashSet,
+        assert2::assert,
+        krabka_bdd::Given,
+        krabka_metadata::{MetadataRecord, ScramCredentialRecord},
+        std::{convert::Infallible, str::FromStr},
     };
 
     /// A SCRAM credential to seed: its user, mechanism and iteration count.
-    #[derive(Clone, Copy)]
-    struct SeededUser<'a> {
-        user: &'a str,
+    #[derive(Clone)]
+    struct SeededUser {
+        user: String,
         mechanism: SaslMechanism,
         iterations: u32,
     }
 
-    fn img_with_scram(users: &[SeededUser<'_>]) -> MetadataImage {
+    fn img_with_scram(users: &[SeededUser]) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());
         for SeededUser {
             user,
@@ -249,7 +226,7 @@ mod tests {
         } in users
         {
             img.apply(&MetadataRecord::V1ScramCredential(ScramCredentialRecord {
-                user: (*user).into(),
+                user: user.clone(),
                 mechanism: *mechanism,
                 iterations: *iterations,
                 salt: vec![1, 2, 3],
@@ -260,195 +237,212 @@ mod tests {
         img
     }
 
-    fn process_targets_for_test(
-        image: &MetadataImage,
-        users_filter: Option<&[describe_user_scram_credentials_request::UserName]>,
-    ) -> DescribeUserScramCredentialsResponse {
-        let known_users: HashSet<String> = image.scram_credentials_users().into_iter().collect();
-        let targets = requested_targets(&known_users, users_filter);
-        let results = build_results(image, &known_users, targets);
-        DescribeUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            error_code: 0,
-            error_message: None,
-            results,
-            ..Default::default()
-        }
-    }
-
     krabka_broker_macros::scram_users_fixture!(scram_users_request);
 
-    const ALICE: SeededUser<'static> = SeededUser {
-        user: "alice",
-        mechanism: SaslMechanism::ScramSha512,
-        iterations: 4096,
-    };
-
-    const ALICE_ONLY: [SeededUser<'static>; 1] = [ALICE];
-
-    const ALICE_AND_BOB: [SeededUser<'static>; 2] = [ALICE, SeededUser {
-        user: "bob",
-        mechanism: SaslMechanism::ScramSha512,
-        iterations: 8192,
-    }];
-
-    fn run_handle_filter(
+    /// The per-user results the handler builds for `users_filter` over the
+    /// credentials in `seeded`, past the authorization check.
+    fn described_results(
         users_filter: Option<Vec<String>>,
-        seeded: &[SeededUser<'_>],
-    ) -> DescribeUserScramCredentialsResponse {
+        seeded: &[SeededUser],
+    ) -> Vec<DescribeUserScramCredentialsResult> {
         let req = scram_users_request(users_filter);
         let image = img_with_scram(seeded);
-        process_targets_for_test(&image, req.users.as_deref())
+        let known_users: HashSet<String> = image.scram_credentials_users().into_iter().collect();
+        let targets = requested_targets(&known_users, req.users.as_deref());
+        build_results(&image, &known_users, targets)
     }
 
-    #[test]
-    fn describe_all_users_when_filter_none() {
-        let resp = run_handle_filter(None, &ALICE_AND_BOB);
-        assert!(resp.results.len() == 2);
-        let users: Vec<&str> = resp.results.iter().map(|r| r.user.as_str()).collect();
-        assert!(users.contains(&"alice") && users.contains(&"bob"));
-    }
+    /// A step's user list: `null`, `empty`, or names separated by `,`.
+    #[derive(Debug)]
+    struct UserList(Option<Vec<String>>);
 
-    #[test]
-    fn describe_filter_returns_only_listed_users() {
-        let resp = run_handle_filter(Some(vec!["alice".into()]), &ALICE_AND_BOB);
-        let expected = vec![krabka_broker_macros::tagged_wire!(
-            DescribeUserScramCredentialsResult {
-                user: "alice".to_owned(),
-                error_code: 0,
-                error_message: None,
-                credential_infos: vec![krabka_broker_macros::tagged_wire!(CredentialInfo {
-                    mechanism: 2,
-                    iterations: 4096,
-                })],
-            }
-        )];
-        assert!(resp.results == expected);
-    }
+    impl FromStr for UserList {
+        type Err = Infallible;
 
-    #[test]
-    fn unknown_user_returns_resource_not_found() {
-        let resp = run_handle_filter(Some(vec!["ghost".into()]), &ALICE_ONLY);
-        let expected = vec![krabka_broker_macros::tagged_wire!(
-            DescribeUserScramCredentialsResult {
-                user: "ghost".to_owned(),
-                error_code: 91,
-                error_message: Some(
-                    "Attempt to describe a user credential that does not exist: ghost".to_owned(),
-                ),
-                credential_infos: Vec::new(),
-            }
-        )];
-        assert!(resp.results == expected);
-    }
-
-    #[test]
-    fn duplicate_requested_user_returns_single_duplicate_resource_row() {
-        const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
-
-        let resp = run_handle_filter(
-            Some(vec!["alice".into(), "bob".into(), "alice".into()]),
-            &ALICE_AND_BOB,
-        );
-
-        assert!(
-            resp.results.len() == 2,
-            "duplicate users collapse to one row"
-        );
-        let alice_rows: Vec<_> = resp.results.iter().filter(|r| r.user == "alice").collect();
-        assert!(
-            alice_rows.len() == 1,
-            "alice should appear once: {:?}",
-            resp.results
-        );
-        assert!(alice_rows[0].error_code == KAFKA_DUPLICATE_RESOURCE);
-        assert!(alice_rows[0].credential_infos.is_empty());
-
-        let bob = resp
-            .results
-            .iter()
-            .find(|r| r.user == "bob")
-            .expect("distinct users remain in the response");
-        assert!(bob.error_code == 0);
-        assert!(
-            bob.credential_infos
-                == vec![krabka_broker_macros::tagged_wire!(CredentialInfo {
-                    mechanism: 2,
-                    iterations: 8192,
-                })]
-        );
-    }
-
-    #[derive(Default)]
-    struct DescribeScramScenario {
-        seeded: Vec<SeededUser<'static>>,
-        request: Option<DescribeUserScramCredentialsRequest>,
-        response: Option<DescribeUserScramCredentialsResponse>,
-    }
-    #[rstest::fixture]
-    fn describe_scram() -> DescribeScramScenario {
-        let seeded = Vec::new();
-        DescribeScramScenario {
-            seeded,
-            ..Default::default()
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(match text {
+                "null" => None,
+                "empty" => Some(Vec::new()),
+                names => Some(names.split(',').map(str::to_owned).collect()),
+            }))
         }
     }
-    #[rstest_bdd_macros::given(
-        "alice has SHA-512 with 8192 iterations before SHA-256 with 4096 iterations"
+
+    /// A SCRAM mechanism by its Kafka name.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum Mechanism {
+        #[step_param("SCRAM-SHA-256")]
+        Sha256,
+        #[step_param("SCRAM-SHA-512")]
+        Sha512,
+    }
+
+    impl From<Mechanism> for SaslMechanism {
+        fn from(mechanism: Mechanism) -> Self {
+            match mechanism {
+                Mechanism::Sha256 => Self::ScramSha256,
+                Mechanism::Sha512 => Self::ScramSha512,
+            }
+        }
+    }
+
+    /// Successful rows written `<user> with <mechanism> at <n> iterations`,
+    /// joined by ` and `.
+    #[derive(Debug)]
+    struct Listing(Vec<DescribeUserScramCredentialsResult>);
+
+    impl FromStr for Listing {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            text.split(" and ")
+                .map(|row| {
+                    let shape =
+                        || format!("`{row}` is not `<user> with <mechanism> at <n> iterations`");
+                    let (user, credential) = row.split_once(" with ").ok_or_else(shape)?;
+                    let (mechanism, iterations) = credential
+                        .strip_suffix(" iterations")
+                        .and_then(|rest| rest.split_once(" at "))
+                        .ok_or_else(shape)?;
+                    let mechanism: Mechanism =
+                        mechanism.parse().map_err(|error| format!("{error:?}"))?;
+                    Ok(krabka_broker_macros::tagged_wire!(
+                        DescribeUserScramCredentialsResult {
+                            user: user.to_owned(),
+                            error_code: 0,
+                            error_message: None,
+                            credential_infos: vec![krabka_broker_macros::tagged_wire!(
+                                CredentialInfo {
+                                    mechanism: sasl_mechanism_to_byte(mechanism.into()),
+                                    iterations: iterations.parse().map_err(|_| "iterations")?,
+                                }
+                            )],
+                        }
+                    ))
+                })
+                .collect::<Result<_, String>>()
+                .map(Self)
+        }
+    }
+
+    /// An error row for `user` with Kafka's `code` and message.
+    fn error_row(user: &str, code: i16, message: &str) -> DescribeUserScramCredentialsResult {
+        krabka_broker_macros::tagged_wire!(DescribeUserScramCredentialsResult {
+            user: user.to_owned(),
+            error_code: code,
+            error_message: Some(format!("{message}: {user}")),
+            credential_infos: Vec::new(),
+        })
+    }
+
+    struct DescribeScramScenario {
+        seeded: Vec<SeededUser>,
+        results: Given<Vec<DescribeUserScramCredentialsResult>>,
+        denied: Given<DescribeUserScramCredentialsResponse>,
+    }
+
+    #[rstest::fixture]
+    fn describe_scram() -> DescribeScramScenario {
+        DescribeScramScenario {
+            seeded: Vec::new(),
+            results: Given::new(
+                "results",
+                "When a client describes the SCRAM credentials with user list <users>",
+            ),
+            denied: Given::new(
+                "denied",
+                "When a client without cluster Describe permission describes the SCRAM \
+                 credentials with user list <users>",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given("{user} has a {mechanism} credential with {iterations} iterations")]
+    fn user_has_credential(
+        describe_scram: &mut DescribeScramScenario,
+        user: String,
+        mechanism: Mechanism,
+        iterations: u32,
+    ) {
+        describe_scram.seeded.push(SeededUser {
+            user,
+            mechanism: mechanism.into(),
+            iterations,
+        });
+    }
+
+    #[krabka_bdd::when("a client describes the SCRAM credentials with user list {users}")]
+    fn client_describes_users(describe_scram: &mut DescribeScramScenario, users: UserList) {
+        let results = described_results(users.0, &describe_scram.seeded);
+        describe_scram.results.set(results);
+    }
+
+    #[krabka_bdd::when(
+        "a client without cluster Describe permission describes the SCRAM credentials with user list {users}"
     )]
-    fn out_of_order_scram_credentials(describe_scram: &mut DescribeScramScenario) {
-        describe_scram.seeded = vec![
-            SeededUser {
-                user: "alice",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 8192,
-            },
-            SeededUser {
-                user: "alice",
-                mechanism: SaslMechanism::ScramSha256,
-                iterations: 4096,
-            },
-        ];
+    fn denied_client_describes_users(describe_scram: &mut DescribeScramScenario, users: UserList) {
+        let response = denied_response(&scram_users_request(users.0));
+        describe_scram.denied.set(response);
     }
-    #[rstest_bdd_macros::when("alice's SCRAM credentials are described")]
-    fn describe_alice_scram(describe_scram: &mut DescribeScramScenario) {
-        describe_scram.response = Some(run_handle_filter(
-            Some(vec!["alice".into()]),
-            &describe_scram.seeded,
-        ));
-    }
-    #[rstest_bdd_macros::then("alice's credential mechanisms appear in Kafka order 1 then 2")]
-    fn check_scram_credential_order(describe_scram: &DescribeScramScenario) {
-        let alice = describe_scram
-            .response
-            .as_ref()
-            .unwrap()
+
+    #[krabka_bdd::then("{user}'s credentials are listed as {first} then {second}")]
+    fn credentials_listed_in_order(
+        describe_scram: &DescribeScramScenario,
+        user: String,
+        first: Mechanism,
+        second: Mechanism,
+    ) {
+        let mechanisms: Vec<Vec<i8>> = describe_scram
             .results
+            .get()
             .iter()
-            .find(|row| row.user == "alice")
-            .expect("alice result exists");
-        let mechanisms: Vec<i8> = alice
-            .credential_infos
-            .iter()
-            .map(|info| info.mechanism)
+            .filter(|row| row.user == user)
+            .map(|row| {
+                row.credential_infos
+                    .iter()
+                    .map(|info| info.mechanism)
+                    .collect()
+            })
             .collect();
-        assert!(mechanisms == vec![1, 2]);
+        let expected = vec![vec![
+            sasl_mechanism_to_byte(first.into()),
+            sasl_mechanism_to_byte(second.into()),
+        ]];
+        assert!(mechanisms == expected);
     }
-    #[rstest_bdd_macros::given("a denied SCRAM description request has user filter {users}")]
-    fn denied_scram_filter(describe_scram: &mut DescribeScramScenario, users: String) {
-        let users = match users.as_str() {
-            "null" => None,
-            "empty" => Some(Vec::new()),
-            _ => Some(users.split(',').map(str::to_owned).collect()),
-        };
-        describe_scram.request = Some(scram_users_request(users));
+
+    #[krabka_bdd::then("the description lists {listing}")]
+    fn description_lists(describe_scram: &DescribeScramScenario, listing: Listing) {
+        assert!(describe_scram.results.get() == &listing.0);
     }
-    #[rstest_bdd_macros::when("the denied SCRAM description response is constructed")]
-    fn render_denied_scram(describe_scram: &mut DescribeScramScenario) {
-        describe_scram.response = Some(denied_response(describe_scram.request.as_ref().unwrap()));
+
+    #[krabka_bdd::then("the description reports {user} as not found")]
+    fn description_reports_not_found(describe_scram: &DescribeScramScenario, user: String) {
+        let expected = vec![error_row(
+            &user,
+            RESOURCE_NOT_FOUND,
+            "Attempt to describe a user credential that does not exist",
+        )];
+        assert!(describe_scram.results.get() == &expected);
     }
-    #[rstest_bdd_macros::then(
-        "the denied response has {rows} anonymous credential-free error rows under cluster authorization failure"
+
+    #[krabka_bdd::then("the description reports {user} as a duplicate and lists {listing}")]
+    fn description_reports_duplicate(
+        describe_scram: &DescribeScramScenario,
+        user: String,
+        listing: Listing,
+    ) {
+        let mut expected = vec![error_row(
+            &user,
+            DUPLICATE_RESOURCE,
+            "Cannot describe SCRAM credentials for the same user twice in a single request",
+        )];
+        expected.extend(listing.0);
+        assert!(describe_scram.results.get() == &expected);
+    }
+
+    #[krabka_bdd::then(
+        "the description fails with CLUSTER_AUTHORIZATION_FAILED in {rows} anonymous error rows"
     )]
     fn check_denied_scram(describe_scram: &DescribeScramScenario, rows: usize) {
         let denied_row = krabka_broker_macros::tagged_wire!(DescribeUserScramCredentialsResult {
@@ -457,8 +451,8 @@ mod tests {
             error_message: None,
             credential_infos: Vec::new()
         });
-        assert2::assert!(
-            describe_scram.response.as_ref().unwrap()
+        assert!(
+            describe_scram.denied.get()
                 == &krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
                     error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: None,
@@ -466,7 +460,11 @@ mod tests {
                 })
         );
     }
-    rstest_bdd_macros::scenarios!("tests/features/handler_describe_scram",fixtures=[describe_scram:DescribeScramScenario]);
+
+    krabka_bdd::scenarios!(
+        "tests/features/handler_describe_scram",
+        fixtures = [describe_scram: DescribeScramScenario],
+    );
 
     #[yare::parameterized(
         scram_sha256 = { SaslMechanism::ScramSha256, 1 },
@@ -475,58 +473,5 @@ mod tests {
     )]
     fn sasl_mechanism_byte_mapping(mechanism: SaslMechanism, want: i8) {
         assert2::assert!(sasl_mechanism_to_byte(mechanism) == want, "{mechanism:?}");
-    }
-
-    /// An empty users filter asks for all credentials at the initial protocol version.
-    fn empty_describe_response(
-        broker: &Broker,
-        context: &RequestContext<'_>,
-    ) -> DescribeUserScramCredentialsResponse {
-        handle(
-            broker,
-            &DescribeUserScramCredentialsRequest::default(),
-            0,
-            context,
-        )
-    }
-    #[tokio::test]
-    async fn handle_allows_cluster_describe_authorization() {
-        krabka_broker_macros::broker_test_setup!(
-            bind(broker_handle, _dir, broker, principal, peer, ctx);
-            boot [start_broker_with_authorizer(Arc::new(ClusterDescribeOnly))];
-            user ["alice"];
-            client ["scram-describe-test"];
-        );
-        let resp = empty_describe_response(&broker, &ctx);
-
-        assert!(
-            resp == krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
-                error_code: 0,
-                error_message: None,
-                results: Vec::new(),
-            }),
-            "Cluster Describe should authorize"
-        );
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn handle_rejects_without_cluster_describe_authorization() {
-        krabka_broker_macros::broker_test_setup!(
-            bind(broker_handle, _dir, broker, principal, peer, ctx);
-            boot [start_broker_with_authorizer(Arc::new(DenyAll,))];
-            user ["alice"];
-            client ["scram-describe-test"];
-        );
-        let resp = empty_describe_response(&broker, &ctx);
-
-        assert!(
-            resp == krabka_broker_macros::unthrottled_wire!(DescribeUserScramCredentialsResponse {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: None,
-                results: Vec::new(),
-            })
-        );
-        broker_handle.shutdown().await;
     }
 }

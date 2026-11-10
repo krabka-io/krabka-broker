@@ -355,6 +355,8 @@ mod tests {
         let text = match value.as_str() {
             "empty" => String::new(),
             "blank" => " ".into(),
+            "a no-break space" => "\u{A0}".into(),
+            "a control character" => "\u{1}".into(),
             _ => value.clone(),
         };
         match field.as_str() {
@@ -516,35 +518,6 @@ mod tests {
         "tests/features/handler_consumer_group_creation",
         fixtures = [consumer_heartbeat: ConsumerHeartbeatScenario],
     );
-
-    /// Kafka's `String.trim` blank: a control character is blank and a
-    /// no-break space is not.
-    #[rstest::rstest]
-    #[case::control_char("\u{1}", Some("MemberId can't be empty."))]
-    #[case::no_break_space("\u{A0}", None)]
-    fn member_id_blankness_follows_java_trim(
-        #[case] member_id: &str,
-        #[case] refusal: Option<&str>,
-    ) {
-        let request = subscription_request("g", member_id, 0);
-
-        let outcome = validate_request(&request, VERSION, &NextGenConfig::default());
-
-        assert!(
-            outcome.err().map(|error| *error)
-                == refusal.map(|message| ConsumerGroupHeartbeatResponse {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(message.to_owned()),
-                    ..Default::default()
-                })
-        );
-    }
-
-    #[test]
-    fn error_response_preserves_error_code() {
-        let resp = ConsumerGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None);
-        assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
-    }
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {

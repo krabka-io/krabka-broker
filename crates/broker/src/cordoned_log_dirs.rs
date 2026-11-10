@@ -318,9 +318,11 @@ pub fn spawn_watcher(
 mod tests {
     use {
         super::*,
-        crate::test_support::broker_registration,
+        crate::{future_log::test_support::step_list, test_support::broker_registration},
         assert2::{assert, check},
+        krabka_bdd::{Given, given, then, when},
         krabka_metadata::{BrokerConfigRecord, MetadataRecord},
+        std::str::FromStr,
     };
 
     fn dirs() -> Vec<PathBuf> { vec![PathBuf::from("/d1"), PathBuf::from("/d2")] }
@@ -370,86 +372,114 @@ mod tests {
 
     rstest_bdd_macros::scenarios!(
         "tests/features/migrated/src/cordoned_log_dirs.feature",
-        fixtures = [cordoning_request: CordoningRequest]
+        fixtures = [cordoning_request: CordoningRequest, cordoned_broker: CordonedBrokerScenario]
     );
 
-    fn registration(
-        log_dirs: &[u128],
-        cordoned: Option<&[u128]>,
-    ) -> krabka_metadata::BrokerRegistrationRecord {
-        krabka_metadata::BrokerRegistrationRecord {
-            cordoned_log_dirs: cordoned
-                .map(|ids| ids.iter().copied().map(uuid::Uuid::from_u128).collect()),
-            broker_epoch: 7,
-            incarnation_id: uuid::Uuid::from_u128(1),
-            log_dirs: log_dirs
-                .iter()
-                .copied()
-                .map(uuid::Uuid::from_u128)
-                .collect(),
-            ..broker_registration(krabka_raft::NodeId(1))
+    /// A set of directory ids, written as letters: `a`, `b`, or `nothing`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DirectoryIds(Vec<uuid::Uuid>);
+
+    impl FromStr for DirectoryIds {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            step_list(text, |letter| match letter {
+                "a" => Ok(uuid::Uuid::from_u128(1)),
+                "b" => Ok(uuid::Uuid::from_u128(2)),
+                other => Err(format!("{other} is not a directory letter")),
+            })
+            .map(Self)
         }
     }
 
-    /// Kafka's `BrokerRegistration.hasUncordonedDirs`.
-    #[yare::parameterized(
-        not_reported_yet = { &[1, 2], None, true },
-        nothing_cordoned = { &[1, 2], Some(&[][..]), true },
-        one_of_two_cordoned = { &[1, 2], Some(&[1][..]), true },
-        every_directory_cordoned = { &[1, 2], Some(&[2, 1][..]), false },
-        no_directory_ids_registered = { &[], Some(&[1][..]), true },
-    )]
-    fn a_broker_is_usable_unless_every_directory_is_cordoned(
-        log_dirs: &[u128],
-        cordoned: Option<&[u128]>,
-        want: bool,
-    ) {
-        check!(has_uncordoned_dirs(&registration(log_dirs, cordoned)) == want);
+    /// Configured log directories, written as `/d1,/d2` or `nothing`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DirectoryPaths(Vec<PathBuf>);
+
+    impl FromStr for DirectoryPaths {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            step_list(text, |path| Ok(PathBuf::from(path))).map(Self)
+        }
     }
 
-    /// Kafka's `handleDirectoriesCordoned`: a record only when the heartbeat
-    /// carries a set and it differs from the stored one as a set.
-    #[yare::parameterized(
-        broker_not_caught_up = { None, None, false },
-        first_report = { None, Some(vec![]), true },
-        unchanged_set_different_order = {
-            Some(&[1, 2][..]),
-            Some(vec![uuid::Uuid::from_u128(2), uuid::Uuid::from_u128(1)]),
-            false
-        },
-        new_directory = {
-            Some(&[1][..]),
-            Some(vec![uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2)]),
-            true
-        },
-        uncordon_everything = { Some(&[1][..]), Some(vec![]), true },
-    )]
-    fn a_heartbeat_changes_the_registration_only_when_its_set_differs(
-        stored: Option<&[u128]>,
+    /// A `cordoned.log.dirs` value, where `empty` is the empty string.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CordoningValue(String);
+
+    impl FromStr for CordoningValue {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(if text == "empty" {
+                String::new()
+            } else {
+                text.to_owned()
+            }))
+        }
+    }
+
+    /// The broker every cordoning-state scenario is about.
+    const BROKER: NodeId = NodeId(1);
+
+    struct CordonedBrokerScenario {
+        cordoned: Given<CordonedLogDirs>,
+        log_dirs: Given<Vec<uuid::Uuid>>,
         reported: Option<Vec<uuid::Uuid>>,
-        writes: bool,
-    ) {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        let current = registration(&[1, 2], stored);
-        image.apply(&MetadataRecord::V1BrokerRegistration(current));
-        let want = writes.then(|| {
-            MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
-                node_id: NodeId(1),
+        usable: Given<bool>,
+        change: Given<Option<MetadataRecord>>,
+    }
+
+    #[rstest::fixture]
+    fn cordoned_broker() -> CordonedBrokerScenario {
+        CordonedBrokerScenario {
+            cordoned: Given::new(
+                "cordoned",
+                "Given a broker with log directories /d1 and /d2 starts with cordoned.log.dirs \
+                 <static>",
+            ),
+            log_dirs: Given::new(
+                "log_dirs",
+                "Given a broker registered log directories <registered>",
+            ),
+            reported: None,
+            usable: Given::new(
+                "usable",
+                "When automatic replica placement considers the broker",
+            ),
+            change: Given::new(
+                "change",
+                "When the broker heartbeats with <reported> cordoned",
+            ),
+        }
+    }
+
+    impl CordonedBrokerScenario {
+        /// The registration the controller holds for the broker.
+        fn registration(&self) -> BrokerRegistrationRecord {
+            BrokerRegistrationRecord {
+                cordoned_log_dirs: self.reported.clone(),
                 broker_epoch: 7,
-                fenced: krabka_metadata::FencingChange::None,
-                in_controlled_shutdown: false,
-                log_dirs: vec![],
-                cordoned_log_dirs: reported.clone(),
-            })
-        });
-        check!(registration_change(&image, NodeId(1), reported.as_deref()) == want);
+                incarnation_id: uuid::Uuid::from_u128(1),
+                log_dirs: self.log_dirs.get().clone(),
+                ..broker_registration(BROKER)
+            }
+        }
+
+        fn heartbeat(&mut self, reported: Option<&[uuid::Uuid]>) {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            image.apply(&MetadataRecord::V1BrokerRegistration(self.registration()));
+            self.change
+                .set(registration_change(&image, BROKER, reported));
+        }
     }
 
     fn image_with(value: Option<&str>) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         if let Some(value) = value {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                node_id: NodeId(1),
+                node_id: BROKER,
                 config_name: CORDONED_LOG_DIRS.into(),
                 config_value: Some(value.into()),
             }));
@@ -457,44 +487,94 @@ mod tests {
         image
     }
 
-    /// The dynamic value wins over the static one, and one that does not
-    /// resolve keeps the set that was in force.
-    #[test]
-    fn the_set_follows_the_dynamic_value_and_keeps_the_last_good_one() {
-        struct Step {
-            value: Option<&'static str>,
-            want: Vec<PathBuf>,
-        }
+    #[given("a broker with log directories \\/d1 and \\/d2 starts with cordoned.log.dirs {value}")]
+    fn broker_with_static_value(cordoned_broker: &mut CordonedBrokerScenario, value: String) {
+        cordoned_broker
+            .cordoned
+            .set(CordonedLogDirs::new(dirs(), Some(value)));
+    }
 
-        let cordoned = CordonedLogDirs::new(dirs(), Some("/d2".into()));
-        check!(cordoned.cordoned() == vec![PathBuf::from("/d2")]);
+    #[given("its dynamic cordoned.log.dirs has been set to {value}")]
+    fn dynamic_value_was_set(cordoned_broker: &mut CordonedBrokerScenario, value: String) {
+        cordoned_broker
+            .cordoned
+            .get()
+            .apply_image(&image_with(Some(&value)), BROKER);
+    }
 
-        let steps: [Step; 5] = [
-            Step {
-                value: Some("/d1"),
-                want: vec![PathBuf::from("/d1")],
-            },
-            Step {
-                value: Some("/nope"),
-                want: vec![PathBuf::from("/d1")],
-            },
-            Step {
-                value: Some("*"),
-                want: dirs(),
-            },
-            Step {
-                value: Some(""),
-                want: vec![],
-            },
-            Step {
-                value: None,
-                want: vec![PathBuf::from("/d2")],
-            },
-        ];
-        for Step { value, want } in steps {
-            cordoned.apply_image(&image_with(value), NodeId(1));
-            check!(cordoned.cordoned() == want, "{value:?}");
-        }
+    #[when("its dynamic cordoned.log.dirs becomes {value}")]
+    fn dynamic_value_becomes(cordoned_broker: &mut CordonedBrokerScenario, value: CordoningValue) {
+        cordoned_broker
+            .cordoned
+            .get()
+            .apply_image(&image_with(Some(&value.0)), BROKER);
+    }
+
+    #[when("its dynamic cordoned.log.dirs is removed")]
+    fn dynamic_value_removed(cordoned_broker: &mut CordonedBrokerScenario) {
+        cordoned_broker
+            .cordoned
+            .get()
+            .apply_image(&image_with(None), BROKER);
+    }
+
+    #[then("the broker cordons {cordoned}")]
+    fn broker_cordons(cordoned_broker: &CordonedBrokerScenario, cordoned: DirectoryPaths) {
+        assert!(cordoned_broker.cordoned.get().cordoned() == cordoned.0);
+    }
+
+    #[given("a broker registered log directories {registered}")]
+    fn broker_registered(cordoned_broker: &mut CordonedBrokerScenario, registered: DirectoryIds) {
+        cordoned_broker.log_dirs.set(registered.0);
+    }
+
+    #[given("the broker reported {cordoned} as cordoned")]
+    fn broker_reported(cordoned_broker: &mut CordonedBrokerScenario, cordoned: DirectoryIds) {
+        cordoned_broker.reported = Some(cordoned.0);
+    }
+
+    #[when("automatic replica placement considers the broker")]
+    fn placement_considers_broker(cordoned_broker: &mut CordonedBrokerScenario) {
+        let usable = has_uncordoned_dirs(&cordoned_broker.registration());
+        cordoned_broker.usable.set(usable);
+    }
+
+    #[then("the broker can take new replicas")]
+    fn broker_can_take_replicas(cordoned_broker: &CordonedBrokerScenario) {
+        assert!(*cordoned_broker.usable.get());
+    }
+
+    #[then("the broker cannot take new replicas")]
+    fn broker_cannot_take_replicas(cordoned_broker: &CordonedBrokerScenario) {
+        assert!(!*cordoned_broker.usable.get());
+    }
+
+    #[when("the broker heartbeats with {reported} cordoned")]
+    fn heartbeat_with_set(cordoned_broker: &mut CordonedBrokerScenario, reported: DirectoryIds) {
+        cordoned_broker.heartbeat(Some(&reported.0));
+    }
+
+    #[when("the broker heartbeats without a cordoned set")]
+    fn heartbeat_without_set(cordoned_broker: &mut CordonedBrokerScenario) {
+        cordoned_broker.heartbeat(None);
+    }
+
+    #[then("the controller records {reported} as the broker's cordoned directories")]
+    fn controller_records_set(cordoned_broker: &CordonedBrokerScenario, reported: DirectoryIds) {
+        let expected = MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+            node_id: BROKER,
+            broker_epoch: 7,
+            fenced: krabka_metadata::FencingChange::None,
+            in_controlled_shutdown: false,
+            log_dirs: vec![],
+            cordoned_log_dirs: Some(reported.0),
+        });
+        assert!(*cordoned_broker.change.get() == Some(expected));
+    }
+
+    #[then("the controller records no registration change")]
+    fn controller_records_nothing(cordoned_broker: &CordonedBrokerScenario) {
+        assert!(*cordoned_broker.change.get() == None);
     }
 
     /// Kafka's `LogManager.nextLogDirs`: uncordoned directories only, or the

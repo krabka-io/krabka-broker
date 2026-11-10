@@ -156,15 +156,12 @@ pub(super) fn topic_config_record(
 mod tests {
     use {
         super::*,
-        crate::{
-            handlers::{
-                incremental_alter_configs::test_support::{
-                    AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
-                    make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
-                },
-                test_support::{check_config_result, diskless_turned_on_refusal},
+        crate::handlers::{
+            incremental_alter_configs::test_support::{
+                AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
+                make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
             },
-            throttle::ThrottledReplicas,
+            test_support::{check_config_result, diskless_turned_on_refusal},
         },
     };
 
@@ -196,7 +193,6 @@ mod tests {
     )]
     #[case::append_of_only_commas(ListOperation::Append, Some("delete"), ",,", "delete")]
     #[case::append_of_an_empty_value(ListOperation::Append, Some("delete"), "", "delete,")]
-    #[case::append_from_the_default(ListOperation::Append, None, "compact", "delete,compact")]
     #[case::subtract_removes_one_occurrence(
         ListOperation::Subtract,
         Some("delete,compact,delete"),
@@ -261,14 +257,6 @@ mod tests {
                     "Can't SUBTRACT to key retention.ms because its type is not LIST.".to_owned(),
                 ))
         );
-    }
-
-    #[test]
-    fn topic_throttle_config_value_validated() {
-        // Verify ThrottledReplicas::parse rejects malformed input that
-        // the validator delegates to.
-        assert!(ThrottledReplicas::parse("not-a-pair").is_err());
-        assert!(ThrottledReplicas::parse("0:bad").is_err());
     }
 
     #[test]

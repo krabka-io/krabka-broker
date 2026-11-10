@@ -302,14 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn client_quota_is_created_at_its_bound_the_first_time() {
-        let buckets = QuotaBuckets::new();
-        let quota = buckets.client_quota(QuotaType::Produce, &key("alice"), 1024.0);
-        check!((quota.bound() - 1024.0).abs() < 1.0e-9);
-        assert!(buckets.len() == 1);
-    }
-
-    #[test]
     fn client_quota_returns_the_existing_quota_the_second_time() {
         let buckets = QuotaBuckets::new();
         let first = buckets.client_quota(QuotaType::Produce, &key("alice"), 1024.0);

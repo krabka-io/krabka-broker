@@ -1,27 +1,53 @@
-Feature: Transaction status records retain Kafka state identifiers
-  Persisted transaction states must recover to the same coordinator state.
+Feature: Transaction states follow Kafka's transaction state machine
 
-  Scenario Outline: Persist and recover transaction state <state>
-    Given a transaction is in state <state>
-    When the transaction state is persisted and recovered through its Kafka status byte
-    Then the persisted status byte is <status> and the recovered state is <state>
+  Rule: A transaction moves only along Kafka's state transitions
 
-    Examples:
-      | state | status |
-      | Empty | 0 |
-      | Ongoing | 1 |
-      | PrepareCommit | 2 |
-      | PrepareAbort | 3 |
-      | CompleteCommit | 4 |
-      | CompleteAbort | 5 |
-      | Dead | 6 |
+    Scenario Outline: A transaction moves to the next state of its lifecycle
+      Given a transaction is in state <from>
+      When the coordinator checks a move to state <to>
+      Then the move is allowed
 
-  Scenario Outline: Unsupported transaction status <status> remains absent
-    Given a transaction log record contains Kafka status byte <status>
-    When the Kafka transaction status byte is recovered
-    Then the status byte has no modeled transaction state
+      Examples:
+        | case                                         | from           | to      |
+        | the first partition opens an empty one       | Empty          | Ongoing |
+        | a completed transactional id is reused       | CompleteCommit | Empty   |
 
-    Examples:
-      | status |
-      | 7 |
-      | -1 |
+    Scenario Outline: A transaction does not skip a state of its lifecycle
+      Given a transaction is in state <from>
+      When the coordinator checks a move to state <to>
+      Then the move is refused
+
+      Examples:
+        | case                                         | from    | to             |
+        | an empty transaction has nothing to prepare  | Empty   | PrepareCommit  |
+        | an open transaction completes only prepared  | Ongoing | CompleteCommit |
+
+  Rule: A transaction state persists as its Kafka status byte
+
+    Scenario Outline: A transaction state survives the transaction log
+      Given a transaction is in state <state>
+      When the coordinator round-trips the transaction through the transaction log
+      Then the transaction log holds status byte <status>
+      And the coordinator reads back state <state>
+
+      Examples:
+        | case            | state          | status |
+        | empty           | Empty          | 0      |
+        | ongoing         | Ongoing        | 1      |
+        | prepare commit  | PrepareCommit  | 2      |
+        | prepare abort   | PrepareAbort   | 3      |
+        | complete commit | CompleteCommit | 4      |
+        | complete abort  | CompleteAbort  | 5      |
+        | dead            | Dead           | 6      |
+
+  Rule: A status byte Krabka does not model recovers no state
+
+    Scenario Outline: An unmodeled status byte recovers no transaction state
+      Given a transaction log record contains Kafka status byte <status>
+      When the Kafka transaction status byte is recovered
+      Then the status byte has no modeled transaction state
+
+      Examples:
+        | case                         | status |
+        | prepare epoch fence          | 7      |
+        | below the first status byte  | -1     |

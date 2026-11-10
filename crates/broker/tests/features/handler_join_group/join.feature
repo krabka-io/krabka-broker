@@ -13,9 +13,9 @@ Feature: JoinGroup request validation and response compatibility
       | g     | 1800001 | 26       |
 
   Scenario Outline: Empty protocol names become null only in versions that support null
-    Given an authorization failure join response has protocol name <protocol>
+    Given a join response to leader m-1 of a consumer group has protocol name <protocol>
     When the join response is encoded and decoded at every supported API version
-    Then the join response preserves its error fields and uses Kafka version-specific null protocol semantics
+    Then the join response keeps its other fields and uses Kafka version-specific null protocol semantics
     Examples:
       | protocol |
       | empty    |

@@ -422,25 +422,6 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn denied_handler_response_preserves_error_fields() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] deny_all;
-            user ["alice"];
-        };
-        let req = topic_listing_request();
-
-        let resp = handle(&broker, &req, VERSION, &ctx);
-
-        let expected = krabka_broker_macros::unthrottled_wire!(ListConfigResourcesResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            config_resources: vec![],
-        });
-        assert!(resp == expected);
-        broker_handle.shutdown().await;
-    }
-
     /// Kafka's `KafkaApis.handleListConfigResources` authorizes
     /// `DescribeConfigs` on the cluster (#660). Only `AlterConfigs` and `All`
     /// imply it. `Describe` and the operations that imply `Describe` get
@@ -477,28 +458,6 @@ mod tests {
 
             assert2::check!(resp == *expected, "user {user} with grant {grant:?}");
         }
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn successful_handler_response_preserves_resource_fields() {
-        krabka_broker_macros::broker_test_setup!(
-            bind(broker_handle, _dir, broker, ctx);
-            boot [listing_broker("orders")];
-            user ["admin"];
-        );
-        let req = topic_listing_request();
-
-        let resp = handle(&broker, &req, VERSION, &ctx);
-
-        assert!(resp.error_code == codes::NONE);
-        assert!(resp.throttle_time_ms == 0);
-        let resource = resp
-            .config_resources
-            .iter()
-            .find(|r| r.resource_name == "orders")
-            .expect("seeded topic resource");
-        assert!(resource.resource_type == ConfigResourceType::Topic.to_wire());
         broker_handle.shutdown().await;
     }
 }

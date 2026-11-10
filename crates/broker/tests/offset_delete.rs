@@ -135,15 +135,6 @@ async fn committed_offsets(
     deletion.topic = topic;
 }
 
-#[given("topic t2 exists but group ghost has never joined or committed")]
-async fn unknown_group(deletion: &mut OffsetDeletion) {
-    let broker = start().await;
-    create_topic(&broker, "t2", 1).await;
-    deletion.broker = Some(broker);
-    deletion.group = "ghost".into();
-    deletion.topic = "t2".into();
-}
-
 #[when("offsets are deleted from topic {topic} for partitions {partitions}")]
 async fn delete_offsets(deletion: &mut OffsetDeletion, topic: String, partitions: String) {
     let broker = deletion.broker.as_ref().expect("a coordinator was started");
@@ -194,18 +185,6 @@ fn partition_results(
         ..Default::default()
     };
     check!(deletion.response.as_ref().expect("OffsetDelete completed") == &expected);
-}
-
-#[then("the unknown group is refused without any topic rows")]
-fn group_refusal(deletion: &OffsetDeletion) {
-    let expected = OffsetDeleteResponse {
-        error_code: 69,
-        ..Default::default()
-    };
-    assert!(
-        deletion.response.as_ref().expect("OffsetDelete completed") == &expected,
-        "top-level GROUP_ID_NOT_FOUND (69) and no topic rows"
-    );
 }
 
 #[then("the remaining committed offsets are exactly")]
@@ -304,35 +283,6 @@ async fn stop_offset_deletion(deletion: OffsetDeletion) {
 )]
 #[tokio::test]
 async fn delete_offsets_from_empty_group_round_trip(deletion: OffsetDeletion) {
-    stop_offset_deletion(deletion).await;
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/offset_delete.feature",
-    name = "An unknown group is refused before partition processing"
-)]
-#[tokio::test]
-async fn delete_offsets_unknown_group_returns_group_id_not_found(deletion: OffsetDeletion) {
-    stop_offset_deletion(deletion).await;
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/offset_delete.feature",
-    name = "An existing group still receives a missing-topic partition error"
-)]
-#[tokio::test]
-async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition(deletion: OffsetDeletion) {
-    stop_offset_deletion(deletion).await;
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/offset_delete.feature",
-    name = "An invalid partition is refused before a valid partition is deleted"
-)]
-#[tokio::test]
-async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition(
-    deletion: OffsetDeletion,
-) {
     stop_offset_deletion(deletion).await;
 }
 

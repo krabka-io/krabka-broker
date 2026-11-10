@@ -42,6 +42,8 @@ use {
 mod response;
 
 #[cfg(test)]
+mod scenarios;
+#[cfg(test)]
 mod tests;
 
 use {

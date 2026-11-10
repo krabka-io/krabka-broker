@@ -1,7 +1,8 @@
 //! Tests for one retention sweep: that it takes a hosted partition's expired
-//! segments off disk through the writer actor, that it does so whether or not
-//! this broker leads the partition, that a KFC-9 write freeze stops it, and
-//! that a deletion the filesystem refuses takes the log directory offline.
+//! segments off disk through the writer actor, that a KFC-9 write freeze stops
+//! it, and that a deletion the filesystem refuses takes the log directory
+//! offline. That it trims a follower's replica as well as a led one is in
+//! `tests/features/storage/local_retention_sweep.feature`.
 
 use {
     super::*,
@@ -19,14 +20,6 @@ use {
     std::fs,
     uuid::Uuid,
 };
-
-/// A partition the sweep is about to trim, with the segment files it had
-/// before the sweep.
-struct Observed<'a> {
-    topic: &'a str,
-    partition: Arc<Partition>,
-    before: Vec<String>,
-}
 
 /// The failure counter's value for one `(topic, partition, reason)`.
 fn failures(metrics: &BrokerMetrics, topic: &str, reason: CleanerFailureReason) -> u64 {
@@ -92,54 +85,6 @@ async fn a_sweep_deletes_expired_segments_and_the_log_size_follows() {
     );
     check!(metrics.log_retention_runs_total.get() == 1);
     check!(failures(&metrics, "orders", CleanerFailureReason::Io) == 0);
-}
-
-/// Retention runs over every log the broker hosts, leader or follower.
-///
-/// Kafka's `LogManager.cleanupLogs` walks the broker's own logs and does not
-/// consult leadership; the cleaner's compaction sweep does, and the two must
-/// not be made to agree. A follower whose replica is never trimmed is exactly
-/// the descriptor climb this loop exists to stop.
-#[tokio::test]
-async fn a_sweep_trims_a_follower_replica_as_well_as_a_led_one() {
-    let dir = tempfile::tempdir().expect("log root");
-    let registry = PartitionRegistry::new();
-    // This broker is node 7: it leads `led` and merely follows `followed`.
-    let cases = [("led", NodeId(7)), ("followed", NodeId(8))];
-    let mut observed: Vec<Observed<'_>> = Vec::new();
-    for (topic, leader) in cases {
-        let partition = expired_partition(&dir, CommittedPartitionSetup {
-            topic,
-            leader,
-            ..Default::default()
-        })
-        .await;
-        let before = segment_files(&dir, topic);
-        registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
-        observed.push(Observed {
-            topic,
-            partition,
-            before,
-        });
-    }
-
-    let metrics = BrokerMetrics::new();
-    tick_all(&registry, None, &metrics).await;
-
-    for Observed {
-        topic,
-        partition,
-        before,
-    } in observed
-    {
-        let after = segment_files(&dir, topic);
-        check!(
-            after.len() < before.len(),
-            "{topic}: retention must trim it whether or not this broker leads it: \
-             {before:?} -> {after:?}"
-        );
-        drop(partition);
-    }
 }
 
 /// A KFC-9 write freeze stops the sweep, and the thaw releases it.

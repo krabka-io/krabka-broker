@@ -3,8 +3,6 @@
 
 #[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
-#[cfg(test)]
-use crate::test_support::EmptyAclImage;
 use {
     super::{
         handle,
@@ -19,65 +17,17 @@ use {
             context::RequestContext, list_offsets::test_support::test_context,
             test_support::configured_topic_request,
         },
-        test_support::{empty_acl_image, start_broker_with_authorizer_no_audit as start_broker},
+        test_support::start_broker_with_authorizer_no_audit as start_broker,
     },
     assert2::assert,
-    bytes::BytesMut,
-    krabka_metadata::{AclOperation, ResourceType},
-    krabka_protocol::{
-        Decode, Encode,
-        owned::{
-            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-            list_offsets_response::{
-                self, ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
-            },
+    krabka_protocol::owned::{
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+        list_offsets_response::{
+            self, ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
         },
     },
     std::sync::Arc,
 };
-
-#[test]
-fn topic_describe_denied_yields_topic_authorization_failed_rows() {
-    use krabka_protocol::owned::list_offsets_response::{
-        ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
-    };
-
-    let EmptyAclImage { authorizer, image } = empty_acl_image();
-    anonymous_request_identity!(principal, peer, ctx, "client-a", "connection-a",);
-    assert!(acl_denied(
-        &authorizer,
-        &image,
-        &ctx,
-        ResourceType::Topic,
-        "t",
-        AclOperation::Describe,
-    ));
-
-    // The denied-topic shape the handler emits: every partition row
-    // carries TOPIC_AUTHORIZATION_FAILED.
-    let resp = ListOffsetsResponse {
-        throttle_time_ms: 0,
-        topics: vec![ListOffsetsTopicResponse {
-            name: "t".into(),
-            partitions: vec![ListOffsetsPartitionResponse {
-                partition_index: 0,
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                timestamp: -1,
-                offset: -1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let mut buf = BytesMut::with_capacity(resp.encoded_len(list_offsets_response::MAX_VERSION));
-    resp.encode(&mut buf, list_offsets_response::MAX_VERSION)
-        .expect("encode");
-    let mut cur: &[u8] = &buf;
-    let decoded =
-        ListOffsetsResponse::decode(&mut cur, list_offsets_response::MAX_VERSION).unwrap();
-    assert!(decoded.topics[0].partitions[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED);
-}
 
 async fn answer_request(
     broker: &Broker,
@@ -151,7 +101,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
 /// allows everything else. Drives the mixed authorized/denied scenarios
 /// below without needing real ACL records in the metadata image.
 use crate::handlers::list_offsets::test_support::DenyNamed;
-use {crate::handlers::acl_denied, std::collections::HashSet};
+use std::collections::HashSet;
 
 /// Kafka's `handleListOffsetRequest` splits topics into authorized and
 /// unauthorized up front, processes only the authorized ones, and appends

@@ -531,13 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_default_still_passes() {
-        BrokerConfig::default()
-            .validate()
-            .expect("legacy default validates");
-    }
-
-    #[test]
     fn per_listener_sasl_mechanisms_satisfy_validation_without_broker_default() {
         let tls = TlsConfig {
             cert_chain_path: PathBuf::from("/tls/c"),
@@ -725,185 +718,98 @@ mod tests {
 }
 
 #[cfg(test)]
-mod connections_max_idle_tests {
-    use {
-        crate::{
-            config::{BrokerConfig, DEFAULT_CONNECTIONS_MAX_IDLE},
-            test_support::listener_time_overrides,
-        },
-        assert2::assert,
-        krabka_units::{Time, convert::TimeExt as _, millis, secs},
-        rstest_bdd::Slot,
-        std::time::Duration,
-    };
+mod connection_window_scenarios {
+    //! Steps for `tests/features/migrated/src/config/listener.feature`: the
+    //! idle and KIP-368 re-authentication windows a listener runs with.
 
-    /// A broker-wide window of `idle` with the named per-listener overrides.
-    fn config(idle: Time, overrides: &[(&str, Time)]) -> BrokerConfig {
-        BrokerConfig {
-            connections_max_idle: Some(idle),
-            connections_max_idle_overrides: listener_time_overrides(overrides),
-            ..BrokerConfig::default()
-        }
-    }
-
-    #[derive(Default)]
-    struct IdleTimeoutScenario {
-        config: Option<BrokerConfig>,
-        resolved: Slot<Option<Duration>>,
-    }
-
-    #[rstest::fixture]
-    fn idle_timeout() -> IdleTimeoutScenario {
-        // Keep idle timeout inputs and observations fresh for each scenario.
-        IdleTimeoutScenario::default()
-    }
-
-    #[rstest_bdd_macros::given("no broker-wide or listener-specific idle timeout is configured")]
-    fn default_idle_timeout(idle_timeout: &mut IdleTimeoutScenario) {
-        idle_timeout.config = Some(BrokerConfig::default());
-    }
-
-    #[rstest_bdd_macros::when("the broker resolves the PLAINTEXT listener idle timeout")]
-    fn resolve_idle_timeout(idle_timeout: &mut IdleTimeoutScenario) {
-        let config = idle_timeout
-            .config
-            .as_ref()
-            .expect("a broker config was given");
-        idle_timeout
-            .resolved
-            .set(config.connections_max_idle_for("PLAINTEXT"));
-    }
-
-    #[rstest_bdd_macros::then("the PLAINTEXT idle timeout is Kafka's 600000 milliseconds")]
-    fn kafka_idle_timeout(idle_timeout: &IdleTimeoutScenario) {
-        assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
-        assert!(idle_timeout.resolved.get() == Some(Some(Duration::from_mins(10))));
-    }
-
-    #[test]
-    fn a_listener_override_wins_over_the_broker_wide_window() {
-        let config = config(secs(600), &[("EXTERNAL", secs(20))]);
-        assert!(config.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(20)));
-        assert!(config.connections_max_idle_for("INTERNAL") == Some(Duration::from_mins(10)));
-    }
-
-    /// Kafka lowercases the listener name in `listener.name.<name>.…`, so an
-    /// override written the Kafka way still has to find an uppercase listener.
-    #[test]
-    fn an_override_matches_its_listener_without_ascii_case() {
-        let config = config(secs(600), &[("external", secs(20))]);
-        assert!(config.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(20)));
-    }
-
-    /// Kafka arms no idle-expiry manager for a non-positive
-    /// `connections.max.idle.ms`, so neither does krabka -- broker-wide and
-    /// per-listener alike.
-    #[test]
-    fn a_non_positive_window_expires_nothing() {
-        assert!(
-            config(millis(0), &[])
-                .connections_max_idle_for("PLAINTEXT")
-                .is_none()
-        );
-        assert!(
-            config(Time::from_millis(-1), &[])
-                .connections_max_idle_for("PLAINTEXT")
-                .is_none()
-        );
-        assert!(
-            config(secs(600), &[("EXTERNAL", millis(0))])
-                .connections_max_idle_for("EXTERNAL")
-                .is_none()
-        );
-    }
-
-    rstest_bdd_macros::scenarios!("tests/features/migrated/src/config/listener.feature", fixtures = [idle_timeout: IdleTimeoutScenario]);
-}
-
-#[cfg(test)]
-mod connections_max_reauth_tests {
     use {
         crate::{config::BrokerConfig, test_support::listener_time_overrides},
         assert2::assert,
-        krabka_units::{Time, convert::TimeExt as _, millis, secs},
+        krabka_bdd::{Given, given, then, when},
+        krabka_units::{Time, convert::TimeExt},
     };
 
-    /// A broker-wide KIP-368 window with the named per-listener overrides.
-    fn config(broker_wide: Option<Time>, overrides: &[(&str, Time)]) -> BrokerConfig {
-        BrokerConfig {
-            connections_max_reauth: broker_wide,
-            connections_max_reauth_overrides: listener_time_overrides(overrides),
-            ..BrokerConfig::default()
+    /// Which of a listener's two connection windows a step names.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Window {
+        /// `connections.max.idle.ms`.
+        Idle,
+        /// `connections.max.reauth.ms`, KIP-368.
+        ReAuthentication,
+    }
+
+    struct ConnectionWindows {
+        config: BrokerConfig,
+        /// The resolved window in milliseconds, or none.
+        resolved: Given<Option<i64>>,
+    }
+
+    #[rstest::fixture]
+    fn connection_windows() -> ConnectionWindows {
+        ConnectionWindows {
+            config: BrokerConfig::default(),
+            resolved: Given::new(
+                "resolved",
+                "When the broker resolves the <window> window of listener <listener>",
+            ),
         }
     }
 
-    /// Kafka's `connections.max.reauth.ms` defaults to 0, which means sessions
-    /// never expire. A default that started expiring sessions would disconnect
-    /// every SASL client on a timer nobody asked for.
-    #[test]
-    fn nothing_configured_expires_no_session() {
-        assert!(
-            BrokerConfig::default()
-                .connections_max_reauth_for("SASL_SSL")
-                .is_none()
-        );
+    #[given("the broker-wide {window} window is {millis} ms")]
+    fn broker_wide_window(connection_windows: &mut ConnectionWindows, window: Window, millis: i64) {
+        let value = Some(Time::from_millis(millis));
+        let config = &mut connection_windows.config;
+        match window {
+            Window::Idle => config.connections_max_idle = value,
+            Window::ReAuthentication => config.connections_max_reauth = value,
+        }
     }
 
-    /// The whole point of the override: one listener re-authenticates on a
-    /// different cadence from the rest, and a listener with no override still
-    /// gets the broker-wide window.
-    #[test]
-    fn a_listener_override_wins_over_the_broker_wide_window() {
-        let config = config(Some(secs(3600)), &[("EXTERNAL", secs(60))]);
-
-        assert!(config.connections_max_reauth_for("EXTERNAL") == Some(secs(60)));
-        assert!(config.connections_max_reauth_for("INTERNAL") == Some(secs(3600)));
+    #[given("listener {listener} overrides the {window} window with {millis} ms")]
+    fn listener_window(
+        connection_windows: &mut ConnectionWindows,
+        listener: String,
+        window: Window,
+        millis: i64,
+    ) {
+        let overrides = listener_time_overrides(&[(&listener, Time::from_millis(millis))]);
+        let config = &mut connection_windows.config;
+        match window {
+            Window::Idle => config.connections_max_idle_overrides = overrides,
+            Window::ReAuthentication => config.connections_max_reauth_overrides = overrides,
+        }
     }
 
-    /// An override with no broker-wide window configured still applies: the
-    /// `or(connections_max_reauth)` fallback must not swallow the match.
-    #[test]
-    fn a_listener_override_applies_without_a_broker_wide_window() {
-        let config = config(None, &[("EXTERNAL", secs(60))]);
-
-        assert!(config.connections_max_reauth_for("EXTERNAL") == Some(secs(60)));
-        assert!(config.connections_max_reauth_for("INTERNAL").is_none());
+    #[when("the broker resolves the {window} window of listener {listener}")]
+    fn resolve_window(
+        connection_windows: &mut ConnectionWindows,
+        window: Window,
+        listener: String,
+    ) {
+        let config = &connection_windows.config;
+        let resolved = match window {
+            Window::Idle => config
+                .connections_max_idle_for(&listener)
+                .map(|idle| i64::try_from(idle.as_millis()).expect("the idle window fits a long")),
+            Window::ReAuthentication => config
+                .connections_max_reauth_for(&listener)
+                .map(TimeExt::millis_i64),
+        };
+        connection_windows.resolved.set(resolved);
     }
 
-    /// Kafka spells the property `listener.name.<lowercased>.connections.max.
-    /// reauth.ms` while the listener itself is conventionally uppercase, so an
-    /// override written the Kafka way still has to find its listener.
-    #[test]
-    fn an_override_matches_its_listener_without_ascii_case() {
-        let config = config(Some(secs(3600)), &[("sasl_ssl", secs(60))]);
-
-        assert!(config.connections_max_reauth_for("SASL_SSL") == Some(secs(60)));
+    #[then("the window is {millis} ms")]
+    fn window_is(connection_windows: &ConnectionWindows, millis: i64) {
+        assert!(*connection_windows.resolved.get() == Some(millis));
     }
 
-    /// A non-positive window means "expire nothing", broker-wide and
-    /// per-listener alike -- and a zero override must not silently fall back
-    /// to the broker-wide window it was written to disable.
-    #[test]
-    fn a_non_positive_window_expires_nothing() {
-        assert!(
-            config(Some(millis(0)), &[])
-                .connections_max_reauth_for("SASL_SSL")
-                .is_none()
-        );
-        assert!(
-            config(Some(Time::from_millis(-1)), &[])
-                .connections_max_reauth_for("SASL_SSL")
-                .is_none()
-        );
-        assert!(
-            config(Some(secs(3600)), &[("SASL_SSL", millis(0))])
-                .connections_max_reauth_for("SASL_SSL")
-                .is_none()
-        );
-        assert!(
-            config(Some(secs(3600)), &[("SASL_SSL", Time::from_millis(-1))])
-                .connections_max_reauth_for("SASL_SSL")
-                .is_none()
-        );
+    #[then("the listener has no window")]
+    fn no_window(connection_windows: &ConnectionWindows) {
+        assert!(connection_windows.resolved.get().is_none());
     }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/config/listener.feature",
+        fixtures = [connection_windows: ConnectionWindows],
+    );
 }

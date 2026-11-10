@@ -482,40 +482,6 @@ mod tests {
         g
     }
 
-    // The rows of `offset_commit_follows_kafka_consumer_group_rule`.
-
-    /// Kafka 4.3.1's `ConsumerGroup.validateOffsetCommit` and
-    /// `createAssignmentEpochValidator`, row by row.
-    /// A group with no members takes a commit with a negative epoch from
-    /// anyone, at any version, and refuses any other.
-    #[test]
-    fn empty_group_takes_only_a_negative_epoch() {
-        let g = commit_group(true);
-        let rows = [
-            ("", -1, CommitFence::Offset { api_version: 9 }, Ok(())),
-            ("", -1, CommitFence::Offset { api_version: 2 }, Ok(())),
-            ("m", -1, CommitFence::Transactional, Ok(())),
-            (
-                "ghost",
-                1,
-                CommitFence::Offset { api_version: 9 },
-                Err(codes::UNKNOWN_MEMBER_ID),
-            ),
-        ];
-        let actual: Vec<_> = rows
-            .iter()
-            .map(|&(member_id, epoch, fence, _)| {
-                (
-                    member_id,
-                    epoch,
-                    fence,
-                    g.validate_offset_commit(member_id, None, epoch, fence, &[(T, 0)]),
-                )
-            })
-            .collect();
-        assert!(actual == rows);
-    }
-
     /// Reconciliation stamps a partition with the epoch at which the member
     /// is granted it, keeps the epoch of a partition it keeps or moves to
     /// pending revocation, and drops the epoch of a partition it gives up.
@@ -854,6 +820,10 @@ mod tests {
     #[then("the offset commit returns Kafka error code {code}")]
     fn consumer_commit_result(consumer_group: &ConsumerBehavior, code: i16) {
         assert!(consumer_group.commit == Some(if code == 0 { Ok(()) } else { Err(code) }));
+    }
+    #[krabka_bdd::given("a consumer group with no members")]
+    fn empty_commit_group(consumer_group: &mut ConsumerBehavior) {
+        consumer_group.group = Some(commit_group(true));
     }
     #[given("consumer member m1 subscribes to topic t before any assignment")]
     fn unassigned_consumer_member(consumer_group: &mut ConsumerBehavior) {

@@ -3,8 +3,6 @@
 //! `GroupCoordinator`.
 
 #[cfg(test)]
-use crate::config::BrokerConfig;
-#[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
@@ -192,8 +190,8 @@ mod tests {
             handlers::{
                 encode_response,
                 group_heartbeat_test_support::{
-                    RequestIdentity, acl_authorizer, alice_peer, describe_acl, grant_group_read,
-                    group_read_acl, subscribed_names_describe_denied_table as denied_table_fixture,
+                    RequestIdentity, acl_authorizer, alice_peer, describe_acl, group_read_acl,
+                    subscribed_names_describe_denied_table as denied_table_fixture,
                     topic_with_partitions,
                 },
                 group_read_denied,
@@ -207,7 +205,7 @@ mod tests {
         assert2::assert,
         krabka_metadata::MetadataImage,
         krabka_protocol::{Decode, owned::share_group_heartbeat_response},
-        std::{net::SocketAddr, sync::Arc},
+        std::{convert::Infallible, net::SocketAddr, str::FromStr, sync::Arc},
     };
 
     const VERSION: i16 = share_group_heartbeat_response::MAX_VERSION;
@@ -290,107 +288,242 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn handle_disabled_feature_returns_unsupported_version() {
-        let version = VERSION;
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
-        tolerate_starved_heartbeats(&mut cfg);
-        let broker_handle = Broker::start(cfg).await.expect("start broker");
-        let broker = broker_handle.broker_arc_for_test();
-        finalize_share_version(&broker, 0).await;
-        krabka_broker_macros::request_test_identity! {
-            bind(ctx);
-            user ["ANONYMOUS"];
-        };
-        let req = request("g1", vec!["t1"]);
-
-        let resp = handle(&broker, req, version, &ctx).await.expect("handle");
-
-        let expected = ShareGroupHeartbeatResponse {
-            error_code: codes::UNSUPPORTED_VERSION,
-            ..Default::default()
-        };
-        assert!(resp == expected);
-        broker_handle.shutdown().await;
+    /// A broker that authorizes with ACLs, and the answer to the heartbeat
+    /// the scenario sends it as `User:alice`.
+    struct ShareHeartbeatGates {
+        started: krabka_bdd::Given<HandlerStartedBroker>,
+        response: krabka_bdd::Given<ShareGroupHeartbeatResponse>,
     }
 
-    /// The protocol gate -- `UNSUPPORTED_VERSION` when `share.version` is
-    /// finalized at 0 -- runs BEFORE the group ACL check, matching Kafka's
-    /// `handleShareGroupHeartbeat`. A principal denied `Read` on the group
-    /// still gets `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`,
-    /// when the protocol itself is unavailable.
-    async fn handle_denied_group_heartbeat(broker: &Broker) -> ShareGroupHeartbeatResponse {
-        krabka_broker_macros::request_test_identity! {
-            bind(ctx);
-            user ["ANONYMOUS"];
+    #[rstest::fixture]
+    fn share_heartbeat_gates() -> ShareHeartbeatGates {
+        ShareHeartbeatGates {
+            started: krabka_bdd::Given::new("started", "Given a principal holds <grants>"),
+            response: krabka_bdd::Given::new("response", "When ... sends a heartbeat ..."),
+        }
+    }
+
+    /// The ACLs `User:alice` holds on a broker that authorizes with ACLs.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Grants {
+        #[step_param("no ACLs")]
+        Nothing,
+        #[step_param("Read on group g")]
+        GroupRead,
+        #[step_param("Read on group g and Describe on topic-a")]
+        GroupReadAndDescribe,
+    }
+
+    /// The whole-response refusal a heartbeat gets.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Refusal {
+        #[step_param("UNSUPPORTED_VERSION")]
+        UnsupportedVersion,
+        #[step_param("GROUP_AUTHORIZATION_FAILED")]
+        GroupAuthorizationFailed,
+        #[step_param("INVALID_REQUEST")]
+        InvalidRequest,
+        #[step_param("TOPIC_AUTHORIZATION_FAILED")]
+        TopicAuthorizationFailed,
+    }
+
+    impl Refusal {
+        fn code(self) -> i16 {
+            match self {
+                Self::UnsupportedVersion => codes::UNSUPPORTED_VERSION,
+                Self::GroupAuthorizationFailed => codes::GROUP_AUTHORIZATION_FAILED,
+                Self::InvalidRequest => codes::INVALID_REQUEST,
+                Self::TopicAuthorizationFailed => codes::TOPIC_AUTHORIZATION_FAILED,
+            }
+        }
+    }
+
+    /// The subscribed topic names of a heartbeat, written `topic-a and topic-b`.
+    struct Subscription(Vec<String>);
+
+    impl FromStr for Subscription {
+        type Err = Infallible;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(text.split(" and ").map(str::to_owned).collect()))
+        }
+    }
+
+    #[krabka_bdd::given("a principal holds {grants}")]
+    async fn principal_grants(share_heartbeat_gates: &mut ShareHeartbeatGates, grants: Grants) {
+        let started = start_broker(Arc::new(ControllerPeerAllowed(acl_authorizer()))).await;
+        started.broker.wait_until_group_coordinator_ready().await;
+        let records = match grants {
+            Grants::Nothing => Vec::new(),
+            Grants::GroupRead => vec![group_read_acl("g")],
+            Grants::GroupReadAndDescribe => vec![group_read_acl("g"), describe_acl("topic-a")],
         };
-        let req = request("denied-group", vec!["t1"]);
-        handle(broker, req, VERSION, &ctx)
+        if !records.is_empty() {
+            started
+                .broker
+                .broker_arc_for_test()
+                .controller
+                .submit_change(records)
+                .await
+                .expect("grant the principal's ACLs");
+        }
+        share_heartbeat_gates.started.set(started);
+    }
+
+    #[krabka_bdd::given("share.version is finalized at {level}")]
+    async fn share_version_level(share_heartbeat_gates: &ShareHeartbeatGates, level: i16) {
+        finalize_share_version(
+            &share_heartbeat_gates
+                .started
+                .get()
+                .broker
+                .broker_arc_for_test(),
+            level,
+        )
+        .await;
+    }
+
+    #[krabka_bdd::given("topic-a exists")]
+    async fn topic_a_exists(share_heartbeat_gates: &ShareHeartbeatGates) {
+        let handle = &share_heartbeat_gates.started.get().broker;
+        handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(
+                topic_with_partitions()
+                    .name("topic-a")
+                    .topic_id(uuid::Uuid::from_u128(1))
+                    .partitions(1)
+                    .node(krabka_raft::NodeId(handle.node_id()))
+                    .call(),
+            )
             .await
-            .expect("ShareGroupHeartbeat handler")
+            .expect("create topic-a");
     }
 
-    #[tokio::test]
-    async fn handle_protocol_gate_precedes_group_acl() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [start_broker(Arc::new(acl_authorizer()))];
-        };
-        finalize_share_version(&broker, 0).await;
-        let resp = handle_denied_group_heartbeat(&broker).await;
-
-        assert!(resp.error_code == codes::UNSUPPORTED_VERSION, "{resp:?}");
-
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn handle_group_read_denied_preserves_error_response() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [start_broker(Arc::new(acl_authorizer()))];
-        };
-        let resp = handle_denied_group_heartbeat(&broker).await;
-
-        assert!(
-            resp.error_code == codes::GROUP_AUTHORIZATION_FAILED,
-            "{resp:?}"
-        );
-
-        broker_handle.shutdown().await;
-    }
-
-    /// A non-zero `member_epoch` with an empty `member_id` is malformed
-    /// (Kafka rejects it before topic filtering) and answers
-    /// `INVALID_REQUEST` even when the request also names a Describe-denied
-    /// topic -- the malformed-request check must win, not
-    /// `TOPIC_AUTHORIZATION_FAILED`.
-    #[tokio::test]
-    async fn handle_malformed_member_id_precedes_topic_authorization() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [start_broker(Arc::new(acl_authorizer()))];
-        };
-        grant_group_read(&broker, "g").await;
+    /// Sends `req` as `User:alice` and keeps the answer.
+    async fn send_as_alice(
+        share_heartbeat_gates: &mut ShareHeartbeatGates,
+        req: ShareGroupHeartbeatRequest,
+    ) {
         let RequestIdentity { principal, peer } = alice_peer();
         let ctx = request_context(&principal, &peer, "c");
-        // No Describe grant for "topic-b" -- if the malformed-request check
-        // did not run first, this would answer `TOPIC_AUTHORIZATION_FAILED`.
-        let req = ShareGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: String::new(),
-            member_epoch: 5,
-            subscribed_topic_names: Some(vec!["topic-b".into()]),
-            ..Default::default()
-        };
-
-        let resp = handle(&broker, req, VERSION, &ctx)
+        let broker = share_heartbeat_gates
+            .started
+            .get()
+            .broker
+            .broker_arc_for_test();
+        let response = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ShareGroupHeartbeat handler");
-        assert!(resp.error_code == codes::INVALID_REQUEST, "{resp:?}");
+        share_heartbeat_gates.response.set(response);
+    }
 
-        broker_handle.shutdown().await;
+    #[krabka_bdd::when("a member sends a first heartbeat for group g subscribing to {topics}")]
+    async fn first_heartbeat(
+        share_heartbeat_gates: &mut ShareHeartbeatGates,
+        topics: Subscription,
+    ) {
+        let req = ShareGroupHeartbeatRequest {
+            subscribed_topic_names: Some(topics.0),
+            ..request("g", Vec::new())
+        };
+        send_as_alice(share_heartbeat_gates, req).await;
+    }
+
+    #[krabka_bdd::when(
+        "a member with an empty member id sends a heartbeat at epoch {epoch} for group g subscribing to topic-b"
+    )]
+    async fn empty_member_id_heartbeat(
+        share_heartbeat_gates: &mut ShareHeartbeatGates,
+        epoch: i32,
+    ) {
+        let req = ShareGroupHeartbeatRequest {
+            member_id: String::new(),
+            member_epoch: epoch,
+            ..request("g", vec!["topic-b"])
+        };
+        send_as_alice(share_heartbeat_gates, req).await;
+    }
+
+    #[krabka_bdd::then("the heartbeat is refused with {refusal}")]
+    fn heartbeat_refused(share_heartbeat_gates: &ShareHeartbeatGates, refusal: Refusal) {
+        let expected = ShareGroupHeartbeatResponse {
+            error_code: refusal.code(),
+            ..Default::default()
+        };
+        assert!(*share_heartbeat_gates.response.get() == expected);
+    }
+
+    #[krabka_bdd::then("the heartbeat is accepted")]
+    fn heartbeat_accepted(share_heartbeat_gates: &ShareHeartbeatGates) {
+        let response = share_heartbeat_gates.response.get();
+        assert!((response.error_code, &response.error_message) == (codes::NONE, &None));
+    }
+
+    #[krabka_bdd::then("group g has {count} member(s)")]
+    async fn group_member_count(share_heartbeat_gates: &ShareHeartbeatGates, count: usize) {
+        let broker = share_heartbeat_gates
+            .started
+            .get()
+            .broker
+            .broker_arc_for_test();
+        let ShareGroupSnapshot {
+            actor: _actor,
+            view,
+        } = share_group_view(&broker, "g").await;
+        assert!(view.members.len() == count, "{view:?}");
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "A heartbeat gets UNSUPPORTED_VERSION while share groups are off"
+    )]
+    #[tokio::test]
+    async fn share_version_zero_precedes_the_group_acl(
+        share_heartbeat_gates: ShareHeartbeatGates,
+        case: String,
+        grants: String,
+    ) {
+        let _ = (share_heartbeat_gates, case, grants);
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "A principal without group Read is refused"
+    )]
+    #[tokio::test]
+    async fn group_read_is_required(share_heartbeat_gates: ShareHeartbeatGates) {
+        let _ = share_heartbeat_gates;
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "An empty member id is invalid even with an undescribable topic"
+    )]
+    #[tokio::test]
+    async fn member_id_precedes_topic_authorization(share_heartbeat_gates: ShareHeartbeatGates) {
+        let _ = share_heartbeat_gates;
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "One undescribable topic refuses the heartbeat and adds no member"
+    )]
+    #[tokio::test]
+    async fn an_undescribable_topic_refuses_the_heartbeat(
+        share_heartbeat_gates: ShareHeartbeatGates,
+    ) {
+        let _ = share_heartbeat_gates;
+    }
+
+    #[rstest_bdd_macros::scenario(
+        path = "tests/features/handler_share_heartbeat/heartbeat.feature",
+        name = "Describable topics admit the member"
+    )]
+    #[tokio::test]
+    async fn describable_topics_admit_the_member(share_heartbeat_gates: ShareHeartbeatGates) {
+        let _ = share_heartbeat_gates;
     }
 
     #[derive(Default)]
@@ -611,91 +744,6 @@ mod tests {
 
     #[test]
     fn subscribed_names_describe_denied_table() { denied_table_fixture(); }
-
-    // ── Explicit-name `Describe` checks (issue #720) ────────────────────
-
-    /// A `SubscribedTopicNames` entry this principal cannot `Describe` fails
-    /// the whole heartbeat with `TOPIC_AUTHORIZATION_FAILED` (29), and the
-    /// group is left with no member -- Kafka never builds the coordinator
-    /// record in this case, so an attacker cannot use group membership to
-    /// learn a denied topic's id or partitions.
-    #[tokio::test]
-    async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
-        // Deliberately no Describe grant for "topic-b".
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [start_broker(Arc::new(acl_authorizer()))];
-        };
-        broker
-            .controller
-            .submit_change(vec![group_read_acl("g"), describe_acl("topic-a")])
-            .await
-            .expect("grant group Read and Describe(topic-a)");
-        let RequestIdentity { principal, peer } = alice_peer();
-        let ctx = request_context(&principal, &peer, "c");
-        let req = request("g", vec!["topic-a", "topic-b"]);
-
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ShareGroupHeartbeat handler");
-        assert!(
-            resp.error_code == codes::TOPIC_AUTHORIZATION_FAILED,
-            "{resp:?}"
-        );
-
-        let ShareGroupSnapshot {
-            actor: _actor,
-            view,
-        } = share_group_view(&broker, "g").await;
-        assert!(view.members.is_empty(), "{view:?}");
-
-        broker_handle.shutdown().await;
-    }
-
-    /// The end-to-end authorized case: both subscribed topics are
-    /// `Describe`-authorized and the group is `Read`-authorized, so the
-    /// heartbeat succeeds and creates a member.
-    #[tokio::test]
-    async fn handle_all_authorized_creates_member() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(ControllerPeerAllowed(acl_authorizer()))).await;
-        broker_handle.wait_until_group_coordinator_ready().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let allowed_id = uuid::Uuid::from_u128(1);
-        let node = krabka_raft::NodeId(broker_handle.node_id());
-        let mut records = vec![group_read_acl("g"), describe_acl("topic-a")];
-        records.extend(
-            topic_with_partitions()
-                .name("topic-a")
-                .topic_id(allowed_id)
-                .partitions(1)
-                .node(node)
-                .call(),
-        );
-        broker
-            .controller
-            .submit_change(records)
-            .await
-            .expect("grant ACLs and create topic");
-        let RequestIdentity { principal, peer } = alice_peer();
-        let ctx = request_context(&principal, &peer, "c");
-        let req = request("g", vec!["topic-a"]);
-
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ShareGroupHeartbeat handler");
-        assert!(resp.error_code == codes::NONE, "{resp:?}");
-
-        let ShareGroupSnapshot {
-            actor: _actor,
-            view,
-        } = share_group_view(&broker, "g").await;
-        assert!(view.members.len() == 1, "{view:?}");
-
-        broker_handle.shutdown().await;
-    }
 
     #[tokio::test]
     async fn handle_persists_request_client_identity() {

@@ -34,7 +34,7 @@ mod sweep;
 pub use crate::time_util::MetadataSweepConfig as CleanerConfig;
 
 #[cfg(test)]
-mod test_support;
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 

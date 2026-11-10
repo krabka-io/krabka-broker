@@ -217,7 +217,7 @@ mod tests {
                 acl_wire::operation_to_wire, authorized_operations::authorized_operations_bits,
             },
             test_support::{
-                self as broker_fixture_support, DenyAll, KafkaErrorCode,
+                self as broker_fixture_support, KafkaErrorCode,
                 StartedBroker as HandlerStartedBroker, allow_acl, peer, principal, request_context,
                 start_group_broker_no_audit,
             },
@@ -281,35 +281,6 @@ mod tests {
         handle(broker, req.clone(), version.0, &ctx)
             .await
             .expect("handle")
-    }
-
-    /// A Deny on `Describe Group` answers the row, not the request: each named
-    /// group gets its own `GROUP_AUTHORIZATION_FAILED` and the coordinator is
-    /// never consulted.
-    #[tokio::test]
-    async fn a_denied_group_is_refused_per_row() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-
-        let resp = drive(
-            &broker,
-            VERSION,
-            &request().groups(&["group-a", "group-b"]).call(),
-        )
-        .await;
-
-        assert!(
-            resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
-                groups: vec![
-                    error_row("group-a", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
-                    error_row("group-b", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
-                ],
-            })
-        );
-        broker_handle.shutdown().await;
     }
 
     #[derive(derive_more::From, derive_more::Into)]
@@ -479,79 +450,6 @@ mod tests {
         }
     }
 
-    /// A live classic group is projected with its state and, per Kafka, the
-    /// empty string for the `protocol_type` and `protocol_data` a group that
-    /// has not yet joined a protocol carries. Without the KIP-430 flag the
-    /// bitfield keeps the `i32::MIN` "not present" sentinel, which is what
-    /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
-    #[tokio::test]
-    async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
-        };
-        let _ = broker.group_coordinator.get_or_create_classic("classic-a");
-
-        let resp = drive(&broker, VERSION, &request().call()).await;
-
-        assert!(
-            resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
-                groups: vec![krabka_broker_macros::tagged_wire!(DescribedGroup {
-                    error_code: codes::NONE,
-                    error_message: None,
-                    group_id: "classic-a".into(),
-                    group_state: "Empty".into(),
-                    protocol_type: String::new(),
-                    protocol_data: String::new(),
-                    members: vec![],
-                    authorized_operations: i32::MIN,
-                })],
-            }),
-            "{resp:?}"
-        );
-        broker_handle.shutdown().await;
-    }
-
-    /// KIP-430: with the flag set the row carries the group operations the
-    /// principal holds, so the field moves off its sentinel.
-    #[tokio::test]
-    async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let _ = broker.group_coordinator.get_or_create_classic("classic-a");
-
-        let resp = drive(
-            &broker,
-            VERSION,
-            &request().operations(OperationsDisclosure::Include).call(),
-        )
-        .await;
-
-        krabka_broker_macros::request_test_identity! {
-            bind(p, peer);
-            user ["admin"];
-        };
-        let expected = authorized_operations_bits(
-            &AllowAllAuthorizer,
-            &broker.controller.current_image(),
-            &request_context(&p, &peer, "test-client"),
-            ResourceType::Group,
-            "classic-a",
-        );
-        assert!(expected != i32::MIN);
-        assert!(
-            resp.groups
-                .iter()
-                .map(|g| (g.group_id.as_str(), g.error_code, g.authorized_operations))
-                .collect::<Vec<_>>()
-                == vec![("classic-a", codes::NONE, expected)]
-        );
-        broker_handle.shutdown().await;
-    }
-
     fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
         krabka_metadata::MetadataRecord::V1AccessControlEntry(
             allow_acl()
@@ -581,9 +479,10 @@ mod tests {
     /// `DescribeConfigs`, `AlterConfigs`).
     #[tokio::test]
     async fn denied_rows_come_first_and_the_bits_cover_every_group_operation() {
-        // (ACLs on `allowed`, include flag, expected response rows)
+        // (requested groups, ACLs on `allowed`, include flag, expected response rows)
         let rows = [
             (
+                &["allowed", "denied"][..],
                 vec![AclOperation::Describe],
                 OperationsDisclosure::Omit,
                 vec![
@@ -592,6 +491,7 @@ mod tests {
                 ],
             ),
             (
+                &["allowed", "denied"][..],
                 vec![AclOperation::Describe, AclOperation::AlterConfigs],
                 OperationsDisclosure::Include,
                 vec![
@@ -605,6 +505,7 @@ mod tests {
                 ],
             ),
             (
+                &["allowed", "denied"][..],
                 vec![AclOperation::All],
                 OperationsDisclosure::Include,
                 vec![
@@ -619,8 +520,26 @@ mod tests {
                     ),
                 ],
             ),
+            // Several denied groups keep their request order, ahead of the
+            // allowed one.
+            (
+                &["denied-b", "allowed", "denied-a"][..],
+                vec![AclOperation::Describe],
+                OperationsDisclosure::Omit,
+                vec![
+                    error_row(
+                        "denied-b",
+                        KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
+                    ),
+                    error_row(
+                        "denied-a",
+                        KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
+                    ),
+                    empty_row("allowed", i32::MIN),
+                ],
+            ),
         ];
-        for (acls, include_ops, expected) in rows {
+        for (groups, acls, include_ops, expected) in rows {
             let authorizer = SimpleAclAuthorizer::new(HashSet::new());
             let HandlerStartedBroker {
                 broker: broker_handle,
@@ -637,10 +556,7 @@ mod tests {
             let resp = drive(
                 &broker,
                 VERSION,
-                &request()
-                    .groups(&["allowed", "denied"])
-                    .operations(include_ops)
-                    .call(),
+                &request().groups(groups).operations(include_ops).call(),
             )
             .await;
 
@@ -648,7 +564,7 @@ mod tests {
                 resp == krabka_broker_macros::unthrottled_wire!(DescribeGroupsResponse {
                     groups: expected
                 }),
-                "{acls:?}"
+                "{groups:?} {acls:?}"
             );
             broker_handle.shutdown().await;
         }

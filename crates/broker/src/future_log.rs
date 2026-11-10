@@ -43,7 +43,7 @@ mod registry;
 mod replicator;
 mod start;
 #[cfg(test)]
-mod test_support;
+pub mod test_support;
 mod truncation;
 
 pub use self::{

@@ -25,7 +25,6 @@ use {
 };
 
 pub(super) const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
-pub(super) const KAFKA_UNSUPPORTED_SASL_MECHANISM: i16 = 33;
 pub(super) const KAFKA_UNACCEPTABLE_CREDENTIAL: i16 = 93;
 
 pub(super) fn valid_upsertion(name: &str) -> ScramCredentialUpsertion {

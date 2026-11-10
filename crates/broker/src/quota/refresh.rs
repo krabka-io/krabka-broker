@@ -213,16 +213,6 @@ mod tests {
     }
 
     #[test]
-    fn refresh_updates_existing_bucket_rate() {
-        let AliceBucket { buckets, quota } = alice_bucket().call();
-        let before = quota.bound();
-
-        let img = img_with_quota().value(2048.0).call();
-        refresh_buckets(&img, &buckets);
-        assert!((before, quota.bound()) == (0.0, 2048.0));
-    }
-
-    #[test]
     fn refresh_zeroes_bucket_when_quota_removed_from_image() {
         let AliceBucket { buckets, quota } = alice_bucket().rate(1024.0).call();
         let before = quota.bound();

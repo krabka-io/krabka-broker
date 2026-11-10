@@ -29,6 +29,7 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_bdd::{Given, given, then, when},
     krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType},
     krabka_protocol::{
         owned::{
@@ -79,50 +80,6 @@ fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopi
 
 fn response(rows: Vec<DeletableTopicResult>) -> DeleteTopicsResponse {
     krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse { responses: rows })
-}
-
-#[tokio::test]
-async fn handle_denied_topic_returns_authorization_failure() {
-    krabka_broker_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, p, peer);
-        boot [start_broker] deny_all;
-        user ["alice"];
-    };
-    let req = request(vec![named_state("secret")]);
-
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    let expected = response(vec![row(
-        Some("secret"),
-        WireUuid::ZERO,
-        codes::TOPIC_AUTHORIZATION_FAILED,
-    )]);
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_unknown_name_and_id_preserve_error_rows() {
-    allow_all_broker_setup!(
-        (broker_handle, _dir, broker, p, peer),
-        start_broker,
-        "admin"
-    );
-    let bogus_id = WireUuid([8; 16]);
-    let req = request(vec![named_state("missing"), id_state(bogus_id)]);
-
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    let expected = response(vec![
-        row(None, bogus_id, codes::UNKNOWN_TOPIC_ID),
-        row(
-            Some("missing"),
-            WireUuid::ZERO,
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-        ),
-    ]);
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
 }
 
 // ── KFC-9: the break-glass gate over a topic deletion ───────────────
@@ -734,77 +691,142 @@ async fn topic_deletion_authorization_case_5(
 
 // ── #743: delete.topic.enable ───────────────────────────────────────
 
-/// Kafka's `ControllerApis.deleteTopics` refuses every row when
-/// `delete.topic.enable` is false: `INVALID_REQUEST` below v3 and
-/// `TOPIC_DELETION_DISABLED` from v3, with the name and the id the client sent
-/// and no message. The topic stays.
-#[tokio::test]
-async fn delete_topic_enable_false_refuses_every_row() {
-    const TOPIC: &str = "kept";
-    let cases = [
-        (true, 6, codes::NONE, false),
-        (false, 2, codes::INVALID_REQUEST, true),
-        (false, 3, codes::TOPIC_DELETION_DISABLED, true),
-        (false, 6, codes::TOPIC_DELETION_DISABLED, true),
-    ];
+/// The topic the `delete.topic.enable` scenarios ask the broker to delete.
+const KEPT: &str = "kept";
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for (enabled, version, error_code, exists) in cases {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker_no_audit_with(move |cfg| {
-            cfg.authorizer = Arc::new(AllowAllAuthorizer);
-            cfg.delete_topic_enable = enabled;
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_broker_macros::request_test_identity! {
-            bind(p, peer);
-            user ["admin"];
-        };
-        let ctx = test_context(&p, &peer);
-        let topic_id = seeded_topic_id(
-            &broker,
-            &ctx,
-            configured_topic_request().topic(TOPIC).call(),
-        )
-        .await;
-        let req = if version < 6 {
-            DeleteTopicsRequest {
-                topic_names: vec![TOPIC.into()],
-                timeout_ms: 5_000,
-                ..Default::default()
-            }
-        } else {
-            request(vec![named_state(TOPIC)])
-        };
-        let ctx = test_context(&p, &peer);
-        let resp: DeleteTopicsResponse = dispatch_wire(&broker, API_KEY, version, &req, &ctx).await;
-        let still_there = broker.controller.current_image().topic(TOPIC).is_some();
-        actual.push(((enabled, version), resp, still_there));
-
-        // A deleted topic's v6 row carries its id; a refused row carries the
-        // zero id the name row was sent with, and v2 carries no id at all.
-        let row = krabka_broker_macros::tagged_wire!(DeletableTopicResult {
-            name: Some(TOPIC.into()),
-            topic_id: if error_code == codes::NONE {
-                topic_id
-            } else {
-                WireUuid::ZERO
-            },
-            error_code,
-            error_message: None,
-        });
-        expected.push((
-            (enabled, version),
-            krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse {
-                responses: vec![row],
-            }),
-            exists,
-        ));
-        broker_handle.shutdown().await;
-    }
-    assert!(actual == expected);
+/// The row code a `delete.topic.enable` scenario expects for its topic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+enum DeletionVerdict {
+    #[step_param("NONE")]
+    Deleted,
+    #[step_param("INVALID_REQUEST")]
+    InvalidRequest,
+    #[step_param("TOPIC_DELETION_DISABLED")]
+    TopicDeletionDisabled,
 }
+
+impl DeletionVerdict {
+    const fn error_code(self) -> i16 {
+        match self {
+            Self::Deleted => codes::NONE,
+            Self::InvalidRequest => codes::INVALID_REQUEST,
+            Self::TopicDeletionDisabled => codes::TOPIC_DELETION_DISABLED,
+        }
+    }
+}
+
+/// One broker with a topic, and the `DeleteTopics` answer for that topic.
+struct TopicDeletionSwitch {
+    started: Given<HandlerStartedBroker>,
+    topic_id: Given<WireUuid>,
+    response: Given<DeleteTopicsResponse>,
+}
+
+#[rstest::fixture]
+fn topic_deletion_switch() -> TopicDeletionSwitch {
+    const GIVEN: &str = "Given a broker with delete.topic.enable <enabled> holds a topic";
+    TopicDeletionSwitch {
+        started: Given::new("started", GIVEN),
+        topic_id: Given::new("topic_id", GIVEN),
+        response: Given::new(
+            "response",
+            "When a client deletes the topic by name with DeleteTopics version <version>",
+        ),
+    }
+}
+
+#[given("a broker with delete.topic.enable {enabled} holds a topic")]
+async fn topic_deletion_switched(topic_deletion_switch: &mut TopicDeletionSwitch, enabled: bool) {
+    let started = start_broker_no_audit_with(move |cfg| {
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.delete_topic_enable = enabled;
+    })
+    .await;
+    let broker = started.broker.broker_arc_for_test();
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    topic_deletion_switch.topic_id.set(
+        seeded_topic_id(
+            &broker,
+            &test_context(&p, &peer),
+            configured_topic_request().topic(KEPT).call(),
+        )
+        .await,
+    );
+    topic_deletion_switch.started.set(started);
+}
+
+#[when("a client deletes the topic by name with DeleteTopics version {version}")]
+async fn delete_switched_topic(topic_deletion_switch: &mut TopicDeletionSwitch, version: i16) {
+    let broker = topic_deletion_switch
+        .started
+        .get()
+        .broker
+        .broker_arc_for_test();
+    // Below v6 a request names its topics in `topic_names`; from v6 in `topics`.
+    let req = if version < 6 {
+        DeleteTopicsRequest {
+            topic_names: vec![KEPT.into()],
+            timeout_ms: 5_000,
+            ..Default::default()
+        }
+    } else {
+        request(vec![named_state(KEPT)])
+    };
+    krabka_broker_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
+    let ctx = test_context(&p, &peer);
+    topic_deletion_switch
+        .response
+        .set(dispatch_wire(&broker, API_KEY, version, &req, &ctx).await);
+}
+
+/// A deleted topic's row carries its id; a refused row carries the zero id
+/// the name row was sent with, and v2 carries no id at all. No row carries a
+/// message.
+#[then("the deletion answers {verdict} for the topic")]
+fn switched_deletion_row(topic_deletion_switch: &TopicDeletionSwitch, verdict: DeletionVerdict) {
+    let topic_id = if verdict == DeletionVerdict::Deleted {
+        *topic_deletion_switch.topic_id.get()
+    } else {
+        WireUuid::ZERO
+    };
+    let row = krabka_broker_macros::tagged_wire!(DeletableTopicResult {
+        name: Some(KEPT.into()),
+        topic_id,
+        error_code: verdict.error_code(),
+        error_message: None,
+    });
+    assert!(
+        *topic_deletion_switch.response.get()
+            == krabka_broker_macros::unthrottled_wire!(DeleteTopicsResponse {
+                responses: vec![row],
+            })
+    );
+}
+
+/// Whether the broker's image still holds the topic, read before the broker
+/// shuts down.
+async fn switched_topic_exists(topic_deletion_switch: &mut TopicDeletionSwitch) -> bool {
+    let started = topic_deletion_switch.started.take();
+    let exists = started
+        .broker
+        .controller_image_for_test()
+        .topic(KEPT)
+        .is_some();
+    started.broker.shutdown().await;
+    exists
+}
+
+#[then("the topic still exists")]
+async fn switched_topic_stays(topic_deletion_switch: &mut TopicDeletionSwitch) {
+    assert!(switched_topic_exists(topic_deletion_switch).await);
+}
+
+#[then("the topic no longer exists")]
+async fn switched_topic_gone(topic_deletion_switch: &mut TopicDeletionSwitch) {
+    assert!(!switched_topic_exists(topic_deletion_switch).await);
+}
+
+krabka_bdd::scenarios!(
+    "tests/features/handler_delete_topic_validation/deletion_disabled.feature",
+    fixtures = [topic_deletion_switch: TopicDeletionSwitch],
+);

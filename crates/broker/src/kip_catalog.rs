@@ -384,8 +384,10 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/create_delegation_token.rs",
         tests: &[
-            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_admits_minting_for_that_owner_only",
-            "crates/broker/src/handlers/describe_delegation_token/tests.rs::describe_tokens_acl_on_the_owner_grants_all_of_their_tokens",
+            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_admits_minting_for_that_owner",
+            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_covers_no_other_owner",
+            "crates/broker/src/handlers/describe_delegation_token/scenarios.rs::a_describe_tokens_grant_on_the_owner_shows_bob_all_of_the_owner_s_tokens",
+            "crates/broker/src/handlers/describe_delegation_token/scenarios.rs::without_a_describe_tokens_grant_on_the_owner_bob_sees_none_of_the_owner_s_tokens",
             "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::exact_user_token_filter_matches_the_stored_binding",
         ],
         note: "",

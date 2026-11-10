@@ -120,6 +120,8 @@ struct PartitionKey {
 use crate::metrics::cleaner_failure_reason as failure_reason;
 
 #[cfg(test)]
+mod scenarios;
+#[cfg(test)]
 mod tests;
 
 /// Whether a KFC-9 write freeze stops this sweep from compacting `topic`.

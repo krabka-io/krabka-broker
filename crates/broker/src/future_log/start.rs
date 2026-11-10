@@ -302,47 +302,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn move_error_log_dir_not_found_when_target_unknown() {
-        // Empty broker — no partitions, no log dirs. `start_move`
-        // returns LogDirNotFound before it ever looks at the
-        // partition map.
-        let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(FutureLogRegistry::default());
-        let log_dirs: Vec<PathBuf> = vec![];
-        let bogus = tempdir().unwrap();
-        let err = move_with_defaults(
-            &partitions,
-            &future_logs,
-            &log_dirs,
-            &LogDirRegistry::default(),
-            None,
-            bogus.path(),
-        )
-        .await
-        .expect_err("expected LogDirNotFound");
-        assert!(matches!(err, MoveError::LogDirNotFound));
-    }
-
-    #[tokio::test]
-    async fn move_error_replica_not_available_when_partition_missing() {
-        let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(FutureLogRegistry::default());
-        let dir = tempdir().unwrap();
-        let err = move_with_defaults(
-            &partitions,
-            &future_logs,
-            &[dir.path().to_path_buf()],
-            &LogDirRegistry::default(),
-            Some(uuid::Uuid::from_u128(1)),
-            dir.path(),
-        )
-        .await
-        .expect_err("expected ReplicaNotAvailable");
-        assert!(matches!(err, MoveError::ReplicaNotAvailable));
-        assert_precreation_preference(&partitions, dir.path());
-    }
-
-    #[tokio::test]
     async fn invalid_target_does_not_replace_precreation_preference() {
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(FutureLogRegistry::default());

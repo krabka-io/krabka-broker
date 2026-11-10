@@ -36,14 +36,11 @@ pub fn consume_producer_quota(
 mod tests {
     use {
         super::consume_producer_quota,
-        crate::quota::{
-            QuotaBuckets,
-            test_support::{
-                QuotaEntityInput, check_fractional_bandwidth, image_with_rate, manual_buckets,
-            },
+        crate::quota::test_support::{
+            QuotaEntityInput, check_fractional_bandwidth, image_with_rate, manual_buckets,
         },
         assert2::{assert, check},
-        krabka_units::{Time, convert::TimeExt, millis, secs},
+        krabka_units::{millis, secs},
     };
 
     fn img_with_quota(
@@ -98,18 +95,6 @@ mod tests {
         let second = consume_producer_quota(&img, &buckets, "alice", Some("other-app"), 1_000);
 
         check!((first.delay, second.delay) == (secs(5), secs(6)));
-    }
-
-    #[test]
-    fn producer_quota_uses_client_id_entity_precedence() {
-        let img = user_and_client_quota(128.0);
-        let buckets = QuotaBuckets::new();
-
-        let matching = consume_producer_quota(&img, &buckets, "alice", Some("app"), 4096);
-        let other_client = consume_producer_quota(&img, &buckets, "alice", Some("other"), 4096);
-
-        assert!(matching > <Time as TimeExt>::ZERO);
-        assert!(other_client == <Time as TimeExt>::ZERO);
     }
 
     /// Kafka's `QuotaUtils.throttleTime`: 12 500 bytes over the padded 10 s

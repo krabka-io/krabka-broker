@@ -3,7 +3,7 @@
 use {
     super::{
         super::{
-            DELETE_RETENTION_MS, INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS,
+            INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS,
             MAX_COMPACTION_LAG_MS, MESSAGE_TIMESTAMP_TYPE, MIN_COMPACTION_LAG_MS,
             MIN_INSYNC_REPLICAS, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
             REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES,
@@ -43,30 +43,11 @@ fn config_map(pairs: &[ConfigPair<'_>]) -> BTreeMap<String, String> {
 /// a test of nothing.
 const UNKNOWN_KEY: &str = "not.a.topic.config";
 
-#[yare::parameterized(
-    positive = { "60000", true },
-    unlimited = { "-1", true },
-    below_unlimited = { "-5", false },
-    non_integer = { "abc", false },
-)]
-fn validate_retention_ms_boundary_cases(value: &str, want_ok: bool) {
-    assert2::assert!(
-        validate_topic_config(RETENTION_MS, value).is_ok() == want_ok,
-        "retention.ms={value}"
-    );
-}
-
 #[test]
 fn internal_segment_bytes_is_not_subject_to_the_topic_floor() {
     // The floor is the topic key's alone. `internal.segment.bytes` is
     // `defineInternal`'d with a null validator, so it still reaches below it.
     assert2::assert!(validate_topic_config(INTERNAL_SEGMENT_BYTES, "1").is_ok());
-}
-
-#[test]
-fn validate_compression_bogus_rejected() {
-    let err = validate_topic_config(COMPRESSION_TYPE, "bzip3").unwrap_err();
-    assert2::assert!(err.contains("compression.type"), "got: {err}");
 }
 
 #[test]
@@ -96,14 +77,6 @@ fn parse_compression_type_rejects_none() {
 #[test]
 fn validate_min_isr_positive_accepted() {
     assert2::assert!(validate_topic_config(MIN_INSYNC_REPLICAS, "2").is_ok());
-}
-
-#[test]
-fn validate_unknown_key_rejected() {
-    assert2::assert!(
-        validate_topic_config(UNKNOWN_KEY, "1000")
-            == Err(format!("Unknown topic config name: {UNKNOWN_KEY}"))
-    );
 }
 
 /// Streams applications send both override sets on their internal topics.
@@ -145,23 +118,6 @@ fn validate_dirty_ratio_accepts_the_closed_unit_interval(value: &str, want_ok: b
     );
 }
 
-#[test]
-fn validate_remote_storage_enable_accepts_bools() {
-    assert2::assert!(validate_topic_config(REMOTE_STORAGE_ENABLE, "true").is_ok());
-    assert2::assert!(validate_topic_config(REMOTE_STORAGE_ENABLE, "false").is_ok());
-}
-
-#[test]
-fn validate_remote_storage_enable_rejects_junk() {
-    let err = validate_topic_config(REMOTE_STORAGE_ENABLE, "yes").unwrap_err();
-    assert2::assert!(err.contains("remote.storage.enable"), "got: {err}");
-}
-
-#[test]
-fn is_recognized_includes_remote_storage_enable() {
-    assert2::assert!(is_recognized(REMOTE_STORAGE_ENABLE));
-}
-
 #[yare::parameterized(
     retention_ms = { RETENTION_MS, true },
     retention_bytes = { RETENTION_BYTES, true },
@@ -174,46 +130,6 @@ fn is_recognized_includes_remote_storage_enable() {
 )]
 fn is_recognized_matches_whitelist(key: &str, want: bool) {
     assert2::assert!(is_recognized(key) == want, "key {key:?}");
-}
-
-#[yare::parameterized(
-    minus_two = { "-2" },
-    minus_one = { "-1" },
-    positive = { "60000" },
-)]
-fn validate_local_retention_ms_accepts_minus_one_minus_two_and_positive(value: &str) {
-    assert2::assert!(
-        validate_topic_config(LOCAL_RETENTION_MS, value) == Ok(()),
-        "local.retention.ms={value}"
-    );
-}
-
-#[test]
-fn validate_local_retention_ms_rejects_below_minus_two() {
-    assert2::assert!(validate_topic_config(LOCAL_RETENTION_MS, "-3").is_err());
-}
-
-#[test]
-fn is_recognized_includes_local_retention_keys() {
-    assert2::assert!(is_recognized(LOCAL_RETENTION_MS));
-    assert2::assert!(is_recognized(LOCAL_RETENTION_BYTES));
-}
-
-#[yare::parameterized(
-    zero = { "0", true },
-    positive = { "86400000", true },
-    negative = { "-1", false },
-)]
-fn validate_delete_retention_ms_accepts_nonneg_rejects_negative(value: &str, want_ok: bool) {
-    assert2::assert!(
-        validate_topic_config(DELETE_RETENTION_MS, value).is_ok() == want_ok,
-        "delete.retention.ms={value}"
-    );
-}
-
-#[test]
-fn is_recognized_includes_delete_retention_ms() {
-    assert2::assert!(is_recognized(DELETE_RETENTION_MS));
 }
 
 #[test]
@@ -1072,3 +988,71 @@ fn canonicalize_tiered_map(topic_map: &mut TopicMapScenario) {
 fn accepted_tiered_map(topic_map: &TopicMapScenario) {
     check!(topic_map.combination == Some(Ok(())));
 }
+
+/// One topic key and the value an alteration sets it to.
+struct TopicRangeAlteration {
+    key: krabka_bdd::Given<String>,
+    value: krabka_bdd::Given<String>,
+}
+
+type RangeValidation = krabka_bdd::Attempt<(), String>;
+
+#[rstest::fixture]
+fn topic_range() -> TopicRangeAlteration {
+    TopicRangeAlteration {
+        key: krabka_bdd::Given::new("key", "Given a topic alteration sets <key> to <value>"),
+        value: krabka_bdd::Given::new("value", "Given a topic alteration sets <key> to <value>"),
+    }
+}
+
+#[rstest::fixture]
+fn range_validation() -> RangeValidation {
+    // The When step replaces it with what the validator returned.
+    RangeValidation::NotExecuted
+}
+
+#[krabka_bdd::given("a topic alteration sets {key} to {value}")]
+fn topic_range_alteration(topic_range: &mut TopicRangeAlteration, key: String, value: String) {
+    topic_range.key.set(key);
+    topic_range.value.set(value);
+}
+
+#[krabka_bdd::when("the broker attempts to validate the topic value")]
+fn attempts_to_validate_topic_value(
+    topic_range: &TopicRangeAlteration,
+) -> krabka_bdd::Attempt<(), String> {
+    RangeValidation::of(|| validate_topic_config(topic_range.key.get(), topic_range.value.get()))
+}
+
+#[krabka_bdd::then("the topic value is accepted")]
+fn topic_range_accepted(range_validation: &RangeValidation) {
+    assert2::assert!(*range_validation == RangeValidation::Succeeded(()));
+}
+
+#[krabka_bdd::then("the topic value is refused with {message}")]
+fn topic_range_refused(range_validation: &RangeValidation, message: String) {
+    assert2::assert!(*range_validation == RangeValidation::Failed(message));
+}
+
+/// Kafka's `ConfigDef.parseType` refusal of a `BOOLEAN` value.
+#[krabka_bdd::then("the topic value is refused as not a Kafka boolean")]
+fn topic_range_not_a_boolean(
+    topic_range: &TopicRangeAlteration,
+    range_validation: &RangeValidation,
+) {
+    let (key, value) = (topic_range.key.get(), topic_range.value.get());
+    assert2::assert!(
+        *range_validation
+            == RangeValidation::Failed(format!(
+                "Invalid value {value} for configuration {key}: Expected value to be either true or false"
+            ))
+    );
+}
+
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/config_keys/validation/tests/ranges",
+    fixtures = [
+        topic_range: TopicRangeAlteration,
+        range_validation: RangeValidation
+    ],
+);

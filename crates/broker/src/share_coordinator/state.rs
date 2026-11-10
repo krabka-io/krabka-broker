@@ -381,12 +381,13 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
+    /// A replayed snapshot, the offset of its record, the update replayed
+    /// after it, and the state the replay leaves.
     struct ShareReplayScenario {
-        snapshot: Option<ShareSnapshotValue>,
-        record_offset: Offset,
-        update: Option<ShareUpdateValue>,
-        replayed: Option<SharePartitionState>,
+        snapshot: krabka_bdd::Given<ShareSnapshotValue>,
+        record_offset: krabka_bdd::Given<Offset>,
+        update: krabka_bdd::Given<ShareUpdateValue>,
+        replayed: krabka_bdd::Given<SharePartitionState>,
     }
 
     #[derive(rstest_bdd_macros::DataTableRow)]
@@ -398,7 +399,54 @@ mod tests {
     #[rstest::fixture]
     fn share_replay() -> ShareReplayScenario {
         // Keep share replay inputs and observations fresh for each scenario.
-        ShareReplayScenario::default()
+        ShareReplayScenario {
+            snapshot: krabka_bdd::Given::new("snapshot", "Given a replay snapshot ..."),
+            record_offset: krabka_bdd::Given::new("record_offset", "Given a replay snapshot ..."),
+            update: krabka_bdd::Given::new("update", "Given a replay update ..."),
+            replayed: krabka_bdd::Given::new(
+                "replayed",
+                "When the coordinator replays the snapshot followed by the update",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given("a replay snapshot starts at offset {start} with leader epoch {leader}")]
+    fn replay_snapshot_at(share_replay: &mut ShareReplayScenario, start: i64, leader: i32) {
+        share_replay.snapshot.set(ShareSnapshotValue {
+            snapshot_epoch: 0,
+            state_epoch: 0,
+            leader_epoch: leader,
+            start_offset: Offset(start),
+            delivery_complete_count: 0,
+            create_timestamp: 0,
+            write_timestamp: 0,
+            state_batches: Vec::new(),
+        });
+        share_replay.record_offset.set(Offset(0));
+    }
+
+    #[krabka_bdd::given(
+        "a replay update has start offset {start}, leader epoch {leader} and available offsets {first} to {last}"
+    )]
+    fn replay_update_with(
+        share_replay: &mut ShareReplayScenario,
+        start: i64,
+        leader: i32,
+        first: i64,
+        last: i64,
+    ) {
+        share_replay.update.set(ShareUpdateValue {
+            snapshot_epoch: 0,
+            leader_epoch: leader,
+            start_offset: Offset(start),
+            delivery_complete_count: 0,
+            state_batches: vec![
+                batch()
+                    .bounds(Offset(first)..=Offset(last))
+                    .delivery(FixtureDeliveryState::Available)
+                    .call(),
+            ],
+        });
     }
 
     #[rstest_bdd_macros::given(
@@ -411,7 +459,7 @@ mod tests {
         leader: i32,
         offset: i64,
     ) {
-        share_replay.snapshot = Some(ShareSnapshotValue {
+        share_replay.snapshot.set(ShareSnapshotValue {
             snapshot_epoch: snapshot,
             state_epoch: state,
             leader_epoch: leader,
@@ -421,7 +469,7 @@ mod tests {
             write_timestamp: 0,
             state_batches: Vec::new(),
         });
-        share_replay.record_offset = Offset(offset);
+        share_replay.record_offset.set(Offset(offset));
     }
 
     #[rstest_bdd_macros::given(
@@ -434,10 +482,7 @@ mod tests {
         created: i64,
         written: i64,
     ) {
-        let snapshot = share_replay
-            .snapshot
-            .as_mut()
-            .expect("a replay snapshot was given");
+        let snapshot = share_replay.snapshot.get_mut();
         snapshot.start_offset = Offset(start);
         snapshot.delivery_complete_count = complete;
         snapshot.create_timestamp = created;
@@ -449,11 +494,7 @@ mod tests {
         share_replay: &mut ShareReplayScenario,
         #[datatable] rows: Rows<DeliveryRange>,
     ) {
-        share_replay
-            .snapshot
-            .as_mut()
-            .expect("a replay snapshot was given")
-            .state_batches = delivery_ranges(rows);
+        share_replay.snapshot.get_mut().state_batches = delivery_ranges(rows);
     }
 
     #[rstest_bdd_macros::given(
@@ -466,7 +507,7 @@ mod tests {
         start: i64,
         complete: i32,
     ) {
-        share_replay.update = Some(ShareUpdateValue {
+        share_replay.update.set(ShareUpdateValue {
             snapshot_epoch: snapshot,
             leader_epoch: leader,
             start_offset: Offset(start),
@@ -480,26 +521,17 @@ mod tests {
         share_replay: &mut ShareReplayScenario,
         #[datatable] rows: Rows<DeliveryRange>,
     ) {
-        share_replay
-            .update
-            .as_mut()
-            .expect("a replay update was given")
-            .state_batches = delivery_ranges(rows);
+        share_replay.update.get_mut().state_batches = delivery_ranges(rows);
     }
 
     #[rstest_bdd_macros::when("the coordinator replays the snapshot followed by the update")]
     fn replay_snapshot_and_update(share_replay: &mut ShareReplayScenario) {
-        let snapshot = share_replay
-            .snapshot
-            .as_ref()
-            .expect("a replay snapshot was given");
-        let update = share_replay
-            .update
-            .as_ref()
-            .expect("a replay update was given");
-        let mut state = SharePartitionState::from_snapshot(snapshot, share_replay.record_offset);
-        state.apply_update(update);
-        share_replay.replayed = Some(state);
+        let mut state = SharePartitionState::from_snapshot(
+            share_replay.snapshot.get(),
+            *share_replay.record_offset.get(),
+        );
+        state.apply_update(share_replay.update.get());
+        share_replay.replayed.set(state);
     }
 
     fn replay_field<T: FromStr>(fields: &BTreeMap<String, String>, name: &str) -> T
@@ -549,29 +581,13 @@ mod tests {
             fence_leader_epoch: replay_field(&fields, "fence_leader_epoch"),
             fence_state_epoch: replay_field(&fields, "fence_state_epoch"),
         };
-        assert!(share_replay.replayed.as_ref() == Some(&expected));
+        assert!(*share_replay.replayed.get() == expected);
     }
 
     rstest_bdd_macros::scenarios!(
         "tests/features/migrated/src/share_coordinator/state/replay.feature",
         fixtures = [share_replay: ShareReplayScenario]
     );
-
-    /// An update with `-1` keeps the stored start offset and leader epoch.
-    #[test]
-    fn update_with_minus_one_keeps_stored_values() {
-        let mut s = SharePartitionState::from_snapshot(&snapshot(50, vec![]), Offset(0));
-        s.apply_update(&ShareUpdateValue {
-            snapshot_epoch: 1,
-            leader_epoch: -1,
-            start_offset: Offset(-1),
-            delivery_complete_count: 3,
-            state_batches: vec![batch().bounds(Offset(40)..=Offset(55)).call()],
-        });
-        check!(s.start_offset == Offset(50));
-        check!(s.leader_epoch == 3);
-        check!(s.state_batches == vec![batch().bounds(Offset(50)..=Offset(55)).call()]);
-    }
 
     /// The update count restarts on a snapshot only once it has reached the
     /// threshold, and the fence epochs never go down.

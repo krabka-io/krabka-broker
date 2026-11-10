@@ -757,40 +757,6 @@ mod tests {
     }
 
     #[test]
-    fn share_auto_offset_reset_describe_config_defaults_to_latest() {
-        // The default the key reports, and the round trip a configured value
-        // takes: `DescribeConfigs` renders the duration the way
-        // `java.time.Duration::toString` does, so the value it reports parses
-        // back to the same strategy.
-        assert!(
-            StreamsGroupConfig::default().group_config_values()[KEY_SHARE_AUTO_OFFSET_RESET]
-                == "latest"
-        );
-    }
-
-    #[yare::parameterized(
-        earliest = { "earliest", "earliest" },
-        latest = { "latest", "latest" },
-        one_hour = { "by_duration:PT1H", "by_duration:PT1H" },
-        normalized_duration = { "by_duration:P1DT2H3M4.5S", "by_duration:PT26H3M4.5S" },
-        zero_duration = { "by_duration:PT0S", "by_duration:PT0S" },
-        normalized_case_and_units = { "by_duration:pt90m", "by_duration:PT1H30M" },
-    )]
-    fn share_auto_offset_reset_is_echoed_by_describe_configs(value: &str, want: &str) {
-        // DescribeConfigs renders durations the way `java.time.Duration.toString` does.
-        let overrides = maplit::btreemap! {KEY_SHARE_AUTO_OFFSET_RESET.into() => value.to_owned()};
-        let reported = StreamsGroupConfig::default()
-            .with_group_overrides(&overrides)
-            .expect("valid strategy")
-            .group_config_values()[KEY_SHARE_AUTO_OFFSET_RESET]
-            .clone();
-        assert2::assert!(reported == want, "{KEY_SHARE_AUTO_OFFSET_RESET}={value}");
-        assert2::assert!(
-            ShareAutoOffsetReset::parse(&reported) == ShareAutoOffsetReset::parse(value)
-        );
-    }
-
-    #[test]
     fn share_auto_offset_reset_from_group_overrides_defaults_to_latest() {
         assert!(
             ShareAutoOffsetReset::from_group_overrides(&BTreeMap::new())
@@ -809,113 +775,68 @@ mod tests {
         assert!(ShareAutoOffsetReset::from_group_overrides(&bogus) == ShareAutoOffsetReset::Latest);
     }
 
-    /// Kafka's `GroupConfig.evaluate` caps a stored group config to the
-    /// broker's bounds, and keeps every other override of the group. A
-    /// heartbeat interval of 0, which the actor's ticker cannot run, is capped
-    /// to the minimum like any other value below it.
-    #[test]
-    fn group_overrides_are_capped_to_the_broker_bounds() {
-        let broker = StreamsGroupConfig::default();
-        let rows = [
-            (KEY_SESSION_TIMEOUT_MS, "1000", StreamsGroupConfig {
-                session_timeout: broker.min_session_timeout,
-                ..broker.clone()
-            }),
-            (KEY_SESSION_TIMEOUT_MS, "3600000", StreamsGroupConfig {
-                session_timeout: broker.max_session_timeout,
-                ..broker.clone()
-            }),
-            (KEY_HEARTBEAT_INTERVAL_MS, "0", StreamsGroupConfig {
-                heartbeat_interval: broker.min_heartbeat_interval,
-                ..broker.clone()
-            }),
-            (KEY_HEARTBEAT_INTERVAL_MS, "-1", StreamsGroupConfig {
-                heartbeat_interval: broker.min_heartbeat_interval,
-                ..broker.clone()
-            }),
-            (KEY_HEARTBEAT_INTERVAL_MS, "60000", StreamsGroupConfig {
-                heartbeat_interval: broker.max_heartbeat_interval,
-                ..broker.clone()
-            }),
-            (KEY_ASSIGNMENT_INTERVAL_MS, "3600000", StreamsGroupConfig {
-                assignment_interval: MAX_ASSIGNMENT_INTERVAL,
-                ..broker.clone()
-            }),
-            (KEY_NUM_STANDBY_REPLICAS, "5", StreamsGroupConfig {
-                num_standby_replicas: MAX_NUM_STANDBY_REPLICAS,
-                ..broker.clone()
-            }),
-        ];
-        for (key, value, expected) in rows {
-            let overrides = maplit::btreemap! {key.into() => value.into()};
-            assert!(
-                broker.with_group_overrides(&overrides) == Ok(expected),
-                "{key}={value}"
-            );
+    /// The Streams settings whose capped or applied value a scenario checks,
+    /// named by their Kafka group config key.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum StreamsSetting {
+        #[step_param("streams.session.timeout.ms")]
+        SessionTimeout,
+        #[step_param("streams.heartbeat.interval.ms")]
+        HeartbeatInterval,
+        #[step_param("streams.initial.rebalance.delay.ms")]
+        InitialRebalanceDelay,
+        #[step_param("streams.assignment.interval.ms")]
+        AssignmentInterval,
+        #[step_param("streams.num.standby.replicas")]
+        NumStandbyReplicas,
+    }
+
+    impl StreamsSetting {
+        /// `config` with this setting at `value`, in milliseconds for a
+        /// duration.
+        fn at(self, config: StreamsGroupConfig, value: u64) -> StreamsGroupConfig {
+            let millis = Duration::from_millis(value);
+            match self {
+                Self::SessionTimeout => StreamsGroupConfig {
+                    session_timeout: millis,
+                    ..config
+                },
+                Self::HeartbeatInterval => StreamsGroupConfig {
+                    heartbeat_interval: millis,
+                    ..config
+                },
+                Self::InitialRebalanceDelay => StreamsGroupConfig {
+                    initial_rebalance_delay: millis,
+                    ..config
+                },
+                Self::AssignmentInterval => StreamsGroupConfig {
+                    assignment_interval: millis,
+                    ..config
+                },
+                Self::NumStandbyReplicas => StreamsGroupConfig {
+                    num_standby_replicas: i32::try_from(value).expect("a replica count"),
+                    ..config
+                },
+            }
         }
     }
 
-    /// A stored value that is not a whole number of milliseconds is still
-    /// refused, where a bound only caps.
-    #[test]
-    fn group_overrides_refuse_a_value_that_does_not_parse() {
-        let overrides = maplit::btreemap! {KEY_SESSION_TIMEOUT_MS.into() => "soon".into()};
-        assert!(
-            StreamsGroupConfig::default()
-                .with_group_overrides(&overrides)
-                .is_err()
-        );
-    }
-
-    /// The group override map holds every group key, the consumer and share
-    /// coordinators' among them. A key this coordinator does not apply must
-    /// not cost the group the streams overrides stored beside it.
-    #[test]
-    fn a_key_of_another_coordinator_leaves_the_streams_overrides_intact() {
-        let overrides = maplit::btreemap! {
-            KEY_NUM_STANDBY_REPLICAS.into() => "1".into(),
-            "consumer.session.timeout.ms".into() => "50000".into(),
-            "share.record.lock.duration.ms".into() => "45000".into(),
-            "errors.deadletterqueue.topic.name".into() => "dlq".into(),
-        };
-        let got = StreamsGroupConfig::default()
-            .with_group_overrides(&overrides)
-            .expect("foreign keys are ignored");
-        assert!(
-            got == StreamsGroupConfig {
-                num_standby_replicas: 1,
-                ..StreamsGroupConfig::default()
-            }
-        );
-    }
-
-    /// `streams.initial.rebalance.delay.ms` and `streams.assignment.interval.ms`
-    /// reach the fields the streams actor waits on, and are reported.
-    #[test]
-    fn the_rebalance_delay_and_assignment_interval_are_applied_and_reported() {
-        let overrides = maplit::btreemap! {
-            KEY_INITIAL_REBALANCE_DELAY_MS.into() => "0".into(),
-            KEY_ASSIGNMENT_INTERVAL_MS.into() => "250".into(),
-        };
-        let got = StreamsGroupConfig::default()
-            .with_group_overrides(&overrides)
-            .expect("valid overrides");
-        assert!(got.initial_rebalance_delay == Duration::ZERO);
-        assert!(got.assignment_interval == Duration::from_millis(250));
-        let reported = got.group_config_values();
-        assert!(reported[KEY_INITIAL_REBALANCE_DELAY_MS] == "0");
-        assert!(reported[KEY_ASSIGNMENT_INTERVAL_MS] == "250");
-    }
-    use rstest_bdd_macros::{given, scenarios, then, when};
-    #[derive(Default)]
+    use {
+        krabka_bdd::Given,
+        rstest_bdd_macros::{given, then, when},
+    };
     struct StreamsConfiguration {
         overrides: BTreeMap<String, String>,
-        configured: Option<Result<StreamsGroupConfig, String>>,
+        configured: Given<Result<StreamsGroupConfig, String>>,
     }
     #[rstest::fixture]
     fn streams_configuration() -> StreamsConfiguration {
         StreamsConfiguration {
-            ..StreamsConfiguration::default()
+            overrides: BTreeMap::new(),
+            configured: Given::new(
+                "configured",
+                "When the coordinator applies Streams group overrides to its default configuration",
+            ),
         }
     }
     #[given("no Streams group configuration values are overridden")]
@@ -936,11 +857,37 @@ mod tests {
             .overrides
             .insert(KEY_SHARE_AUTO_OFFSET_RESET.into(), text);
     }
+    #[krabka_bdd::given("the group stores {key} as {value}")]
+    fn stored_override(
+        streams_configuration: &mut StreamsConfiguration,
+        key: String,
+        value: String,
+    ) {
+        streams_configuration.overrides.insert(key, value);
+    }
+    /// The group override map holds every group key, the consumer and share
+    /// coordinators' among them.
+    #[krabka_bdd::given("the group stores keys that other coordinators own")]
+    fn foreign_overrides(streams_configuration: &mut StreamsConfiguration) {
+        streams_configuration.overrides.extend(maplit::btreemap! {
+            "consumer.session.timeout.ms".to_owned() => "50000".to_owned(),
+            "share.record.lock.duration.ms".to_owned() => "45000".to_owned(),
+            "errors.deadletterqueue.topic.name".to_owned() => "dlq".to_owned(),
+        });
+    }
     #[when("the coordinator applies Streams group overrides to its default configuration")]
     fn apply_streams_config(streams_configuration: &mut StreamsConfiguration) {
-        streams_configuration.configured = Some(
-            StreamsGroupConfig::default().with_group_overrides(&streams_configuration.overrides),
-        );
+        let configured =
+            StreamsGroupConfig::default().with_group_overrides(&streams_configuration.overrides);
+        streams_configuration.configured.set(configured);
+    }
+    impl StreamsConfiguration {
+        fn config(&self) -> &StreamsGroupConfig {
+            self.configured
+                .get()
+                .as_ref()
+                .expect("the coordinator accepted the overrides")
+        }
     }
     #[then("every Streams setting equals the Kafka GA default")]
     fn kafka_streams_defaults(streams_configuration: &StreamsConfiguration) {
@@ -969,87 +916,120 @@ mod tests {
             topology_description_backend: None,
             actor_mailbox_capacity: 64,
         };
-        assert!(
-            streams_configuration
-                .configured
-                .as_ref()
-                .expect("overrides applied")
-                .as_ref()
-                .expect("valid defaults")
-                == &expected
-        );
+        assert!(streams_configuration.config() == &expected);
     }
-    #[then("rack tags become {tags} and DescribeConfigs reports JSON text {reported}")]
+    /// The rack tags a group runs with: comma-separated tag keys, or `none`.
+    struct RackTags(Vec<String>);
+    impl FromStr for RackTags {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(if text == "none" {
+                Vec::new()
+            } else {
+                text.split(',').map(str::to_owned).collect()
+            }))
+        }
+    }
+    /// Why Kafka's `GroupConfig` refuses a rack tag list.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum TagRefusal {
+        Duplicate,
+        Empty,
+    }
+    impl TagRefusal {
+        const fn message(self) -> &'static str {
+            match self {
+                Self::Duplicate => {
+                    "streams.rack.aware.assignment.tags must not contain duplicate tag keys."
+                }
+                Self::Empty => {
+                    "Configuration 'streams.rack.aware.assignment.tags' values must not be empty."
+                }
+            }
+        }
+    }
+    /// The kind of `share.auto.offset.reset` strategy a group runs with.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum StrategyKind {
+        Latest,
+        Earliest,
+        Duration,
+    }
+    #[krabka_bdd::then("rack tags become {tags} and DescribeConfigs reports JSON text {reported}")]
     fn parsed_rack_tags(
         streams_configuration: &StreamsConfiguration,
-        tags: String,
+        tags: RackTags,
         reported: String,
     ) {
-        let config = streams_configuration
-            .configured
-            .as_ref()
-            .expect("overrides applied")
-            .as_ref()
-            .expect("valid rack tags");
-        let expected = if tags == "none" {
-            vec![]
-        } else {
-            tags.split(',').map(str::to_owned).collect::<Vec<_>>()
-        };
-        assert!(config.rack_aware_assignment_tags == expected);
+        let config = streams_configuration.config();
+        assert!(config.rack_aware_assignment_tags == tags.0);
         assert!(
             config.group_config_values()[KEY_RACK_AWARE_ASSIGNMENT_TAGS]
                 == serde_json::from_str::<String>(&reported).expect("quoted report")
         );
     }
-    #[then("rack awareness tags are rejected with Kafka {reason} validation message")]
-    fn refused_rack_tags(streams_configuration: &StreamsConfiguration, reason: String) {
-        let expected = match reason.as_str() {
-            "duplicate" => {
-                "streams.rack.aware.assignment.tags must not contain duplicate tag keys."
-            }
-            "empty" => {
-                "Configuration 'streams.rack.aware.assignment.tags' values must not be empty."
-            }
-            _ => panic!("unknown tag validation reason"),
-        };
-        assert!(
-            streams_configuration
-                .configured
-                .as_ref()
-                .expect("overrides applied")
-                .as_ref()
-                .err()
-                .map(String::as_str)
-                == Some(expected)
-        );
+    #[krabka_bdd::then("rack awareness tags are rejected with Kafka {reason} validation message")]
+    fn refused_rack_tags(streams_configuration: &StreamsConfiguration, reason: TagRefusal) {
+        assert!(streams_configuration.configured.get() == &Err(reason.message().to_owned()));
     }
-    #[then(
+    #[krabka_bdd::then(
         "auto offset reset selects {strategy} with duration seconds {seconds} and nanoseconds {nanos}"
     )]
     fn parsed_offset_reset(
         streams_configuration: &StreamsConfiguration,
-        strategy: String,
+        strategy: StrategyKind,
         seconds: u64,
         nanos: u32,
     ) {
-        let actual = streams_configuration
-            .configured
-            .as_ref()
-            .expect("overrides applied")
-            .as_ref()
-            .ok()
-            .map(|config| config.share_auto_offset_reset);
-        let expected = match strategy.as_str() {
-            "latest" => Some(ShareAutoOffsetReset::Latest),
-            "earliest" => Some(ShareAutoOffsetReset::Earliest),
-            "duration" => Some(ShareAutoOffsetReset::ByDuration(Duration::new(
-                seconds, nanos,
-            ))),
-            "rejected" => None,
-            _ => panic!("unknown offset reset strategy"),
+        let expected = match strategy {
+            StrategyKind::Latest => ShareAutoOffsetReset::Latest,
+            StrategyKind::Earliest => ShareAutoOffsetReset::Earliest,
+            StrategyKind::Duration => {
+                ShareAutoOffsetReset::ByDuration(Duration::new(seconds, nanos))
+            }
         };
-        assert!(actual == expected);
+        assert!(streams_configuration.config().share_auto_offset_reset == expected);
     }
-    scenarios!("tests/features/migrated/src/coordinator/unified/streams/config.feature",fixtures=[streams_configuration:StreamsConfiguration]);
+    #[krabka_bdd::then("the share auto offset reset is refused as no Kafka strategy")]
+    fn refused_offset_reset(streams_configuration: &StreamsConfiguration) {
+        let message = "share.auto.offset.reset must be `latest`, `earliest`, or \
+                       `by_duration:<PnDTnHnMn.nS>` with a non-negative duration";
+        assert!(streams_configuration.configured.get() == &Err(message.to_owned()));
+    }
+    #[krabka_bdd::then("DescribeConfigs reports {key} as {value}")]
+    fn reported_value(streams_configuration: &StreamsConfiguration, key: String, value: String) {
+        assert!(
+            streams_configuration
+                .config()
+                .group_config_values()
+                .get(&key)
+                == Some(&value)
+        );
+    }
+    #[krabka_bdd::then("the reported strategy parses back to the strategy the group runs with")]
+    fn reported_strategy_round_trips(streams_configuration: &StreamsConfiguration) {
+        let config = streams_configuration.config();
+        let reported = &config.group_config_values()[KEY_SHARE_AUTO_OFFSET_RESET];
+        assert!(ShareAutoOffsetReset::parse(reported) == Ok(config.share_auto_offset_reset));
+    }
+    #[krabka_bdd::then("the group runs with only {setting} changed, to {value}")]
+    fn runs_with_setting(
+        streams_configuration: &StreamsConfiguration,
+        setting: StreamsSetting,
+        value: u64,
+    ) {
+        let expected = setting.at(StreamsGroupConfig::default(), value);
+        assert!(streams_configuration.configured.get() == &Ok(expected));
+    }
+    #[krabka_bdd::then("the overrides are refused because {key} must be an integer")]
+    fn refused_integer(streams_configuration: &StreamsConfiguration, key: String) {
+        assert!(
+            streams_configuration.configured.get() == &Err(format!("{key} must be an integer"))
+        );
+    }
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/streams/config.feature",
+        fixtures = [streams_configuration: StreamsConfiguration]
+    );
 }

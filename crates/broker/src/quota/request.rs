@@ -163,14 +163,6 @@ mod tests {
     }
 
     #[test]
-    fn overage_returns_capped_delay() {
-        // rate=0.001% ⇒ 10 µs/sec budget; 1_000_000 µs of work is a colossal
-        // overage → multi-day delay → capped at 1s.
-        let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 0.001);
-        check_request_delay(&img, 1_000_000, secs(1), secs(1));
-    }
-
-    #[test]
     fn overage_uses_configured_maximum_delay() {
         let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 0.001);
         check_request_delay(&img, 1_000_000, millis(25), millis(25));

@@ -53,7 +53,6 @@ crates/broker/tests/features/handler_delegation_token_creation.feature	quote-in-
 crates/broker/tests/features/handler_delegation_token_creation.feature	quote-in-step	step `the token request has owner type "null", owner name "null", lifetime 3600000 and renewers none` quotes a value	1
 crates/broker/tests/features/handler_delegation_token_creation.feature	quote-in-step	step `the token request has owner type "null", owner name "null", lifetime 604800000 and renewers none` quotes a value	1
 crates/broker/tests/features/handler_delete_acl_matching.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/handler_delete_acl_matching.feature	quote-in-step	step `admin deletes Topic ACLs with pattern any, name "<empty>" and principal "<empty>"` quotes a value	1
 crates/broker/tests/features/handler_delete_acl_matching.feature	quote-in-step	step `admin deletes Topic ACLs with pattern any, name "<empty>" and principal "null"` quotes a value	1
 crates/broker/tests/features/handler_delete_acl_matching.feature	quote-in-step	step `admin deletes Topic ACLs with pattern any, name "foo" and principal "null"` quotes a value	1
 crates/broker/tests/features/handler_delete_acl_matching.feature	quote-in-step	step `admin deletes Topic ACLs with pattern any, name "null" and principal "<empty>"` quotes a value	1
@@ -84,7 +83,6 @@ crates/broker/tests/features/handler_describe_config_resources/resources.feature
 crates/broker/tests/features/handler_describe_quorum/errors.feature	case-column	the Examples table starts with column `code`, not `case`	1
 crates/broker/tests/features/handler_describe_quota_filters/filter.feature	case-column	the Examples table starts with column `components`, not `case`	2
 crates/broker/tests/features/handler_describe_quota_filters/filter.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/handler_describe_scram/scram.feature	case-column	the Examples table starts with column `users`, not `case`	1
 crates/broker/tests/features/handler_empty_fetch_charge/size.feature	case-column	the Examples table starts with column `version`, not `case`	1
 crates/broker/tests/features/handler_explicit_partition_assignment/assignment.feature	case-column	the Examples table starts with column `lists`, not `case`	1
 crates/broker/tests/features/handler_explicit_partition_assignment/assignment.feature	no-background	the feature has a `Background`	1
@@ -182,8 +180,6 @@ crates/broker/tests/features/handler_isr_validation/isr.feature	case-column	the 
 crates/broker/tests/features/handler_isr_validation/isr.feature	unknown-tag	tag `@named_kip_evidence` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
 crates/broker/tests/features/handler_join_group/join.feature	case-column	the Examples table starts with column `group`, not `case`	1
 crates/broker/tests/features/handler_join_group/join.feature	case-column	the Examples table starts with column `protocol`, not `case`	1
-crates/broker/tests/features/handler_lagging_watermark/fencing.feature	case-column	the Examples table starts with column `kind`, not `case`	1
-crates/broker/tests/features/handler_leave_group/leave.feature	case-column	the Examples table starts with column `version`, not `case`	1
 crates/broker/tests/features/handler_legacy_delete.feature	case-column	the Examples table starts with column `version`, not `case`	1
 crates/broker/tests/features/handler_list_config_resources/list.feature	case-column	the Examples table starts with column `version`, not `case`	1
 crates/broker/tests/features/handler_list_groups/list.feature	case-column	the Examples table starts with column `states`, not `case`	1
@@ -284,7 +280,6 @@ crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-i
 crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-in-step	step `the client pushes at 62000 milliseconds with {"id_xor":0,"compression_supported":true,"payload_len":10,"terminating":false}` quotes a value	1
 crates/broker/tests/features/migrated/src/client_metrics/manager/subscription.feature	case-column	the Examples table starts with column `input`, not `case`	1
 crates/broker/tests/features/migrated/src/cluster_id.feature	case-column	the Examples table starts with column `requested`, not `case`	1
-crates/broker/tests/features/migrated/src/config/listener.feature	or-in-step	step `no broker-wide or listener-specific idle timeout is configured` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/src/config/offset_retention.feature	or-in-step	step `the operator has not overridden offset retention or its sweep interval` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/src/config/scalar_checks/tests.feature	case-column	the Examples table starts with column `setting`, not `case`	1
 crates/broker/tests/features/migrated/src/config/test_defaults.feature	case-column	the Examples table starts with column `brokers`, not `case`	1
@@ -336,8 +331,6 @@ crates/broker/tests/features/migrated/src/config_keys/kafka_broker/tests/roster.
 crates/broker/tests/features/migrated/src/config_keys/kafka_parity/codec_boundaries.feature	case-column	the Examples table starts with column `key`, not `case`	1
 crates/broker/tests/features/migrated/src/config_keys/kafka_parity/metadata_surface.feature	max-steps	scenario `Kafka keys are covered and documented with only the named broker extensions` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/config_keys/kafka_parity/metadata_surface.feature	or-in-step	step `every captured topic key retains Kafka's type and its default or a documented divergence` offers alternatives with `or`	1
-crates/broker/tests/features/migrated/src/config_keys/kafka_parity/refused_values.feature	case-column	the Examples table starts with column `key`, not `case`	1
-crates/broker/tests/features/migrated/src/config_keys/kafka_parity/unconstrained_long.feature	case-column	the Examples table starts with column `value`, not `case`	1
 crates/broker/tests/features/migrated/src/config_keys/listener_endpoints/tests/addresses.feature	quote-in-step	step `listener addresses are JSON "EXTERNAL://:9095"` quotes a value	1
 crates/broker/tests/features/migrated/src/config_keys/listener_endpoints/tests/addresses.feature	quote-in-step	step `listener addresses are JSON "PLAINTEXT://127.0.0.1:9092,SSL://127.0.0.2:9092"` quotes a value	1
 crates/broker/tests/features/migrated/src/config_keys/listener_endpoints/tests/addresses.feature	quote-in-step	step `listener addresses are JSON "PLAINTEXT://127.0.0.1:9092,SSL://[::1]:9092"` quotes a value	1
@@ -386,10 +379,7 @@ crates/broker/tests/features/migrated/src/coordinator/unified/assignor/uniform/t
 crates/broker/tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature	one-when	scenario `Diverging resolved subscriptions force the heterogeneous builder` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature	one-when	scenario `heterogeneous reassignment is a fixed point in every member order` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/src/coordinator/unified/assignor/uniform/tests.feature	one-when	scenario `homogeneous reassignment is a fixed point in every member order` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/src/coordinator/unified/classic_ops/join.feature	case-column	the Examples table starts with column `member`, not `case`	1
-crates/broker/tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature	case-column	the Examples table starts with column `state`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/classic_state/membership.feature	case-column	the Examples table starts with column `is_new`, not `case`	1
-crates/broker/tests/features/migrated/src/coordinator/unified/classic_state/protocol.feature	case-column	the Examples table starts with column `state`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/consumer_state/group.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/consumer_state/group.feature	max-steps	scenario `Assignment epochs survive retained and revoked partitions and reset on static leave` has 11 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/coordinator/unified/consumer_state/group.feature	one-when	scenario `Assignment epochs survive retained and revoked partitions and reset on static leave` has 5 `When` steps, and exactly one is allowed	1
@@ -438,14 +428,12 @@ crates/broker/tests/features/migrated/src/coordinator/unified/share/persistence/
 crates/broker/tests/features/migrated/src/coordinator/unified/share/persistence/partition_metadata.feature	unknown-tag	tag `@state_partition_metadata` is not in the glossary; adding a tag means adding it, with its meaning, to crates/bdd-model/glossary.toml	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/epochs.feature	case-column	the Examples table starts with column `environment`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/internal_topics.feature	case-column	the Examples table starts with column `environment`, not `case`	1
-crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/offset_validation.feature	case-column	the Examples table starts with column `input`, not `case`	2
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/responses.feature	case-column	the Examples table starts with column `environment`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/static_members.feature	case-column	the Examples table starts with column `requests`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/static_members.feature	quote-in-step	step `a fresh streams actor with environment {"topics":[["in",1,1]],"max_size":2,"unstable":true}` quotes a value	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/static_members.feature	quote-in-step	step `the complete initial streams heartbeat response is {"code":0,"message":null,"member":"m1","epoch":2,"heartbeat_ms":5000,"task_ms":60000,"lag":10000,"active":[["0",[0]]],"standby":[],"warmup":[],"status":[],"endpoint_epoch":0,"endpoints":null}` quotes a value	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/statuses.feature	case-column	the Examples table starts with column `environment`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/actor/tests/subscriptions.feature	case-column	the Examples table starts with column `input`, not `case`	1
-crates/broker/tests/features/migrated/src/coordinator/unified/streams/config.feature	case-column	the Examples table starts with column `value`, not `case`	3
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/description/model.feature	case-column	the Examples table starts with column `node`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/migration.feature	case-column	the Examples table starts with column `members`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/persistence/assignment.feature	case-column	the Examples table starts with column `state`, not `case`	1
@@ -462,8 +450,6 @@ crates/broker/tests/features/migrated/src/coordinator/unified/streams/persistenc
 crates/broker/tests/features/migrated/src/coordinator/unified/streams/topology/configured.feature	or-in-step	step `the complete configured topology or exact configuration error is` offers alternatives with `or`	10
 crates/broker/tests/features/migrated/src/coordinator/unified/topic_hash.feature	case-column	the Examples table starts with column `name`, not `case`	1
 crates/broker/tests/features/migrated/src/coordinator/unified/topic_hash.feature	case-column	the Examples table starts with column `topics`, not `case`	1
-crates/broker/tests/features/migrated/src/cordoned_log_dirs.feature	case-column	the Examples table starts with column `value`, not `case`	2
-crates/broker/tests/features/migrated/src/cordoned_log_dirs.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/envelope/failure_codes.feature	case-column	the Examples table starts with column `failure`, not `case`	1
 crates/broker/tests/features/migrated/src/features.feature	case-column	the Examples table starts with column `source`, not `case`	1
 crates/broker/tests/features/migrated/src/fetch_session/order/victims.feature	max-steps	scenario `a consumer displaces the smallest old consumer session, not the oldest` has 7 steps, and at most 5 are allowed	1
@@ -488,14 +474,9 @@ crates/broker/tests/features/migrated/src/file_config/runtime_coordinators.featu
 crates/broker/tests/features/migrated/src/file_config/runtime_storage.feature	case-column	the Examples table starts with column `value`, not `case`	2
 crates/broker/tests/features/migrated/src/freeze/mod.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
 crates/broker/tests/features/migrated/src/freeze/signing/tests/canonical_bytes.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
-crates/broker/tests/features/migrated/src/future_log/truncation.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
-crates/broker/tests/features/migrated/src/future_log/truncation.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature	case-column	the Examples table starts with column `iterations`, not `case`	1
-crates/broker/tests/features/migrated/src/handlers/alter_user_scram_credentials/validation.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/handlers/api_versions/feature_keys.feature	case-column	the Examples table starts with column `version`, not `case`	2
-crates/broker/tests/features/migrated/src/handlers/authorized_operations.feature	case-column	the Examples table starts with column `operation`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/list_offsets/sentinels.feature	case-column	the Examples table starts with column `position`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/list_offsets/sentinels.feature	case-column	the Examples table starts with column `timestamp`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/produce/topic_settings.feature	case-column	the Examples table starts with column `before`, not `case`	1
@@ -532,24 +513,23 @@ crates/broker/tests/features/migrated/src/network/codec.feature	or-in-step	step 
 crates/broker/tests/features/migrated/src/network/dispatch/sasl.feature	case-column	the Examples table starts with column `key`, not `case`	1
 crates/broker/tests/features/migrated/src/partition/leadership.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
 crates/broker/tests/features/migrated/src/partition/leadership.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/migrated/src/quota/lookup.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["client-id","app"]] permits 1000 bytes per second` quotes a value	1
-crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["client-id","app"]] permits 5000 bytes per second` quotes a value	2
+crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["client-id","app"]] permits 5000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["client-id",null]] permits 5000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"],["client-id","app"]] permits 1000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"],["client-id",null]] permits 1000 bytes per second` quotes a value	2
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"],["client-id",null]] permits 5000 bytes per second` quotes a value	1
-crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"]] permits 1000 bytes per second` quotes a value	3
+crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"]] permits 1000 bytes per second` quotes a value	2
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user","alice"]] permits 5000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null],["client-id","app"]] permits 1000 bytes per second` quotes a value	1
-crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null],["client-id","app"]] permits 5000 bytes per second` quotes a value	3
+crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null],["client-id","app"]] permits 5000 bytes per second` quotes a value	2
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null],["client-id",null]] permits 1000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null],["client-id",null]] permits 5000 bytes per second` quotes a value	2
-crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null]] permits 1000 bytes per second` quotes a value	2
+crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null]] permits 1000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `producer quota entity JSON [["user",null]] permits 5000 bytes per second` quotes a value	1
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `the quota uses bucket JSON [["client-id","app"],["user","alice"]] at 1000 bytes per second` quotes a value	5
 crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `the quota uses bucket JSON [["client-id","app"]] at 1000 bytes per second` quotes a value	1
-crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `the quota uses bucket JSON [["user","alice"]] at 1000 bytes per second` quotes a value	5
+crates/broker/tests/features/migrated/src/quota/lookup.feature	quote-in-step	step `the quota uses bucket JSON [["user","alice"]] at 1000 bytes per second` quotes a value	3
 crates/broker/tests/features/migrated/src/raft_handshake/frame/receive_limit.feature	case-column	the Examples table starts with column `size`, not `case`	1
 crates/broker/tests/features/migrated/src/raft_handshake/frame/valid_requests.feature	case-column	the Examples table starts with column `frame`, not `case`	1
 crates/broker/tests/features/migrated/src/re2j.feature	or-in-step	step `pattern compilation reports Kafka's invalid or unsupported Perl syntax message` offers alternatives with `or`	1
@@ -573,43 +553,18 @@ crates/broker/tests/features/migrated/src/replica_state.feature	one-when	scenari
 crates/broker/tests/features/migrated/src/replicator/truncation/divergence.feature	case-column	the Examples table starts with column `input`, not `case`	1
 crates/broker/tests/features/migrated/src/replicator/truncation/recovery.feature	case-column	the Examples table starts with column `lookups`, not `case`	1
 crates/broker/tests/features/migrated/src/share_coordinator/coordinator/persist/tests.feature	case-column	the Examples table starts with column `condition`, not `case`	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/initialize.feature	case-cell	case `a higher state epoch and a new start offset` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/initialize.feature	case-cell	case `a lower state epoch` names an earlier row of the outline too	1
 crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/initialize.feature	case-cell	case `a repeat of the stored epoch and start offset` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/initialize.feature	case-cell	case `a state epoch of -1` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 10` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 11` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 12` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 13` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 14` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 1` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 2` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 3` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 4` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 5` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 6` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 7` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 8` names an earlier row of the outline too	1
-crates/broker/tests/features/migrated/src/share_coordinator/coordinator/state_machine/tests/write.feature	case-cell	case `write request 9` names an earlier row of the outline too	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/delete.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/delete.feature	quote-in-step	step `DeleteShareGroupState requests group "" topic 1f1f1f1f-1f1f-1f1f-1f1f-1f1f1f1f1f1f partitions [0] and observes its appended records and seeded key` quotes a value	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/delete.feature	quote-in-step	step `deletion appends exactly ["tombstone"] and keeps seeded partition 0 state false` quotes a value	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A negative partition under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A negative partition under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A negative state epoch under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A negative state epoch under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A partition beyond the topic under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A partition beyond the topic under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A resigned coordinator under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A resigned coordinator under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A topic absent from the image under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `A topic absent from the image under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An empty group id under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An empty group id under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An older state epoch under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An older state epoch under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An uninitialized start offset on a new key under Kafka4.4` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `An uninitialized start offset on a new key under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `Equal epoch and offset under Kafka4.4` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `Equal epoch and offset under trunk` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/src/share_coordinator/handlers/initialize.feature	max-steps	scenario `Equal epoch with a new offset under Kafka4.4` has 6 steps, and at most 5 are allowed	1
@@ -627,9 +582,6 @@ crates/broker/tests/features/migrated/src/share_partition/dlq/validate.feature	c
 crates/broker/tests/features/migrated/src/share_partition/dlq/validate.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/share_partition/manager/persistence.feature	case-column	the Examples table starts with column `persister`, not `case`	1
 crates/broker/tests/features/migrated/src/site_placement/tests.feature	case-column	the Examples table starts with column `brokers`, not `case`	1
-crates/broker/tests/features/migrated/src/throttle/mod.feature	case-column	the Examples table starts with column `value`, not `case`	1
-crates/broker/tests/features/migrated/src/throttle/mod.feature	quote-in-step	step `the throttled replica configuration is JSON " "` quotes a value	1
-crates/broker/tests/features/migrated/src/throttle/mod.feature	quote-in-step	step `the throttled replica configuration is JSON " * "` quotes a value	1
 crates/broker/tests/features/migrated/src/txn/coordinator/commit/tests.feature	case-column	the Examples table starts with column `append`, not `case`	1
 crates/broker/tests/features/migrated/src/txn/coordinator/leadership/tests.feature	case-column	the Examples table starts with column `status`, not `case`	1
 crates/broker/tests/features/migrated/src/txn/coordinator/produce_verification/tests.feature	case-column	the Examples table starts with column `producer`, not `case`	1
@@ -641,10 +593,6 @@ crates/broker/tests/features/migrated/src/txn/handlers/end_txn/producer_identity
 crates/broker/tests/features/migrated/src/txn/handlers/txn_offset_commit/integration_tests.feature	case-column	the Examples table starts with column `input`, not `case`	1
 crates/broker/tests/features/migrated/src/txn/handlers/txn_offset_commit/verification.feature	case-column	the Examples table starts with column `coordinator`, not `case`	1
 crates/broker/tests/features/migrated/src/txn/marker.feature	case-column	the Examples table starts with column `code`, not `case`	1
-crates/broker/tests/features/migrated/src/txn/state.feature	case-column	the Examples table starts with column `state`, not `case`	1
-crates/broker/tests/features/migrated/src/txn/state.feature	case-column	the Examples table starts with column `status`, not `case`	1
-crates/broker/tests/features/migrated/src/txn/two_pc.feature	case-column	the Examples table starts with column `requested`, not `case`	2
-crates/broker/tests/features/migrated/src/txn/two_pc.feature	no-background	the feature has a `Background`	1
 crates/broker/tests/features/migrated/src/wal/quorum/follower/fetch.feature	case-column	the Examples table starts with column `epoch`, not `case`	2
 crates/broker/tests/features/migrated/tests/acl_handlers/implications.feature	case-column	the Examples table starts with column `operation`, not `case`	1
 crates/broker/tests/features/migrated/tests/acl_handlers/metadata_group_txn.feature	max-steps	scenario `join group denied without group read acl` has 8 steps, and at most 5 are allowed	1
@@ -1291,7 +1239,6 @@ crates/broker/tests/features/migrated/tests/mtls.feature	max-steps	scenario `A t
 crates/broker/tests/features/migrated/tests/mtls.feature	max-steps	scenario `An optional certificate listener serves clients that present no certificate` has 7 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/offset_delete.feature	max-steps	scenario `A subscribed topic refuses deletion and retains its committed offset` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/offset_delete.feature	one-when	scenario `A subscribed topic refuses deletion and retains its committed offset` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/offset_delete.feature	or-in-step	step `topic t2 exists but group ghost has never joined or committed` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/tests/offsets_retention.feature	max-steps	scenario `The background sweeper removes a memberless group after its final offset is deleted` has 7 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/offsets_retention.feature	one-when	scenario `The background sweeper removes a memberless group after its final offset is deleted` has 3 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/offsets_retention.feature	or-in-step	step `all broker configurations are described without synonyms or documentation` offers alternatives with `or`	1

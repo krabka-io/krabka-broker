@@ -41,6 +41,8 @@ use {
 };
 
 #[cfg(test)]
+mod scenarios;
+#[cfg(test)]
 mod tests;
 
 use crate::metrics::cleaner_failure_reason as failure_reason;

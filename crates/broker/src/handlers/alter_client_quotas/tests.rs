@@ -100,38 +100,6 @@ fn whole_request_error_answers_every_entry() {
     assert!(resp == expected);
 }
 
-#[tokio::test]
-async fn handle_denies_cluster_alter_for_each_entry() {
-    let version = 1;
-    krabka_broker_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [start_broker] deny_all;
-        user ["alice"];
-    };
-    let req = request(
-        vec![entry(vec![part("user", Some("alice"))], vec![op(
-            "producer_byte_rate",
-            1024.0,
-        )])],
-        false,
-    );
-
-    assert_handled_response()
-        .broker(&broker)
-        .request(req)
-        .version(version)
-        .context(&ctx)
-        .expected(expected_response(vec![expected_entry(
-            part("user", Some("alice")),
-            CLUSTER_AUTHORIZATION_FAILED,
-            Some("Cluster authorization failed.".into()),
-        )]))
-        .call()
-        .await;
-    assert!(quota_value(&broker_handle, "alice", "producer_byte_rate") == None);
-    broker_handle.shutdown().await;
-}
-
 /// Kafka's `ControllerApis.handleAlterClientQuotas` authorizes `AlterConfigs`
 /// on the cluster (#664). `All` implies it. `Alter` does not, so a principal
 /// that can reassign partitions cannot change quotas.

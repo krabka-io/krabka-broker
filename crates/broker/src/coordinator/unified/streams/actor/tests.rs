@@ -35,6 +35,7 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_bdd::Given,
     krabka_protocol::{
         owned::{
             common::{
@@ -47,7 +48,7 @@ use {
         },
         records::RecordBatch,
     },
-    std::{collections::BTreeMap, sync::Arc, time::Duration},
+    std::{collections::BTreeMap, str::FromStr, sync::Arc, time::Duration},
     tokio::{
         task::yield_now,
         time::{sleep, timeout},
@@ -180,22 +181,6 @@ async fn heartbeat(
     req: StreamsGroupHeartbeatRequest,
 ) -> StreamsGroupHeartbeatResponse {
     heartbeat_result(handle, req).await.response
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_join_advances_epoch_not_ready() {
-    let (coord, _log) = make_coordinator();
-    let handle = coord.get_or_create_streams("g");
-    let resp = heartbeat(&handle, member_request("m1", 0)).await;
-    check!(resp.error_code == codes::NONE);
-    check!(resp.member_id == "m1");
-    // No metadata source / no topology → NotReady, empty assignment, but the
-    // member still advances to the group epoch, which the join bumps past
-    // the initial epoch 1.
-    check!(resp.member_epoch == 2);
-    check!(resp.active_tasks == Some(vec![]));
-    check!(resp.standby_tasks == Some(vec![]));
-    check!(resp.warmup_tasks == Some(vec![]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -461,16 +446,6 @@ async fn a_failed_session_tick_write_closes_the_actor() {
     let closed = timeout(Duration::from_secs(10), handle.tx.closed()).await;
 
     assert!(closed.is_ok(), "the actor exits after its tick write fails");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fenced_epoch_is_rejected() {
-    let (coord, _log) = make_coordinator();
-    let handle = coord.get_or_create_streams("g");
-    let join = heartbeat(&handle, member_request("m1", 0)).await;
-    assert!(join.member_epoch == 2);
-    let resp = heartbeat(&handle, member_request("m1", 99)).await;
-    assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
 }
 
 /// A heartbeat whose write fails answers the code of the failure, and the
@@ -1348,24 +1323,54 @@ fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSub
 /// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
 /// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology
 /// `0`, assigned at epochs 3 and 5, task 2 pending revocation from epoch 4,
-/// and task 3 with no recorded epoch. Subtopology `0` reads `in` and the
-/// repartition topic `rep`; subtopology `1` reads `other`, where `m1` holds
-/// nothing. Each row commits at epoch 4.
-#[test]
-fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
-    /// A partition that the commit writes.
-    struct CommittedPartition {
-        topic: &'static str,
-        partition: i32,
-    }
+/// task 3 with no recorded epoch, and task 5 assigned at epoch 4.
+/// Subtopology `0` reads `in` and the repartition topic `rep`; subtopology
+/// `1` reads `other`, where `m1` holds nothing.
+struct OlderEpochCommit {
+    group: Given<(StreamsGroupState, StreamsGroupTopologyValue)>,
+    /// What each commit fence answered, offset commit first.
+    answers: Given<Vec<Result<(), i16>>>,
+}
 
-    /// A row: its label, the partitions the commit writes, and the answer.
-    struct CommitRow {
-        row: &'static str,
-        committed: &'static [CommittedPartition],
-        expected: Result<(), i16>,
+#[rstest::fixture]
+fn older_epoch_commit() -> OlderEpochCommit {
+    OlderEpochCommit {
+        group: Given::new(
+            "group",
+            "Given member m1 at epoch 5 holds tasks of the source topic named in, assigned from epoch 3 to 5",
+        ),
+        answers: Given::new("answers", "When the member commits <partitions> at epoch 4"),
     }
+}
 
+/// The partitions a commit writes, as `topic-partition` entries joined by
+/// commas, or `none`.
+struct CommittedPartitions(Vec<(String, i32)>);
+
+impl FromStr for CommittedPartitions {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        text.split(',')
+            .filter(|entry| *entry != "none")
+            .map(|entry| {
+                let (topic, partition) = entry
+                    .rsplit_once('-')
+                    .ok_or_else(|| format!("{entry} is not topic-partition"))?;
+                let partition = partition
+                    .parse()
+                    .map_err(|_| format!("{entry} has no partition number"))?;
+                Ok((topic.to_owned(), partition))
+            })
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+}
+
+#[krabka_bdd::given(
+    "member m1 at epoch 5 holds tasks of the source topic named in, assigned from epoch 3 to 5"
+)]
+fn member_with_task_epochs(older_epoch_commit: &mut OlderEpochCommit) {
     let topology = StreamsGroupTopologyValue {
         epoch: 1,
         subtopologies: vec![
@@ -1375,131 +1380,55 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
     };
     let mut group = StreamsGroupState::new("g");
     let mut member = epoch_five_member();
-    member.active = maplit::btreemap! {"0".to_owned() => vec![0, 1, 3]};
+    member.active = maplit::btreemap! {"0".to_owned() => vec![0, 1, 3, 5]};
     member.active_pending_revocation = maplit::btreemap! {"0".to_owned() => vec![2]};
     member.active_epochs = maplit::btreemap! {
         ("0".to_owned(), 0) => 3,
         ("0".to_owned(), 1) => 5,
         ("0".to_owned(), 2) => 4,
+        ("0".to_owned(), 5) => 4,
     };
     group.members.insert("m1".into(), member);
+    older_epoch_commit.group.set((group, topology));
+}
 
-    // (row, committed (topic, partition)s, expected)
-    let rows: [CommitRow; 10] = [
-        CommitRow {
-            row: "no partitions",
-            committed: &[],
-            expected: Ok(()),
-        },
-        CommitRow {
-            row: "assigned before the epoch",
-            committed: &[CommittedPartition {
-                topic: "in",
-                partition: 0,
-            }],
-            expected: Ok(()),
-        },
-        CommitRow {
-            row: "assigned after the epoch",
-            committed: &[CommittedPartition {
-                topic: "in",
-                partition: 1,
-            }],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-        CommitRow {
-            row: "pending revocation at the epoch",
-            committed: &[CommittedPartition {
-                topic: "in",
-                partition: 2,
-            }],
-            expected: Ok(()),
-        },
-        CommitRow {
-            row: "no recorded epoch reads the member epoch",
-            committed: &[CommittedPartition {
-                topic: "in",
-                partition: 3,
-            }],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-        CommitRow {
-            row: "a repartition source topic",
-            committed: &[CommittedPartition {
-                topic: "rep",
-                partition: 0,
-            }],
-            expected: Ok(()),
-        },
-        CommitRow {
-            row: "one refused partition refuses the commit",
-            committed: &[
-                CommittedPartition {
-                    topic: "in",
-                    partition: 0,
-                },
-                CommittedPartition {
-                    topic: "in",
-                    partition: 1,
-                },
-            ],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-        CommitRow {
-            row: "a task the member does not hold",
-            committed: &[CommittedPartition {
-                topic: "in",
-                partition: 4,
-            }],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-        CommitRow {
-            row: "another subtopology's task",
-            committed: &[CommittedPartition {
-                topic: "other",
-                partition: 0,
-            }],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-        CommitRow {
-            row: "a topic outside the topology",
-            committed: &[CommittedPartition {
-                topic: "unknown",
-                partition: 0,
-            }],
-            expected: Err(codes::STALE_MEMBER_EPOCH),
-        },
-    ];
-    for CommitRow {
-        row,
-        committed,
-        expected,
-    } in rows
-    {
-        let partitions: Vec<_> = committed
-            .iter()
-            .map(|committed| (committed.topic.to_owned(), committed.partition))
-            .collect();
-        for fence in [
-            CommitFence::Offset { api_version: 9 },
-            CommitFence::Transactional,
-        ] {
-            check!(
-                validate_offset_commit(
-                    &group,
-                    Some(&topology),
-                    CommitIdentity {
-                        member_id: "m1",
-                        group_instance_id: None,
-                        member_epoch: 4,
-                        fence,
-                    },
-                    &partitions,
-                ) == expected,
-                "{row} {fence:?}"
-            );
-        }
-    }
+#[krabka_bdd::when("the member commits {partitions} at epoch 4")]
+fn commit_at_epoch_four(
+    older_epoch_commit: &mut OlderEpochCommit,
+    partitions: CommittedPartitions,
+) {
+    let (group, topology) = older_epoch_commit.group.get();
+    let answers = [
+        CommitFence::Offset { api_version: 9 },
+        CommitFence::Transactional,
+    ]
+    .into_iter()
+    .map(|fence| {
+        validate_offset_commit(
+            group,
+            Some(topology),
+            CommitIdentity {
+                member_id: "m1",
+                group_instance_id: None,
+                member_epoch: 4,
+                fence,
+            },
+            &partitions.0,
+        )
+    })
+    .collect();
+    older_epoch_commit.answers.set(answers);
+}
+
+#[krabka_bdd::then("the commit is accepted")]
+fn older_epoch_commit_accepted(older_epoch_commit: &OlderEpochCommit) {
+    assert!(*older_epoch_commit.answers.get() == vec![Ok(()), Ok(())]);
+}
+
+#[krabka_bdd::then("the commit is refused with STALE_MEMBER_EPOCH")]
+fn older_epoch_commit_refused(older_epoch_commit: &OlderEpochCommit) {
+    let stale = Err(codes::STALE_MEMBER_EPOCH);
+    assert!(*older_epoch_commit.answers.get() == vec![stale, stale]);
 }
 
 /// #972: Kafka trunk's `MISSING_CLIENT_TAGS` (`streamsGroupHeartbeat`, after
@@ -2341,9 +2270,12 @@ fn streams_offset_validation(streams_offset_fence: &StreamsOffsetFence, code: i1
             == &expected
     );
 }
-rstest_bdd_macros::scenarios!(
+krabka_bdd::scenarios!(
     "tests/features/migrated/src/coordinator/unified/streams/actor/tests/offset_validation.feature",
-    fixtures = [streams_offset_fence: StreamsOffsetFence],
+    fixtures = [
+        streams_offset_fence: StreamsOffsetFence,
+        older_epoch_commit: OlderEpochCommit,
+    ],
 );
 type SubtopologyInput = (String, String, Vec<String>, Vec<String>);
 

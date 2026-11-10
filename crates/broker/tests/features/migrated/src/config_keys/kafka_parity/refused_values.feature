@@ -1,6 +1,5 @@
 Feature: Kafka topic value rejection boundaries
-  Compatibility includes Kafka's refusals, not merely its key roster: unknown
-  names, invalid codec bounds, negative batch limits, and invalid LONGs stay invalid.
+  Depends on: Topic refusals preserve Kafka ConfigException text - ../validation/tests/values/exact_refusals.feature
 
   Scenario Outline: Values refused by Kafka remain refused by the broker
     Given an operator alters topic key <key> to quoted value <value>
@@ -8,16 +7,8 @@ Feature: Kafka topic value rejection boundaries
     Then the individual topic alteration is refused
 
     Examples:
-      | key | value |
-      | message.downconversion.enable | "true" |
-      | totally.made.up | "1" |
-      | compression.gzip.level | "0" |
-      | compression.lz4.level | "18" |
-      | compression.lz4.level | "0" |
-      | compression.zstd.level | "-131073" |
-      | compression.zstd.level | "23" |
-      | max.message.bytes | "-1" |
-      | segment.bytes | "1048575" |
-      | segment.bytes | "0" |
-      | compression.type | "none" |
-      | retention.bytes | "9223372036854775808" |
+      | case                         | key                           | value     |
+      | a key Kafka 4 removed        | message.downconversion.enable | "true"    |
+      | lz4 level below one          | compression.lz4.level         | "0"       |
+      | zstd level below its minimum | compression.zstd.level        | "-131073" |
+      | zstd level above its maximum | compression.zstd.level        | "23"      |

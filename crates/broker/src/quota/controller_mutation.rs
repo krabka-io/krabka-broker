@@ -237,7 +237,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_units::{millis, secs},
-        std::time::Duration,
+        std::{str::FromStr, time::Duration},
     };
 
     fn img_with_quota(
@@ -369,80 +369,6 @@ mod tests {
         check!(delay.delay > secs(7) && delay.delay <= secs(8), "{delay:?}");
     }
 
-    /// Kafka's examples for `controller_mutation_rate = 10` with the default
-    /// 11 s window (a 110-token bucket): each list is the per-topic charges of
-    /// one or more strict requests on a fresh bucket, and the expected
-    /// outcome of each charge.
-    #[test]
-    fn strict_quota_refuses_only_once_the_bucket_is_negative() {
-        type Outcome = Result<(), ThrottlingQuotaExceeded>;
-        const OK: Outcome = Ok(());
-        const REFUSED: Outcome = Err(ThrottlingQuotaExceeded);
-        /// A label, the per-topic charges of each request, and their outcomes.
-        struct Case {
-            label: &'static str,
-            requests: &'static [&'static [u64]],
-            outcomes: &'static [&'static [Outcome]],
-        }
-        let cases: [Case; 4] = [
-            Case {
-                label: "50 partitions, then two topics of 5",
-                requests: &[&[50], &[5, 5]],
-                outcomes: &[&[OK], &[OK, OK]],
-            },
-            Case {
-                label: "60, 60 and 1 in one request",
-                requests: &[&[60, 60, 1]],
-                outcomes: &[&[OK, OK, REFUSED]],
-            },
-            Case {
-                label: "a request that ends below zero refuses the next one",
-                requests: &[&[120], &[1]],
-                outcomes: &[&[OK], &[REFUSED]],
-            },
-            Case {
-                label: "a refused topic records nothing",
-                requests: &[&[111, 5, 5]],
-                outcomes: &[&[OK, REFUSED, REFUSED]],
-            },
-        ];
-
-        let img = img_with_quota(vec![QuotaEntityInput::user(Some("alice"))], 10.0);
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for Case {
-            label,
-            requests,
-            outcomes,
-        } in cases
-        {
-            let buckets = QuotaBuckets::new();
-            let got: Vec<Vec<Outcome>> = requests
-                .iter()
-                .map(|charges| {
-                    let mut quota = ControllerMutationQuota::new(&QuotaRequest {
-                        image: &img,
-                        buckets: &buckets,
-                        principal: "alice",
-                        client_id: Some(""),
-                        window: secs(11),
-                        strict: true,
-                    });
-                    charges.iter().map(|charge| quota.record(*charge)).collect()
-                })
-                .collect();
-            actual.push((label, got));
-            expected.push((
-                label,
-                outcomes
-                    .iter()
-                    .map(|request| request.to_vec())
-                    .collect::<Vec<_>>(),
-            ));
-        }
-        assert!(actual == expected);
-    }
-
     /// A strict request that is refused reports the time the bucket needs to
     /// climb back to zero. One that is accepted reports no throttle, even when
     /// it leaves the bucket below zero.
@@ -564,4 +490,129 @@ mod tests {
 
         assert!((outcomes, quota.delay()) == ([Ok(()), Ok(())], <Time as TimeExt>::ZERO));
     }
+
+    /// What a strict quota answered for one topic of a request.
+    type Outcome = Result<(), ThrottlingQuotaExceeded>;
+
+    /// A list of `;`-separated requests, each a list of `,`-separated items.
+    fn requests<T>(
+        text: &str,
+        item: impl Fn(&str) -> Result<T, String>,
+    ) -> Result<Vec<Vec<T>>, String> {
+        text.split(';')
+            .map(|request| request.split(',').map(|value| item(value.trim())).collect())
+            .collect()
+    }
+
+    /// The mutations each topic of each request charges, such as `50; 5,5`.
+    struct Charges(Vec<Vec<u64>>);
+
+    impl FromStr for Charges {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            requests(text, |charge| {
+                charge.parse().map_err(|e| format!("{charge}: {e}"))
+            })
+            .map(Self)
+        }
+    }
+
+    /// What a scenario says a strict quota answered for one topic.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum TopicOutcome {
+        Accepted,
+        Refused,
+    }
+
+    impl From<TopicOutcome> for Outcome {
+        fn from(outcome: TopicOutcome) -> Self {
+            match outcome {
+                TopicOutcome::Accepted => Ok(()),
+                TopicOutcome::Refused => Err(ThrottlingQuotaExceeded),
+            }
+        }
+    }
+
+    /// The outcome of each topic of each request, such as `accepted; refused`.
+    struct Outcomes(Vec<Vec<Outcome>>);
+
+    impl FromStr for Outcomes {
+        type Err = String;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            requests(text, |outcome| {
+                outcome
+                    .parse::<TopicOutcome>()
+                    .map(Outcome::from)
+                    .map_err(|e| e.to_string())
+            })
+            .map(Self)
+        }
+    }
+
+    /// The Given step that sets the rate and the quota window.
+    const GIVEN_QUOTA: &str = "Given a user has a controller mutation rate of <rate> per second \
+                               over a quota window of <window> seconds";
+
+    struct StrictMutationQuota {
+        image: krabka_bdd::Given<MetadataImage>,
+        window: krabka_bdd::Given<Time>,
+        outcomes: krabka_bdd::Given<Vec<Vec<Outcome>>>,
+    }
+
+    #[rstest::fixture]
+    fn strict_mutation_quota() -> StrictMutationQuota {
+        StrictMutationQuota {
+            image: krabka_bdd::Given::new("image", GIVEN_QUOTA),
+            window: krabka_bdd::Given::new("window", GIVEN_QUOTA),
+            outcomes: krabka_bdd::Given::new(
+                "outcomes",
+                "When the user sends strict requests whose topics charge <charges> mutations",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given(
+        "a user has a controller mutation rate of {rate} per second over a quota window of {window} seconds"
+    )]
+    fn mutation_quota(strict_mutation_quota: &mut StrictMutationQuota, rate: f64, window: i64) {
+        strict_mutation_quota.image.set(img_with_quota(
+            vec![QuotaEntityInput::user(Some("alice"))],
+            rate,
+        ));
+        strict_mutation_quota.window.set(Time::from_secs(window));
+    }
+
+    /// Each request opens the quota on the same bucket.
+    #[krabka_bdd::when("the user sends strict requests whose topics charge {charges} mutations")]
+    fn sends_strict_requests(strict_mutation_quota: &mut StrictMutationQuota, charges: Charges) {
+        let buckets = QuotaBuckets::new();
+        let outcomes = charges
+            .0
+            .iter()
+            .map(|request| {
+                let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+                    image: strict_mutation_quota.image.get(),
+                    buckets: &buckets,
+                    principal: "alice",
+                    client_id: Some(""),
+                    window: *strict_mutation_quota.window.get(),
+                    strict: true,
+                });
+                request.iter().map(|charge| quota.record(*charge)).collect()
+            })
+            .collect();
+        strict_mutation_quota.outcomes.set(outcomes);
+    }
+
+    #[krabka_bdd::then("the topics are {outcomes}")]
+    fn topic_outcomes(strict_mutation_quota: &StrictMutationQuota, outcomes: Outcomes) {
+        assert!(*strict_mutation_quota.outcomes.get() == outcomes.0);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/quota/controller_mutation.feature",
+        fixtures = [strict_mutation_quota: StrictMutationQuota],
+    );
 }

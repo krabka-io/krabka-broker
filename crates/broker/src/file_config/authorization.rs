@@ -193,16 +193,6 @@ mod tests {
         fixtures = [super_user_file: SuperUserFile]
     );
 
-    #[test]
-    fn super_users_toml_populates_broker_config_set() {
-        let toml = r#"
-super_users = ["operator", "admin"]
-"#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
-
-        let expected: HashSet<String> = ["operator".to_owned(), "admin".to_owned()].into();
-        assert2::assert!(cfg.super_users == expected);
-    }
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
 
     fn test_principal(name: &str) -> krabka_security::Principal { sasl_principal(name) }

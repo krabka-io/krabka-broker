@@ -423,6 +423,7 @@ mod tests {
             test_support::FakeMetadataSource,
         },
         assert2::{assert, check},
+        krabka_bdd::{Attempt, Given},
         std::{borrow::Cow, collections::HashMap, ptr},
     };
 
@@ -803,57 +804,99 @@ mod tests {
         assert!(max_size > 200);
     }
 
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/coordinator/unified/config.feature",
-        fixtures = [member_limit: ConsumerMemberLimit]
-    );
-
-    #[test]
-    fn migration_policy_default_is_bidirectional() {
-        // Matches Apache Kafka 4.0 (verified empirically).
-        assert!(
-            NextGenConfig::default().migration_policy
-                == ConsumerGroupMigrationPolicy::Bidirectional
-        );
+    /// The migration policy the coordinator runs with.
+    struct MigrationPolicyScenario {
+        policy: Given<ConsumerGroupMigrationPolicy>,
     }
 
-    #[yare::parameterized(
-        disabled = { "disabled", ConsumerGroupMigrationPolicy::Disabled },
-        upgrade = { "upgrade", ConsumerGroupMigrationPolicy::Upgrade },
-        downgrade = { "downgrade", ConsumerGroupMigrationPolicy::Downgrade },
-        bidirectional = { "bidirectional", ConsumerGroupMigrationPolicy::Bidirectional },
-        mixed_case = { "BiDirectional", ConsumerGroupMigrationPolicy::Bidirectional },
-        upper_case = { "UPGRADE", ConsumerGroupMigrationPolicy::Upgrade },
-    )]
-    fn migration_policy_from_str_round_trips_all_names(
-        name: &str,
-        want: ConsumerGroupMigrationPolicy,
-    ) {
-        assert2::assert!(name.parse::<ConsumerGroupMigrationPolicy>().unwrap() == want);
+    /// A `group.consumer.migration.policy` value the coordinator refused, and
+    /// the name the operator gave.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RefusedPolicy {
+        name: String,
+        error: String,
     }
 
-    #[test]
-    fn migration_policy_from_str_rejects_junk() {
-        assert!("sideways".parse::<ConsumerGroupMigrationPolicy>().is_err());
-        assert!("".parse::<ConsumerGroupMigrationPolicy>().is_err());
-    }
+    type PolicyAttempt = Attempt<ConsumerGroupMigrationPolicy, RefusedPolicy>;
 
-    #[test]
-    fn migration_policy_direction_truth_table() {
-        use ConsumerGroupMigrationPolicy as P;
-        let cases = [
-            (P::Disabled, (false, false)),
-            (P::Upgrade, (true, false)),
-            (P::Downgrade, (false, true)),
-            (P::Bidirectional, (true, true)),
-        ];
-        for (policy, want) in cases {
-            assert!(
-                (policy.allows_upgrade(), policy.allows_downgrade()) == want,
-                "policy {policy:?}"
-            );
+    #[rstest::fixture]
+    fn migration_policy() -> MigrationPolicyScenario {
+        MigrationPolicyScenario {
+            policy: Given::new(
+                "policy",
+                "When an operator sets the migration policy to <name>",
+            ),
         }
     }
+
+    #[rstest::fixture]
+    fn policy_attempt() -> PolicyAttempt {
+        // No operator has set a policy until a When step attempts one.
+        PolicyAttempt::NotExecuted
+    }
+
+    /// Parses `name` as the operator's `group.consumer.migration.policy`.
+    fn attempt_policy(name: &str) -> PolicyAttempt {
+        PolicyAttempt::of(|| {
+            name.parse::<ConsumerGroupMigrationPolicy>()
+                .map_err(|error| RefusedPolicy {
+                    name: name.to_owned(),
+                    error,
+                })
+        })
+    }
+
+    #[krabka_bdd::when("the consumer coordinator starts without a migration policy")]
+    fn default_migration_policy(migration_policy: &mut MigrationPolicyScenario) {
+        migration_policy
+            .policy
+            .set(NextGenConfig::default().migration_policy);
+    }
+
+    #[krabka_bdd::when("an operator sets the migration policy to {name}")]
+    fn set_migration_policy(migration_policy: &mut MigrationPolicyScenario, name: String) {
+        migration_policy
+            .policy
+            .set(*attempt_policy(&name).succeeded());
+    }
+
+    #[krabka_bdd::then("the coordinator allows upgrades {upgrade} and downgrades {downgrade}")]
+    fn migration_directions(
+        migration_policy: &MigrationPolicyScenario,
+        upgrade: bool,
+        downgrade: bool,
+    ) {
+        let policy = *migration_policy.policy.get();
+        assert!((policy.allows_upgrade(), policy.allows_downgrade()) == (upgrade, downgrade));
+    }
+
+    #[krabka_bdd::when("an operator attempts to set the migration policy to {name}")]
+    fn attempt_migration_policy(
+        name: String,
+    ) -> Attempt<ConsumerGroupMigrationPolicy, RefusedPolicy> {
+        attempt_policy(&name)
+    }
+
+    #[krabka_bdd::when("an operator attempts to set an empty migration policy")]
+    fn attempt_empty_migration_policy() -> Attempt<ConsumerGroupMigrationPolicy, RefusedPolicy> {
+        attempt_policy("")
+    }
+
+    #[krabka_bdd::then("the policy is refused as an invalid migration policy")]
+    fn invalid_migration_policy(policy_attempt: &PolicyAttempt) {
+        let name = policy_attempt.failed().name.clone();
+        let error = format!("invalid group.consumer.migration.policy: {name}");
+        assert!(*policy_attempt == PolicyAttempt::Failed(RefusedPolicy { name, error }));
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/config.feature",
+        fixtures = [
+            member_limit: ConsumerMemberLimit,
+            migration_policy: MigrationPolicyScenario,
+            policy_attempt: PolicyAttempt,
+        ]
+    );
 
     /// Kafka's `consumerGroupSessionTimeoutMs`,
     /// `consumerGroupHeartbeatIntervalMs` and

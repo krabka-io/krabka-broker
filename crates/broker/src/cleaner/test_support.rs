@@ -144,3 +144,21 @@ pub(super) async fn register_compactable(
         record_count: initial_count,
     }
 }
+
+/// Whether this broker, node 7, leads a replica or follows node 8: the two
+/// roles the compaction and the local-retention scenarios sweep alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+pub enum ReplicaRole {
+    Leader,
+    Follower,
+}
+
+impl ReplicaRole {
+    /// The node that leads a replica this broker holds in this role.
+    pub const fn leader(self) -> NodeId {
+        match self {
+            Self::Leader => NodeId(7),
+            Self::Follower => NodeId(8),
+        }
+    }
+}

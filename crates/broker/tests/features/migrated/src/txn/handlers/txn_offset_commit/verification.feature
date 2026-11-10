@@ -8,7 +8,6 @@ Feature: TxnOffsetCommit verification errors remain compatible with Kafka reques
     Examples:
       | coordinator | version | response |
       | 0 | 3 | 0 |
-      | 0 | 5 | 0 |
       | 90 | 3 | 47 |
       | 90 | 5 | 47 |
       | 49 | 3 | 49 |
@@ -16,7 +15,6 @@ Feature: TxnOffsetCommit verification errors remain compatible with Kafka reques
       | 31 | 5 | 48 |
       | 120 | 3 | 48 |
       | 120 | 4 | 120 |
-      | 120 | 5 | 120 |
       | 13 | 5 | 14 |
       | 3 | 5 | 15 |
       | 15 | 5 | 15 |

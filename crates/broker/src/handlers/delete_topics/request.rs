@@ -386,7 +386,7 @@ mod tests {
         };
         assert!(delete_topic_validation.validated.as_ref().unwrap().invalid == expected);
     }
-    rstest_bdd_macros::scenarios!("tests/features/handler_delete_topic_validation",fixtures=[delete_topic_validation:DeleteTopicValidationScenario]);
+    rstest_bdd_macros::scenarios!("tests/features/handler_delete_topic_validation/request.feature",fixtures=[delete_topic_validation:DeleteTopicValidationScenario]);
 
     /// A request of many distinct names and ids, each sent twice, answers one
     /// `INVALID_REQUEST` row per name and per id, in first-row order, and

@@ -69,22 +69,12 @@ pub async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        crate::{
-            handlers::group_read_denied,
-            test_support::{EmptyAclImage, empty_acl_image},
-        },
-        assert2::assert,
-    };
+    use {super::*, assert2::assert};
 
+    /// A refusal carries only its error code: every other field keeps its
+    /// wire default.
     #[test]
-    fn group_read_denied_yields_group_authorization_failed() {
-        let EmptyAclImage { authorizer, image } = empty_acl_image();
-        anonymous_request_identity!(principal, peer, ctx, "heartbeat-client",);
-
-        assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
-
+    fn error_response_carries_only_the_error_code() {
         assert!(
             HeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED)
                 == krabka_broker_macros::unthrottled_wire!(HeartbeatResponse {

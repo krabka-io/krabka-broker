@@ -126,3 +126,17 @@ Feature: Delegation token creation authorization, owner identity and lifetime
     And the token request has owner type "null", owner name "null", lifetime -1 and renewers User:bob
     When the controller handles CreateDelegationToken with a 24-hour renew period
     Then the minted token belongs to User:alice, names requester User:alice, renewers User:bob, expiry delta 60000 and maximum delta 60000
+
+  Scenario: CreateTokens on a user lets a requester mint a token for that user
+    Given a token controller with requester bob authenticated by plain, tokens enabled true, super users none and lifetime ceiling 60000
+    And bob may create tokens for User:alice
+    And the token request names owner User:alice
+    When the controller handles CreateDelegationToken with a 24-hour renew period
+    Then the minted token belongs to User:alice, names requester User:bob, renewers none, expiry delta 60000 and maximum delta 60000
+
+  Scenario: CreateTokens on one user does not cover another user
+    Given a token controller with requester bob authenticated by plain, tokens enabled true, super users none and lifetime ceiling 60000
+    And bob may create tokens for User:alice
+    And the token request names owner User:carol
+    When the controller handles CreateDelegationToken with a 24-hour renew period
+    Then token creation refuses with code 65, owner User:carol, requester User:bob and timestamps -1 without persisting tokens

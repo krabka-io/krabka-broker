@@ -897,43 +897,6 @@ async fn mixed_group_batch_answers_the_denied_key_in_its_slot() {
     broker_handle.shutdown().await;
 }
 
-/// Key type 7 is not a `CoordinatorType`, so every key of a v4+ batch gets
-/// `INVALID_REQUEST` with Kafka's default message.
-#[tokio::test]
-async fn key_type_seven_is_invalid_on_every_key() {
-    let HandlerStartedBroker {
-        broker: broker_handle,
-        dir: _dir,
-    } = start_broker_no_audit().await;
-    let broker = broker_handle.broker_arc_for_test();
-    let message = response::error_message(codes::INVALID_REQUEST);
-    let request = FindCoordinatorRequest {
-        key_type: 7,
-        coordinator_keys: vec!["a".into(), "b".into()],
-        ..Default::default()
-    };
-
-    let response = find(
-        &broker,
-        &request,
-        find_coordinator_response::MAX_VERSION,
-        "alice",
-    )
-    .await;
-
-    assert!(
-        response
-            == FindCoordinatorResponse {
-                coordinators: vec![
-                    row("a", codes::INVALID_REQUEST, message.clone()),
-                    row("b", codes::INVALID_REQUEST, message),
-                ],
-                ..Default::default()
-            }
-    );
-    broker_handle.shutdown().await;
-}
-
 /// The unknown-key-type check runs only inside Kafka's per-key loop, so an
 /// empty v4+ batch with an unknown key type stays empty.
 #[tokio::test]

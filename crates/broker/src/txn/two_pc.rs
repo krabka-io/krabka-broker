@@ -119,92 +119,122 @@ pub fn should_abort_idle_txn(
 mod tests {
     use {super::*, assert2::assert};
 
-    #[yare::parameterized(
-        normal = { 30_000, Ok(NO_TIMEOUT_MS) },
-        zero = { 0, Ok(NO_TIMEOUT_MS) },
-        max = { i32::MAX, Ok(NO_TIMEOUT_MS) },
-        negative = { -5, Ok(NO_TIMEOUT_MS) },
-    )]
-    fn resolve_timeout_2pc_is_sentinel_regardless_of_request(
-        requested: i32,
-        want: Result<i32, i16>,
-    ) {
-        // Even an out-of-range request (-5) is ignored under 2PC.
-        assert2::assert!(
-            resolve_txn_timeout(true, requested, 8_000) == want,
-            "{requested}"
-        );
-    }
-
-    #[derive(Default)]
-    struct OrdinaryTransactionTimeout {
-        maximum: Option<i32>,
-        requested: Option<i32>,
-        resolved: Option<Result<i32, i16>>,
+    /// The transaction timeout a scenario's producer asks for, and what the
+    /// broker made of it.
+    struct TransactionTimeoutScenario {
+        maximum_ms: krabka_bdd::Given<i32>,
+        requested_ms: krabka_bdd::Given<i32>,
+        resolved: krabka_bdd::Given<Result<i32, i16>>,
+        state: krabka_bdd::Given<TxnState>,
+        aborted: krabka_bdd::Given<bool>,
     }
 
     #[rstest::fixture]
-    fn ordinary_transaction_timeout() -> OrdinaryTransactionTimeout {
-        // Every ordinary transaction request resolves against its own timeout ceiling.
-        OrdinaryTransactionTimeout::default()
+    fn transaction_timeout() -> TransactionTimeoutScenario {
+        TransactionTimeoutScenario {
+            maximum_ms: krabka_bdd::Given::new(
+                "maximum_ms",
+                "Given the maximum transaction timeout is <maximum> milliseconds",
+            ),
+            requested_ms: krabka_bdd::Given::new(
+                "requested_ms",
+                "Given the producer requests transaction timeout <requested> milliseconds",
+            ),
+            resolved: krabka_bdd::Given::new(
+                "resolved",
+                "When the broker resolves the ordinary transaction timeout",
+            ),
+            state: krabka_bdd::Given::new(
+                "state",
+                "Given a transaction in state <state> has been open longer than its timeout",
+            ),
+            aborted: krabka_bdd::Given::new(
+                "aborted",
+                "When the timeout reaper checks the transaction",
+            ),
+        }
     }
 
-    #[rstest_bdd_macros::given(
-        "the maximum ordinary transaction timeout is {milliseconds} milliseconds"
-    )]
-    fn supplied_transaction_timeout_ceiling(
-        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
-        milliseconds: i32,
+    /// The timeout the transaction of a reaper scenario was opened with.
+    const OPEN_TIMEOUT_MS: i32 = 60_000;
+
+    #[krabka_bdd::given("the maximum transaction timeout is {maximum} milliseconds")]
+    fn maximum_timeout(transaction_timeout: &mut TransactionTimeoutScenario, maximum: i32) {
+        transaction_timeout.maximum_ms.set(maximum);
+    }
+
+    #[krabka_bdd::given("the producer requests transaction timeout {requested} milliseconds")]
+    fn requested_timeout(transaction_timeout: &mut TransactionTimeoutScenario, requested: i32) {
+        transaction_timeout.requested_ms.set(requested);
+    }
+
+    #[krabka_bdd::given("a transaction in state {state} has been open longer than its timeout")]
+    fn open_past_its_timeout(
+        transaction_timeout: &mut TransactionTimeoutScenario,
+        state: TxnState,
     ) {
-        ordinary_transaction_timeout.maximum = Some(milliseconds);
+        transaction_timeout.state.set(state);
     }
 
-    #[rstest_bdd_macros::given(
-        "the producer requests transaction timeout {milliseconds} milliseconds"
-    )]
-    fn requested_transaction_timeout(
-        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
-        milliseconds: i32,
-    ) {
-        ordinary_transaction_timeout.requested = Some(milliseconds);
+    fn resolve(transaction_timeout: &mut TransactionTimeoutScenario, enable_2pc: bool) {
+        let resolved = resolve_txn_timeout(
+            enable_2pc,
+            *transaction_timeout.requested_ms.get(),
+            *transaction_timeout.maximum_ms.get(),
+        );
+        transaction_timeout.resolved.set(resolved);
     }
 
-    #[rstest_bdd_macros::when("the broker resolves the non-two-phase-commit transaction timeout")]
-    fn resolve_ordinary_transaction_timeout(
-        ordinary_transaction_timeout: &mut OrdinaryTransactionTimeout,
-    ) {
-        ordinary_transaction_timeout.resolved = Some(resolve_txn_timeout(
-            false,
-            ordinary_transaction_timeout
-                .requested
-                .expect("producer timeout was given"),
-            ordinary_transaction_timeout
-                .maximum
-                .expect("broker timeout ceiling was given"),
-        ));
+    #[krabka_bdd::when("the broker resolves the ordinary transaction timeout")]
+    fn resolve_ordinary(transaction_timeout: &mut TransactionTimeoutScenario) {
+        resolve(transaction_timeout, false);
     }
 
-    #[rstest_bdd_macros::then(
-        "the configured ordinary transaction timeout is {milliseconds} milliseconds"
-    )]
-    fn accepted_ordinary_transaction_timeout(
-        ordinary_transaction_timeout: &OrdinaryTransactionTimeout,
-        milliseconds: i32,
-    ) {
-        assert2::assert!(ordinary_transaction_timeout.resolved == Some(Ok(milliseconds)));
+    #[krabka_bdd::when("the broker resolves the two-phase-commit transaction timeout")]
+    fn resolve_two_phase_commit(transaction_timeout: &mut TransactionTimeoutScenario) {
+        resolve(transaction_timeout, true);
     }
 
-    #[rstest_bdd_macros::then("the transaction timeout is refused with Kafka error code {code}")]
-    fn refused_ordinary_transaction_timeout(
-        ordinary_transaction_timeout: &OrdinaryTransactionTimeout,
-        code: i16,
-    ) {
-        assert2::assert!(ordinary_transaction_timeout.resolved == Some(Err(code)));
+    #[krabka_bdd::when("the timeout reaper checks the transaction")]
+    fn reaper_checks(transaction_timeout: &mut TransactionTimeoutScenario) {
+        // Opened at 0 and checked one millisecond past its timeout.
+        let aborted = should_abort_idle_txn(
+            *transaction_timeout.state.get(),
+            OPEN_TIMEOUT_MS,
+            0,
+            i64::from(OPEN_TIMEOUT_MS) + 1,
+        );
+        transaction_timeout.aborted.set(aborted);
     }
 
-    rstest_bdd_macros::scenarios!(
+    #[krabka_bdd::then("the transaction timeout is {stored} milliseconds")]
+    fn stored_timeout(transaction_timeout: &TransactionTimeoutScenario, stored: i32) {
+        assert!(*transaction_timeout.resolved.get() == Ok(stored));
+    }
+
+    #[krabka_bdd::then("the transaction timeout is refused with INVALID_TRANSACTION_TIMEOUT")]
+    fn refused_timeout(transaction_timeout: &TransactionTimeoutScenario) {
+        assert!(*transaction_timeout.resolved.get() == Err(INVALID_TRANSACTION_TIMEOUT));
+    }
+
+    #[krabka_bdd::then("the transaction is stored with the no-timeout sentinel")]
+    fn stored_without_timeout(transaction_timeout: &TransactionTimeoutScenario) {
+        assert!(*transaction_timeout.resolved.get() == Ok(i32::MAX));
+    }
+
+    #[krabka_bdd::then("the reaper aborts the transaction")]
+    fn reaper_aborts(transaction_timeout: &TransactionTimeoutScenario) {
+        assert!(*transaction_timeout.aborted.get());
+    }
+
+    #[krabka_bdd::then("the reaper leaves the transaction alone")]
+    fn reaper_leaves_it(transaction_timeout: &TransactionTimeoutScenario) {
+        assert!(!*transaction_timeout.aborted.get());
+    }
+
+    krabka_bdd::scenarios!(
         "tests/features/migrated/src/txn/two_pc.feature",
-        fixtures = [ordinary_transaction_timeout: OrdinaryTransactionTimeout]
+        fixtures = [transaction_timeout: TransactionTimeoutScenario],
     );
 
     #[test]
@@ -217,75 +247,6 @@ mod tests {
         ));
         check!(is_two_phase_commit(
             resolve_txn_timeout(true, 1, 8_000).expect("2PC")
-        ));
-    }
-
-    #[test]
-    fn reaper_aborts_an_expired_ongoing_non_2pc_txn() {
-        // Opened at t=0 with a 60s timeout: Kafka's `start + timeout < now`
-        // makes it reapable once t passes 60s.
-        assert!(should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 60_001));
-        assert!(should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 120_000));
-    }
-
-    #[test]
-    fn reaper_spares_a_not_yet_expired_ongoing_txn() {
-        // Exactly at, and one ms short of, the timeout.
-        assert!(!should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 60_000));
-        assert!(!should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 59_999));
-        // Exactly opened "now".
-        assert!(!should_abort_idle_txn(
-            TxnState::Ongoing,
-            60_000,
-            1_000,
-            1_000
-        ));
-    }
-
-    #[test]
-    fn reaper_never_touches_a_2pc_txn_even_in_the_far_future() {
-        // The headline KIP-939 property at the unit level: a 2PC (sentinel
-        // timeout) Ongoing transaction is never reaped, no matter how much time
-        // has elapsed — including a `now_ms` past `i32::MAX` ms.
-        assert!(!should_abort_idle_txn(
-            TxnState::Ongoing,
-            NO_TIMEOUT_MS,
-            0,
-            i64::MAX
-        ));
-        assert!(!should_abort_idle_txn(
-            TxnState::Ongoing,
-            NO_TIMEOUT_MS,
-            0,
-            60_000
-        ));
-    }
-
-    #[test]
-    fn reaper_only_acts_on_ongoing() {
-        for state in [
-            TxnState::Empty,
-            TxnState::PrepareCommit,
-            TxnState::PrepareAbort,
-            TxnState::CompleteCommit,
-            TxnState::CompleteAbort,
-            TxnState::Dead,
-        ] {
-            assert!(
-                !should_abort_idle_txn(state, 60_000, 0, i64::MAX),
-                "{state:?} must never be reaped by the idle-txn timeout"
-            );
-        }
-    }
-
-    #[test]
-    fn reaper_is_robust_to_a_backwards_clock() {
-        // now < start (clock skew) must not underflow into a spurious abort.
-        assert!(!should_abort_idle_txn(
-            TxnState::Ongoing,
-            60_000,
-            100_000,
-            0
         ));
     }
 }

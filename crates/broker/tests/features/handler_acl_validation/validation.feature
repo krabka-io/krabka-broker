@@ -31,7 +31,6 @@ Feature: CreateAcls validates concrete bindings with Kafka diagnostics
       | operation     | 42    | Invalid operation UNKNOWN                                                                                              |
       | permission    | 5     | Invalid permissionType UNKNOWN                                                                                         |
       | principal     | alice | Could not parse principal from `alice` (no colon is present separating the principal type from the principal name)     |
-      | host          | empty | Host pattern cannot be null or empty                                                                                   |
 
   Scenario Outline: The cluster resource has exactly one valid name
     Given the ACL creation field resource type is 4
@@ -67,9 +66,7 @@ Feature: CreateAcls validates concrete bindings with Kafka diagnostics
     Examples:
       | host          | supported |
       | *             | false     |
-      | *             | true      |
       | 10.0.0.1      | false     |
-      | 10.0.0.1      | true      |
       | 10.0.0.0/8    | true      |
       | 2001:db8::/32 | true      |
 

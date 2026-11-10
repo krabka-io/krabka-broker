@@ -165,20 +165,15 @@ async fn super_user_bypasses_opa_call() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_hit_returns_cached_decision_without_http_call() {
-    check_cached_decision("t", true, AuthorizationResult::Allow).await;
+    check_cached_decision(true, AuthorizationResult::Allow).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_hit_preserves_a_deny_decision() {
-    check_cached_decision("t", false, AuthorizationResult::Deny).await;
+    check_cached_decision(false, AuthorizationResult::Deny).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn cache_miss_calls_opa_and_caches_result() {
-    check_cached_decision("fresh-topic", true, AuthorizationResult::Allow).await;
-}
-
-async fn check_cached_decision(topic: &str, allow: bool, expected: AuthorizationResult) {
+async fn check_cached_decision(allow: bool, expected: AuthorizationResult) {
     let mock = MockServer::start().await;
     mount_decision().mock(&mock).allow(allow).call().await;
     let (
@@ -192,7 +187,7 @@ async fn check_cached_decision(topic: &str, allow: bool, expected: Authorization
     // The second call must preserve the decision and use the cache: expect(1)
     // verifies that only the initial authorization reached HTTP.
     for _ in 0..2 {
-        assert!(auth.authorize(&image, &req(&principal, &host, topic)) == expected);
+        assert!(auth.authorize(&image, &req(&principal, &host, "t")) == expected);
     }
 }
 

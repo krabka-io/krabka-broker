@@ -391,12 +391,6 @@ mod tests {
 
     fn img_with(records: Vec<ClientQuotaRecord>) -> MetadataImage { image_with_quotas(records) }
 
-    /// Both identities must resolve the configured 1,024-byte producer quota.
-    fn assert_alice_app1_entity(entity: QuotaEntitySpec<'_>) {
-        let img = img_with(vec![rec().entity(entity).value(1024.0).call()]);
-        assert!(lookup_quota(&img, "alice", Some("app1"), QuotaType::Produce) == Some(1024.0));
-    }
-
     #[test]
     fn an_image_without_quotas_has_none_for_any_identity() {
         let img = img_with(Vec::new());
@@ -412,79 +406,8 @@ mod tests {
         check!(found == [None, None, None, None]);
     }
 
-    #[test]
-    fn exact_user_client_pair_match() {
-        assert_alice_app1_entity(vec![
-            QuotaEntityInput::user(Some("alice")),
-            QuotaEntityInput::client_id(Some("app1")),
-        ]);
-    }
-
-    #[test]
-    fn user_default_falls_back_to_client_specific() {
-        // Only (client-id=app1) configured; user=alice should still match.
-        assert_alice_app1_entity(vec![QuotaEntityInput::client_id(Some("app1"))]);
-    }
-
-    #[test]
-    fn single_user_match_when_no_pair_exists() {
-        let img = img_with(vec![rec().value(2048.0).call()]);
-        assert!(lookup_quota(&img, "alice", Some("anyclient"), QuotaType::Produce) == Some(2048.0));
-    }
-
-    #[test]
-    fn single_client_id_match_when_no_user_exists() {
-        let img = img_with(vec![
-            rec()
-                .entity(vec![QuotaEntityInput::client_id(Some("app1"))])
-                .value(512.0)
-                .call(),
-        ]);
-        assert!(lookup_quota(&img, "anyuser", Some("app1"), QuotaType::Produce) == Some(512.0));
-    }
-
-    #[test]
-    fn default_user_default_client_pair() {
-        let img = img_with(vec![
-            rec()
-                .entity(vec![
-                    QuotaEntityInput::user(None),
-                    QuotaEntityInput::client_id(None),
-                ])
-                .value(256.0)
-                .call(),
-        ]);
-        assert!(lookup_quota(&img, "alice", Some("app1"), QuotaType::Produce) == Some(256.0));
-    }
-
-    #[test]
-    fn default_user_alone() {
-        let img = img_with(vec![
-            rec()
-                .entity(vec![QuotaEntityInput::user(None)])
-                .value(128.0)
-                .call(),
-        ]);
-        assert!(lookup_quota(&img, "alice", Some("app1"), QuotaType::Produce) == Some(128.0));
-    }
-
-    #[test]
-    fn default_client_alone() {
-        let img = img_with(vec![
-            rec()
-                .entity(vec![QuotaEntityInput::client_id(None)])
-                .value(64.0)
-                .call(),
-        ]);
-        assert!(lookup_quota(&img, "alice", Some("app1"), QuotaType::Produce) == Some(64.0));
-    }
-
-    #[test]
-    fn no_match_returns_none() {
-        let img = img_with(vec![]);
-        assert!(lookup_quota(&img, "alice", Some("app1"), QuotaType::Produce) == None);
-    }
-
+    /// `lookup_quota` answers the rate of the level `lookup_quota_with_key`
+    /// resolves; `quota_precedence_exhaustive` checks every level order.
     #[test]
     fn pair_specific_wins_over_user_only() {
         let img = img_with(vec![
@@ -893,48 +816,6 @@ mod tests {
 
     fn img_with_ip(records: Vec<ClientQuotaRecord>) -> MetadataImage { image_with_quotas(records) }
 
-    #[test]
-    fn ip_quotas_prefer_an_exact_address_and_fall_back_to_the_default() {
-        let cases = [
-            (
-                vec![rec_ip().maybe_ip(Some("127.0.0.1")).call()],
-                "127.0.0.1",
-                Some(1.0),
-            ),
-            (vec![rec_ip().value(2.0).call()], "10.0.0.7", Some(2.0)),
-            (
-                vec![
-                    rec_ip().value(8.0).call(),
-                    rec_ip().maybe_ip(Some("127.0.0.1")).call(),
-                ],
-                "127.0.0.1",
-                Some(1.0),
-            ),
-        ];
-        for (records, address, expected) in cases {
-            let image = img_with_ip(records);
-            let ip: IpAddr = address.parse().unwrap();
-            assert!(
-                lookup_ip_quota(
-                    &image,
-                    &IpNames::default(),
-                    ip,
-                    QuotaType::ConnectionCreation
-                ) == expected,
-                "{address}"
-            );
-        }
-    }
-
-    #[test]
-    fn ip_no_match_returns_none() {
-        let img = img_with_ip(vec![]);
-        let ip: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(
-            lookup_ip_quota(&img, &IpNames::default(), ip, QuotaType::ConnectionCreation).is_none()
-        );
-    }
-
     /// Kafka resolves an ip entity's name to an `InetAddress` and matches it
     /// with the connection's address, so the entity stands for every spelling
     /// of its address (#1214). The bucket key is the peer's canonical address
@@ -1074,21 +955,18 @@ mod tests {
         ]
     }
 
-    #[derive(Default)]
     struct ProducerQuotaPrecedence {
-        image: Option<MetadataImage>,
+        image: MetadataImage,
         matched: rstest_bdd::Slot<Option<MatchedQuota>>,
     }
 
     #[rstest::fixture]
     fn producer_quota_precedence() -> ProducerQuotaPrecedence {
-        // Every client quota lookup starts from an independent configuration image.
-        ProducerQuotaPrecedence::default()
-    }
-
-    #[rstest_bdd_macros::given("the cluster has no configured producer quotas")]
-    fn empty_producer_quota_image(producer_quota_precedence: &mut ProducerQuotaPrecedence) {
-        producer_quota_precedence.image = Some(img_with(Vec::new()));
+        // Every client quota lookup starts from a cluster with no quotas.
+        ProducerQuotaPrecedence {
+            image: img_with(Vec::new()),
+            matched: rstest_bdd::Slot::default(),
+        }
     }
 
     #[rstest_bdd_macros::given(
@@ -1115,18 +993,13 @@ mod tests {
         };
         producer_quota_precedence
             .image
-            .as_mut()
-            .expect("cluster quota image was given")
             .apply(&MetadataRecord::V1ClientQuota(record));
     }
 
     #[rstest_bdd_macros::when("the producer quota for user alice and client app is resolved")]
     fn resolve_producer_quota_precedence(producer_quota_precedence: &mut ProducerQuotaPrecedence) {
         producer_quota_precedence.matched.set(matched_quota(
-            producer_quota_precedence
-                .image
-                .as_ref()
-                .expect("cluster quota image was given"),
+            &producer_quota_precedence.image,
             "alice",
             Some("app"),
             QuotaType::Produce,

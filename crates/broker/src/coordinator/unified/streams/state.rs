@@ -714,60 +714,14 @@ mod tests {
     /// second member in a group with a target at epoch 2, reconciles `m1`
     /// with the owned tasks of its heartbeat, and compares the whole
     /// reconciliation state of `m1` afterwards.
-    /// Kafka's `scheduleStreamsGroupRebalanceTimeout`: a member that enters
-    /// `UnrevokedTasks` must revoke within its rebalance timeout, or it is
-    /// removed. A member that left that state is not.
-    #[test]
-    fn a_member_past_its_rebalance_timeout_is_fenced() {
-        let rows = [
-            ("still unrevoked at the deadline", false, vec![
-                "m1".to_owned(),
-            ]),
-            ("revoked before the deadline", true, vec![]),
-        ];
-        for (name, revokes, fenced) in rows {
-            let mut group = StreamsGroupState::new("g");
-            let mut m1 = StreamsMemberState::joining("m1", "c", "h");
-            m1.member_epoch = 1;
-            m1.rebalance_timeout_ms = 100;
-            m1.active = tasks_of(&[0, 1]);
-            group.members.insert("m1".into(), m1);
-            group.group_epoch = 2;
-            let mut target = StreamsTargetAssignment::default();
-            target.active.insert("m1".into(), tasks_of(&[0]));
-            group.install_target(target);
-            let now = Instant::now();
-            let owned = |active: &[i32]| RoleTasks {
-                active: tasks_of(active),
-                ..RoleTasks::default()
-            };
-
-            check!(
-                group.reconcile_member("m1", Some(&owned(&[0, 1]))),
-                "{name}"
-            );
-            group.track_rebalance_timeout("m1", now);
-            if revokes && group.reconcile_member("m1", Some(&owned(&[0]))) {
-                group.track_rebalance_timeout("m1", now);
-            }
-
-            check!(
-                group
-                    .fence_rebalance_timeouts(now + Duration::from_millis(99))
-                    .is_empty(),
-                "{name}"
-            );
-            check!(
-                group.fence_rebalance_timeouts(now + Duration::from_millis(100)) == fenced,
-                "{name}"
-            );
-        }
-    }
     mod bdd_reconciliation {
         use {
             super::*,
+            assert2::assert,
+            krabka_bdd::Given,
             rstest_bdd::datatable::Rows,
-            rstest_bdd_macros::{DataTableRow, given, scenarios, then, when},
+            rstest_bdd_macros::{DataTableRow, given, then, when},
+            std::str::FromStr,
         };
         #[derive(Default)]
         struct MemberReconciliation {
@@ -910,6 +864,151 @@ mod tests {
                 }
             );
         }
-        scenarios!("tests/features/migrated/src/coordinator/unified/streams/state.feature",fixtures=[reconciliation:MemberReconciliation]);
+        /// Kafka's `scheduleStreamsGroupRebalanceTimeout`: a member that
+        /// enters `UnrevokedTasks` must revoke within its rebalance timeout,
+        /// or it is removed. A member that left that state is not.
+        struct RebalanceTimeout {
+            group: Given<StreamsGroupState>,
+            started: Instant,
+            fenced: Given<Vec<Vec<String>>>,
+        }
+        #[rstest::fixture]
+        fn rebalance_timeout() -> RebalanceTimeout {
+            RebalanceTimeout {
+                group: Given::new(
+                    "group",
+                    "Given member m1 with a rebalance timeout of 100 ms has been asked to revoke a task",
+                ),
+                started: Instant::now(),
+                fenced: Given::new(
+                    "fenced",
+                    "When the coordinator checks rebalance timeouts <checks> ms after the revocation began",
+                ),
+            }
+        }
+        /// What became of the member after it was asked to revoke a task.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+        enum Revocation {
+            /// It still reports the task.
+            #[step_param("still owns the task")]
+            StillOwns,
+            /// It stopped reporting the task and reconciled to the target.
+            #[step_param("has revoked the task")]
+            Revoked,
+            /// Its member epoch moved on, and no new deadline was armed.
+            #[step_param("has moved to a newer epoch without a new deadline")]
+            NewerEpoch,
+            /// It left `UnrevokedTasks` at the same member epoch.
+            #[step_param("has left the revoking state at the same epoch")]
+            LeftRevoking,
+        }
+        /// Comma-separated times, in milliseconds after the revocation began.
+        struct CheckTimes(Vec<u64>);
+        impl FromStr for CheckTimes {
+            type Err = String;
+
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                text.split(',')
+                    .map(|millis| {
+                        millis
+                            .parse()
+                            .map_err(|_| format!("{millis} is no millisecond count"))
+                    })
+                    .collect::<Result<_, _>>()
+                    .map(Self)
+            }
+        }
+        /// What each check fences, comma-separated: a member id or `none`.
+        struct FencedPerCheck(Vec<Vec<String>>);
+        impl FromStr for FencedPerCheck {
+            type Err = String;
+
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                Ok(Self(
+                    text.split(',')
+                        .map(|fenced| {
+                            if fenced == "none" {
+                                Vec::new()
+                            } else {
+                                vec![fenced.to_owned()]
+                            }
+                        })
+                        .collect(),
+                ))
+            }
+        }
+        fn owned_active(active: &[i32]) -> RoleTasks {
+            RoleTasks {
+                active: tasks_of(active),
+                ..RoleTasks::default()
+            }
+        }
+        #[krabka_bdd::given(
+            "member m1 with a rebalance timeout of 100 ms has been asked to revoke a task"
+        )]
+        fn member_asked_to_revoke(rebalance_timeout: &mut RebalanceTimeout) {
+            let mut group = StreamsGroupState::new("g");
+            let mut m1 = StreamsMemberState::joining("m1", "c", "h");
+            m1.member_epoch = 1;
+            m1.rebalance_timeout_ms = 100;
+            m1.active = tasks_of(&[0, 1]);
+            group.members.insert("m1".into(), m1);
+            group.group_epoch = 2;
+            let mut target = StreamsTargetAssignment::default();
+            target.active.insert("m1".into(), tasks_of(&[0]));
+            group.install_target(target);
+            assert!(group.reconcile_member("m1", Some(&owned_active(&[0, 1]))));
+            group.track_rebalance_timeout("m1", rebalance_timeout.started);
+            rebalance_timeout.group.set(group);
+        }
+        #[krabka_bdd::given("the member {revocation}")]
+        fn member_revocation(rebalance_timeout: &mut RebalanceTimeout, revocation: Revocation) {
+            let started = rebalance_timeout.started;
+            let group = rebalance_timeout.group.get_mut();
+            match revocation {
+                Revocation::StillOwns => {}
+                Revocation::Revoked => {
+                    assert!(group.reconcile_member("m1", Some(&owned_active(&[0]))));
+                    group.track_rebalance_timeout("m1", started);
+                }
+                Revocation::NewerEpoch => {
+                    group.members.get_mut("m1").expect("member m1").member_epoch = 2;
+                }
+                Revocation::LeftRevoking => {
+                    group
+                        .members
+                        .get_mut("m1")
+                        .expect("member m1")
+                        .assignment_state = StreamsMemberAssignmentState::Stable;
+                    group.track_rebalance_timeout("m1", started);
+                }
+            }
+        }
+        #[krabka_bdd::when(
+            "the coordinator checks rebalance timeouts {checks} ms after the revocation began"
+        )]
+        fn check_rebalance_timeouts(rebalance_timeout: &mut RebalanceTimeout, checks: CheckTimes) {
+            let started = rebalance_timeout.started;
+            let group = rebalance_timeout.group.get_mut();
+            let fenced = checks
+                .0
+                .into_iter()
+                .map(|elapsed| {
+                    group.fence_rebalance_timeouts(started + Duration::from_millis(elapsed))
+                })
+                .collect();
+            rebalance_timeout.fenced.set(fenced);
+        }
+        #[krabka_bdd::then("the checks fence {fenced}")]
+        fn fenced_members(rebalance_timeout: &RebalanceTimeout, fenced: FencedPerCheck) {
+            assert!(*rebalance_timeout.fenced.get() == fenced.0);
+        }
+        krabka_bdd::scenarios!(
+            "tests/features/migrated/src/coordinator/unified/streams/state.feature",
+            fixtures = [
+                reconciliation: MemberReconciliation,
+                rebalance_timeout: RebalanceTimeout,
+            ]
+        );
     }
 }

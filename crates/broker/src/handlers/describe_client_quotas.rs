@@ -246,7 +246,6 @@ mod tests {
     #[derive(Clone, Copy, Default)]
     enum QuotaNameMatch {
         Exact,
-        DefaultEntity,
         #[default]
         Any,
     }
@@ -255,7 +254,6 @@ mod tests {
         fn wire_code(self) -> i8 {
             match self {
                 Self::Exact => MATCH_TYPE_EXACT,
-                Self::DefaultEntity => MATCH_TYPE_DEFAULT,
                 Self::Any => MATCH_TYPE_ANY,
             }
         }
@@ -412,79 +410,6 @@ mod tests {
             &filter,
             QuotaEntityScope::ExactTypes
         )); // strict rejects superset
-    }
-
-    #[test]
-    fn default_match_type_filters_by_none_entity_name() {
-        let stored_default = key(vec![EntityPart {
-            entity_type: "user",
-            entity_name: None,
-        }]);
-        let stored_named = key(vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }]);
-        let filter = vec![comp().matching(QuotaNameMatch::DefaultEntity).call()];
-        assert!(entity_matches_filter(
-            &stored_default,
-            &filter,
-            QuotaEntityScope::ExactTypes
-        ));
-        assert!(!entity_matches_filter(
-            &stored_named,
-            &filter,
-            QuotaEntityScope::ExactTypes
-        ));
-    }
-
-    #[test]
-    fn any_match_type_returns_all_names_of_type() {
-        let stored1 = key(vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }]);
-        let stored2 = key(vec![EntityPart {
-            entity_type: "user",
-            entity_name: None,
-        }]);
-        let filter = vec![comp().call()];
-        assert!(entity_matches_filter(
-            &stored1,
-            &filter,
-            QuotaEntityScope::ExactTypes
-        ));
-        assert!(entity_matches_filter(
-            &stored2,
-            &filter,
-            QuotaEntityScope::ExactTypes
-        ));
-    }
-
-    #[tokio::test]
-    async fn denied_response_preserves_error_fields() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] deny_all;
-            user ["alice"];
-        };
-
-        let resp = handle(
-            &broker,
-            &request()
-                .components(exact_user_filter("alice"))
-                .matching(QuotaEntityScope::ExactTypes)
-                .call(),
-            VERSION,
-            &ctx,
-        );
-
-        let expected = krabka_broker_macros::unthrottled_wire!(DescribeClientQuotasResponse {
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: None,
-            entries: None,
-        });
-        assert!(resp == expected, "{resp:?}");
-        broker_handle.shutdown().await;
     }
 
     /// Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes

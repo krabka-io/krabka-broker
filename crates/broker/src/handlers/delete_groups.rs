@@ -116,10 +116,7 @@ mod tests {
         crate::{
             authorizer::AuthorizationResult,
             handlers::RequestContext,
-            test_support::{
-                self as broker_fixture_support, DenyAll, dispatch_context,
-                start_group_broker_no_audit,
-            },
+            test_support::{DenyAll, dispatch_context, start_group_broker_no_audit},
         },
         assert2::assert,
         krabka_protocol::api_key::ApiKey,
@@ -147,45 +144,6 @@ mod tests {
         handle(broker, req.clone(), VERSION, ctx)
             .await
             .expect("handle")
-    }
-
-    fn result(group_id: &str, error_code: i16) -> DeletableGroupResult {
-        krabka_broker_macros::tagged_wire!(DeletableGroupResult {
-            group_id: group_id.to_owned(),
-            error_code,
-            error_message: None,
-        })
-    }
-
-    async fn assert_results(
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
-        groups: &[&str],
-        results: Vec<DeletableGroupResult>,
-    ) {
-        let response = drive(broker, &request(groups), ctx).await;
-        let expected = krabka_broker_macros::unthrottled_wire!(DeleteGroupsResponse { results });
-        assert!(response == expected);
-    }
-
-    #[tokio::test]
-    async fn handle_denies_delete_for_each_group() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_group_broker_no_audit(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_broker_macros::request_test_identity! {
-            bind(p, peer);
-            user ["alice"];
-        };
-        let ctx = test_context(&p, &peer);
-        assert_results(&broker, &ctx, &["group-a", "group-b"], vec![
-            result("group-a", codes::GROUP_AUTHORIZATION_FAILED),
-            result("group-b", codes::GROUP_AUTHORIZATION_FAILED),
-        ])
-        .await;
-        broker_handle.shutdown().await;
     }
 
     /// Denies every operation on the group named `denied` and allows the
@@ -287,22 +245,6 @@ mod tests {
             expected.push((groups, response));
         }
         assert!(actual == expected);
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn handle_allowed_missing_group_returns_not_found() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, p, peer);
-            boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
-            user ["admin"];
-        };
-        let ctx = test_context(&p, &peer);
-        assert_results(&broker, &ctx, &["missing"], vec![result(
-            "missing",
-            codes::GROUP_ID_NOT_FOUND,
-        )])
-        .await;
         broker_handle.shutdown().await;
     }
 

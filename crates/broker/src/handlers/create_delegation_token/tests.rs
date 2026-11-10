@@ -12,11 +12,11 @@ use {
         *,
     },
     crate::{
-        codes::{DELEGATION_TOKEN_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE},
+        codes::{INVALID_REQUEST, NONE},
         handlers::{
             delegation_token_test_support::{
                 DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
-                check_failed_writes, test_controller, token_authed,
+                check_failed_writes, token_authed,
             },
             test_support::metadata_version_gated,
         },
@@ -28,7 +28,6 @@ use {
         create_delegation_token_response::CreateDelegationTokenResponse,
     },
     krabka_security::{KafkaPrincipal, SecretBytes},
-    tempfile::TempDir,
 };
 
 fn principal(principal_type: &str, name: &str) -> KafkaPrincipal {
@@ -425,58 +424,51 @@ async fn token_creation_case_19(token_creation: TokenCreationScenario) {}
 #[tokio::test]
 async fn token_creation_case_20(token_creation: TokenCreationScenario) {}
 
-/// KIP-373: `CreateTokens` on `User:<owner>` lets a requester mint a token for
-/// that owner, and for no other (Kafka's `handleCreateTokenRequest`).
-#[tokio::test]
-async fn create_tokens_acl_admits_minting_for_that_owner_only() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    controller
+#[krabka_bdd::given("{requester} may create tokens for {owner}")]
+async fn requester_may_create_tokens_for(
+    token_creation: &mut TokenCreationScenario,
+    requester: String,
+    owner: String,
+) {
+    token_creation
+        .resources
+        .as_ref()
+        .expect("controller")
+        .controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
             allow_acl()
                 .resource_type(krabka_metadata::ResourceType::User)
-                .resource_name("User:alice")
-                .principal("User:bob")
+                .resource_name(&owner)
+                .principal(&format!("User:{requester}"))
                 .operation(krabka_metadata::AclOperation::CreateTokens)
                 .call(),
         )])
         .await
         .expect("seed acl");
-    let secret = SecretBytes::new(b"master-key".to_vec());
-    let authorizer = empty_super_users();
-
-    let mint = |owner: &'static str| {
-        let req = act_as("User", owner);
-        let controller = &controller;
-        let secret = &secret;
-        let authorizer = &authorizer;
-        async move {
-            handle(
-                &req,
-                &authed("bob"),
-                Some(secret),
-                60_000,
-                RENEW_24H_MS,
-                &**controller,
-                token_acl(authorizer),
-            )
-            .await
-        }
-    };
-    let for_alice = mint("alice").await;
-    let for_carol = mint("carol").await;
-
-    assert!((for_alice.error_code, for_alice.principal_name.as_str()) == (NONE, "alice"));
-    assert!(
-        for_carol
-            == refusal()
-                .code(DELEGATION_TOKEN_AUTHORIZATION_FAILED)
-                .owner(user("carol"))
-                .requester(user("bob"))
-                .call()
-    );
-    controller.cancel().await;
 }
+
+#[krabka_bdd::given("the token request names owner {owner}")]
+fn token_request_names_owner(token_creation: &mut TokenCreationScenario, owner: String) {
+    let owner = token_principal(&owner);
+    token_creation.request = act_as(&owner.principal_type, &owner.name);
+}
+
+/// KIP-373: `CreateTokens` on `User:<owner>` lets a requester mint a token for
+/// that owner (Kafka's `handleCreateTokenRequest`).
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "CreateTokens on a user lets a requester mint a token for that user"
+)]
+#[tokio::test]
+async fn create_tokens_acl_admits_minting_for_that_owner(token_creation: TokenCreationScenario) {}
+
+/// KIP-373: the `CreateTokens` grant names one owner and covers no other.
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_delegation_token_creation.feature",
+    name = "CreateTokens on one user does not cover another user"
+)]
+#[tokio::test]
+async fn create_tokens_acl_covers_no_other_owner(token_creation: TokenCreationScenario) {}
 
 /// Kafka's `DelegationTokenControlManager.sum` saturates at `Long.MAX_VALUE`
 /// instead of refusing a lifetime that runs past it.

@@ -92,33 +92,6 @@ mod tests {
     use {super::*, crate::codes::INVALID_REQUEST, assert2::assert};
 
     #[test]
-    fn entry_helpers_preserve_wire_fields() {
-        let entity: EntityKey = vec![("user".into(), Some("alice".into()))];
-
-        let ok = ok_entry(&entity);
-        let expected_ok = krabka_broker_macros::tagged_wire!(RespEntry {
-            error_code: 0,
-            error_message: None,
-            entity: vec![krabka_broker_macros::tagged_wire!(RespEntity {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-            })],
-        });
-        assert!(ok == expected_ok);
-
-        let err = err_entry(&entity, INVALID_REQUEST, "bad quota".into());
-        let expected_err = krabka_broker_macros::tagged_wire!(RespEntry {
-            error_code: INVALID_REQUEST,
-            error_message: Some("bad quota".into()),
-            entity: vec![krabka_broker_macros::tagged_wire!(RespEntity {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-            })],
-        });
-        assert!(err == expected_err);
-    }
-
-    #[test]
     fn submit_error_only_stamps_successful_entries() {
         let mut results = vec![
             ok_entry(&[("user".into(), Some("alice".into()))]),

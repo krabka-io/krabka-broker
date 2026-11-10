@@ -128,67 +128,6 @@ async fn handle_denies_topic_alter_for_each_topic() {
 }
 
 #[tokio::test]
-async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
-    let LiveBrokerFixture {
-        handle: broker_handle,
-        directory: _dir,
-        broker,
-    } = start_partition_topic().name("stable").call().await;
-    check_topic_rows()
-        .broker(&broker)
-        .topics(vec![
-            topic_req().name("missing").call(),
-            topic_req().name("stable").count(2).call(),
-        ])
-        .expected(vec![
-            expected_result("missing", codes::UNKNOWN_TOPIC_OR_PARTITION, None),
-            expected_result(
-                "stable",
-                codes::INVALID_PARTITIONS,
-                Some("Topic already has 2 partition(s).".into()),
-            ),
-        ])
-        .call()
-        .await;
-    assert!(
-        broker_handle
-            .controller_image_for_test()
-            .partitions_of("stable")
-            .count()
-            == 2
-    );
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn validate_only_reports_success_without_adding_partitions() {
-    let LiveBrokerFixture {
-        handle: broker_handle,
-        directory: _dir,
-        broker,
-    } = start_partition_topic()
-        .name("dry-run")
-        .partitions(1)
-        .call()
-        .await;
-    check_topic_rows()
-        .broker(&broker)
-        .topics(vec![topic_req().name("dry-run").call()])
-        .mutation(PartitionMutation::Validate)
-        .expected(vec![expected_result("dry-run", codes::NONE, None)])
-        .call()
-        .await;
-    assert!(
-        broker_handle
-            .controller_image_for_test()
-            .partitions_of("dry-run")
-            .count()
-            == 1
-    );
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
 async fn handle_adds_new_partitions_and_preserves_response_identity() {
     let LiveBrokerFixture {
         handle: broker_handle,
@@ -830,6 +769,27 @@ async fn partition_growth_case_4(partition_growth_rows: PartitionGrowthRows) {}
 )]
 #[tokio::test]
 async fn partition_growth_case_5(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "a count equal to the current one"
+)]
+#[tokio::test]
+async fn partition_growth_case_6(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "a valid growth in a dry run adds nothing"
+)]
+#[tokio::test]
+async fn partition_growth_case_7(partition_growth_rows: PartitionGrowthRows) {}
+
+#[rstest_bdd_macros::scenario(
+    path = "tests/features/handler_create_partition_rows.feature",
+    name = "two checked topics answer in the order they were requested"
+)]
+#[tokio::test]
+async fn partition_growth_case_8(partition_growth_rows: PartitionGrowthRows) {}
 
 /// Both operations initially observe the same count. Only one may create the
 /// new indices; the other must see the committed count on its next attempt.

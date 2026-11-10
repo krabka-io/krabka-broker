@@ -42,29 +42,6 @@ fn remove_snapshots(dir: &Path, offsets: impl IntoIterator<Item = i64>) {
     }
 }
 
-#[tokio::test]
-async fn first_batch_appends() {
-    let s = ProducerState::new();
-    let d = s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await;
-    assert!(d == Decision::Append);
-}
-
-#[tokio::test]
-async fn next_sequence_appends() {
-    let s = ProducerState::new();
-    commit_fixture().state(&s).call().await;
-    let d = s.check("t", PartitionIndex(0), 1000, 0, 5, 2).await;
-    assert!(d == Decision::Append);
-}
-
-#[tokio::test]
-async fn duplicate_returns_cached_offset() {
-    let s = ProducerState::new();
-    commit_fixture().state(&s).call().await;
-    let d = s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await;
-    assert!(d == Decision::Duplicate { base_offset: 0 });
-}
-
 /// A late commit for a pre-marker batch must not undo a marker's epoch bump.
 ///
 /// `AppendCommit::record` runs on the request's task after the writer
@@ -97,25 +74,6 @@ async fn a_late_commit_at_an_older_epoch_does_not_undo_a_marker() {
         s.check("t", PartitionIndex(0), 1000, 3, 0, 2).await == Decision::Fenced,
         "the stale commit must not have reopened the pre-marker epoch"
     );
-}
-
-#[tokio::test]
-async fn only_an_exact_retry_of_the_last_batch_is_duplicate() {
-    let s = ProducerState::new();
-    commit_fixture()
-        .state(&s)
-        .sequence(3)
-        .delta(1)
-        .offset(10)
-        .call()
-        .await;
-
-    check!(
-        s.check("t", PartitionIndex(0), 1000, 0, 3, 1).await
-            == Decision::Duplicate { base_offset: 10 }
-    );
-    check!(s.check("t", PartitionIndex(0), 1000, 0, 3, 0).await == Decision::OutOfOrder);
-    check!(s.check("t", PartitionIndex(0), 1000, 0, 2, 1).await == Decision::OutOfOrder);
 }
 
 #[tokio::test]
@@ -230,72 +188,6 @@ async fn truncate_drops_every_marker_only_entry_regardless_of_offset() {
             "offset={offset}"
         );
     }
-}
-
-#[tokio::test]
-async fn out_of_order_when_gap() {
-    let s = ProducerState::new();
-    commit_fixture().state(&s).call().await;
-    // Last seq is 4; next valid base_seq is 5. Sending 10 → OutOfOrder.
-    let d = s.check("t", PartitionIndex(0), 1000, 0, 10, 2).await;
-    assert!(d == Decision::OutOfOrder);
-}
-
-async fn commit_epoch_five_prefix(state: &ProducerState) {
-    commit_fixture().state(state).epoch(5).delta(2).call().await;
-}
-
-#[tokio::test]
-async fn lower_epoch_is_fenced() {
-    let s = ProducerState::new();
-    commit_fixture().state(&s).epoch(5).call().await;
-    let d = s.check("t", PartitionIndex(0), 1000, 4, 5, 2).await;
-    assert!(d == Decision::Fenced);
-}
-
-/// A bumped producer epoch (same `producer_id`, higher epoch) establishes a
-/// FRESH sequence baseline: `base_sequence == 0` at the new epoch must be a
-/// fresh `Append`, NOT a `Duplicate` against the prior epoch's high-water.
-/// This is the EOS-restart path. The client resets its sequence to 0.
-///
-/// This is the regression test for the cross-restart EOS data-loss bug.
-/// Before the fix, the broker silently deduped a restarted EOS producer's
-/// first record on each partition and echoed the old `base_offset`. The
-/// txn's offset commit still landed. The source offset advanced, but the
-/// output record vanished.
-#[tokio::test]
-async fn higher_epoch_at_seq_zero_appends() {
-    let s = ProducerState::new();
-    // Epoch 5 committed sequences 0..=2 (last_sequence = 2).
-    commit_epoch_five_prefix(&s).await;
-    // Same pid, epoch 6, base_sequence 0 — a fresh write, NOT a duplicate.
-    let d = s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await;
-    assert!(d == Decision::Append);
-}
-
-/// A bumped epoch that continues the sequence (`base_sequence > 0`) is out
-/// of order. Kafka's `ProducerAppendInfo.checkSequence` requires sequence 0
-/// for the first batch at a new epoch. That includes the KIP-890
-/// (transaction version 2) epoch bump on every commit or abort, after which
-/// the Java client calls `resetSequenceNumbers()`. The rejected batch changes
-/// nothing, so the batch at sequence 0 still appends, and same-epoch dedup
-/// resumes after it commits.
-#[tokio::test]
-async fn higher_epoch_continuing_sequence_is_out_of_order() {
-    let s = ProducerState::new();
-    commit_epoch_five_prefix(&s).await;
-    check!(s.check("t", PartitionIndex(0), 1000, 6, 3, 0).await == Decision::OutOfOrder);
-    check!(s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await == Decision::Append);
-    commit_fixture()
-        .state(&s)
-        .epoch(6)
-        .delta(0)
-        .offset(10)
-        .timestamp(2)
-        .call()
-        .await;
-    let dup = s.check("t", PartitionIndex(0), 1000, 6, 0, 0).await;
-    assert!(dup == Decision::Duplicate { base_offset: 10 });
 }
 
 #[tokio::test]
@@ -631,3 +523,103 @@ fn snapshot_rolling_log(path: &Path) -> RollingLog {
     let log = krabka_log::Log::open(path, config.clone()).unwrap();
     RollingLog { log, config }
 }
+
+/// One producer's batches on one partition, and the leader's decision for the
+/// batch a scenario's producer sends.
+struct ProducerSequenceScenario {
+    state: ProducerState,
+    decision: krabka_bdd::Given<Decision>,
+}
+
+#[rstest::fixture]
+fn producer_sequence() -> ProducerSequenceScenario {
+    ProducerSequenceScenario {
+        state: ProducerState::new(),
+        decision: krabka_bdd::Given::new(
+            "decision",
+            "When the producer sends sequences <first> to <last> at epoch <epoch>",
+        ),
+    }
+}
+
+/// How the leader refuses a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+enum Refusal {
+    #[step_param("OUT_OF_ORDER_SEQUENCE_NUMBER")]
+    OutOfOrder,
+    #[step_param("INVALID_PRODUCER_EPOCH")]
+    Fenced,
+}
+
+impl From<Refusal> for Decision {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::OutOfOrder => Self::OutOfOrder,
+            Refusal::Fenced => Self::Fenced,
+        }
+    }
+}
+
+#[krabka_bdd::given("the producer has appended sequences {first} to {last} at epoch {epoch}")]
+async fn appended(producer_sequence: &ProducerSequenceScenario, first: i32, last: i32, epoch: i16) {
+    written_at(producer_sequence, first, last, epoch, 0).await;
+}
+
+#[krabka_bdd::given(
+    "the producer's batch of sequences {first} to {last} at epoch {epoch} was written at offset {offset}"
+)]
+async fn written_at(
+    producer_sequence: &ProducerSequenceScenario,
+    first: i32,
+    last: i32,
+    epoch: i16,
+    offset: i64,
+) {
+    commit_fixture()
+        .state(&producer_sequence.state)
+        .epoch(epoch)
+        .sequence(first)
+        .delta(last - first)
+        .offset(offset)
+        .call()
+        .await;
+}
+
+#[krabka_bdd::when("the producer sends sequences {first} to {last} at epoch {epoch}")]
+async fn sends(
+    producer_sequence: &mut ProducerSequenceScenario,
+    first: i32,
+    last: i32,
+    epoch: i16,
+) {
+    let decision = producer_sequence
+        .state
+        .check("t", PartitionIndex(0), 1000, epoch, first, last - first)
+        .await;
+    producer_sequence.decision.set(decision);
+}
+
+#[krabka_bdd::then("the batch is appended")]
+fn is_appended(producer_sequence: &ProducerSequenceScenario) {
+    assert!(*producer_sequence.decision.get() == Decision::Append);
+}
+
+#[krabka_bdd::then("the batch is a duplicate of the batch at offset {offset}")]
+fn is_duplicate(producer_sequence: &ProducerSequenceScenario, offset: i64) {
+    assert!(
+        *producer_sequence.decision.get()
+            == Decision::Duplicate {
+                base_offset: offset
+            }
+    );
+}
+
+#[krabka_bdd::then("the batch is refused with {refusal}")]
+fn is_refused(producer_sequence: &ProducerSequenceScenario, refusal: Refusal) {
+    assert!(*producer_sequence.decision.get() == Decision::from(refusal));
+}
+
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/txn/producer_sequence.feature",
+    fixtures = [producer_sequence: ProducerSequenceScenario],
+);

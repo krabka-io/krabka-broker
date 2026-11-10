@@ -589,13 +589,6 @@ fn quota_versions_accounted(quota: &QuotaEnforcement) {
 
 #[rstest_bdd_macros::scenario(
     path = "tests/features/migrated/tests/client_quotas/throttling.feature",
-    name = "producer byte rate throttles produce"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_byte_rate_throttles_produce(quota: QuotaEnforcement) { quota.shutdown().await; }
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/migrated/tests/client_quotas/throttling.feature",
     name = "request percentage throttles produce"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

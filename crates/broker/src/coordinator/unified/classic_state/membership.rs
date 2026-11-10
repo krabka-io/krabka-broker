@@ -456,23 +456,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dynamic_member_timeout_still_drops_in_mixed_group() {
-        let mut g = ClassicGroup::new("g");
-        g.add_member(static_member("static-1", "inst-a"));
-        let mut dyn_m = sample_member("dyn-1");
-        dyn_m.session_timeout = Duration::from_millis(1);
-        dyn_m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
-        g.add_member(dyn_m);
-        g.complete_rebalance("range");
-        g.state = GroupState::Stable;
-
-        let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
-        check!(dropped == vec!["dyn-1".to_owned()]);
-        check!(g.state == GroupState::PreparingRebalance);
-        check!(g.members.contains_key("static-1"));
-    }
-
     /// Kafka's `removeMemberAndUpdateClassicGroup` reaches `prepareRebalance`,
     /// which waits for the survivors for `group.rebalanceTimeoutMs()`, the
     /// largest member rebalance timeout. `group.initial.rebalance.delay.ms`
@@ -533,20 +516,6 @@ mod tests {
         g.remove_member("m1");
         assert!(g.current_member_id_for_instance("inst-a") == Some("m2"));
         assert!(g.members.contains_key("m2"));
-    }
-
-    #[test]
-    fn expire_dead_members_drops_stale() {
-        let mut g = ClassicGroup::new("g");
-        let mut m = sample_member("m1");
-        m.session_timeout = Duration::from_millis(1);
-        m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
-        g.add_member(m);
-        g.complete_rebalance("range");
-        g.state = GroupState::Stable;
-        let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
-        assert!(dropped == vec!["m1".to_owned()]);
-        assert!(g.state == GroupState::Empty);
     }
 
     #[test]

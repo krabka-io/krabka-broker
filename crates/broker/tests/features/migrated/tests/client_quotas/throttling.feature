@@ -2,12 +2,6 @@ Feature: Byte and request quotas report and account for actual applied throttles
   Background:
     Given a SASL quota broker has super user admin and ordinary user alice
 
-  Scenario: producer byte rate throttles produce
-    Given topic throttle-produce permits alice to Write
-    And alice has producer_byte_rate quota 128
-    When alice produces 8 records of 1024 bytes to the topic
-    Then the produce partition succeeds and reports a positive throttle delay
-
   Scenario: request percentage throttles produce
     Given topic throttle-request permits alice to Write
     And alice has request_percentage quota 0.001

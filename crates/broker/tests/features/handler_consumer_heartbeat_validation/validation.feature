@@ -14,6 +14,18 @@ Feature: ConsumerGroupHeartbeat validates member identity join fields and assign
     When the consumer heartbeat is validated with default coordinator settings
     Then consumer heartbeat validation accepts the request
 
+  Scenario: A member id of a no-break space is not blank to Java's trim
+    Given a consumer joining heartbeat uses API version 1
+    And the consumer heartbeat field member ID is a no-break space
+    When the consumer heartbeat is validated with default coordinator settings
+    Then consumer heartbeat validation accepts the request
+
+  Scenario: A member id of a control character is blank to Java's trim
+    Given a consumer joining heartbeat uses API version 1
+    And the consumer heartbeat field member ID is a control character
+    When the consumer heartbeat is validated with default coordinator settings
+    Then consumer heartbeat validation refuses with code 42 message MemberId can't be empty.
+
   Scenario: Invalid heartbeat fields retain complete Kafka refusal messages: phase=joining, version=1, field=member ID (1)
     Given a consumer joining heartbeat uses API version 1
     And the consumer heartbeat field member ID is blank

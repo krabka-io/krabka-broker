@@ -189,11 +189,6 @@ mod helper_tests {
     }
 
     #[test]
-    fn first_join_member_id_preserves_client_supplied_id() {
-        assert!(first_join_member_id("member-a") == "member-a");
-    }
-
-    #[test]
     fn first_join_member_id_mints_uuid_for_empty_id() {
         let member_id = first_join_member_id("");
 

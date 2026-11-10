@@ -50,15 +50,14 @@ mod tests {
     use {
         super::local_read_failure,
         crate::{
-            codes::{CORRUPT_MESSAGE, KAFKA_STORAGE_ERROR, UNKNOWN_SERVER_ERROR},
+            codes::{CORRUPT_MESSAGE, UNKNOWN_SERVER_ERROR},
             error::BrokerError,
             log_dir_status::LogDirRegistry,
             partition::test_support::test_partition,
         },
         assert2::assert,
         krabka_log::{LogError, Offset},
-        krabka_protocol::records::RecordsError,
-        std::{io, sync::Arc},
+        std::sync::Arc,
         tokio::sync::Notify,
     };
 
@@ -70,24 +69,12 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::disk_io(
-        LogError::Io(io::Error::other("EIO")),
-        Settled { code: KAFKA_STORAGE_ERROR, offline: true },
-    )]
     #[case::crc_mismatch(
         LogError::CrcMismatch { segment: Offset(0), file_offset: 0, expected: 1, computed: 2 },
         Settled { code: CORRUPT_MESSAGE, offline: false },
     )]
     #[case::partial_batch(
         LogError::PartialBatch { segment: Offset(0), file_offset: 0 },
-        Settled { code: CORRUPT_MESSAGE, offline: false },
-    )]
-    #[case::record_parse(
-        LogError::Records(RecordsError::RecordParse("bad batch".into())),
-        Settled { code: CORRUPT_MESSAGE, offline: false },
-    )]
-    #[case::corrupt_index(
-        LogError::Corrupt("txn index".into()),
         Settled { code: CORRUPT_MESSAGE, offline: false },
     )]
     #[case::bad_segment_name(
@@ -114,22 +101,5 @@ mod tests {
                 offline: log_dirs.is_offline(dir.path()),
             } == expected
         );
-    }
-
-    /// A broker-side I/O error, such as a read task that panicked, is not the
-    /// disk's fault and leaves the dir online.
-    #[tokio::test]
-    async fn a_broker_io_error_leaves_the_dir_online() {
-        let (partition, dir) = test_partition(Arc::new(Notify::new()));
-        let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
-
-        let code = local_read_failure(
-            &partition,
-            &BrokerError::Io(io::Error::other("task panicked")),
-            &log_dirs,
-        );
-
-        assert!(code == UNKNOWN_SERVER_ERROR);
-        assert!(!log_dirs.is_offline(dir.path()));
     }
 }

@@ -154,34 +154,17 @@ pub const ALTER_LOG_DIRS_THROTTLED_RATE_KEY: &str =
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, std::iter};
+    use {
+        super::*,
+        assert2::assert,
+        std::{iter, str::FromStr},
+    };
 
     fn replica(partition: i32, broker: u64) -> ThrottledReplica {
         ThrottledReplica {
             partition,
             broker: NodeId(broker),
         }
-    }
-
-    #[test]
-    fn empty_string_parses_as_none() {
-        assert!(ThrottledReplicas::parse("").unwrap() == ThrottledReplicas::None);
-    }
-
-    #[test]
-    fn wildcard_parses_as_all() {
-        assert!(ThrottledReplicas::parse("*").unwrap() == ThrottledReplicas::All);
-    }
-
-    #[yare::parameterized(
-        one_pair = { "0:1", vec![replica(0, 1)] },
-        multiple_pairs = { "0:1,0:2,1:3", vec![replica(0, 1), replica(0, 2), replica(1, 3)] },
-    )]
-    fn pairs_parse_in_order(input: &str, want: Vec<ThrottledReplica>) {
-        assert2::assert!(
-            ThrottledReplicas::parse(input) == Ok(ThrottledReplicas::List(want)),
-            "{input}"
-        );
     }
 
     /// Each broker reads only the entries that name it, as Kafka's
@@ -276,76 +259,107 @@ mod tests {
         }
     }
 
-    #[yare::parameterized(
-        no_separator = { "not-a-pair" },
-        nonnumeric_broker = { "0:x" },
-        nonnumeric_partition = { "x:1" },
-        negative_partition = { "-1:1" },
-        explicit_positive_sign = { "+0:1" },
-        spaces_around_separator = { "0 : 1" },
-    )]
-    fn malformed_pair_rejected(input: &str) {
-        // Kafka's `([0-9]+:[0-9]+)?` has no sign and no space around the colon.
-        assert2::assert!(ThrottledReplicas::parse(input).is_err(), "{input}");
+    /// A `*.throttled.replicas` value as the operator wrote it, spaces
+    /// included. The feature quotes it as a JSON string so that its padding
+    /// survives the table.
+    struct ListValue(String);
+
+    impl FromStr for ListValue {
+        type Err = serde_json::Error;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> { serde_json::from_str(text).map(Self) }
     }
 
-    #[derive(Default)]
-    struct ThrottledReplicaSelection {
-        input: String,
-        selected: Option<Result<ThrottledReplicas, String>>,
+    /// What a list without pairs selects.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum Selection {
+        #[step_param("no replica")]
+        NoReplica,
+        #[step_param("every replica")]
+        EveryReplica,
+    }
+
+    impl From<Selection> for ThrottledReplicas {
+        fn from(selection: Selection) -> Self {
+            match selection {
+                Selection::NoReplica => Self::None,
+                Selection::EveryReplica => Self::All,
+            }
+        }
+    }
+
+    /// The JSON array of `[partition, broker]` pairs a list selects, in order.
+    struct Pairs(Vec<ThrottledReplica>);
+
+    impl FromStr for Pairs {
+        type Err = serde_json::Error;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            let pairs: Vec<(i32, u64)> = serde_json::from_str(text)?;
+            Ok(Self(
+                pairs
+                    .into_iter()
+                    .map(|(partition, broker)| replica(partition, broker))
+                    .collect(),
+            ))
+        }
+    }
+
+    type ParseAttempt = krabka_bdd::Attempt<ThrottledReplicas, String>;
+
+    struct ThrottledReplicaList {
+        value: krabka_bdd::Given<String>,
     }
 
     #[rstest::fixture]
-    fn throttled_replica_selection() -> ThrottledReplicaSelection {
-        // Each throttle list has its own parser input and resolved selection.
-        ThrottledReplicaSelection::default()
+    fn throttled_replica_list() -> ThrottledReplicaList {
+        ThrottledReplicaList {
+            value: krabka_bdd::Given::new(
+                "value",
+                "Given the throttled replica configuration is JSON <value>",
+            ),
+        }
     }
 
-    #[rstest_bdd_macros::given("the throttled replica configuration is JSON {value}")]
-    fn supplied_throttled_replica_selection(
-        throttled_replica_selection: &mut ThrottledReplicaSelection,
-        value: String,
-    ) {
-        throttled_replica_selection.input =
-            serde_json::from_str(&value).expect("JSON preserves Kafka list whitespace");
+    #[rstest::fixture]
+    fn parsed() -> ParseAttempt {
+        // The When step replaces it with what the parse returned.
+        ParseAttempt::NotExecuted
     }
 
-    #[rstest_bdd_macros::when("the broker parses the throttled replica list")]
-    fn parse_throttled_replica_selection(
-        throttled_replica_selection: &mut ThrottledReplicaSelection,
-    ) {
-        throttled_replica_selection.selected =
-            Some(ThrottledReplicas::parse(&throttled_replica_selection.input));
+    #[krabka_bdd::given("the throttled replica configuration is JSON {value}")]
+    fn configured_list(throttled_replica_list: &mut ThrottledReplicaList, value: ListValue) {
+        throttled_replica_list.value.set(value.0);
     }
 
-    #[rstest_bdd_macros::then("the throttled replica selection is empty")]
-    fn no_throttled_replicas(throttled_replica_selection: &ThrottledReplicaSelection) {
-        assert2::assert!(throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::None)));
+    #[krabka_bdd::when("the broker attempts to parse the throttled replica list")]
+    fn attempts_to_parse(
+        throttled_replica_list: &ThrottledReplicaList,
+    ) -> krabka_bdd::Attempt<ThrottledReplicas, String> {
+        ParseAttempt::of(|| ThrottledReplicas::parse(throttled_replica_list.value.get()))
     }
 
-    #[rstest_bdd_macros::then("the throttled replica selection includes every replica")]
-    fn all_throttled_replicas(throttled_replica_selection: &ThrottledReplicaSelection) {
-        assert2::assert!(throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::All)));
+    #[krabka_bdd::then("the list selects {selection}")]
+    fn selects(parsed: &ParseAttempt, selection: Selection) {
+        assert!(*parsed == ParseAttempt::Succeeded(selection.into()));
     }
 
-    #[rstest_bdd_macros::then("the selected partition and broker pairs are JSON {pairs}")]
-    fn listed_throttled_replicas(
-        throttled_replica_selection: &ThrottledReplicaSelection,
-        pairs: String,
-    ) {
-        let expected: Vec<(i32, u64)> =
-            serde_json::from_str(&pairs).expect("independent expected replica pairs");
-        let replicas = expected
-            .into_iter()
-            .map(|(partition, broker)| replica(partition, broker))
-            .collect();
-        assert2::assert!(
-            throttled_replica_selection.selected == Some(Ok(ThrottledReplicas::List(replicas)))
-        );
+    #[krabka_bdd::then("the pairs selected are {pairs}")]
+    fn selects_pairs(parsed: &ParseAttempt, pairs: Pairs) {
+        assert!(*parsed == ParseAttempt::Succeeded(ThrottledReplicas::List(pairs.0)));
     }
 
-    rstest_bdd_macros::scenarios!(
+    #[krabka_bdd::then("the list is refused because its only entry is not a pair")]
+    fn refused_as_not_a_pair(throttled_replica_list: &ThrottledReplicaList, parsed: &ParseAttempt) {
+        let entry = throttled_replica_list.value.get().trim();
+        assert!(*parsed == ParseAttempt::Failed(format!("invalid pair {entry:?}")));
+    }
+
+    krabka_bdd::scenarios!(
         "tests/features/migrated/src/throttle/mod.feature",
-        fixtures = [throttled_replica_selection: ThrottledReplicaSelection]
+        fixtures = [
+            throttled_replica_list: ThrottledReplicaList,
+            parsed: ParseAttempt
+        ],
     );
 }

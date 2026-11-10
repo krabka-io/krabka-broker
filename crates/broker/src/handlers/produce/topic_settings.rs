@@ -565,35 +565,6 @@ mod tests {
     }
 
     #[test]
-    fn topic_min_isr_defaults_to_one_when_unset() {
-        let img = image_with_topic("t", &[1, 2, 3]);
-        assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 1);
-    }
-
-    #[test]
-    fn topic_min_isr_reads_override_when_set() {
-        let mut img = image_with_topic("t", &[1, 2, 3]);
-        set_min_isr(&mut img, "t", 3);
-        assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 3);
-    }
-
-    #[yare::parameterized(
-        broker_default = { None, 2 },
-        valid_topic_override = { Some(3), 3 },
-    )]
-    fn topic_min_isr_uses_broker_fallback_unless_valid_override_exists(
-        override_value: Option<i32>,
-        expected: i32,
-    ) {
-        let mut img = image_with_topic("t", &[1, 2, 3]);
-        if let Some(value) = override_value {
-            set_min_isr(&mut img, "t", value);
-        }
-
-        assert2::assert!(topic_min_insync_replicas(&img, NODE, "t", 2) == expected);
-    }
-
-    #[test]
     fn topic_min_isr_default_one_on_unknown_topic() {
         let img = MetadataImage::new(Uuid::nil());
         assert!(

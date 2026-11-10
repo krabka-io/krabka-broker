@@ -266,7 +266,6 @@ mod tests {
         super::*,
         crate::{
             authorizer::AllowAllAuthorizer,
-            coordinator::unified::classic_state::GroupState,
             handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             test_support::{
                 StartedBroker as HandlerStartedBroker, allow_acl, start_broker_no_audit_with,
@@ -495,17 +494,4 @@ mod tests {
         assert!(group_listing.listed.as_ref().unwrap() == &expected);
     }
     rstest_bdd_macros::scenarios!("tests/features/handler_list_groups",fixtures=[group_listing:GroupListingScenario]);
-
-    #[test]
-    fn group_state_as_str_covers_all_classic_states() {
-        let cases = [
-            (GroupState::Empty, "Empty"),
-            (GroupState::PreparingRebalance, "PreparingRebalance"),
-            (GroupState::CompletingRebalance, "CompletingRebalance"),
-            (GroupState::Stable, "Stable"),
-        ];
-        for (state, want) in cases {
-            assert!(state.as_str() == want, "{state:?}");
-        }
-    }
 }

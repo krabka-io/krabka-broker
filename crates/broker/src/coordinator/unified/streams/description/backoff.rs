@@ -131,35 +131,6 @@ impl SolicitationBackoff {
 mod tests {
     use {super::*, assert2::assert};
 
-    /// The windows of the chain at the neutral factor, its end points at
-    /// the extreme factors, and the cap that the jitter cannot pass.
-    #[test]
-    fn the_window_doubles_from_30_seconds_to_an_hour() {
-        let rows = [
-            (0, 1_000, 30_000),
-            (1, 1_000, 60_000),
-            (2, 1_000, 120_000),
-            (3, 1_000, 240_000),
-            (4, 1_000, 480_000),
-            (5, 1_000, 960_000),
-            (6, 1_000, 1_920_000),
-            (7, 1_000, 3_600_000),
-            (40, 1_000, 3_600_000),
-            (u32::MAX, 1_000, 3_600_000),
-            (0, 800, 24_000),
-            (0, 1_199, 35_970),
-            (6, 1_199, 2_302_080),
-            (7, 800, 2_880_000),
-            (7, 1_199, 3_600_000),
-        ];
-        for (attempts, per_mille, millis) in rows {
-            assert!(
-                delay(attempts, Jitter::per_mille(per_mille)) == Duration::from_millis(millis),
-                "attempt {attempts} at {per_mille}"
-            );
-        }
-    }
-
     /// One group's backoff through a run of heartbeats and pushes. Each step
     /// is an operation at a time in seconds, what `arm_if_not_active`
     /// answers, and the window afterwards as (epoch, attempts, end second).
@@ -302,9 +273,35 @@ mod tests {
         }
     }
     use {
-        rstest_bdd_macros::{given, scenarios, then, when},
+        krabka_bdd::Given,
+        rstest_bdd_macros::{given, then, when},
         std::iter,
     };
+    /// The retry window a scenario sized.
+    struct RetryWindow {
+        window: Given<Duration>,
+    }
+    #[rstest::fixture]
+    fn retry_window() -> RetryWindow {
+        RetryWindow {
+            window: Given::new(
+                "window",
+                "When the coordinator sizes the retry window after <attempts> attempts at jitter <jitter> per mille",
+            ),
+        }
+    }
+    #[krabka_bdd::when(
+        "the coordinator sizes the retry window after {attempts} attempts at jitter {jitter} per mille"
+    )]
+    fn size_retry_window(retry_window: &mut RetryWindow, attempts: u32, jitter: u64) {
+        retry_window
+            .window
+            .set(delay(attempts, Jitter::per_mille(jitter)));
+    }
+    #[krabka_bdd::then("the retry window lasts {millis} milliseconds")]
+    fn retry_window_lasts(retry_window: &RetryWindow, millis: u64) {
+        assert!(*retry_window.window.get() == Duration::from_millis(millis));
+    }
     #[derive(Default)]
     struct RetryJitter {
         draws: usize,
@@ -336,7 +333,10 @@ mod tests {
             assert!((800..1200).contains(&sample));
         }
     }
-    scenarios!("tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",fixtures=[retry_jitter:RetryJitter]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/streams/description/backoff.feature",
+        fixtures = [retry_jitter: RetryJitter, retry_window: RetryWindow]
+    );
 }
 
 #[cfg(test)]

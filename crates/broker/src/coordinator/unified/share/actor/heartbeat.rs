@@ -257,13 +257,13 @@ mod tests {
             offsets_log::fake::InMemoryOffsetsLog,
             share::actor::test_support::{
                 TopicMetadataSetup, heartbeat, make_coordinator, metadata_with_topic,
-                seed_initialized, subscribed_group, subscribed_request,
+                seed_initialized, subscribed_request,
             },
             test_support::{
                 assert_single_member_limit, assignment_interval_fixture, heartbeat_write_failures,
             },
         },
-        assert2::{assert, check},
+        assert2::check,
         std::{sync::Arc, time::Duration},
     };
 
@@ -303,28 +303,6 @@ mod tests {
         .await;
     }
 
-    /// Kafka's `shareGroupLeave`: a known member is fenced, with its records
-    /// tombstoned and the group epoch bumped, and the response echoes its id
-    /// and epoch `-1`. An unknown member answers `UNKNOWN_MEMBER_ID` and
-    /// leaves the group and the log untouched.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stale_epoch_is_fenced() {
-        let (_coord, _log, handle) = subscribed_group()
-            .name(TopicMetadataSetup::four_partitions().name)
-            .partitions(TopicMetadataSetup::four_partitions().partitions)
-            .call();
-        let joined = heartbeat(&handle, subscribed_request().call()).await;
-        assert!(joined.member_epoch == 2);
-        // Re-send with an epoch ahead of the server → fenced.
-        let resp = heartbeat(&handle, subscribed_request().epoch(99).call()).await;
-        assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
-    }
-
-    /// The member epoch rule of Kafka's `throwIfShareGroupMemberEpochIsInvalid`.
-    /// Member `m1` is at epoch 4 with previous epoch 2: it joins at epoch 2,
-    /// `m2` and `m3` join (group epochs 3 and 4), and `m1` heartbeats once at
-    /// epoch 2. Each row sends one heartbeat on a fresh group and compares the
-    /// whole response.
     /// A heartbeat that carries a rack id replaces the stored one, a rejoin at
     /// epoch 0 included, and the member metadata record carries the new rack.
     /// A heartbeat without a rack id keeps it (`maybeUpdateRackId`).

@@ -22,27 +22,3 @@ pub(super) fn partition_records(
         .map(|(index, (replicas, leadership))| leadership.partition_record(topic, *index, replicas))
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use {
-        super::*, crate::handlers::partition_materialization::should_materialize_locally,
-        assert2::check,
-    };
-
-    #[test]
-    fn local_materialization_predicates_track_replica_membership_and_leader() {
-        check!(should_materialize_locally(
-            &[NodeId(1), NodeId(2)],
-            NodeId(1)
-        ));
-        check!(should_materialize_locally(
-            &[NodeId(1), NodeId(2)],
-            NodeId(2)
-        ));
-        check!(!should_materialize_locally(
-            &[NodeId(1), NodeId(2)],
-            NodeId(3)
-        ));
-    }
-}

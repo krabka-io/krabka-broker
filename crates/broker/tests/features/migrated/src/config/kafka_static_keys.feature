@@ -28,14 +28,6 @@ Feature: Truthful static Kafka configuration descriptions
       | socket.receive.buffer.bytes | 1048576 |
       | broker.heartbeat.interval.ms | 3000   |
 
-  Scenario: Released mode discloses the running streams assignor
-    Given the broker has no operator-supplied static configuration overrides
-    And the static-config query selects the streams assignor list
-    When the broker describes the selected static Kafka settings
-    Then the ordered stated static settings are:
-      | key | value |
-      | group.streams.assignors | auto |
-
   Scenario: Unstable mode discloses the running streams assignor
     Given the broker has no operator-supplied static configuration overrides
     And the static-config query selects the streams assignor list

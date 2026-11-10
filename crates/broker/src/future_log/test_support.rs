@@ -210,3 +210,12 @@ pub(super) struct OpenedFutureLog {
     pub path: PathBuf,
     pub log: Arc<Mutex<krabka_log::Log>>,
 }
+
+/// Reads a scenario's comma-separated list, where `nothing` is the empty
+/// list, parsing each entry with `entry`.
+pub fn step_list<T, E>(text: &str, entry: impl Fn(&str) -> Result<T, E>) -> Result<Vec<T>, E> {
+    if text == "nothing" {
+        return Ok(Vec::new());
+    }
+    text.split(',').map(entry).collect()
+}

@@ -163,12 +163,13 @@ fn truncate_locked_to_current_epochs(current: &Log, future: &mut Log) -> Result<
 mod tests {
     use {
         super::*,
-        crate::log_dir,
+        crate::{future_log::test_support::step_list, log_dir},
         assert2::assert,
         bytes::Bytes,
+        krabka_bdd::{Given, given, then, when},
         krabka_log::LogConfig,
         krabka_protocol::records::{Record, RecordBatch},
-        std::{fs, path::Path},
+        std::{fs, num::ParseIntError, path::Path, str::FromStr},
         tempfile::tempdir,
     };
 
@@ -216,7 +217,7 @@ mod tests {
         FutureEpochExchange::default()
     }
 
-    #[rstest_bdd_macros::given(
+    #[given(
         "the future log has epoch {first_epoch} starting at {first_start} and epoch {last_epoch} starting at {last_start}"
     )]
     fn supplied_future_epoch_checkpoint(
@@ -238,9 +239,7 @@ mod tests {
         ]));
     }
 
-    #[rstest_bdd_macros::given(
-        "the future log ends at {end} and the initial truncation offset is {initial}"
-    )]
+    #[given("the future log ends at {end} and the initial truncation offset is {initial}")]
     fn supplied_future_epoch_offsets(
         future_epoch_exchange: &mut FutureEpochExchange,
         end: i64,
@@ -250,7 +249,7 @@ mod tests {
         future_epoch_exchange.initial_truncation = Some(Offset(initial));
     }
 
-    #[rstest_bdd_macros::given("the current log reports epoch {epoch} ending at {end}")]
+    #[given("the current log reports epoch {epoch} ending at {end}")]
     fn supplied_current_epoch_end(
         future_epoch_exchange: &mut FutureEpochExchange,
         epoch: i32,
@@ -262,7 +261,7 @@ mod tests {
         });
     }
 
-    #[rstest_bdd_macros::when("the migration chooses its next future-log truncation state")]
+    #[when("the migration chooses its next future-log truncation state")]
     fn choose_future_epoch_truncation(future_epoch_exchange: &mut FutureEpochExchange) {
         future_epoch_exchange.selected = Some(offset_truncation_state(
             future_epoch_exchange
@@ -282,7 +281,7 @@ mod tests {
         ));
     }
 
-    #[rstest_bdd_macros::then(
+    #[then(
         "the future-log truncation offset is {offset} and reconciliation completed is {completed}"
     )]
     fn expected_future_epoch_truncation(
@@ -298,11 +297,6 @@ mod tests {
                 })
         );
     }
-
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/future_log/truncation.feature",
-        fixtures = [future_epoch_exchange: FutureEpochExchange]
-    );
 
     fn log_with_epochs(dir: &Path, name: &str, batches: &[LeaderEpoch]) -> Mutex<Log> {
         let path = log_dir::partition_dir(dir, name, 0);
@@ -324,111 +318,75 @@ mod tests {
 
     fn leo(log: &Mutex<Log>) -> Offset { log.lock().unwrap().log_end_offset() }
 
-    struct TruncationLogsFixture {
-        current: Mutex<Log>,
-        future: Mutex<Log>,
-        _directory: tempfile::TempDir,
-    }
+    /// The leader epochs a log's records carry, one record per entry, written
+    /// as `1,1,2` or `nothing`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct RecordEpochs(Vec<LeaderEpoch>);
 
-    impl TruncationLogsFixture {
-        fn truncate(&self) {
-            truncate_to_current_epochs(&self.current, ("t", PartitionIndex(0)), &self.future)
-                .unwrap();
+    impl FromStr for RecordEpochs {
+        type Err = ParseIntError;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            step_list(text, |epoch| epoch.parse().map(LeaderEpoch)).map(Self)
         }
     }
 
-    #[bon::builder]
-    fn truncation_logs(
-        #[builder(default = & [])] future: &'_ [LeaderEpoch],
-        #[builder(default = & [LeaderEpoch (1) , LeaderEpoch (1)])] current: &'_ [LeaderEpoch],
-    ) -> TruncationLogsFixture {
-        let directory = tempdir().unwrap();
-        let future = log_with_epochs(directory.path(), "future", future);
-        let current = log_with_epochs(directory.path(), "current", current);
-        TruncationLogsFixture {
-            current,
-            future,
-            _directory: directory,
+    struct ReconcileScenario {
+        directory: tempfile::TempDir,
+        future: Given<Mutex<Log>>,
+        current: Given<Mutex<Log>>,
+        current_records: Given<i64>,
+    }
+
+    #[rstest::fixture]
+    fn reconcile() -> ReconcileScenario {
+        const CURRENT: &str = "Given a current log whose records carry leader epochs <current>";
+        ReconcileScenario {
+            directory: tempdir().unwrap(),
+            future: Given::new(
+                "future",
+                "Given a future log whose records carry leader epochs <future>",
+            ),
+            current: Given::new("current", CURRENT),
+            current_records: Given::new("current_records", CURRENT),
         }
     }
 
-    /// The case the truncation mark cannot cover: the current log lost its tail
-    /// while no move task ran (across a restart) and grew back in a newer
-    /// epoch, to a log end equal to the future log's. A swap that checks only
-    /// the log ends would install the future log's discarded tail.
-    #[test]
-    fn a_future_log_that_kept_a_discarded_tail_is_cut_at_the_end_of_the_shared_epoch() {
-        // Both logs hold offsets 0-1 in epoch 1. The future log went on with
-        // offsets 2-3 in epoch 1, which the current log dropped and replaced
-        // with offsets 2-3 in epoch 2.
-        let logs = truncation_logs()
-            .future(&[
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-            ])
-            .current(&[
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(2),
-                LeaderEpoch(2),
-            ])
-            .call();
-        assert!(leo(&logs.future) == leo(&logs.current));
-
-        logs.truncate();
-
-        assert!(leo(&logs.future) == Offset(2));
-        assert!(leo(&logs.current) == Offset(4));
+    #[given("a future log whose records carry leader epochs {future}")]
+    fn future_log_epochs(reconcile: &mut ReconcileScenario, future: RecordEpochs) {
+        let log = log_with_epochs(reconcile.directory.path(), "future", &future.0);
+        reconcile.future.set(log);
     }
 
-    #[test]
-    fn a_future_log_that_is_a_prefix_of_the_current_log_is_left_alone() {
-        let logs = truncation_logs()
-            .future(&[LeaderEpoch(1), LeaderEpoch(1)])
-            .current(&[
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(2),
-            ])
-            .call();
-
-        logs.truncate();
-
-        assert!(leo(&logs.future) == Offset(2));
+    #[given("a current log whose records carry leader epochs {current}")]
+    fn current_log_epochs(reconcile: &mut ReconcileScenario, current: RecordEpochs) {
+        let log = log_with_epochs(reconcile.directory.path(), "current", &current.0);
+        reconcile
+            .current_records
+            .set(i64::try_from(current.0.len()).expect("a record count"));
+        reconcile.current.set(log);
     }
 
-    /// The future log holds an epoch the current log never had, above the
-    /// current log's newest one: it is dropped epoch by epoch, down to what the
-    /// two share.
-    #[test]
-    fn epochs_the_current_log_does_not_know_are_dropped_one_at_a_time() {
-        let logs = truncation_logs()
-            .future(&[
-                LeaderEpoch(1),
-                LeaderEpoch(1),
-                LeaderEpoch(2),
-                LeaderEpoch(3),
-                LeaderEpoch(3),
-            ])
-            .call();
-
-        logs.truncate();
-
-        assert!(leo(&logs.future) == Offset(2));
+    #[when("the future log is reconciled with the current log")]
+    fn reconcile_future_log(reconcile: &mut ReconcileScenario) {
+        truncate_to_current_epochs(
+            reconcile.current.get(),
+            ("t", PartitionIndex(0)),
+            reconcile.future.get(),
+        )
+        .unwrap();
     }
 
-    #[test]
-    fn future_logs_with_no_epoch_history_are_emptied_or_stay_empty() {
-        for (label, epochs) in [
-            ("without epochs", &[LeaderEpoch(-1), LeaderEpoch(-1)][..]),
-            ("already empty", &[][..]),
-        ] {
-            let logs = truncation_logs().future(epochs).call();
-            logs.truncate();
-            assert!(leo(&logs.future) == Offset(0), "{label}");
-        }
+    #[then("the future log ends at offset {end} while the current log keeps every record")]
+    fn future_log_ends_at(reconcile: &ReconcileScenario, end: i64) {
+        assert!(
+            (leo(reconcile.future.get()), leo(reconcile.current.get()))
+                == (Offset(end), Offset(*reconcile.current_records.get()))
+        );
     }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/future_log/truncation.feature",
+        fixtures = [future_epoch_exchange: FutureEpochExchange, reconcile: ReconcileScenario],
+    );
 }

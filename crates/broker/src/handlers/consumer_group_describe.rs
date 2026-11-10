@@ -320,7 +320,7 @@ mod tests {
                 RequestContext,
                 authorized_operations::authorized_operations_bits,
                 group_heartbeat_test_support::{
-                    GroupFeatureLevel, acl_authorizer, image_with_group_version, set_group_version,
+                    GroupFeatureLevel, acl_authorizer, set_group_version,
                 },
                 test_support as handler_fixture_support,
             },
@@ -367,22 +367,6 @@ mod tests {
                 error_code: group.error_code,
             })
             .collect()
-    }
-
-    #[test]
-    fn group_version_gate_distinguishes_disabled_and_enabled_images() {
-        // (finalized group.version level; None = fresh image) → disabled?
-        let cases = [(None, true), (Some(1), false), (Some(0), true)];
-        for (level, want_disabled) in cases {
-            let image = level.map_or_else(
-                || MetadataImage::new(uuid::Uuid::nil()),
-                |level| image_with_group_version(GroupFeatureLevel(level)),
-            );
-            assert!(
-                group_version_disabled(&image) == want_disabled,
-                "level {level:?}"
-            );
-        }
     }
 
     const ORDERS: Uuid = Uuid([1; 16]);

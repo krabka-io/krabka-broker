@@ -5,8 +5,9 @@
 //! Tests:
 //! 1. `alter_then_describe_round_trip` — `AlterClientQuotas` sets
 //!    `(user=alice) producer_byte_rate=1024`; `DescribeClientQuotas` returns it.
-//! 2. `producer_byte_rate_throttles_produce` — Set low `producer_byte_rate` for
-//!    alice; produce a large payload; assert `throttle_time_ms` > 0.
+//! 2. `producer_byte_rate_throttle_moves_the_throttle_metrics` — Set low
+//!    `producer_byte_rate` for alice; produce a large payload; assert
+//!    `throttle_time_ms` > 0 and that the throttle metrics cover the delay.
 //! 3. `consumer_byte_rate_throttles_fetch` — Set low `consumer_byte_rate` for
 //!    alice; produce then fetch a large payload; assert `throttle_time_ms` > 0.
 //! 4. `user_client_tuple_overrides_user_specific` — Set

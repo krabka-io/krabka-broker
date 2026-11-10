@@ -319,42 +319,6 @@ async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
     broker_handle.shutdown().await;
 }
 
-#[tokio::test]
-async fn handle_reports_invalid_partition_count_and_replication_factor() {
-    allow_all_broker_setup!(
-        (broker_handle, _dir, broker, p, peer),
-        start_broker,
-        "admin"
-    );
-    let req = request(vec![topic("bad-count", 0, 1), topic("bad-rf", 1, 2)]);
-
-    let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    let expected = expected_response!(vec![
-        expected_empty_topic(
-            "bad-count",
-            codes::INVALID_PARTITIONS,
-            Some("Number of partitions was set to an invalid non-positive value.".into(),)
-        ),
-        expected_empty_topic(
-            "bad-rf",
-            codes::INVALID_REPLICATION_FACTOR,
-            Some(
-                "Unable to replicate the partition 2 time(s): The target replication factor \
-                     of 2 cannot be reached because only 1 broker(s) are registered or some \
-                     brokers have all their log directories cordoned."
-                    .into(),
-            )
-        ),
-    ]);
-    assert!(resp == expected);
-    for name in ["bad-count", "bad-rf"] {
-        let image = broker_handle.controller_image_for_test();
-        assert!(image.topic(name).is_none(), "topic {name} not committed");
-    }
-    broker_handle.shutdown().await;
-}
-
 /// KIP-464: `num_partitions = -1` and `replication_factor = -1` take the
 /// broker's `num.partitions` and `default.replication.factor` (#728). That is
 /// what `kafka-topics --create` sends without `--partitions` and
@@ -1000,31 +964,6 @@ async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
         .get("plain", krabka_ids::PartitionIndex(0))
         .expect("partition materialized locally");
     assert!(!partition.diskless);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn duplicate_topic_reports_error_without_success_fields() {
-    allow_all_broker_setup!(
-        (broker_handle, _dir, broker, p, peer),
-        start_broker,
-        "admin"
-    );
-    let req = request(vec![topic("dupe", 1, 1)]);
-    let first = drive(&broker, &req, &test_context(&p, &peer)).await;
-    assert!(first.topics[0].error_code == codes::NONE);
-
-    let second = drive(&broker, &req, &test_context(&p, &peer)).await;
-
-    assert!(second.topics.len() == 1);
-    let expected = krabka_broker_macros::unthrottled_wire!(CreateTopicsResponse {
-        topics: vec![expected_empty_topic(
-            "dupe",
-            codes::TOPIC_ALREADY_EXISTS,
-            Some("Topic 'dupe' already exists.".into())
-        )],
-    });
-    assert!(second == expected);
     broker_handle.shutdown().await;
 }
 

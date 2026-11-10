@@ -225,8 +225,10 @@ mod tests {
     use {
         super::*,
         crate::{cordoned_log_dirs::CordonedLogDirs, test_support::two_log_dirs},
-        assert2::{assert, check},
-        tempfile::tempdir,
+        assert2::assert,
+        krabka_bdd::{Given, given, then, when},
+        std::str::FromStr,
+        tempfile::{TempDir, tempdir},
     };
 
     fn discovered(topic: &str, partition: i32) -> DiscoveredPartition {
@@ -308,40 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn place_picks_least_loaded_then_order() {
-        let (a, b, dirs) = two_log_dirs();
-        // Empty cluster: tie → first dir.
-        assert!(place_partition_dir(&dirs, "t", 0) == a.path().join("t-0"));
-        // Load `a` with two partitions; next placement should go to `b`.
-        fs::create_dir(a.path().join("t-0")).unwrap();
-        fs::create_dir(a.path().join("t-1")).unwrap();
-        assert!(place_partition_dir(&dirs, "t", 2) == b.path().join("t-2"));
-    }
-
-    /// A new partition skips a cordoned directory even when it is the least
-    /// loaded, and a partition that already lives in one stays there.
-    #[test]
-    fn placement_avoids_cordoned_dirs_but_keeps_existing_partitions() {
-        let (a, b, dirs) = two_log_dirs();
-        fs::create_dir(b.path().join("t-0")).unwrap();
-        let cordoned = CordonedLogDirs::new(dirs.clone(), Some(a.path().display().to_string()));
-        let cases = [
-            ("a new partition", 1, b.path().join("t-1")),
-            ("an existing partition", 0, b.path().join("t-0")),
-        ];
-        for (label, partition, want) in cases {
-            check!(
-                place_partition_dir_avoiding(&dirs, &cordoned, "t", partition) == want,
-                "{label}"
-            );
-        }
-        fs::create_dir(a.path().join("u-0")).unwrap();
-        let everything = CordonedLogDirs::new(dirs.clone(), Some("*".into()));
-        check!(place_partition_dir_avoiding(&dirs, &everything, "u", 0) == a.path().join("u-0"));
-        check!(place_partition_dir_avoiding(&dirs, &everything, "t", 1) == a.path().join("t-1"));
-    }
-
-    #[test]
     fn scan_all_merges_dirs_and_sorts() {
         let a = partition_dirs(&["foo-0"]);
         let b = partition_dirs(&["bar-1"]);
@@ -409,4 +377,127 @@ mod tests {
         let results = scan_all(&search_dirs).expect("scan_all ok");
         assert!(results == vec![located("foo", 0, first.path())]);
     }
+
+    // ── Scenarios: tests/features/storage/partition_placement.feature ──
+
+    /// One of the broker's two log directories, in configuration order.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum LogDirectory {
+        #[step_param("d1")]
+        First,
+        #[step_param("d2")]
+        Second,
+    }
+
+    /// A partition named as its directory is, `<topic>-<partition>`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct PartitionName {
+        topic: String,
+        partition: i32,
+    }
+
+    impl FromStr for PartitionName {
+        type Err = String;
+
+        fn from_str(name: &str) -> Result<Self, Self::Err> {
+            parse_partition_dir(name)
+                .map(|(topic, partition)| Self { topic, partition })
+                .ok_or_else(|| format!("{name} is not a partition name"))
+        }
+    }
+
+    struct PlacementScenario {
+        first: TempDir,
+        second: TempDir,
+        /// The `cordoned.log.dirs` the broker runs with; none cordons nothing.
+        cordoned: Option<String>,
+        placed: Given<PathBuf>,
+    }
+
+    impl PlacementScenario {
+        fn dir(&self, directory: LogDirectory) -> &Path {
+            match directory {
+                LogDirectory::First => self.first.path(),
+                LogDirectory::Second => self.second.path(),
+            }
+        }
+
+        fn log_dirs(&self) -> Vec<PathBuf> {
+            vec![
+                self.first.path().to_path_buf(),
+                self.second.path().to_path_buf(),
+            ]
+        }
+    }
+
+    #[rstest::fixture]
+    fn placement() -> PlacementScenario {
+        let (first, second, _) = two_log_dirs();
+        PlacementScenario {
+            first,
+            second,
+            cordoned: None,
+            placed: Given::new("placed", "When the broker places partition <partition>"),
+        }
+    }
+
+    #[given("partition {partition} already lives in log directory {directory}")]
+    fn partition_lives_in(
+        placement: &mut PlacementScenario,
+        partition: PartitionName,
+        directory: LogDirectory,
+    ) {
+        let path = partition_dir(
+            placement.dir(directory),
+            &partition.topic,
+            partition.partition,
+        );
+        fs::create_dir(path).expect("create the partition directory");
+    }
+
+    #[given("log directory {directory} holds {count} partition(s)")]
+    fn directory_holds(placement: &mut PlacementScenario, directory: LogDirectory, count: i32) {
+        for partition in 0..count {
+            let path = partition_dir(placement.dir(directory), "load", partition);
+            fs::create_dir(path).expect("create a load partition directory");
+        }
+    }
+
+    #[given("log directory {directory} is cordoned")]
+    fn directory_is_cordoned(placement: &mut PlacementScenario, directory: LogDirectory) {
+        placement.cordoned = Some(placement.dir(directory).display().to_string());
+    }
+
+    #[given("every log directory is cordoned")]
+    fn every_directory_is_cordoned(placement: &mut PlacementScenario) {
+        placement.cordoned = Some("*".to_owned());
+    }
+
+    #[when("the broker places partition {partition}")]
+    fn places_partition(placement: &mut PlacementScenario, partition: PartitionName) {
+        let log_dirs = placement.log_dirs();
+        let cordoned = CordonedLogDirs::new(log_dirs.clone(), placement.cordoned.clone());
+        let placed = place_partition_dir_avoiding(
+            &log_dirs,
+            &cordoned,
+            &partition.topic,
+            partition.partition,
+        );
+        placement.placed.set(placed);
+    }
+
+    #[then("partition {partition} is placed in log directory {directory}")]
+    fn placed_in(placement: &PlacementScenario, partition: PartitionName, directory: LogDirectory) {
+        let expected = partition_dir(
+            placement.dir(directory),
+            &partition.topic,
+            partition.partition,
+        );
+        assert!(*placement.placed.get() == expected);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/storage/partition_placement.feature",
+        fixtures = [placement: PlacementScenario],
+    );
 }

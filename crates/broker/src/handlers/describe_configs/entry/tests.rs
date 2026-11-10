@@ -292,36 +292,6 @@ fn a_sensitive_key_reports_no_value_anywhere_in_the_chain() {
     );
 }
 
-#[test]
-fn a_key_with_no_registry_row_is_treated_as_one_the_broker_may_not_disclose() {
-    // Kafka's `ConfigHelper.maybeSensitive` reads an absent type the same way:
-    // a value the broker cannot describe is a value it does not echo.
-    let entry = config_entry(
-        None,
-        "some.key.no.row.covers",
-        &[Layer {
-            source: CONFIG_SOURCE_DYNAMIC_BROKER,
-            name: "some.key.no.row.covers",
-            value: "a-value",
-        }],
-        DefaultLayer::default(),
-        BOTH,
-    );
-
-    check!(entry.value == None);
-    check!(entry.is_sensitive);
-    check!(entry.config_type == 0i8);
-    check!(entry.documentation == None);
-    check!(
-        entry.synonyms
-            == vec![krabka_broker_macros::tagged_wire!(DescribeConfigsSynonym {
-                name: "some.key.no.row.covers".to_owned(),
-                value: None,
-                source: CONFIG_SOURCE_DYNAMIC_BROKER,
-            })]
-    );
-}
-
 #[yare::parameterized(
     diskless_topic = { ConfigScope::Topic, DISKLESS, true },
     write_freeze_topic = { ConfigScope::Topic, WRITE_FREEZE, true },

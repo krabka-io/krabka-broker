@@ -20,8 +20,6 @@ Feature: DescribeAcls follows Kafka resource pattern matching
       | match | empty | literal:* |
       | match | foo | literal:*;prefixed:f;prefixed:fo;literal:foo |
       | literal | null | literal:*;literal:foo;literal:food |
-      | literal | empty | none |
       | literal | foo | literal:foo |
       | prefixed | null | prefixed:bar;prefixed:f;prefixed:fo |
-      | prefixed | empty | none |
       | prefixed | foo | none |

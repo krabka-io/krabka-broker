@@ -1,7 +1,8 @@
-//! Tests for one sweep: which partitions it compacts, which it skips for
-//! cleanup policy or for a dirty region too small to be worth a pass, and how
-//! a KFC-9 topic write freeze and the later thaw move a partition out of and
-//! back into eligibility.
+//! Tests for one sweep: how a KFC-9 topic write freeze and the later thaw move
+//! a partition out of and back into eligibility, and how the sweep accounts a
+//! compaction it could not finish. Which partitions the cleanup policy and the
+//! cleanable test make eligible is in
+//! `tests/features/storage/log_compaction_sweep.feature`.
 
 use {
     super::*,
@@ -15,7 +16,7 @@ use {
         partition::{Partition, test_support::update_log_config},
         test_support::{append_partition_batch, topic_thaw_record},
     },
-    assert2::{assert, check},
+    assert2::check,
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, PatternType},
     std::{fs, io::Error, iter, path::PathBuf},
@@ -67,50 +68,27 @@ async fn blocked_sweep(dir: &TempDir, registry: &PartitionRegistry) -> BlockedSw
     }
 }
 
-/// The cleanup policy is the only thing that makes a partition the cleaner's
-/// work. Leadership is not: Kafka's `LogCleanerManager` walks every log the
-/// broker holds, so the replica this broker follows (leader 8) is compacted
-/// beside the one it leads. Skipping it left a compacted topic's followers
-/// with no bound on their segment count at all, because `cleanup.policy=
-/// compact` sets no `retention.ms` for the local-retention sweep to act on.
+/// One sweep over a registry that mixes a compacted topic with a delete-only
+/// one: the compacted partition shrinks, the delete-only one is passed over
+/// without ending the sweep, and the sweep counts itself exactly once.
+///
+/// `log_compaction_sweep.feature` has each policy alone in its registry; this
+/// pins that skipping one partition moves on to the next rather than leaving
+/// the sweep, and that `record_cleaner_run` runs once per clean sweep.
 #[tokio::test]
-async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
+async fn one_sweep_over_mixed_policies_compacts_the_compacted_topic_and_counts_once() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    // (topic, leader, cleanup_policy, expect_compacted): every partition with
-    // the Compact policy should shrink, led here (7) or not (8).
-    let specs = [
-        ("local-compact", 7, krabka_log::CleanupPolicy::Compact, true),
-        (
-            "follower-compact",
-            8,
-            krabka_log::CleanupPolicy::Compact,
-            true,
-        ),
-        ("local-delete", 7, krabka_log::CleanupPolicy::Delete, false),
-        (
-            "follower-delete",
-            8,
-            krabka_log::CleanupPolicy::Delete,
-            false,
-        ),
-        // Kafka derives `compact` from the policy list by membership, so a
-        // `compact,delete` topic is the cleaner's work exactly as a `compact`
-        // one is. Kafka Streams writes that value on every windowed-store
-        // changelog topic.
-        (
-            "local-compact-and-delete",
-            7,
-            krabka_log::CleanupPolicy::CompactAndDelete,
-            true,
-        ),
-    ];
+    // A sweep that left at the delete-only partition instead of skipping it
+    // would miss the run counter, whichever order the registry yields them in.
     let mut cases = Vec::new();
-    for (topic, leader, policy, expect_compacted) in specs {
+    for (topic, policy) in [
+        ("delete-only", krabka_log::CleanupPolicy::Delete),
+        ("compacted", krabka_log::CleanupPolicy::Compact),
+    ] {
         let partition = compactable_partition()
             .root(&dir)
             .topic(topic)
-            .leader(leader)
             .cfg(krabka_log::LogConfig {
                 cleanup_policy: policy,
                 ..CompactionSetup::default().cfg
@@ -119,7 +97,7 @@ async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
             .await;
         let before = record_count(&partition);
         registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
-        cases.push((topic, partition, before, expect_compacted));
+        cases.push((partition, before));
     }
 
     let metrics = BrokerMetrics::new();
@@ -131,86 +109,11 @@ async fn tick_all_compacts_every_hosted_compact_topic_whoever_leads_it() {
     )
     .await;
 
-    // A single `tick_all` is exactly one cleaner sweep, so the run counter
-    // must advance by one. This pins `record_cleaner_run` against a no-op
-    // mutation (nothing else asserts on `log_cleaner_runs_total`).
-    assert2::assert!((metrics.log_cleaner_runs_total.get()) == (1));
-
-    for (topic, partition, before, expect_compacted) in cases {
-        let after = record_count(&partition);
-        let count_ok = if expect_compacted {
-            after < before
-        } else {
-            after == before
-        };
-        assert!(
-            count_ok,
-            "case: {topic} (before={before}, after={after}, expect_compacted={expect_compacted})"
-        );
-    }
-}
-
-/// Kafka's cleanable test, from the sweep's side: a partition whose dirty
-/// region is too small a share of the log earns no pass, and the same
-/// partition earns one once `max.compaction.lag.ms` has elapsed over it.
-#[tokio::test]
-async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
-    let dir = tempfile::tempdir().expect("log root");
-    let registry = PartitionRegistry::new();
-    let base = krabka_log::LogConfig {
-        cleanup_policy: krabka_log::CleanupPolicy::Compact,
-        segment_size: krabka_units::bytes(256),
-        // No share of the log short of all of it is worth a pass.
-        min_cleanable_dirty_ratio: krabka_units::fraction(1.0),
-        ..Default::default()
-    };
-    let partition = compactable_partition()
-        .root(&dir)
-        .topic("too-clean")
-        .cfg(base.clone())
-        .call()
-        .await;
-    let before = record_count(&partition);
-    registry.insert(
-        "too-clean".into(),
-        PartitionIndex(0),
-        Arc::clone(&partition),
-    );
-
-    let metrics = BrokerMetrics::new();
-    tick_all(
-        &registry,
-        None,
-        &metrics,
-        &mut UncleanablePartitions::default(),
-    )
-    .await;
-    assert!(
-        record_count(&partition) == before,
-        "ratio must hold it back"
-    );
-
-    // The partition's records are older than a one-millisecond max lag, so
-    // the next sweep owes it a pass however clean the ratio says it is.
-    partition
-        .log
-        .lock()
-        .expect("partition log lock")
-        .set_config(krabka_log::LogConfig {
-            max_compaction_lag: Some(krabka_units::millis(1)),
-            ..base
-        });
-    tick_all(
-        &registry,
-        None,
-        &metrics,
-        &mut UncleanablePartitions::default(),
-    )
-    .await;
-    assert!(
-        record_count(&partition) < before,
-        "the max lag must force a pass"
-    );
+    let [(deleted, deleted_before), (compacted, compacted_before)] =
+        <[_; 2]>::try_from(cases).unwrap_or_else(|_| unreachable!("two cases"));
+    check!(record_count(&deleted) == deleted_before);
+    check!(record_count(&compacted) < compacted_before);
+    check!(metrics.log_cleaner_runs_total.get() == 1);
 }
 
 // ── KFC-9 topic write freeze ─────────────────────────────────────

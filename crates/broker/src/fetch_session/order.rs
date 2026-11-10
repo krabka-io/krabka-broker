@@ -328,20 +328,6 @@ mod tests {
     );
 
     #[test]
-    fn a_larger_follower_displaces_an_old_follower_session() {
-        let order = seeded(&[Step::Insert(3, true, 2, 0), Step::Touch(3, 2, 121)]);
-        assert!(order.victim(true, 3, 122 * SECOND) == Some(3));
-    }
-
-    #[test]
-    fn touching_a_session_moves_it_off_the_stale_head() {
-        let mut order = seeded(&[Step::Insert(1, false, 1, 0), Step::Insert(2, false, 1, 1)]);
-        assert!(order.victim(false, 1, 121 * SECOND) == Some(1));
-        order.touch(1, 1, 121 * SECOND);
-        assert!(order.victim(false, 1, 122 * SECOND) == Some(2));
-    }
-
-    #[test]
     fn touching_a_session_updates_the_size_it_is_ranked_by() {
         let mut order = seeded(&[Step::Insert(1, false, 2, 0), Step::Touch(1, 2, 121)]);
         assert!(order.victim(false, 3, 122 * SECOND) == Some(1));

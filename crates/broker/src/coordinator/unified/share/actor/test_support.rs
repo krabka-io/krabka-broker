@@ -99,26 +99,6 @@ pub(super) fn unavailable_persister_coordinator(
     (coordinator, log, topic_id)
 }
 
-/// Create the metadata, coordinator, log and first share actor in their usual order.
-#[bon::builder]
-pub(super) fn subscribed_group(
-    #[builder(default = "t")] name: &'_ str,
-    #[builder(into, default)] partitions: PartitionCount,
-) -> (
-    Arc<GroupCoordinator>,
-    Arc<InMemoryOffsetsLog>,
-    Arc<ShareGroupActorHandle>,
-) {
-    let setup = TopicMetadataSetup { name, partitions };
-    let (metadata, _) = metadata_with_topic()
-        .name(setup.name)
-        .partitions(setup.partitions)
-        .call();
-    let (coordinator, log) = make_coordinator(metadata);
-    let handle = coordinator.get_or_create_share("g");
-    (coordinator, log, handle)
-}
-
 pub(super) fn make_coordinator(
     metadata: Arc<dyn MetadataProvider>,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {

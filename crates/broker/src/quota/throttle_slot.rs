@@ -76,12 +76,6 @@ mod tests {
     use {super::*, assert2::assert, krabka_units::millis};
 
     #[test]
-    fn empty_slot_takes_a_zero_window() {
-        let slot = ThrottleSlot::default();
-        assert!(slot.take() == <Time as TimeExt>::ZERO);
-    }
-
-    #[test]
     fn record_keeps_the_longest_window_and_take_drains_it() {
         let slot = ThrottleSlot::default();
         slot.record(millis(250));

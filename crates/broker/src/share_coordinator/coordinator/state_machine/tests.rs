@@ -998,11 +998,11 @@ fn share_state_write() -> ShareStateWrite {
 }
 
 #[rstest_bdd_macros::given(
-    "a share coordinator with trunk rules {trunk} stores group g at state epoch 2, leader epoch 3, offset 10 and delivery count 4"
+    "a share coordinator stores group g at state epoch 2, leader epoch 3, offset 10 and delivery count 4"
 )]
-async fn seeded_share_state_write(share_state_write: &mut ShareStateWrite, trunk: bool) {
+async fn seeded_share_state_write(share_state_write: &mut ShareStateWrite) {
     let directory = tempdir().expect("fresh share state write log");
-    share_state_write.seeded = Some(seeded(directory.path(), trunk).await);
+    share_state_write.seeded = Some(seeded(directory.path(), false).await);
     share_state_write.directory_guard = Some(directory);
 }
 
@@ -1079,11 +1079,10 @@ fn expected_share_state_write(share_state_write: &ShareStateWrite, expected: Str
 async fn write_matches_kafka_checks_and_record_rules(
     share_state_write: ShareStateWrite,
     case: String,
-    trunk: bool,
     request: String,
     expected: String,
 ) {
-    let _ = (share_state_write, case, trunk, request, expected);
+    let _ = (share_state_write, case, request, expected);
 }
 
 /// A load drops the keys of its state partition and replays them. A bare read

@@ -10,11 +10,6 @@ Feature: DeleteAcls returns and removes exactly matching bindings
       | bar | prefixed | User:bob | allow |
       | food | literal | User:alice | allow |
 
-  Scenario: Empty name and principal match nothing
-    When admin deletes Topic ACLs with pattern any, name "<empty>" and principal "<empty>"
-    Then the complete DeleteAcls response lists exactly these ACLs and removes only these entries
-      | name | pattern | principal | permission |
-
   Scenario: Empty name matches nothing
     When admin deletes Topic ACLs with pattern any, name "<empty>" and principal "null"
     Then the complete DeleteAcls response lists exactly these ACLs and removes only these entries

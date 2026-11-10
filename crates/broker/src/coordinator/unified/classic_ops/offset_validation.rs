@@ -166,7 +166,7 @@ mod tests {
         }
         assert!(actual == expected);
     }
-    use rstest_bdd_macros::{given, scenarios, then, when};
+    use rstest_bdd_macros::{given, then, when};
     #[derive(Default)]
     struct ClassicCommit {
         group: Option<ClassicState>,
@@ -221,5 +221,8 @@ mod tests {
     fn classic_commit_result(classic_commit: &ClassicCommit, code: i16) {
         assert!(classic_commit.result == Some(if code == 0 { Ok(()) } else { Err(code) }));
     }
-    scenarios!("tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature",fixtures=[classic_commit:ClassicCommit]);
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/classic_ops/offset_validation.feature",
+        fixtures = [classic_commit: ClassicCommit]
+    );
 }

@@ -16,4 +16,3 @@ Feature: Transaction-state append errors preserve Kafka coordinator availability
       | 56 | 16 |
       | 10 | -1 |
       | 18 | -1 |
-      | -1 | -1 |

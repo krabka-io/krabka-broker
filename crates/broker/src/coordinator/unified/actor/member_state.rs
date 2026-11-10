@@ -855,43 +855,6 @@ mod tests {
         }
     }
 
-    /// Acceptance parity with RE2J, the engine Kafka validates with. Rust's
-    /// `regex` runs in Unicode mode here on purpose: it accepts everything
-    /// RE2J does in these cases, where `RegexBuilder::unicode(false)` would
-    /// reject the Unicode classes RE2J supports.
-    #[yare::parameterized(
-        digits = { r"\d+", true },
-        word = { r"\w+", true },
-        word_boundary_control = { r"\x08x\x08", true },
-        unicode_number = { r"\pN", true },
-        greek = { r"\p{Greek}", true },
-        named_group_re = { "(?P<name>a)", true },
-        named_group_angle = { "(?<name>a)", true },
-        unmatched_parenthesis = { "(", false },
-        unfinished_class = { "[a-", false },
-        flag_i = { "(?i)abc", true },
-        flags_im = { "(?im)abc", true },
-        negative_flag = { "(?i-s)abc", true },
-        flag_upper_u = { "(?U)a+", true },
-        scoped_flags = { "(?i:abc)", true },
-        noncapturing_group = { "(?:abc)", true },
-        unsupported_flag_x = { "(?x) a b c", false },
-        unsupported_scoped_flag_x = { "(?x:abc)", false },
-        unsupported_unicode_flag = { "(?iu)abc", false },
-        unsupported_disable_unicode = { "(?-u)abc", false },
-        unsupported_recursive_flag = { "(?R)abc", false },
-        escaped_parenthesis = { r"\(?abc", true },
-        parenthesis_in_class = { "[(?x]abc", true },
-        flag_after_escaped_bracket = { r"a\[(?x)", false },
-    )]
-    fn regex_acceptance_matches_re2j(pattern: &str, accepted: bool) {
-        check!(
-            check_subscribed_topic_regex(pattern).is_ok() == accepted,
-            "{pattern}: {:?}",
-            check_subscribed_topic_regex(pattern),
-        );
-    }
-
     /// A flag RE2J does not have is answered with the message Kafka builds
     /// from RE2J's own `PatternSyntaxException.getDescription`, so a client
     /// that reads `error_message` sees the same text either broker produced.
@@ -1023,7 +986,7 @@ mod tests {
             "custom assignor must be invoked at least once",
         );
     }
-    use rstest_bdd_macros::{given, scenarios, then, when};
+    use rstest_bdd_macros::{given, then, when};
     #[derive(Default)]
     struct SubscriptionRegex {
         pattern: String,
@@ -1048,5 +1011,29 @@ mod tests {
     fn unsupported_regex_flag(subscription_regex: &SubscriptionRegex) {
         check!(subscription_regex.validation.as_ref()==Some(&Err("SubscribedTopicRegex `(?x)abc` is not a valid regular expression: invalid or unsupported Perl syntax.".to_owned())));
     }
-    scenarios!("tests/features/migrated/src/coordinator/unified/actor/member_state.feature",fixtures=[subscription_regex:SubscriptionRegex]);
+    #[krabka_bdd::then("the expression is accepted")]
+    fn regex_accepted(subscription_regex: &SubscriptionRegex) {
+        check!(subscription_regex.validation == Some(Ok(())));
+    }
+    #[krabka_bdd::then("the expression is refused")]
+    fn regex_refused(subscription_regex: &SubscriptionRegex) {
+        let prefix = format!(
+            "SubscribedTopicRegex `{}` is not a valid regular expression: ",
+            subscription_regex.pattern
+        );
+        check!(
+            subscription_regex
+                .validation
+                .as_ref()
+                .is_some_and(|validation| validation
+                    .as_ref()
+                    .is_err_and(|message| message.starts_with(&prefix))),
+            "{:?}",
+            subscription_regex.validation
+        );
+    }
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/coordinator/unified/actor/member_state.feature",
+        fixtures = [subscription_regex: SubscriptionRegex]
+    );
 }

@@ -227,57 +227,112 @@ mod tests {
         assert2::assert!(state.as_str() == want, "{state:?}");
     }
 
-    #[yare::parameterized(
-        negative_disables = { 20_000, -2, true },
-        older_than_cutoff = { 8_999, 1_000, true },
-        exactly_on_cutoff = { 9_000, 1_000, false },
-        newer_than_cutoff = { 9_001, 1_000, false },
-        future_start_with_zero_filter = { 11_000, 0, false },
-    )]
-    fn duration_filter_is_a_strict_lower_bound(start_ms: i64, filter: i64, expected: bool) {
-        let now_ms = 10_000;
-        assert2::assert!(
-            matches_duration_filter(start_ms, now_ms, filter) == expected,
-            "start={start_ms} filter={filter}"
-        );
+    /// One transaction a `ListTransactions` filter is checked against, and
+    /// whether the listing keeps it.
+    struct ListFilterScenario {
+        start_ms: krabka_bdd::Given<i64>,
+        transactional_id: krabka_bdd::Given<String>,
+        listed: krabka_bdd::Given<bool>,
     }
 
-    #[yare::parameterized(
-        absent_pattern_accepts_anything = { None, "anything", true },
-        empty_pattern_accepts_anything = { Some(""), "anything", true },
-        matching_pattern = { Some("txn-.*"), "txn-alpha", true },
-        match_must_cover_whole_id = { Some("txn-.*"), "prefix-txn-alpha", false },
-        alternation_matches_long_id = { Some("txn|txn-long"), "txn-long", true },
-    )]
-    fn transactional_id_pattern_is_optional_and_matches_the_whole_id(
-        pattern: Option<&str>,
-        transactional_id: &str,
-        expected: bool,
-    ) {
-        let compiled = compile_transactional_id_pattern(pattern).expect("valid pattern");
-        let matches = compiled
-            .as_ref()
-            .is_none_or(|pattern| pattern.is_match(transactional_id));
-        assert2::assert!(
-            matches == expected,
-            "{pattern:?} against {transactional_id}"
-        );
+    #[rstest::fixture]
+    fn list_filter() -> ListFilterScenario {
+        ListFilterScenario {
+            start_ms: krabka_bdd::Given::new(
+                "start_ms",
+                "Given a transaction started at <start> ms",
+            ),
+            transactional_id: krabka_bdd::Given::new(
+                "transactional_id",
+                "Given a transaction with transactional id <id>",
+            ),
+            listed: krabka_bdd::Given::new(
+                "listed",
+                "When an admin lists the transactions with the transactional id pattern <pattern>",
+            ),
+        }
     }
 
-    /// Kafka compiles the pattern with RE2J, which has no lookahead,
-    /// backreferences, or possessive quantifiers.
-    #[yare::parameterized(
-        lookahead = { "(?=txn-).*" },
-        backreference = { r"(txn)-\1" },
-        possessive_quantifier = { "a*+" },
-        unclosed_group = { "(unclosed" },
-    )]
-    fn transactional_id_pattern_rejects_unsupported_regex(refused: &str) {
-        assert2::assert!(
-            compile_transactional_id_pattern(Some(refused)).is_err(),
-            "{refused}"
-        );
+    #[rstest::fixture]
+    fn pattern_compilation() -> PatternCompilation {
+        // The runner hands the value the When step returns to this fixture.
+        PatternCompilation::NotExecuted
     }
+
+    /// The compiled pattern, or why it did not compile.
+    type PatternCompilation = krabka_bdd::Attempt<(), String>;
+
+    impl ListFilterScenario {
+        fn list_with_pattern(&mut self, pattern: Option<&str>) {
+            let compiled = compile_transactional_id_pattern(pattern).expect("a valid pattern");
+            let listed = compiled
+                .as_ref()
+                .is_none_or(|pattern| pattern.is_match(self.transactional_id.get()));
+            self.listed.set(listed);
+        }
+    }
+
+    #[krabka_bdd::given("a transaction started at {start} ms")]
+    fn started_at(list_filter: &mut ListFilterScenario, start: i64) {
+        list_filter.start_ms.set(start);
+    }
+
+    #[krabka_bdd::given("a transaction with transactional id {id}")]
+    fn with_transactional_id(list_filter: &mut ListFilterScenario, id: String) {
+        list_filter.transactional_id.set(id);
+    }
+
+    #[krabka_bdd::when(
+        "an admin lists the transactions running longer than {filter} ms at {now} ms"
+    )]
+    fn list_by_duration(list_filter: &mut ListFilterScenario, filter: i64, now: i64) {
+        let listed = matches_duration_filter(*list_filter.start_ms.get(), now, filter);
+        list_filter.listed.set(listed);
+    }
+
+    #[krabka_bdd::when("an admin lists the transactions without a transactional id pattern")]
+    fn list_without_pattern(list_filter: &mut ListFilterScenario) {
+        list_filter.list_with_pattern(None);
+    }
+
+    #[krabka_bdd::when("an admin lists the transactions with an empty transactional id pattern")]
+    fn list_with_empty_pattern(list_filter: &mut ListFilterScenario) {
+        list_filter.list_with_pattern(Some(""));
+    }
+
+    #[krabka_bdd::when(
+        "an admin lists the transactions with the transactional id pattern {pattern}"
+    )]
+    fn list_with_pattern(list_filter: &mut ListFilterScenario, pattern: String) {
+        list_filter.list_with_pattern(Some(&pattern));
+    }
+
+    #[krabka_bdd::when(
+        "an admin attempts to list the transactions with the transactional id pattern {pattern}"
+    )]
+    fn attempt_pattern(pattern: String) -> krabka_bdd::Attempt<(), String> {
+        PatternCompilation::of(|| compile_transactional_id_pattern(Some(&pattern)).map(|_| ()))
+    }
+
+    #[krabka_bdd::then("the transaction is listed")]
+    fn is_listed(list_filter: &ListFilterScenario) {
+        assert!(*list_filter.listed.get());
+    }
+
+    #[krabka_bdd::then("the transaction is not listed")]
+    fn is_not_listed(list_filter: &ListFilterScenario) {
+        assert!(!*list_filter.listed.get());
+    }
+
+    #[krabka_bdd::then("the pattern is refused as an invalid regular expression")]
+    fn pattern_refused(pattern_compilation: &PatternCompilation) {
+        assert!(!pattern_compilation.failed().is_empty());
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/handler_describe_transactions/list_filters.feature",
+        fixtures = [list_filter: ListFilterScenario, pattern_compilation: PatternCompilation],
+    );
 
     krabka_broker_macros::wire_codec_helpers! {
         test_context ["admin-client"];

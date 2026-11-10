@@ -327,13 +327,6 @@ async fn deleted_acl_observations(
 
 #[rstest_bdd_macros::scenario(
     path = "tests/features/handler_delete_acl_matching.feature",
-    name = "Empty name and principal match nothing"
-)]
-#[tokio::test]
-async fn delete_acl_matching_case_0(acl_deletion: AclDeletionScenario) {}
-
-#[rstest_bdd_macros::scenario(
-    path = "tests/features/handler_delete_acl_matching.feature",
     name = "Empty name matches nothing"
 )]
 #[tokio::test]

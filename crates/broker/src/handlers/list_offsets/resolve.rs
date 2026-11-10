@@ -806,6 +806,7 @@ mod tests {
         },
         partition::Partition,
     };
+    mod lagging_watermark;
     mod timestamp_visibility;
 
     use {
@@ -1320,112 +1321,6 @@ mod tests {
         }
         partition.produce_batch(batch).await.expect("produce").0
     }
-
-    #[test]
-    fn lagging_high_watermark_error_follows_the_high_watermark_and_the_version() {
-        // (label, replica id, epoch start, high watermark, version, error)
-        let cases = [
-            ("no epoch start", -1, None, 3, 11, None),
-            ("caught up exactly", -1, Some(4), 4, 11, None),
-            ("caught up past", -1, Some(4), 6, 11, None),
-            (
-                "lagging, v11",
-                -1,
-                Some(4),
-                3,
-                11,
-                Some(codes::OFFSET_NOT_AVAILABLE),
-            ),
-            (
-                "lagging, v5",
-                -1,
-                Some(4),
-                3,
-                5,
-                Some(codes::OFFSET_NOT_AVAILABLE),
-            ),
-            (
-                "lagging, v4",
-                -1,
-                Some(4),
-                3,
-                4,
-                Some(codes::LEADER_NOT_AVAILABLE),
-            ),
-            (
-                "lagging, v1",
-                -1,
-                Some(4),
-                3,
-                1,
-                Some(codes::LEADER_NOT_AVAILABLE),
-            ),
-            ("lagging, follower", 3, Some(4), 3, 11, None),
-            ("lagging, debugging replica", -2, Some(4), 3, 11, None),
-        ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (label, replica_id, epoch_start, high_watermark, version, error) in cases {
-            actual.push((
-                label,
-                lagging_high_watermark_error(replica_id, epoch_start, high_watermark, version),
-            ));
-            expected.push((label, error));
-        }
-        assert!(actual == expected);
-    }
-
-    #[derive(Default)]
-    struct LaggingWatermarkScenario {
-        kind: Option<ListOffsetsKind>,
-        candidate: i64,
-        bound: i64,
-        fenced: Option<bool>,
-    }
-    #[rstest::fixture]
-    fn lagging_watermark() -> LaggingWatermarkScenario {
-        let kind = None;
-        LaggingWatermarkScenario {
-            kind,
-            ..Default::default()
-        }
-    }
-    #[rstest_bdd_macros::given(
-        "a lagging high watermark bounds {kind} offset candidate {candidate} before offset 3"
-    )]
-    fn watermark_candidate(
-        lagging_watermark: &mut LaggingWatermarkScenario,
-        kind: String,
-        candidate: i64,
-    ) {
-        lagging_watermark.kind = Some(match kind.as_str() {
-            "latest" => ListOffsetsKind::Latest,
-            "earliest" => ListOffsetsKind::Earliest,
-            "earliest-local" => ListOffsetsKind::EarliestLocal,
-            "timestamp" => ListOffsetsKind::Timestamp,
-            "maximum-timestamp" => ListOffsetsKind::MaxTimestamp,
-            "latest-tiered" => ListOffsetsKind::LatestTiered,
-            "earliest-pending-upload" => ListOffsetsKind::EarliestPendingUpload,
-            _ => panic!("unknown offset lookup: {kind}"),
-        });
-        lagging_watermark.candidate = candidate;
-        lagging_watermark.bound = 3;
-    }
-    #[rstest_bdd_macros::when(
-        "ListOffsets decides whether the lagging high watermark fences the result"
-    )]
-    fn fence_watermark_candidate(lagging_watermark: &mut LaggingWatermarkScenario) {
-        lagging_watermark.fenced = Some(lagging_high_watermark_fences(
-            lagging_watermark.kind.unwrap(),
-            lagging_watermark.candidate,
-            lagging_watermark.bound,
-        ));
-    }
-    #[rstest_bdd_macros::then("the candidate is fenced {expected}")]
-    fn check_watermark_candidate(lagging_watermark: &LaggingWatermarkScenario, expected: bool) {
-        assert!(lagging_watermark.fenced.unwrap() == expected);
-    }
-    rstest_bdd_macros::scenarios!("tests/features/handler_lagging_watermark",fixtures=[lagging_watermark:LaggingWatermarkScenario]);
 
     /// KIP-207 over the wire, one row per request shape, in the two states
     /// `Partition.fetchOffsetForTimestamp` distinguishes: the high watermark

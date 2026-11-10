@@ -293,7 +293,7 @@ fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffset
 #[cfg(test)]
 mod tests {
     use {
-        super::{handle, top_level},
+        super::handle,
         crate::{
             authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
             broker::BrokerHandle,
@@ -427,18 +427,6 @@ mod tests {
                 .wait_until_partition_present(topic_name, 0)
                 .await;
         }
-    }
-
-    #[test]
-    fn top_level_preserves_error_fields() {
-        let resp = top_level(codes::UNSUPPORTED_VERSION, None);
-
-        let expected = krabka_broker_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: Some("The version of API is not supported.".into()),
-            responses: Vec::new(),
-        });
-        assert!(resp == expected);
     }
 
     #[bon::builder]

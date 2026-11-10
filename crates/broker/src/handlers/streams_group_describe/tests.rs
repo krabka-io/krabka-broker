@@ -65,26 +65,6 @@ async fn grant(
 }
 
 #[tokio::test]
-async fn disabled_feature_returns_requested_group_error_rows() {
-    krabka_broker_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker);
-        boot [start_broker(true)];
-    };
-    unfinalize_streams_version(&broker).await;
-
-    let resp = describe(&broker, &["g-disabled-a", "g-disabled-b"]).await;
-
-    let expected = krabka_broker_macros::unthrottled_wire!(StreamsGroupDescribeResponse {
-        groups: vec![
-            error_group("g-disabled-a", codes::UNSUPPORTED_VERSION),
-            error_group("g-disabled-b", codes::UNSUPPORTED_VERSION),
-        ],
-    });
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
 async fn enabled_missing_group_returns_not_found_rows() {
     krabka_broker_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);

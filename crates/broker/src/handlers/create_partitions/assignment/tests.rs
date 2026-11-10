@@ -324,13 +324,6 @@ fn a_cluster_of_witnesses_returns_invalid_rf() {
 }
 
 #[test]
-fn rf_exceeds_broker_count_returns_invalid_rf() {
-    let brokers = plain_brokers(&[0, 1]);
-    let err = automatic(&brokers, 1, 3, None, 0).expect_err("rf=3 against 2 brokers must fail");
-    assert!(err.code == codes::INVALID_REPLICATION_FACTOR);
-}
-
-#[test]
 fn honored_assignments_pass_through_verbatim() {
     let brokers = plain_brokers(&[0, 1, 2, 3]);
     let provided = vec![assn(&[3, 1]), assn(&[2, 0]), assn(&[1, 3])];

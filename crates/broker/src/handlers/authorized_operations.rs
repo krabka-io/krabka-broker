@@ -174,6 +174,7 @@ mod tests {
         super::*,
         crate::authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
         assert2::assert,
+        krabka_bdd::Given,
         krabka_metadata::{AclEntry, MetadataRecord, PermissionType, ResourceType},
         krabka_security::Principal,
         serde_json::Value,
@@ -191,29 +192,16 @@ mod tests {
 
     use crate::test_support::{allow_acl, request_context, sasl_principal};
 
-    #[bon::builder]
-    fn acl_image(
-        #[builder(default = ResourceType::Topic)] resource_type: ResourceType,
-        #[builder(default = "orders")] resource_name: &'_ str,
-        #[builder(default = "User:alice")] principal: &'_ str,
-        #[builder(default = AclOperation::Read)] operation: AclOperation,
-    ) -> MetadataImage {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1AccessControlEntry(
-            allow_acl()
-                .resource_type(resource_type)
-                .resource_name(resource_name)
-                .principal(principal)
-                .operation(operation)
-                .call(),
-        ));
-        image
-    }
-
     fn bit(op: AclOperation) -> i32 { 1_i32 << operation_to_wire(op) }
 
-    fn alice_acl_bits(image: &MetadataImage, resource: ResourceType, name: &str) -> i32 {
-        let auth = SimpleAclAuthorizer::new(HashSet::new());
+    /// alice's bitfield on `name` under a `SimpleAclAuthorizer` with `super_users`.
+    fn alice_acl_bits(
+        super_users: &HashSet<String>,
+        image: &MetadataImage,
+        resource: ResourceType,
+        name: &str,
+    ) -> i32 {
+        let auth = SimpleAclAuthorizer::new(super_users.clone());
         let principal = principal("alice");
         let host = addr();
         authorized_operations_bits(&auth, image, &ctx(&principal, &host), resource, name)
@@ -267,18 +255,73 @@ mod tests {
         });
     }
 
-    #[derive(Default)]
+    /// A resource type as a scenario names it.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum Resource {
+        Topic,
+        Group,
+        Cluster,
+    }
+
+    impl From<Resource> for ResourceType {
+        fn from(resource: Resource) -> Self {
+            match resource {
+                Resource::Topic => Self::Topic,
+                Resource::Group => Self::Group,
+                Resource::Cluster => Self::Cluster,
+            }
+        }
+    }
+
+    /// Whether an ACL a scenario gives alice allows or denies its operation.
+    #[derive(Clone, Copy, Debug, krabka_bdd::StepParam)]
+    enum Permission {
+        Allowed,
+        Denied,
+    }
+
+    impl From<Permission> for PermissionType {
+        fn from(permission: Permission) -> Self {
+            match permission {
+                Permission::Allowed => Self::Allow,
+                Permission::Denied => Self::Deny,
+            }
+        }
+    }
+
+    /// The name of the resource every ACL in the bitfield scenarios is on.
+    const RESOURCE_NAME: &str = "orders";
+
     struct AuthorizationContract {
-        resource: Option<ResourceType>,
-        operation: Option<AclOperation>,
-        supported: Option<HashSet<AclOperation>>,
-        mask: Option<i32>,
+        resource: Given<ResourceType>,
+        operation: Given<AclOperation>,
+        supported: Given<HashSet<AclOperation>>,
+        mask: Given<i32>,
+        /// The ACLs alice holds. A scenario with no ACL step holds none.
+        image: MetadataImage,
+        /// The super users the authorizer knows. A scenario with no super-user
+        /// step has none.
+        super_users: HashSet<String>,
     }
 
     #[rstest::fixture]
     fn authorization_contract() -> AuthorizationContract {
         AuthorizationContract {
-            ..AuthorizationContract::default()
+            resource: Given::new(
+                "resource",
+                "Given an authorization query concerns a <resource> resource",
+            ),
+            operation: Given::new("operation", "Given the authorized operation is <operation>"),
+            supported: Given::new(
+                "supported",
+                "When the broker lists the resource's supported permissions",
+            ),
+            mask: Given::new(
+                "mask",
+                "When the broker reports alice's authorized operations on the <resource>",
+            ),
+            image: MetadataImage::new(Uuid::nil()),
+            super_users: HashSet::new(),
         }
     }
 
@@ -286,52 +329,103 @@ mod tests {
         serde_json::from_value(Value::String(name.to_owned())).expect("a named ACL operation")
     }
 
-    #[rstest_bdd_macros::given("an authorization query concerns a {resource} resource")]
+    #[krabka_bdd::given("an authorization query concerns a {resource} resource")]
     fn authorization_resource(
         authorization_contract: &mut AuthorizationContract,
-        resource: String,
+        resource: Resource,
     ) {
-        authorization_contract.resource = Some(match resource.as_str() {
-            "topic" => ResourceType::Topic,
-            "group" => ResourceType::Group,
-            "cluster" => ResourceType::Cluster,
-            _ => panic!("unknown resource {resource}"),
-        });
+        authorization_contract.resource.set(resource.into());
     }
 
-    #[rstest_bdd_macros::given("the authorized operation is {operation}")]
+    #[krabka_bdd::given("the authorized operation is {operation}")]
     fn authorization_operation(
         authorization_contract: &mut AuthorizationContract,
         operation: String,
     ) {
-        authorization_contract.operation = Some(named_operation(&operation));
-    }
-
-    #[rstest_bdd_macros::when("the broker lists the resource's supported permissions")]
-    fn query_supported_permissions(authorization_contract: &mut AuthorizationContract) {
-        let resource = authorization_contract
-            .resource
-            .expect("a resource type was given");
-        authorization_contract.supported =
-            Some(supported_operations(resource).iter().copied().collect());
-    }
-
-    #[rstest_bdd_macros::when("the operation is encoded in the authorized-operations bitfield")]
-    fn encode_authorized_operation(authorization_contract: &mut AuthorizationContract) {
-        authorization_contract.mask = Some(bit(authorization_contract
+        authorization_contract
             .operation
-            .expect("an operation was given")));
+            .set(named_operation(&operation));
     }
 
-    #[rstest_bdd_macros::then("the supported permissions are exactly {permissions}")]
+    #[krabka_bdd::given("alice is {permission} {operation} on a/the {resource}")]
+    fn alice_holds_acl(
+        authorization_contract: &mut AuthorizationContract,
+        permission: Permission,
+        operation: String,
+        resource: Resource,
+    ) {
+        authorization_contract
+            .image
+            .apply(&MetadataRecord::V1AccessControlEntry(AclEntry {
+                permission_type: permission.into(),
+                ..allow_acl()
+                    .resource_type(resource.into())
+                    .resource_name(RESOURCE_NAME)
+                    .operation(named_operation(&operation))
+                    .call()
+            }));
+    }
+
+    #[krabka_bdd::given("{name} is a super user")]
+    fn super_user(authorization_contract: &mut AuthorizationContract, name: String) {
+        authorization_contract.super_users.insert(name);
+    }
+
+    #[krabka_bdd::when("the broker lists the resource's supported permissions")]
+    fn query_supported_permissions(authorization_contract: &mut AuthorizationContract) {
+        let resource = *authorization_contract.resource.get();
+        authorization_contract
+            .supported
+            .set(supported_operations(resource).iter().copied().collect());
+    }
+
+    #[krabka_bdd::when("the operation is encoded in the authorized-operations bitfield")]
+    fn encode_authorized_operation(authorization_contract: &mut AuthorizationContract) {
+        let operation = *authorization_contract.operation.get();
+        authorization_contract.mask.set(bit(operation));
+    }
+
+    #[krabka_bdd::when("the broker reports alice's authorized operations on a/the {resource}")]
+    fn report_alice_operations(
+        authorization_contract: &mut AuthorizationContract,
+        resource: Resource,
+    ) {
+        let bits = alice_acl_bits(
+            &authorization_contract.super_users,
+            &authorization_contract.image,
+            resource.into(),
+            RESOURCE_NAME,
+        );
+        authorization_contract.mask.set(bits);
+    }
+
+    #[krabka_bdd::then("the supported permissions are exactly {permissions}")]
     fn supported_permissions(authorization_contract: &AuthorizationContract, permissions: String) {
         let expected: HashSet<_> = permissions.split(',').map(named_operation).collect();
-        assert!(authorization_contract.supported.as_ref() == Some(&expected));
+        assert!(*authorization_contract.supported.get() == expected);
     }
 
-    #[rstest_bdd_macros::then("the operation contributes mask {mask}")]
+    #[krabka_bdd::then("the operation contributes mask {mask}")]
     fn operation_mask(authorization_contract: &AuthorizationContract, mask: i32) {
-        assert!(authorization_contract.mask == Some(mask));
+        assert!(*authorization_contract.mask.get() == mask);
+    }
+
+    #[krabka_bdd::then("the authorized operations are exactly {operations}")]
+    fn authorized_operations_are(
+        authorization_contract: &AuthorizationContract,
+        operations: String,
+    ) {
+        let expected = operations
+            .split(',')
+            .map(named_operation)
+            .fold(0_i32, |acc, op| acc | bit(op));
+        let actual = *authorization_contract.mask.get();
+        assert!(actual == expected, "0b{actual:b} != 0b{expected:b}");
+    }
+
+    #[krabka_bdd::then("no operation is authorized")]
+    fn no_operation_authorized(authorization_contract: &AuthorizationContract) {
+        assert!(*authorization_contract.mask.get() == 0);
     }
 
     #[test]
@@ -355,128 +449,6 @@ mod tests {
                 .fold(0_i32, |acc, op| acc | bit(op));
             assert!(bits == expected, "{rt:?}: full mask under AllowAll");
         }
-    }
-
-    #[test]
-    fn simple_acl_with_no_acls_yields_zero() {
-        let mut supers = HashSet::new();
-        supers.insert("ignored".to_owned());
-        let auth = SimpleAclAuthorizer::new(supers);
-        let img = MetadataImage::new(Uuid::nil());
-        let p = principal("alice");
-        let h = addr();
-        // alice is not a super-user and the image has no ACLs → every
-        // supported op denies → bitfield is 0.
-        let bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
-        assert!(bits == 0);
-    }
-
-    #[test]
-    fn super_user_gets_full_mask_per_resource() {
-        let mut supers = HashSet::new();
-        supers.insert("admin".to_owned());
-        let auth = SimpleAclAuthorizer::new(supers);
-        let img = MetadataImage::new(Uuid::nil());
-        let p = principal("admin");
-        let h = addr();
-
-        let topic_bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
-        let topic_want = supported_operations(ResourceType::Topic)
-            .iter()
-            .copied()
-            .fold(0_i32, |acc, op| acc | bit(op));
-        assert!(topic_bits == topic_want);
-
-        let group_bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Group, "g");
-        let group_want = supported_operations(ResourceType::Group)
-            .iter()
-            .copied()
-            .fold(0_i32, |acc, op| acc | bit(op));
-        assert!(group_bits == group_want);
-    }
-
-    #[test]
-    fn read_allow_on_topic_sets_read_and_describe_bits_only() {
-        let img = acl_image().resource_name("foo").call();
-        let bits = alice_acl_bits(&img, ResourceType::Topic, "foo");
-        // Read ACL grants Read directly and Describe via implication.
-        // No other supported op should be set.
-        let expected = bit(AclOperation::Read) | bit(AclOperation::Describe);
-        assert!(bits == expected);
-    }
-
-    #[test]
-    fn write_allow_on_topic_sets_write_and_describe_only() {
-        let img = acl_image()
-            .resource_name("foo")
-            .operation(AclOperation::Write)
-            .call();
-        let bits = alice_acl_bits(&img, ResourceType::Topic, "foo");
-        let expected = bit(AclOperation::Write) | bit(AclOperation::Describe);
-        assert!(bits == expected);
-    }
-
-    /// The group bitfield per granted ACL, as Kafka's `AclEntry` supported
-    /// set and its implication table give it: `Read` and `Delete` imply
-    /// `Describe`, `AlterConfigs` implies `DescribeConfigs`, and `All`
-    /// grants all five group operations.
-    #[test]
-    fn group_bits_follow_the_granted_acl() {
-        let rows = [
-            (
-                AclOperation::Read,
-                bit(AclOperation::Read) | bit(AclOperation::Describe),
-            ),
-            (
-                AclOperation::Delete,
-                bit(AclOperation::Delete) | bit(AclOperation::Describe),
-            ),
-            (
-                AclOperation::DescribeConfigs,
-                bit(AclOperation::DescribeConfigs),
-            ),
-            (
-                AclOperation::AlterConfigs,
-                bit(AclOperation::DescribeConfigs) | bit(AclOperation::AlterConfigs),
-            ),
-            (
-                AclOperation::All,
-                bit(AclOperation::Read)
-                    | bit(AclOperation::Describe)
-                    | bit(AclOperation::Delete)
-                    | bit(AclOperation::DescribeConfigs)
-                    | bit(AclOperation::AlterConfigs),
-            ),
-        ];
-        for (granted, expected) in rows {
-            let img = acl_image()
-                .resource_type(ResourceType::Group)
-                .resource_name("cg")
-                .operation(granted)
-                .call();
-            let bits = alice_acl_bits(&img, ResourceType::Group, "cg");
-            assert!(bits == expected, "{granted:?}");
-        }
-    }
-
-    #[test]
-    fn deny_wins_the_exact_operation_but_not_its_implied_describe() {
-        let mut img = acl_image().resource_name("foo").call();
-        img.apply(&MetadataRecord::V1AccessControlEntry(AclEntry {
-            permission_type: PermissionType::Deny,
-            ..allow_acl().resource_name("foo").call()
-        }));
-        let bits = alice_acl_bits(&img, ResourceType::Topic, "foo");
-        // Read itself is denied: both ACL rows match the exact Read request,
-        // and DENY wins precedence. But Kafka's operation-implication table
-        // only ever widens what an ALLOW ACL matches -- a DENY Read ACL does
-        // not also deny the implied Describe. Only the ALLOW row matches a
-        // Describe request (via the Read -> Describe arrow); the DENY row
-        // does not apply to it at all. So Describe is allowed.
-        assert!(bits == bit(AclOperation::Describe));
     }
 
     /// The group bitfield goes only on an opted-in row whose error is `NONE`;
