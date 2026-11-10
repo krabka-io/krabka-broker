@@ -20,13 +20,19 @@ use {
     stateright::{Checker as _, Expectation, Model, Property},
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DeliveryPhase {
+    Ready,
+    InFlight,
+    Settled,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct State {
     live: AcquisitionState,
     durable: AcquisitionState,
     persisted: bool,
-    in_flight: bool,
-    settled: bool,
+    phase: DeliveryPhase,
     attempts: u8,
     appended: u8,
     crashes: u8,
@@ -78,8 +84,7 @@ impl Model for DlqModel {
             durable: restored(&live),
             live,
             persisted: false,
-            in_flight: false,
-            settled: false,
+            phase: DeliveryPhase::Ready,
             attempts: 0,
             appended: 0,
             crashes: 0,
@@ -110,53 +115,55 @@ impl Model for DlqModel {
                 s.durable = restored(&s.live);
                 s.persisted = true;
             }
-            Action::Send if s.persisted && !s.in_flight && !s.settled && s.attempts < 2 => {
+            Action::Send if s.persisted && s.phase == DeliveryPhase::Ready && s.attempts < 2 => {
                 if s.live.take_pending_dlq().is_empty() {
                     return None;
                 }
-                s.in_flight = true;
+                s.phase = DeliveryPhase::InFlight;
                 s.attempts += 1;
             }
             // A leader error retries the same in-flight operation; the second
             // attempt must settle, bounding schedules without assuming fairness.
-            Action::Retry if s.in_flight && s.attempts < 2 => {
+            Action::Retry if s.phase == DeliveryPhase::InFlight && s.attempts < 2 => {
                 s.attempts += 1;
             }
-            Action::Success if s.in_flight => {
+            Action::Success if s.phase == DeliveryPhase::InFlight => {
                 s.appended += 1;
-                s.in_flight = false;
-                s.settled = true;
+                s.phase = DeliveryPhase::Settled;
             }
-            Action::Oversized if s.in_flight => {
-                s.in_flight = false;
-                s.settled = true;
+            Action::Oversized if s.phase == DeliveryPhase::InFlight => {
+                s.phase = DeliveryPhase::Settled;
             }
-            Action::AuthorizationDenied if s.in_flight => {
-                s.in_flight = false;
-                s.settled = true;
+            Action::AuthorizationDenied if s.phase == DeliveryPhase::InFlight => {
+                s.phase = DeliveryPhase::Settled;
                 s.denied = true;
             }
-            Action::Finish if s.settled && s.live.start_offset == Offset(0) => {
+            Action::Finish
+                if s.phase == DeliveryPhase::Settled && s.live.start_offset == Offset(0) =>
+            {
                 s.live.finish_archiving(Offset(0), Offset(0));
             }
             // Production prunes after either persistence outcome. A failed
             // phase-2 write leaves durable ARCHIVING: a crash can enqueue again.
             Action::PersistFailure
-                if s.settled && !has_archiving(&s.live) && s.live.start_offset == Offset(0) =>
+                if s.phase == DeliveryPhase::Settled
+                    && !has_archiving(&s.live)
+                    && s.live.start_offset == Offset(0) =>
             {
                 s.live.prune_terminal_prefix();
                 s.persistence_failed = true;
             }
             Action::Confirm
-                if s.settled && !has_archiving(&s.live) && s.durable.start_offset == Offset(0) =>
+                if s.phase == DeliveryPhase::Settled
+                    && !has_archiving(&s.live)
+                    && s.durable.start_offset == Offset(0) =>
             {
                 s.durable = restored(&s.live);
                 s.live.prune_terminal_prefix();
             }
             Action::Crash if s.persisted && s.crashes < 1 => {
                 s.live = restored(&s.durable);
-                s.in_flight = false;
-                s.settled = false;
+                s.phase = DeliveryPhase::Ready;
                 s.attempts = 0;
                 s.crashes += 1;
                 if self.lose_recovery && s.live.start_offset == Offset(0) {
@@ -199,8 +206,8 @@ impl Model for DlqModel {
             }),
             Property::always("recovered_archiving_has_work", |_: &Self, s: &State| {
                 s.live.start_offset == Offset(1)
-                    || s.in_flight
-                    || s.settled
+                    || s.phase == DeliveryPhase::InFlight
+                    || s.phase == DeliveryPhase::Settled
                     || !s.live.pending_dlq.is_empty()
             }),
             Property::always(
@@ -212,7 +219,7 @@ impl Model for DlqModel {
                 },
             ),
             Property::always("terminal_failure_can_finish", |_: &Self, s: &State| {
-                if s.settled {
+                if s.phase == DeliveryPhase::Settled {
                     let mut sm = s.live.clone();
                     sm.finish_archiving(Offset(0), Offset(0));
                     sm.prune_terminal_prefix();
