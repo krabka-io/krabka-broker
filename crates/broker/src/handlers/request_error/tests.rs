@@ -6,6 +6,7 @@
 //! here.
 
 mod admin;
+mod api_error_message;
 mod client;
 mod txn;
 
@@ -18,8 +19,6 @@ use {
         Decode, Encode,
         api_key::ApiKey,
         owned::{
-            describe_acls_request::DescribeAclsRequest,
-            describe_acls_response::DescribeAclsResponse,
             describe_share_group_offsets_request::{
                 DescribeShareGroupOffsetsRequest, DescribeShareGroupOffsetsRequestGroup,
             },
@@ -109,48 +108,6 @@ where
             assert!(cursor.is_empty(), "{api:?} v{version} left bytes over");
             response
         })
-}
-
-/// `ApiError.fromThrowable` drops the message for `UNKNOWN_SERVER_ERROR` and
-/// for a message equal to the code's own, and keeps any other.
-#[test]
-fn api_error_message_follows_api_error_from_throwable() {
-    let cases = [
-        ("an exception message", FAILURE, Some(exception_message())),
-        (
-            "the default message",
-            RequestFailure {
-                exception_message: DEFAULT_MESSAGE,
-                ..FAILURE
-            },
-            None,
-        ),
-        (
-            "an unknown server error",
-            RequestFailure {
-                error_code: UNKNOWN_SERVER_ERROR,
-                ..FAILURE
-            },
-            None,
-        ),
-    ];
-    for (name, failure, error_message) in cases {
-        let response: Option<DescribeAclsResponse> = answer(
-            ApiKey::DescribeAcls,
-            3,
-            &DescribeAclsRequest::default(),
-            &failure,
-        );
-        assert!(
-            response
-                == Some(DescribeAclsResponse {
-                    error_code: failure.error_code,
-                    error_message,
-                    ..Default::default()
-                }),
-            "{name}"
-        );
-    }
 }
 
 /// `UnregisterBroker` copies `e.getMessage()` even where `ApiError` would drop

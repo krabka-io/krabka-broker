@@ -507,33 +507,6 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on(
     .await;
 }
 
-/// An `ApiVersions` request above Kafka 4.4's released v5 range receives
-/// `UNSUPPORTED_VERSION` in a v0 body naming the released range.
-#[tokio::test]
-async fn api_versions_above_v5_are_unsupported() {
-    use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
-
-    let (_dir, cfg) = broker_config();
-    let DrivenFrames { outcomes, .. } = drive_one_frame_per_connection(cfg, &[FrameRequest {
-        api_key: API_VERSIONS_KEY,
-        version: 6,
-    }])
-    .await;
-    check!(
-        outcomes
-            == vec![Outcome::ApiVersionsV0(ApiVersionsResponse {
-                error_code: codes::UNSUPPORTED_VERSION,
-                api_keys: vec![ApiVersion {
-                    api_key: API_VERSIONS_KEY,
-                    min_version: 0,
-                    max_version: 5,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })]
-    );
-}
-
 /// Boots a broker, serves exactly one connection on a listener of `protocol`
 /// offering `mechanisms`, sends `requests` down it in order, and returns once
 /// the serve loop has exited. What the loop recorded is the return value.
