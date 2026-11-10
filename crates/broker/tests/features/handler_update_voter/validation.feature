@@ -5,11 +5,14 @@ Feature: UpdateRaftVoter refusals preserve current leader information
     When the broker handles the version 0 voter update
     Then the voter update returns error <code> and still identifies the current leader and epoch
     Examples:
-      | malformation                    | code |
-      | another cluster ID              | 104  |
-      | an epoch one behind             | 74   |
-      | an epoch one ahead              | 75   |
-      | a zero voter directory ID       | 42   |
-      | no listeners                    | 42   |
-      | an inverted kraft.version range | 42   |
-      | only a PLAINTEXT listener        | 42   |
+      | malformation                                    | code |
+      | another cluster ID                              | 104  |
+      | an epoch one behind                             | 74   |
+      | an epoch one ahead                              | 75   |
+      | a zero voter directory ID                       | 42   |
+      | no listeners                                    | 42   |
+      | an inverted kraft.version range                 | 42   |
+      | only a PLAINTEXT listener                       | 42   |
+      | a negative voter ID                             | 42   |
+      | a negative kraft.version minimum                | 42   |
+      | a range that misses the cluster's kraft.version | 42   |

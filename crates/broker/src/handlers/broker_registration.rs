@@ -577,18 +577,22 @@ mod tests {
         );
     }
 
-    #[derive(Default)]
     struct BrokerRegistrationChecks {
         image: Option<krabka_metadata::MetadataImage>,
         request: BrokerRegistrationRequest,
+        failure: krabka_bdd::Given<WriteFailure>,
         outcome: Option<Result<(), i16>>,
     }
     #[rstest::fixture]
     fn registration_checks() -> BrokerRegistrationChecks {
-        let image = None;
         BrokerRegistrationChecks {
-            image,
-            ..Default::default()
+            image: None,
+            request: BrokerRegistrationRequest::default(),
+            failure: krabka_bdd::Given::new(
+                "failure",
+                "Given the controller write of a registration fails with <failure>",
+            ),
+            outcome: None,
         }
     }
     #[rstest_bdd_macros::given("the cluster has finalized metadata.version 25 and group.version 1")]
@@ -724,25 +728,46 @@ mod tests {
         assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
     }
 
-    #[yare::parameterized(
-        not_leader = {
-            RaftError::NotLeader { current_leader: None },
-            codes::NOT_CONTROLLER,
-        },
-        leader_unknown = { RaftError::LeaderUnknown, codes::NOT_CONTROLLER },
-        uncommitted_tail = { RaftError::UncommittedTail, codes::NOT_CONTROLLER },
-        metadata_refusal = {
-            RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(String::new())),
-            codes::INVALID_REGISTRATION,
-        },
-        shutdown = { RaftError::Shutdown, codes::UNKNOWN_SERVER_ERROR },
-        change_rejected = {
-            RaftError::ChangeRejected("stale".to_owned()),
-            codes::UNKNOWN_SERVER_ERROR,
-        },
-    )]
-    fn a_failed_registration_write_answers_kafkas_code(error: RaftError, expected: i16) {
-        assert2::assert!(raft_error_code(&error) == expected);
+    /// How the controller write of a registration fails.
+    #[derive(Debug, Clone, Copy, krabka_bdd::StepParam)]
+    enum WriteFailure {
+        NotLeader,
+        LeaderUnknown,
+        UncommittedTail,
+        MetadataRefusal,
+        Shutdown,
+        ChangeRejected,
+    }
+
+    impl WriteFailure {
+        fn error(self) -> RaftError {
+            match self {
+                Self::NotLeader => RaftError::NotLeader {
+                    current_leader: None,
+                },
+                Self::LeaderUnknown => RaftError::LeaderUnknown,
+                Self::UncommittedTail => RaftError::UncommittedTail,
+                Self::MetadataRefusal => {
+                    RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(String::new()))
+                }
+                Self::Shutdown => RaftError::Shutdown,
+                Self::ChangeRejected => RaftError::ChangeRejected("stale".to_owned()),
+            }
+        }
+    }
+
+    #[krabka_bdd::given("the controller write of a registration fails with {failure}")]
+    fn failed_registration_write(
+        registration_checks: &mut BrokerRegistrationChecks,
+        failure: WriteFailure,
+    ) {
+        registration_checks.failure.set(failure);
+    }
+
+    #[krabka_bdd::when("the controller answers the failed registration write")]
+    fn answer_failed_registration_write(registration_checks: &mut BrokerRegistrationChecks) {
+        let code = raft_error_code(&registration_checks.failure.get().error());
+        registration_checks.outcome = Some(Err(code));
     }
 }
 
