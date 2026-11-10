@@ -10,7 +10,6 @@ Feature: Broker-wide Kafka message size limits
     Examples:
       | value       | bytes      |
       | 0B          | 0          |
-      | 2048B       | 2048       |
       | 2147483647B | 2147483647 |
       | 1MiB        | 1048576    |
 

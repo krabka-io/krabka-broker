@@ -124,35 +124,12 @@ impl ReplicaSelectorKind {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
-
-    /// A follower in the ISR that has fetched to offset 100 and caught up a
-    /// moment ago; the cases below change the fields they are about.
-    fn view(node_id: i32, rack: &str, in_isr: bool) -> ReplicaView {
-        ReplicaView {
-            node_id,
-            rack: Some(rack.to_owned()),
-            in_isr,
-            is_witness: false,
-            log_end_offset: 100,
-            time_since_caught_up: Duration::ZERO,
-        }
-    }
-
-    fn witness(node_id: i32, rack: &str, in_isr: bool) -> ReplicaView {
-        ReplicaView {
-            is_witness: true,
-            ..view(node_id, rack, in_isr)
-        }
-    }
-
-    fn behind(replica: ReplicaView, log_end_offset: i64, since_caught_up_ms: u64) -> ReplicaView {
-        ReplicaView {
-            log_end_offset,
-            time_since_caught_up: Duration::from_millis(since_caught_up_ms),
-            ..replica
-        }
-    }
+    use {
+        super::*,
+        assert2::assert,
+        krabka_bdd::{Given, StepParamError, table},
+        std::{fmt, str::FromStr},
+    };
 
     #[yare::parameterized(
         leader = { "leader", Some(ReplicaSelectorKind::Leader) },
@@ -166,136 +143,170 @@ mod tests {
         );
     }
 
-    #[test]
-    fn leader_kind_always_returns_minus_one() {
-        let replicas = [view(1, "a", true), view(2, "b", true)];
-        assert!(ReplicaSelectorKind::Leader.select(Some("b"), 1, &replicas) == -1);
+    /// The selector a scenario's leader runs.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum Selector {
+        Leader,
+        RackAware,
     }
 
-    #[test]
-    fn rack_aware_picks_same_rack_isr_member() {
-        let replicas = [view(1, "a", true), view(2, "b", true)];
-        // leader is node 1 (rack a); client in rack b -> the same-rack ISR
-        // member is node 2.
-        assert!(ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas) == 2);
+    impl From<Selector> for ReplicaSelectorKind {
+        fn from(selector: Selector) -> Self {
+            match selector {
+                Selector::Leader => Self::Leader,
+                Selector::RackAware => Self::RackAware,
+            }
+        }
     }
 
-    #[test]
-    fn rack_aware_none_when_client_rack_missing() {
-        let replicas = [view(1, "a", true), view(2, "b", true)];
-        assert!(ReplicaSelectorKind::RackAware.select(None, 1, &replicas) == -1);
-        assert!(ReplicaSelectorKind::RackAware.select(Some(""), 1, &replicas) == -1);
+    /// Kafka's `timeSinceLastCaughtUpMs`, in milliseconds, or `never` for a
+    /// follower whose fetch offset never reached the leader's log end.
+    #[derive(Debug, Clone, Copy)]
+    struct SinceCaughtUp(Duration);
+
+    impl FromStr for SinceCaughtUp {
+        type Err = StepParamError;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            if text == "never" {
+                return Ok(Self(Duration::MAX));
+            }
+            text.parse()
+                .map(|millis| Self(Duration::from_millis(millis)))
+                .map_err(|_| StepParamError::new("SinceCaughtUp", text, &["never", "<millis>"]))
+        }
     }
 
-    #[test]
-    fn rack_aware_none_when_no_same_rack_replica() {
-        let replicas = [view(1, "a", true), view(2, "a", true)];
-        assert!(ReplicaSelectorKind::RackAware.select(Some("z"), 1, &replicas) == -1);
+    impl fmt::Display for SinceCaughtUp {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if self.0 == Duration::MAX {
+                f.write_str("never")
+            } else {
+                write!(f, "{}", self.0.as_millis())
+            }
+        }
     }
 
-    #[test]
-    fn rack_aware_ignores_non_isr_same_rack_replica() {
-        let replicas = [view(1, "a", true), view(2, "b", false)];
-        // Node 2 is same-rack but out of ISR -> no redirect.
-        assert!(ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas) == -1);
+    /// A replica's configured rack: a name, `empty` for the empty string,
+    /// or `none` for a broker with no rack.
+    #[derive(Debug, Clone)]
+    struct Rack(Option<String>);
+
+    impl FromStr for Rack {
+        type Err = StepParamError;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(match text {
+                "none" => None,
+                "empty" => Some(String::new()),
+                name => Some(name.to_owned()),
+            }))
+        }
     }
 
-    #[yare::parameterized(
-        witness_is_only_same_rack_isr_member = {
-            vec![view(1, "a", true), witness(2, "b", true)],
-            -1,
-        },
-        same_rack_non_witness_beats_more_caught_up_witness = {
-            vec![
-                view(1, "a", true),
-                witness(2, "b", true),
-                behind(view(3, "b", true), 50, 9_000),
-            ],
-            3,
-        },
-    )]
-    fn rack_aware_never_redirects_a_consumer_to_a_witness(replicas: Vec<ReplicaView>, want: i32) {
-        // Node 1 leads in rack "a". The client rack is "b", the witness site,
-        // so the witness there is an in-ISR same-rack replica and looks like
-        // the best pick.
-        let got = ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas);
-        assert2::assert!(got == want, "got {got}, want {want}");
+    impl fmt::Display for Rack {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self.0.as_deref() {
+                None => f.write_str("none"),
+                Some("") => f.write_str("empty"),
+                Some(name) => f.write_str(name),
+            }
+        }
     }
 
-    /// Kafka's `RackAwareReplicaSelector` answers the leader when it is in the
-    /// client's rack, and `findPreferredReadReplica` drops a selected leader:
-    /// a same-rack follower never outranks it, whatever its id or progress.
-    #[yare::parameterized(
-        lower_id_same_rack_follower = {
-            vec![view(1, "b", true), view(2, "b", true)],
-            2,
-        },
-        further_ahead_same_rack_follower = {
-            vec![behind(view(1, "b", true), 500, 0), view(2, "b", true)],
-            2,
-        },
-        only_same_rack_replica = {
-            vec![view(1, "b", true), view(2, "a", true)],
-            1,
-        },
-    )]
-    fn rack_aware_keeps_the_read_on_a_leader_in_the_clients_rack(
+    /// One replica as the leader sees it. A missing column is an in-sync,
+    /// client-serving replica at log end 100 that caught up a moment ago.
+    #[derive(Debug, krabka_bdd::TableRow)]
+    struct Replica {
+        node: i32,
+        rack: Rack,
+        in_sync: Option<bool>,
+        witness: Option<bool>,
+        log_end: Option<i64>,
+        caught_up_ms_ago: Option<SinceCaughtUp>,
+    }
+
+    impl From<Replica> for ReplicaView {
+        fn from(replica: Replica) -> Self {
+            Self {
+                node_id: replica.node,
+                rack: replica.rack.0,
+                in_isr: replica.in_sync.unwrap_or(true),
+                is_witness: replica.witness.unwrap_or(false),
+                log_end_offset: replica.log_end.unwrap_or(100),
+                time_since_caught_up: replica
+                    .caught_up_ms_ago
+                    .map_or(Duration::ZERO, |since| since.0),
+            }
+        }
+    }
+
+    /// The partition's leader and replicas, and the replica the leader named.
+    struct ReadReplicaSelection {
+        leader: i32,
         replicas: Vec<ReplicaView>,
-        leader_id: i32,
-    ) {
-        let got = ReplicaSelectorKind::RackAware.select(Some("b"), leader_id, &replicas);
-        assert2::assert!(got == -1, "got {got}");
+        preferred: Given<i32>,
     }
 
-    /// Among several same-rack followers Kafka picks the most caught up: the
-    /// highest log end offset, then the shortest time since it last caught up,
-    /// then the highest node id.
-    #[yare::parameterized(
-        higher_log_end_offset_beats_lower_id = {
-            vec![behind(view(2, "b", true), 90, 0), view(3, "b", true)],
-            3,
-        },
-        higher_log_end_offset_beats_lower_lag_time = {
-            vec![
-                behind(view(2, "b", true), 95, 5_000),
-                behind(view(3, "b", true), 90, 0),
-            ],
-            2,
-        },
-        shorter_caught_up_time_breaks_log_end_tie = {
-            vec![
-                behind(view(2, "b", true), 100, 5_000),
-                behind(view(3, "b", true), 100, 100),
-            ],
-            3,
-        },
-        never_caught_up_loses_log_end_tie = {
-            vec![
-                ReplicaView {
-                    time_since_caught_up: Duration::MAX,
-                    ..view(2, "b", true)
-                },
-                behind(view(3, "b", true), 100, 60_000),
-            ],
-            3,
-        },
-        higher_id_breaks_full_tie = {
-            vec![view(2, "b", true), view(4, "b", true), view(3, "b", true)],
-            4,
-        },
-        out_of_sync_follower_is_not_a_candidate = {
-            vec![behind(view(2, "b", false), 999, 0), view(3, "b", true)],
-            3,
-        },
-    )]
-    fn rack_aware_picks_the_most_caught_up_same_rack_follower(
-        followers: Vec<ReplicaView>,
-        want: i32,
-    ) {
-        // Node 1 leads in rack "a"; the client is in rack "b".
-        let mut replicas = vec![view(1, "a", true)];
-        replicas.extend(followers);
-        let got = ReplicaSelectorKind::RackAware.select(Some("b"), 1, &replicas);
-        assert2::assert!(got == want, "got {got}, want {want}");
+    #[rstest::fixture]
+    fn read_replica() -> ReadReplicaSelection {
+        ReadReplicaSelection {
+            leader: -1,
+            replicas: Vec::new(),
+            preferred: Given::new(
+                "preferred",
+                "When a consumer in rack <rack> fetches through the <selector> selector",
+            ),
+        }
     }
+
+    impl ReadReplicaSelection {
+        fn select(&mut self, selector: ReplicaSelectorKind, client_rack: Option<&str>) {
+            let preferred = selector.select(client_rack, self.leader, &self.replicas);
+            self.preferred.set(preferred);
+        }
+    }
+
+    #[krabka_bdd::given("the partition led by node {leader} has these replicas")]
+    fn partition_replicas(
+        read_replica: &mut ReadReplicaSelection,
+        leader: i32,
+        datatable: Vec<Vec<String>>,
+    ) {
+        let rows: Vec<Replica> = table::rows(&datatable).expect("replica table");
+        read_replica.leader = leader;
+        read_replica.replicas = rows.into_iter().map(ReplicaView::from).collect();
+    }
+
+    #[krabka_bdd::when("a consumer in rack {rack} fetches through the {selector} selector")]
+    fn fetch_from_rack(read_replica: &mut ReadReplicaSelection, rack: String, selector: Selector) {
+        read_replica.select(selector.into(), Some(&rack));
+    }
+
+    #[krabka_bdd::when("a consumer that sends no rack fetches through the rack-aware selector")]
+    fn fetch_without_rack(read_replica: &mut ReadReplicaSelection) {
+        read_replica.select(ReplicaSelectorKind::RackAware, None);
+    }
+
+    #[krabka_bdd::when(
+        "a consumer that sends an empty rack fetches through the rack-aware selector"
+    )]
+    fn fetch_with_empty_rack(read_replica: &mut ReadReplicaSelection) {
+        read_replica.select(ReplicaSelectorKind::RackAware, Some(""));
+    }
+
+    #[krabka_bdd::then("the fetch prefers node {node}")]
+    fn prefers_node(read_replica: &ReadReplicaSelection, node: i32) {
+        assert!(*read_replica.preferred.get() == node);
+    }
+
+    #[krabka_bdd::then("the fetch names no preferred read replica")]
+    fn no_preferred_replica(read_replica: &ReadReplicaSelection) {
+        assert!(*read_replica.preferred.get() == -1);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/replica_selector",
+        fixtures = [read_replica: ReadReplicaSelection],
+    );
 }

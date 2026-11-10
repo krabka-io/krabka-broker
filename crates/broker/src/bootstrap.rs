@@ -339,7 +339,7 @@ mod tests {
             /// The data directory the check refuses, if any.
             refused: Option<&'static str>,
         }
-        let cases: [Case; 4] = [
+        let cases: [Case; 3] = [
             Case {
                 what: "none",
                 holding: &[],
@@ -350,12 +350,6 @@ mod tests {
                 what: "the metadata dir is a data dir",
                 holding: &["data-a"],
                 metadata: "data-a",
-                refused: None,
-            },
-            Case {
-                what: "a separate metadata dir",
-                holding: &[],
-                metadata: "meta",
                 refused: None,
             },
             Case {

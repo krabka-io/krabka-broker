@@ -37,51 +37,93 @@ pub fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::test_support::single_partition_topic, assert2::assert,
+        super::*, crate::test_support::single_partition_topic, assert2::assert, krabka_bdd::Given,
         krabka_metadata::MetadataRecord,
     };
 
-    fn image_with(name: &str, id: uuid::Uuid) -> MetadataImage {
-        let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1Topic(single_partition_topic(name, id)));
-        img
+    /// The error code a scenario expects a request to fail with.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum ErrorCode {
+        #[step_param("UNKNOWN_TOPIC_ID")]
+        UnknownTopicId,
+        #[step_param("INCONSISTENT_TOPIC_ID")]
+        InconsistentTopicId,
+        #[step_param("UNKNOWN_TOPIC_OR_PARTITION")]
+        UnknownTopicOrPartition,
     }
 
-    #[test]
-    fn resolves_by_id() {
-        let id = uuid::Uuid::from_u128(7);
-        let img = image_with("t", id);
-        let r = resolve(&img, "", WireUuid(id.into_bytes())).unwrap();
-        assert!(r.name == "t");
+    impl ErrorCode {
+        const fn code(self) -> i16 {
+            match self {
+                Self::UnknownTopicId => codes::UNKNOWN_TOPIC_ID,
+                Self::InconsistentTopicId => codes::INCONSISTENT_TOPIC_ID,
+                Self::UnknownTopicOrPartition => codes::UNKNOWN_TOPIC_OR_PARTITION,
+            }
+        }
     }
 
-    #[test]
-    fn unknown_id_is_unknown_topic_id() {
-        let img = image_with("t", uuid::Uuid::from_u128(7));
-        let err = resolve(&img, "", WireUuid(uuid::Uuid::from_u128(99).into_bytes())).unwrap_err();
-        assert!(err == codes::UNKNOWN_TOPIC_ID);
+    /// The cluster's image and what one request resolved against it: the
+    /// resolved topic's name, or the error code.
+    struct TopicResolution {
+        image: MetadataImage,
+        resolved: Given<Result<String, i16>>,
     }
 
-    #[test]
-    fn mismatched_name_and_id_is_inconsistent() {
-        let id = uuid::Uuid::from_u128(7);
-        let img = image_with("t", id);
-        // id resolves to "t" but the request also names "other".
-        let err = resolve(&img, "other", WireUuid(id.into_bytes())).unwrap_err();
-        assert!(err == codes::INCONSISTENT_TOPIC_ID);
+    #[rstest::fixture]
+    fn topic_resolution() -> TopicResolution {
+        TopicResolution {
+            image: MetadataImage::new(uuid::Uuid::nil()),
+            resolved: Given::new(
+                "resolved",
+                "When a request resolves topic id <id> without a name",
+            ),
+        }
     }
 
-    #[test]
-    fn name_only_resolves() {
-        let img = image_with("t", uuid::Uuid::from_u128(7));
-        let r = resolve(&img, "t", WireUuid::ZERO).unwrap();
-        assert!(r.name == "t");
+    impl TopicResolution {
+        fn resolve(&mut self, name: &str, id: WireUuid) {
+            let resolved = resolve(&self.image, name, id).map(|topic| topic.name.clone());
+            self.resolved.set(resolved);
+        }
     }
 
-    #[test]
-    fn unknown_name_is_unknown_topic_or_partition() {
-        let img = image_with("t", uuid::Uuid::from_u128(7));
-        let err = resolve(&img, "missing", WireUuid::ZERO).unwrap_err();
-        assert!(err == codes::UNKNOWN_TOPIC_OR_PARTITION);
+    fn wire_id(id: u128) -> WireUuid { WireUuid(uuid::Uuid::from_u128(id).into_bytes()) }
+
+    #[krabka_bdd::given("the cluster holds topic {name} with id {id}")]
+    fn cluster_topic(topic_resolution: &mut TopicResolution, name: String, id: u128) {
+        let topic = single_partition_topic(&name, uuid::Uuid::from_u128(id));
+        topic_resolution
+            .image
+            .apply(&MetadataRecord::V1Topic(topic));
     }
+
+    #[krabka_bdd::when("a request resolves topic id {id} without a name")]
+    fn resolve_by_id(topic_resolution: &mut TopicResolution, id: u128) {
+        topic_resolution.resolve("", wire_id(id));
+    }
+
+    #[krabka_bdd::when("a request resolves topic id {id} named {name}")]
+    fn resolve_by_id_and_name(topic_resolution: &mut TopicResolution, id: u128, name: String) {
+        topic_resolution.resolve(&name, wire_id(id));
+    }
+
+    #[krabka_bdd::when("a request resolves topic name {name} without an id")]
+    fn resolve_by_name(topic_resolution: &mut TopicResolution, name: String) {
+        topic_resolution.resolve(&name, WireUuid::ZERO);
+    }
+
+    #[krabka_bdd::then("the request resolves to topic {name}")]
+    fn resolved_to(topic_resolution: &TopicResolution, name: String) {
+        assert!(*topic_resolution.resolved.get() == Ok(name));
+    }
+
+    #[krabka_bdd::then("the request fails with {error}")]
+    fn failed_with(topic_resolution: &TopicResolution, error: ErrorCode) {
+        assert!(*topic_resolution.resolved.get() == Err(error.code()));
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/topic_resolve",
+        fixtures = [topic_resolution: TopicResolution],
+    );
 }
