@@ -200,7 +200,6 @@ crates/broker/tests/features/handler_offset_deletion_rows/rows.feature	case-colu
 crates/broker/tests/features/handler_produce_ack_completion.feature	case-column	the Examples table starts with column `isr`, not `case`	1
 crates/broker/tests/features/handler_produce_transaction_errors.feature	case-column	the Examples table starts with column `answer`, not `case`	1
 crates/broker/tests/features/handler_produce_transaction_errors.feature	quote-in-step	step `the Produce row has code <code> and message "<message>"` quotes a value	1
-crates/broker/tests/features/handler_push_telemetry/payload.feature	case-column	the Examples table starts with column `unstable`, not `case`	1
 crates/broker/tests/features/handler_replica_log_destination.feature	case-column	the Examples table starts with column `destination`, not `case`	1
 crates/broker/tests/features/handler_share_heartbeat/heartbeat.feature	case-column	the Examples table starts with column `epoch`, not `case`	1
 crates/broker/tests/features/handler_share_heartbeat/heartbeat.feature	case-column	the Examples table starts with column `field`, not `case`	1
@@ -273,7 +272,6 @@ crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-i
 crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-in-step	step `the client pushes at 400000 milliseconds with {"id_xor":0,"compression_supported":true,"payload_len":10,"terminating":false}` quotes a value	1
 crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-in-step	step `the client pushes at 61000 milliseconds with {"id_xor":21845,"compression_supported":true,"payload_len":10,"terminating":false}` quotes a value	1
 crates/broker/tests/features/migrated/src/client_metrics/manager.feature	quote-in-step	step `the client pushes at 62000 milliseconds with {"id_xor":0,"compression_supported":true,"payload_len":10,"terminating":false}` quotes a value	1
-crates/broker/tests/features/migrated/src/client_metrics/manager/subscription.feature	case-column	the Examples table starts with column `input`, not `case`	1
 crates/broker/tests/features/migrated/src/cluster_id.feature	case-column	the Examples table starts with column `requested`, not `case`	1
 crates/broker/tests/features/migrated/src/config/offset_retention.feature	or-in-step	step `the operator has not overridden offset retention or its sweep interval` offers alternatives with `or`	1
 crates/broker/tests/features/migrated/src/config/scalar_checks/tests.feature	case-column	the Examples table starts with column `setting`, not `case`	1
@@ -467,7 +465,6 @@ crates/broker/tests/features/migrated/src/file_config/runtime_config/tests/origi
 crates/broker/tests/features/migrated/src/file_config/runtime_coordinators.feature	quote-in-step	step `the Streams rack tags are exactly ["zone", "rack"]` quotes a value	2
 crates/broker/tests/features/migrated/src/file_config/runtime_coordinators.feature	quote-in-step	step `the Streams rack tags are exactly ["zone"]` quotes a value	1
 crates/broker/tests/features/migrated/src/file_config/runtime_storage.feature	case-column	the Examples table starts with column `value`, not `case`	2
-crates/broker/tests/features/migrated/src/freeze/mod.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
 crates/broker/tests/features/migrated/src/freeze/signing/tests/canonical_bytes.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature	case-column	the Examples table starts with column `pattern`, not `case`	1
 crates/broker/tests/features/migrated/src/handlers/acl_wire/binding_filter/tests.feature	no-background	the feature has a `Background`	1
