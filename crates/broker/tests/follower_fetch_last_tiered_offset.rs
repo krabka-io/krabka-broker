@@ -50,6 +50,7 @@ use {
         },
     },
     assert2::{assert, check},
+    futures_util::FutureExt as _,
     krabka_broker::{BrokerHandle, metrics::PartitionLabel},
     krabka_client_admin::{
         AdminClient, AdminClientLike as _, CreateTopicSpec, TopicMutationOptions,
@@ -60,6 +61,7 @@ use {
     },
     std::{
         collections::BTreeMap,
+        panic::{AssertUnwindSafe, resume_unwind},
         path::Path,
         sync::Arc,
         time::{Duration, Instant},
@@ -118,29 +120,69 @@ async fn create_tiered_topic(
     topic: &str,
     local_retention: u64,
 ) {
+    let configs = BTreeMap::from([
+        ("remote.storage.enable".into(), "true".into()),
+        ("local.retention.bytes".into(), local_retention.to_string()),
+        ("retention.bytes".into(), "-1".into()),
+        ("retention.ms".into(), "-1".into()),
+    ]);
     let response = admin
         .create_topics(
             &[CreateTopicSpec::builder()
                 .name(topic)
-                .configs(BTreeMap::from([
-                    ("remote.storage.enable".into(), "true".into()),
-                    ("local.retention.bytes".into(), local_retention.to_string()),
-                    ("retention.bytes".into(), "-1".into()),
-                    ("retention.ms".into(), "-1".into()),
-                ]))
+                .configs(configs.clone())
                 .replica_assignments(BTreeMap::from([(0, vec![1])]))
                 .build()],
             TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )
         .await
         .expect("CreateTopics");
+    // The admin retries a lost response, even if its first create committed.
+    // An existing topic is usable only once its complete setup matches.
     assert!(
-        response[0].error.is_none(),
+        response[0]
+            .error
+            .as_ref()
+            .is_none_or(|error| error.code == 36),
         "CreateTopics failed: {response:?}"
     );
     leader
-        .wait_for_image(|img| img.partition(topic, 0).is_some())
+        .wait_for_image(|img| {
+            img.topic_partition_count(topic) == 1
+                && img
+                    .partition(topic, 0)
+                    .is_some_and(|partition| partition.replicas == [krabka_raft::NodeId(1)])
+                && img.topic_config(topic) == Some(&configs)
+        })
         .await;
+}
+
+/// A retried create can find the topic committed by its first attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tiered_topic_setup_accepts_an_existing_matching_topic() {
+    let cluster = start_tiered_cluster_with([krabka_units::kibibytes(1); 3], |_, config| {
+        config.heartbeat_timeout = krabka_units::secs(30);
+    })
+    .await;
+    let [b1, b2, b3] = &cluster.brokers;
+    let ready = ready_admin([b1, b2, b3], "kip1023-topic-setup").await;
+    let mut admin = AdminClient::connect(&[b1.listen_addr().to_string()])
+        .await
+        .expect("topic admin client");
+    let result = AssertUnwindSafe(async {
+        create_tiered_topic(&mut admin, b1, "kip1023-retried-topic-setup", 4096).await;
+        create_tiered_topic(&mut admin, b1, "kip1023-retried-topic-setup", 4096).await;
+    })
+    .catch_unwind()
+    .await;
+    drop(admin);
+    drop(ready);
+    for broker in cluster.brokers {
+        broker.shutdown().await;
+    }
+    if let Err(panic) = result {
+        resume_unwind(panic);
+    }
 }
 
 /// The leader's answer to `ListOffsets(EARLIEST_PENDING_UPLOAD_TIMESTAMP)`.
