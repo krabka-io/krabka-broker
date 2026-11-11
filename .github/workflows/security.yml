@@ -1,8 +1,6 @@
 name: security
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:

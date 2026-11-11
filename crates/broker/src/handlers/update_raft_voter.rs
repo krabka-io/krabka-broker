@@ -224,17 +224,6 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
-    async fn handle_rejects_negative_voter_id_before_reconfig() {
-        let version = 0;
-        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
-        let request = stamp_request(&broker, request(-7));
-        let resp = answer(&broker, version, &request, &ctx).await;
-
-        assert!(resp.error_code == codes::INVALID_REQUEST);
-        broker_handle.shutdown().await;
-    }
-
     #[derive(Default)]
     struct UpdateVoterScenario {
         started: Option<StartedBroker>,
@@ -264,6 +253,10 @@ mod tests {
         let mut req = request(2);
         req.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         req.current_leader_epoch = voter_update.epoch;
+        // The range covers the cluster's kraft.version, so an unmalformed request
+        // passes every check and reaches the voter lookup: each refusal comes
+        // from the field its row malforms.
+        req.k_raft_version_feature.min_supported_version = 0;
         voter_update.request = Some(req);
         voter_update.started = Some(started);
     }
@@ -280,6 +273,14 @@ mod tests {
                 req.k_raft_version_feature.min_supported_version = 2;
             }
             "only a PLAINTEXT listener" => req.listeners[0].name = "PLAINTEXT".into(),
+            "a negative kraft.version minimum" => {
+                req.k_raft_version_feature.min_supported_version = -1;
+            }
+            // The cluster runs kraft.version 0, which a 1-1 range leaves out.
+            "a range that misses the cluster's kraft.version" => {
+                req.k_raft_version_feature.min_supported_version = 1;
+            }
+            "a negative voter ID" => req.voter_id = -7,
             _ => panic!("unknown voter malformation: {malformation}"),
         }
     }
@@ -330,14 +331,11 @@ mod tests {
     async fn handle_accepts_a_request_that_names_no_cluster() {
         let version = 0;
         allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
-        let mut named = request(2);
+        let mut named = stamp_request(&broker, request(2));
         // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
         // against the cluster's before it looks the voter up, so the range
         // covers the cluster's version for the lookup to be reached.
         named.k_raft_version_feature.min_supported_version = 0;
-        named.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
-        named.current_leader_epoch =
-            i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
         let mut anonymous = named.clone();
         anonymous.cluster_id = None;
 
@@ -484,20 +482,5 @@ mod tests {
             );
             broker_handle.shutdown().await;
         }
-    }
-
-    #[tokio::test]
-    async fn handle_reports_reconfig_error_from_controller() {
-        let version = 0;
-        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
-        let mut request = request(2);
-        // The range covers the cluster's kraft.version, so Kafka's handler
-        // reaches the voter lookup.
-        request.k_raft_version_feature.min_supported_version = 0;
-        let request = stamp_request(&broker, request);
-        let resp = answer(&broker, version, &request, &ctx).await;
-
-        assert!(resp.error_code == codes::VOTER_NOT_FOUND);
-        broker_handle.shutdown().await;
     }
 }

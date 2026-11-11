@@ -14,13 +14,17 @@ use {
         time_util::now_ms,
     },
     assert2::{assert, check},
+    krabka_bdd::{Given, given, then, when},
     krabka_ids::LeaderEpoch,
     krabka_remote_storage::{
         CustomMetadata, LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
         RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
     },
     krabka_units::{bytes, hours, millis},
-    std::sync::{Arc, atomic::Ordering},
+    std::{
+        str::FromStr,
+        sync::{Arc, atomic::Ordering},
+    },
     uuid::Uuid,
 };
 
@@ -123,20 +127,6 @@ fn the_archive_enforces_a_floor_nothing_finished_lies_below(floor: i64, enforced
     assert2::assert!(archive_enforces_floor(&segments, Offset(floor)) == enforced);
 }
 
-#[test]
-fn remote_retention_eviction_set_returns_empty_when_no_segments() {
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &[],
-        Some(millis(1)),
-        Some(bytes(1)),
-        None,
-        10_000,
-        NO_BYTES,
-    );
-    assert!(out.is_empty());
-}
-
 #[tokio::test]
 async fn scheduled_remote_retention_checks_stored_activation_before_size_eviction() {
     let local = tempfile::tempdir().unwrap();
@@ -215,32 +205,6 @@ async fn scheduled_remote_retention_holds_unreadable_activation_evidence() {
     check!(rsm_impl.deletes_attempted.load(Ordering::Relaxed) == 0);
 }
 
-/// Kafka's `buildRetentionSizeData` counts the local bytes the remote tier
-/// does not hold yet (`onlyLocalLogSegmentsSize`) toward `retention.bytes`,
-/// so they push the oldest remote segment out. Two 100-byte remote segments
-/// under a 200-byte budget.
-#[yare::parameterized(
-    nothing_local = { 0, 0 },
-    below_segment_size = { 99, 0 },
-    one_segment_size = { 100, 1 },
-)]
-fn local_bytes_not_yet_copied_count_toward_the_remote_size_budget(only_local: u32, deleted: usize) {
-    let segments = vec![
-        synth_remote_md(10, 0, 9, 0, 100),
-        synth_remote_md(11, 10, 19, 0, 100),
-    ];
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &segments,
-        None,
-        Some(bytes(200)),
-        None,
-        10_000,
-        bytes(only_local),
-    );
-    check!(out.len() == deleted);
-}
-
 /// Kafka's `onlyLocalLogSegmentsSize`: a local segment counts when its base
 /// offset is above `highestOffsetInRemoteStorage`, and the active segment,
 /// never copied, always counts. Sealed segments at 0 and 10 of 30 bytes each,
@@ -306,134 +270,6 @@ fn time_window_evictions(
         10_000,
         NO_BYTES,
     )
-}
-
-#[test]
-fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window() {
-    let segs = retention_segments([100, 200, 9_500]);
-    // now=10_000, retention=500ms → seg with max_ts < 9_500 is deletable.
-    // seg0 (100) + seg1 (200) qualify; seg2 (9_500) stops the walk.
-    let out = time_window_evictions(&segs, None);
-    assert!(out.len() == 2);
-    check!(out[0].start_offset() == 0);
-    check!(out[1].start_offset() == 10);
-}
-
-/// Kafka's `isSegmentBreachedByRetentionSize` deletes a segment only while
-/// the bytes over `retention.bytes` still cover the whole segment. Three
-/// 100-byte segments make 300 bytes in total.
-#[test]
-fn remote_retention_eviction_set_size_based_deletes_only_what_the_debt_covers() {
-    let segs = retention_segments([100, 200, 300]);
-    let cases = [
-        ("150 over deletes one, not two", Some(bytes(150)), 1),
-        ("200 over deletes two", Some(bytes(100)), 2),
-        ("250 over deletes two, not three", Some(bytes(50)), 2),
-        ("50 over deletes nothing", Some(bytes(250)), 0),
-        ("300 over deletes all three", Some(bytes(0)), 3),
-        ("under budget deletes nothing", Some(bytes(10_000)), 0),
-    ];
-    for (name, budget, expected_len) in cases {
-        let out = remote_retention_eviction_set(
-            ArchiveMode::Mutable.into(),
-            &segs,
-            None,
-            budget,
-            None,
-            1_000,
-            NO_BYTES,
-        );
-        check!(out.len() == expected_len, "{name}");
-    }
-}
-
-#[test]
-fn remote_retention_eviction_set_equal_size_budget_keeps_all_segments() {
-    let segs = vec![synth_remote_md(10, 0, 9, 100, 100)];
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &segs,
-        None,
-        Some(bytes(100)),
-        None,
-        1_000,
-        NO_BYTES,
-    );
-    assert!(out.is_empty());
-}
-
-#[test]
-fn remote_retention_eviction_set_time_and_size_take_union_of_either() {
-    let segs = retention_segments([100, 200, 5_000]);
-    // Time-window: seg0+seg1 qualify (max_ts<500). Budget very generous
-    // so size-based evicts nothing. Result is the time-window prefix.
-    let out = remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &segs,
-        Some(millis(500)),
-        Some(bytes(10_000)),
-        None,
-        1_000,
-        NO_BYTES,
-    );
-    assert!(out.len() == 2);
-}
-
-/// Kafka's `isSegmentBreachedByRetentionTime` charges a time-expired segment
-/// against the size debt, so the size axis sees the bytes the time axis
-/// already reclaimed. The oldest segment is past a 500 ms window and the two
-/// after it are inside it. Three 100-byte segments make 300 bytes in total.
-#[test]
-fn a_time_deletion_is_charged_against_the_size_debt() {
-    let segs = retention_segments([100, 9_900, 9_900]);
-    let cases = [
-        ("150 over: time takes 100, 50 cannot cover the next", 150, 1),
-        ("200 over: time takes 100, size takes the next", 100, 2),
-        ("50 over: time alone, the debt floors at zero", 250, 1),
-    ];
-    for (name, budget, expected_len) in cases {
-        let out = remote_retention_eviction_set(
-            ArchiveMode::Mutable.into(),
-            &segs,
-            Some(millis(500)),
-            Some(bytes(budget)),
-            None,
-            10_000,
-            NO_BYTES,
-        );
-        check!(out.len() == expected_len, "{name}");
-    }
-}
-
-#[test]
-fn remote_retention_eviction_set_none_settings_disable_axis() {
-    let segs = vec![synth_remote_md(10, 0, 9, 100, 100)];
-    // No time or size → no eviction.
-    assert!(
-        remote_retention_eviction_set(
-            ArchiveMode::Mutable.into(),
-            &segs,
-            None,
-            None,
-            None,
-            10_000,
-            NO_BYTES
-        )
-        .is_empty()
-    );
-}
-
-#[test]
-fn remote_retention_eviction_set_walk_stops_at_first_non_deletable() {
-    let segs = vec![
-        synth_remote_md(10, 0, 9, 100, 100),     // deletable by time
-        synth_remote_md(11, 10, 19, 9_500, 100), // in window → stops walk
-        synth_remote_md(12, 20, 29, 200, 100),   // also deletable by time, but
-                                                 // walk stopped at seg1 already.
-    ];
-    let out = time_window_evictions(&segs, None);
-    assert!(out.len() == 1);
-    assert!(out[0].start_offset() == 0);
 }
 
 #[tokio::test]
@@ -1305,62 +1141,136 @@ async fn a_retention_pass_leaves_a_stuck_copy_whose_upload_still_runs() {
     check!(segment_states(&rlmm).is_empty());
 }
 
-#[derive(Default)]
-struct RemoteTimeRetention {
-    segments: Vec<RemoteLogSegmentMetadata>,
-    retention: Option<Time>,
-    evicted: Option<Vec<RemoteLogSegmentMetadata>>,
+/// A `,`-separated list of numbers, or `no segment` for an empty one.
+#[derive(Debug, PartialEq, Eq)]
+struct Numbers(Vec<i64>);
+
+impl FromStr for Numbers {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "no segment" => Ok(Self(Vec::new())),
+            list => list
+                .split(',')
+                .map(|value| value.trim().parse().map_err(|e| format!("{value}: {e}")))
+                .collect::<Result<_, String>>()
+                .map(Self),
+        }
+    }
+}
+
+/// A topic's `retention.ms` and `retention.bytes`, such as `500 ms, 150 bytes`,
+/// or `no limit` for neither.
+#[derive(Debug, Default)]
+struct RemoteLimits {
+    time: Option<Time>,
+    size: Option<ByteSize>,
+}
+
+impl FromStr for RemoteLimits {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let mut limits = Self::default();
+        if text == "no limit" {
+            return Ok(limits);
+        }
+        for limit in text.split(',') {
+            let (amount, unit) = limit
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| format!("{limit}: not `<amount> <unit>`"))?;
+            let amount: u32 = amount.parse().map_err(|e| format!("{limit}: {e}"))?;
+            match unit {
+                "ms" => limits.time = Some(millis(amount)),
+                "byte" | "bytes" => limits.size = Some(bytes(amount)),
+                _ => return Err(format!("{limit}: unknown unit {unit}")),
+            }
+        }
+        Ok(limits)
+    }
+}
+
+struct RemoteRetentionScenario {
+    segments: Given<Vec<RemoteLogSegmentMetadata>>,
+    limits: Given<RemoteLimits>,
+    /// The local bytes the tier does not hold yet; none unless a step says so.
+    only_local: ByteSize,
+    /// The start offsets of the segments the pass deletes.
+    deleted: Given<Vec<i64>>,
 }
 
 #[rstest::fixture]
-fn remote_time_retention() -> RemoteTimeRetention {
-    // The retention window and metadata segment belong to an independent pass.
-    RemoteTimeRetention::default()
+fn remote_retention() -> RemoteRetentionScenario {
+    RemoteRetentionScenario {
+        segments: Given::new(
+            "segments",
+            "Given finished remote segments of 100 bytes with maximum timestamps <timestamps>",
+        ),
+        limits: Given::new("limits", "And the remote retention limits are <limits>"),
+        only_local: NO_BYTES,
+        deleted: Given::new(
+            "deleted",
+            "When retention evaluates the mutable archive at millisecond 10000",
+        ),
+    }
 }
 
-#[rstest_bdd_macros::given(
-    "remote segment 10 covers offsets 0 through 9, has 100 bytes and maximum timestamp {timestamp}"
-)]
-fn supplied_remote_time_segment(remote_time_retention: &mut RemoteTimeRetention, timestamp: i64) {
-    remote_time_retention.segments = vec![synth_remote_md(10, 0, 9, timestamp, 100)];
-}
-
-#[rstest_bdd_macros::given("remote time retention is {milliseconds} milliseconds")]
-fn supplied_remote_time_retention(
-    remote_time_retention: &mut RemoteTimeRetention,
-    milliseconds: u32,
-) {
-    remote_time_retention.retention = Some(millis(milliseconds));
-}
-
-#[rstest_bdd_macros::when(
-    "mutable archive retention is evaluated at millisecond 10000 without size or deletion-floor pressure"
-)]
-fn evaluate_remote_time_retention(remote_time_retention: &mut RemoteTimeRetention) {
-    remote_time_retention.evicted = Some(remote_retention_eviction_set(
-        ArchiveMode::Mutable.into(),
-        &remote_time_retention.segments,
-        remote_time_retention.retention,
-        None,
-        None,
-        10000,
-        NO_BYTES,
-    ));
-}
-
-#[rstest_bdd_macros::then("the remote retention eviction set contains {count} segments")]
-fn expected_remote_time_retention(remote_time_retention: &RemoteTimeRetention, count: usize) {
-    check!(
-        remote_time_retention
-            .evicted
-            .as_ref()
-            .expect("retention was evaluated")
-            .len()
-            == count
+/// Segment `i` covers offsets `10 * i` through `10 * i + 9`.
+#[given("finished remote segments of 100 bytes with maximum timestamps {timestamps}")]
+fn finished_remote_segments(remote_retention: &mut RemoteRetentionScenario, timestamps: Numbers) {
+    remote_retention.segments.set(
+        (0_i64..)
+            .zip(timestamps.0)
+            .map(|(index, timestamp)| {
+                let start = index * 10;
+                synth_remote_md(
+                    u128::try_from(index).expect("a small index") + 10,
+                    start,
+                    start + 9,
+                    timestamp,
+                    100,
+                )
+            })
+            .collect(),
     );
 }
 
-rstest_bdd_macros::scenarios!(
-    "tests/features/migrated/src/remote_log_manager/remote_retention/tests.feature",
-    fixtures = [remote_time_retention: RemoteTimeRetention]
+#[given("the remote retention limits are {limits}")]
+fn remote_retention_limits(remote_retention: &mut RemoteRetentionScenario, limits: RemoteLimits) {
+    remote_retention.limits.set(limits);
+}
+
+#[given("the local log holds {local} bytes the tier does not hold yet")]
+fn only_local_bytes(remote_retention: &mut RemoteRetentionScenario, local: u32) {
+    remote_retention.only_local = bytes(local);
+}
+
+#[when("retention evaluates the mutable archive at millisecond 10000")]
+fn evaluate_remote_retention(remote_retention: &mut RemoteRetentionScenario) {
+    let limits = remote_retention.limits.get();
+    let deleted = remote_retention_eviction_set(
+        ArchiveMode::Mutable.into(),
+        remote_retention.segments.get(),
+        limits.time,
+        limits.size,
+        None,
+        10_000,
+        remote_retention.only_local,
+    )
+    .iter()
+    .map(RemoteLogSegmentMetadata::start_offset)
+    .collect();
+    remote_retention.deleted.set(deleted);
+}
+
+#[then("retention deletes the segments starting at {starts}")]
+fn deleted_remote_segments(remote_retention: &RemoteRetentionScenario, starts: Numbers) {
+    assert!(*remote_retention.deleted.get() == starts.0);
+}
+
+krabka_bdd::scenarios!(
+    "tests/features/migrated/src/remote_log_manager/remote_retention",
+    fixtures = [remote_retention: RemoteRetentionScenario],
 );

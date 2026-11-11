@@ -508,6 +508,9 @@ pub(super) fn authenticate_with_reauth(
 }
 
 #[cfg(test)]
+mod gate_steps;
+
+#[cfg(test)]
 mod tests {
     use {
         super::*,
@@ -519,71 +522,6 @@ mod tests {
         assert2::{assert, check},
         std::mem,
     };
-
-    /// The request gate follows Kafka's `SaslServerAuthenticator`: before a
-    /// handshake only `SaslHandshake` and `ApiVersions`; after one only
-    /// `SaslAuthenticate`; after a re-authentication mechanism switch
-    /// nothing.
-    #[test]
-    fn request_gate_follows_the_sasl_server_states() {
-        fn negotiating() -> ConnectionAuth {
-            ConnectionAuth::Negotiating {
-                mechanism: SaslMechanism::Plain,
-                exchange: SaslExchange::Plain,
-                pending_token_expiry_ms: None,
-            }
-        }
-        fn reauthenticating() -> ConnectionAuth {
-            ConnectionAuth::Reauthenticating {
-                previous: AuthenticatedSnapshot {
-                    principal: sasl_principal("alice"),
-                    mechanism: SaslMechanism::Plain,
-                    expires_at_ms: Some(1),
-                    authenticated_via_token: false,
-                },
-                exchange: SaslExchange::Plain,
-                pending_token_expiry_ms: None,
-            }
-        }
-        /// A state and whether it admits each of `SaslHandshake`, `ApiVersions`,
-        /// `SaslAuthenticate`, `Produce` and `Metadata`.
-        struct GateCase<'a> {
-            name: &'a str,
-            auth: ConnectionAuth,
-            expected: [bool; 5],
-        }
-        let cases: [GateCase; 4] = [
-            GateCase {
-                name: "anonymous",
-                auth: ConnectionAuth::Anonymous,
-                expected: [true, true, false, false, false],
-            },
-            GateCase {
-                name: "negotiating",
-                auth: negotiating(),
-                expected: [false, false, true, false, false],
-            },
-            GateCase {
-                name: "reauthenticating",
-                auth: reauthenticating(),
-                expected: [false, false, true, false, false],
-            },
-            GateCase {
-                name: "reauth bad mechanism",
-                auth: ConnectionAuth::ReauthBadMechanism,
-                expected: [false; 5],
-            },
-        ];
-        for GateCase {
-            name,
-            auth,
-            expected,
-        } in cases
-        {
-            let got = [17, 18, 36, 0, 3].map(|api_key| auth.allows_request(api_key));
-            assert!(got == expected, "{name}");
-        }
-    }
 
     #[test]
     fn unauthenticated_states_have_no_principal() {
@@ -603,94 +541,6 @@ mod tests {
         for (name, a) in cases {
             assert!(!a.is_authenticated(), "{name}");
             assert!(a.principal().is_none(), "{name}");
-        }
-    }
-
-    #[test]
-    fn token_api_admission_maps_connection_auth_states_exactly() {
-        use krabka_security::AuthMethod;
-
-        let apis = [
-            TokenApi::Create,
-            TokenApi::Renew,
-            TokenApi::Expire,
-            TokenApi::Describe,
-        ];
-        let authenticated =
-            |auth_method, mechanism, authenticated_via_token| ConnectionAuth::Authenticated {
-                principal: Principal {
-                    name: "alice".into(),
-                    auth_method,
-                    groups: vec![],
-                },
-                mechanism,
-                expires_at_ms: None,
-                authenticated_via_token,
-            };
-
-        let rejected = [
-            ("anonymous state", ConnectionAuth::Anonymous),
-            ("negotiating state", ConnectionAuth::Negotiating {
-                mechanism: SaslMechanism::Plain,
-                exchange: SaslExchange::Plain,
-                pending_token_expiry_ms: None,
-            }),
-            ("reauthenticating state", ConnectionAuth::Reauthenticating {
-                previous: AuthenticatedSnapshot {
-                    principal: Principal {
-                        name: "alice".into(),
-                        auth_method: AuthMethod::SaslOAuthBearer,
-                        groups: vec![],
-                    },
-                    mechanism: SaslMechanism::OAuthBearer,
-                    expires_at_ms: Some(2_000_000),
-                    authenticated_via_token: false,
-                },
-                exchange: SaslExchange::OAuthBearer,
-                pending_token_expiry_ms: None,
-            }),
-            (
-                "authenticated anonymous principal",
-                authenticated(AuthMethod::Anonymous, SaslMechanism::Plain, false),
-            ),
-        ];
-        for (state, auth) in rejected {
-            for api in apis {
-                check!(
-                    auth.token_api_admission(api) == TokenApiAdmission::Reject,
-                    "{state}: {api:?}"
-                );
-            }
-        }
-
-        for (method, mechanism) in [
-            (AuthMethod::SaslPlain, SaslMechanism::Plain),
-            (AuthMethod::SaslScramSha256, SaslMechanism::ScramSha256),
-            (AuthMethod::SaslScramSha512, SaslMechanism::ScramSha512),
-            (AuthMethod::SaslOAuthBearer, SaslMechanism::OAuthBearer),
-            (AuthMethod::SaslGssapi, SaslMechanism::Gssapi),
-            (AuthMethod::MTls, SaslMechanism::Plain),
-        ] {
-            let auth = authenticated(method, mechanism, false);
-            for api in apis {
-                check!(auth.token_api_admission(api) == TokenApiAdmission::Allow);
-            }
-        }
-
-        // KafkaApis.allowTokenRequests refuses every delegation-token API,
-        // Describe included, to a token-authenticated caller: a session
-        // minted from one token must not be able to describe (and so leak
-        // the HMACs of) any token at all, including its own.
-        let token_auth = authenticated(
-            AuthMethod::SaslScramSha256,
-            SaslMechanism::ScramSha256,
-            true,
-        );
-        for api in apis {
-            check!(
-                token_auth.token_api_admission(api) == TokenApiAdmission::Reject,
-                "{api:?}"
-            );
         }
     }
 
@@ -735,34 +585,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allows_request_during_reauthenticating_only_sasl_authenticate() {
-        let auth = oauth_reauthenticating("alice", 2_000_000);
-        let cases = [
-            (36, true),  // SaslAuthenticate
-            (17, false), // SaslHandshake
-            (18, false), // ApiVersions
-            (3, false),  // Metadata
-        ];
-        for (api_key, allowed) in cases {
-            assert!(auth.allows_request(api_key) == allowed, "api key {api_key}");
-        }
-    }
-
-    #[test]
-    fn allows_request_authenticated_allows_all() {
-        let auth = authenticated(
-            "alice",
-            krabka_security::AuthMethod::SaslScramSha512,
-            SaslMechanism::ScramSha512,
-            None,
-            false,
-        );
-        for api_key in [0, 3, 17, 36] {
-            assert!(auth.allows_request(api_key), "api key {api_key}");
-        }
-    }
-
     /// KIP-368: the deadline ends a connection only through a request, and
     /// never through a `SaslHandshake` that begins a re-authentication. That
     /// is what lets a client whose window has already closed start its
@@ -774,27 +596,19 @@ mod tests {
     #[test]
     fn an_expired_session_admits_a_re_authentication_and_nothing_else() {
         let now_ms = 1_000_i64;
-        let expired = authenticated(
-            "alice",
-            krabka_security::AuthMethod::SaslScramSha512,
-            SaslMechanism::ScramSha512,
-            Some(now_ms - 1),
-            false,
-        );
-        let live = authenticated(
-            "alice",
-            krabka_security::AuthMethod::SaslScramSha512,
-            SaslMechanism::ScramSha512,
-            Some(now_ms + 1),
-            false,
-        );
-        let uncapped = authenticated(
-            "alice",
-            krabka_security::AuthMethod::SaslScramSha512,
-            SaslMechanism::ScramSha512,
-            None,
-            false,
-        );
+        let scram_session = |expires_at_ms| {
+            authenticated(
+                "alice",
+                AuthMethod::SaslScramSha512,
+                SaslMechanism::ScramSha512,
+                expires_at_ms,
+                false,
+            )
+        };
+        let expired = scram_session(Some(now_ms - 1));
+        let at_deadline = scram_session(Some(now_ms));
+        let live = scram_session(Some(now_ms + 1));
+        let uncapped = scram_session(None);
         let reauthenticating = ConnectionAuth::Reauthenticating {
             previous: AuthenticatedSnapshot {
                 principal: Principal {
@@ -842,6 +656,13 @@ mod tests {
             ("expired: Produce closes", &expired, 0, None, true),
             ("expired: Metadata closes", &expired, 3, None, true),
             ("expired: ApiVersions closes", &expired, 18, None, true),
+            (
+                "a session at its deadline serves Produce",
+                &at_deadline,
+                0,
+                None,
+                false,
+            ),
             ("live session serves Produce", &live, 0, None, false),
             (
                 "live: a SaslAuthenticate reaches its handler",
@@ -876,73 +697,6 @@ mod tests {
         for (case, auth, api_key, last_reauth_start_ms, want) in cases {
             check!(
                 auth.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
-                "{case}"
-            );
-        }
-    }
-
-    /// KIP-368: Kafka's `KafkaChannel.serverAuthenticationSessionExpired`
-    /// expires a session only strictly after its deadline, so a request at
-    /// exactly `expires_at_ms` is still served and one a millisecond later
-    /// closes the connection.
-    #[test]
-    fn a_session_expires_strictly_after_its_deadline() {
-        let deadline_ms = 1_000_i64;
-        let session = authenticated(
-            "alice",
-            krabka_security::AuthMethod::SaslScramSha512,
-            SaslMechanism::ScramSha512,
-            Some(deadline_ms),
-            false,
-        );
-        let cases = [
-            (
-                "Produce before the deadline",
-                0,
-                deadline_ms - 1,
-                None,
-                false,
-            ),
-            ("Produce at the deadline", 0, deadline_ms, None, false),
-            (
-                "Produce a ms after the deadline",
-                0,
-                deadline_ms + 1,
-                None,
-                true,
-            ),
-            (
-                "SaslAuthenticate at the deadline",
-                36,
-                deadline_ms,
-                None,
-                false,
-            ),
-            (
-                "SaslAuthenticate a ms after the deadline",
-                36,
-                deadline_ms + 1,
-                None,
-                true,
-            ),
-            (
-                "a SaslHandshake inside the interval at the deadline",
-                17,
-                deadline_ms,
-                Some(deadline_ms - 1),
-                false,
-            ),
-            (
-                "a SaslHandshake inside the interval a ms after the deadline",
-                17,
-                deadline_ms + 1,
-                Some(deadline_ms),
-                true,
-            ),
-        ];
-        for (case, api_key, now_ms, last_reauth_start_ms, want) in cases {
-            check!(
-                session.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
                 "{case}"
             );
         }

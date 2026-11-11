@@ -212,57 +212,6 @@ mod tests {
     use {super::*, assert2::check};
 
     #[yare::parameterized(
-        literal = { "literal", 3_i8, Some(PatternType::Literal) },
-        prefixed = { "prefixed", 4, Some(PatternType::Prefixed) },
-        unknown = { "unknown", 0, None },
-        any = { "any", 1, None },
-        match_pattern = { "match", 2, None },
-        unrecognized = { "a byte no build knows", 9, None },
-        negative = { "a negative byte", -1, None },
-    )]
-    fn a_concrete_pattern_type_byte_names_one_pattern_type(
-        label: &str,
-        byte: i8,
-        expected: Option<PatternType>,
-    ) {
-        check!(pattern_type_concrete(byte) == expected, "{label}");
-    }
-
-    #[test]
-    fn a_filter_byte_selects_the_entries_it_names() {
-        for (label, byte, expected) in [
-            (
-                "any reads every entry",
-                1_i8,
-                FreezeFilter::EveryPatternType,
-            ),
-            (
-                "unknown reads every entry",
-                0,
-                FreezeFilter::EveryPatternType,
-            ),
-            (
-                "literal reads literal entries",
-                3,
-                FreezeFilter::One(PatternType::Literal),
-            ),
-            (
-                "prefixed reads prefixed entries",
-                4,
-                FreezeFilter::One(PatternType::Prefixed),
-            ),
-            (
-                "a byte no build knows reads nothing",
-                9,
-                FreezeFilter::Nothing,
-            ),
-            ("a negative byte reads nothing", -1, FreezeFilter::Nothing),
-        ] {
-            check!(pattern_type_filter(byte) == expected, "{label}");
-        }
-    }
-
-    #[yare::parameterized(
         every_literal = {
             "every pattern type takes a literal entry",
             FreezeFilter::EveryPatternType,

@@ -102,6 +102,7 @@ mod tests {
             txn::marker::{MarkerType, build_marker_batch},
         },
         assert2::assert,
+        krabka_bdd::Given,
     };
 
     fn sample() -> BarrierMarker {
@@ -142,76 +143,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_marker_is_a_control_batch_and_not_transactional() {
-        let built = batch();
-        assert!(built.attributes.is_control_batch());
-        assert!(!built.attributes.is_transactional());
+    /// The batch header fields that mark a batch as Kafka control traffic that
+    /// no producer or transaction owns.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ControlIdentity {
+        control: bool,
+        transactional: bool,
+        producer_id: i64,
+        producer_epoch: i16,
+        base_sequence: i32,
     }
 
-    /// The log keeps a barrier marker out of its producer and transaction
-    /// bookkeeping by these three values, and compaction keeps the marker
-    /// because the producer is not transactional.
-    #[test]
-    fn a_marker_carries_no_producer_identity() {
-        let built = batch();
-        assert!(built.producer_id == -1);
-        assert!(built.producer_epoch == -1);
-        assert!(built.base_sequence == -1);
+    /// Where a batch sits in the log, how many records it holds, and its time.
+    #[derive(Debug, PartialEq, Eq)]
+    struct BatchPlacement {
+        records: usize,
+        last_offset_delta: i32,
+        base_offset: i64,
+        partition_leader_epoch: i32,
+        base_timestamp: i64,
+        max_timestamp: i64,
     }
 
-    #[test]
-    fn a_marker_holds_exactly_one_record() {
-        let built = batch();
-        assert!(built.records.len() == 1);
-        assert!(built.last_offset_delta == 0);
-    }
-
-    #[test]
-    fn a_marker_carries_the_supplied_offset_and_leader_epoch() {
-        let built = batch();
-        assert!(built.base_offset == 42);
-        assert!(built.partition_leader_epoch == 3);
-    }
-
-    /// A zero timestamp would look older than the Unix epoch to time-based
-    /// retention, and the marker's segment could age out at once.
-    #[test]
-    fn a_marker_is_stamped_with_its_trigger_time() {
-        let built = batch();
-        assert!(built.base_timestamp == 1_724_500_000_000);
-        assert!(built.max_timestamp == 1_724_500_000_000);
-    }
-
-    #[derive(Default)]
+    /// One scenario's barrier marker and the control batch built from it.
     struct BarrierControlRecord {
-        marker: Option<BarrierMarker>,
-        batch: Option<RecordBatch>,
+        marker: Given<BarrierMarker>,
+        batch: Given<RecordBatch>,
     }
 
     #[rstest::fixture]
     fn barrier_control_record() -> BarrierControlRecord {
-        // Building one control record cannot reuse a previous marker batch.
-        BarrierControlRecord::default()
+        BarrierControlRecord {
+            marker: Given::new(
+                "marker",
+                "Given barrier group <group> at epoch <epoch> was triggered at <timestamp>",
+            ),
+            batch: Given::new(
+                "batch",
+                "When the barrier control batch is built at offset <offset> in leader epoch <epoch>",
+            ),
+        }
     }
 
-    #[rstest_bdd_macros::given(
-        "barrier group {group} at epoch {epoch} was triggered at {timestamp}"
-    )]
+    #[krabka_bdd::given("barrier group {group} at epoch {epoch} was triggered at {timestamp}")]
     fn supplied_barrier_marker(
         barrier_control_record: &mut BarrierControlRecord,
         group: String,
         epoch: i64,
         timestamp: i64,
     ) {
-        barrier_control_record.marker = Some(BarrierMarker {
+        barrier_control_record.marker.set(BarrierMarker {
             group,
             epoch,
             triggered_at: timestamp,
         });
     }
 
-    #[rstest_bdd_macros::when(
+    #[krabka_bdd::when(
         "the barrier control batch is built at offset {offset} in leader epoch {epoch}"
     )]
     fn build_supplied_barrier(
@@ -219,33 +207,73 @@ mod tests {
         offset: i64,
         epoch: i32,
     ) {
-        barrier_control_record.batch = Some(
-            build_barrier_batch(
-                barrier_control_record
-                    .marker
-                    .as_ref()
-                    .expect("barrier was given"),
-                Offset(offset),
-                epoch,
-            )
-            .expect("valid marker builds"),
+        let batch = build_barrier_batch(barrier_control_record.marker.get(), Offset(offset), epoch)
+            .expect("valid marker builds");
+        barrier_control_record.batch.set(batch);
+    }
+
+    #[krabka_bdd::then("the batch is a non-transactional control batch with no producer identity")]
+    fn barrier_control_identity(barrier_control_record: &BarrierControlRecord) {
+        let batch = barrier_control_record.batch.get();
+        let identity = ControlIdentity {
+            control: batch.attributes.is_control_batch(),
+            transactional: batch.attributes.is_transactional(),
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+        };
+        assert!(
+            identity
+                == ControlIdentity {
+                    control: true,
+                    transactional: false,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    base_sequence: -1,
+                }
         );
     }
 
-    #[rstest_bdd_macros::then(
-        "the control record key contains Kafka version 0 and barrier type 1000"
+    #[krabka_bdd::then(
+        "the batch holds one record at offset {offset} in leader epoch {epoch} stamped at {timestamp}"
     )]
+    fn barrier_batch_placement(
+        barrier_control_record: &BarrierControlRecord,
+        offset: i64,
+        epoch: i32,
+        timestamp: i64,
+    ) {
+        let batch = barrier_control_record.batch.get();
+        let placement = BatchPlacement {
+            records: batch.records.len(),
+            last_offset_delta: batch.last_offset_delta,
+            base_offset: batch.base_offset,
+            partition_leader_epoch: batch.partition_leader_epoch,
+            base_timestamp: batch.base_timestamp,
+            max_timestamp: batch.max_timestamp,
+        };
+        assert!(
+            placement
+                == BatchPlacement {
+                    records: 1,
+                    last_offset_delta: 0,
+                    base_offset: offset,
+                    partition_leader_epoch: epoch,
+                    base_timestamp: timestamp,
+                    max_timestamp: timestamp,
+                }
+        );
+    }
+
+    #[krabka_bdd::then("the control record key is Kafka key version 0 with barrier type 1000")]
     fn barrier_control_key_layout(barrier_control_record: &BarrierControlRecord) {
-        let batch = barrier_control_record
-            .batch
-            .as_ref()
-            .expect("control batch was built");
+        let batch = barrier_control_record.batch.get();
         let key = batch.records[0].key.as_ref().expect("marker has a key");
         assert!(&key[..] == &[0, 0, 3, 232]);
     }
 
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/barrier/marker.feature",
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/barrier",
         fixtures = [barrier_control_record: BarrierControlRecord]
     );
 

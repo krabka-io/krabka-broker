@@ -268,7 +268,9 @@ mod tests {
             ConfigEntry, apply_config, attrs, img_with,
         },
         assert2::{assert, check},
+        krabka_bdd::Given,
         krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
+        std::{convert::Infallible, str::FromStr},
         uuid::Uuid,
     };
 
@@ -336,134 +338,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_subscription_means_no_metrics() {
-        let img = MetadataImage::new(Uuid::nil());
-        let m = compute_subscription(&img, &attrs());
-        assert!(m.metrics.is_empty());
-        check!(m.push_interval_ms == 300_000);
-    }
-
-    #[test]
-    fn match_all_empty_match_applies() {
-        let img = img_with("all", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "*",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: "60000",
-            },
-        ]);
-        let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["*".to_owned()]);
-        check!(m.push_interval_ms == 60_000);
-    }
-
-    #[test]
-    fn selector_filters_clients() {
-        let img = img_with("java-only", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "a.",
-            },
-            ConfigEntry {
-                key: "match",
-                value: "client_software_name=apache-kafka-java",
-            },
-        ]);
-        let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["a.".to_owned()]);
-
-        let img2 = img_with("py-only", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "a.",
-            },
-            ConfigEntry {
-                key: "match",
-                value: "client_software_name=kafka-python",
-            },
-        ]);
-        let m2 = compute_subscription(&img2, &attrs());
-        assert!(
-            m2.metrics.is_empty(),
-            "java client must not match python selector"
-        );
-    }
-
-    #[test]
-    fn min_interval_and_metric_union_across_subs() {
-        let mut img = img_with("s1", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "a.",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: "60000",
-            },
-        ]);
-        apply_config(&mut img, "s2", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "b.",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: "30000",
-            },
-        ]);
-        let m = compute_subscription(&img, &attrs());
-        let mut got = m.metrics.clone();
-        got.sort();
-        check!(got == vec!["a.".to_owned(), "b.".to_owned()]);
-        check!(m.push_interval_ms == 30_000);
-    }
-
-    #[test]
-    fn an_empty_metrics_list_collects_nothing() {
-        // KIP-714: `*` is the value that means every metric. An empty list
-        // names no prefix, so it contributes nothing to the client's set --
-        // `apache/kafka:4.3.1` builds the same set by adding each matching
-        // subscription's metrics, and an empty one adds none. The registry
-        // row documents the key that way.
-        let img = img_with("empty", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: "60000",
-            },
-        ]);
-        let m = compute_subscription(&img, &attrs());
-        assert!(m.metrics.is_empty());
-
-        let unset = img_with("unset", &[ConfigEntry {
-            key: "interval.ms",
-            value: "60000",
-        }]);
-        let m2 = compute_subscription(&unset, &attrs());
-        assert!(m2.metrics.is_empty());
-    }
-
-    #[test]
-    fn star_collapses_union() {
-        let mut img = img_with("s1", &[ConfigEntry {
-            key: "metrics",
-            value: "a.",
-        }]);
-        apply_config(&mut img, "s2", &[ConfigEntry {
-            key: "metrics",
-            value: "*",
-        }]);
-        let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["*".to_owned()]);
-    }
-
     /// The id is pinned: brokers of two versions in one cluster must hand a
     /// client the same id for the same subscription, so the CRC-32C
     /// implementation behind it must not change the value.
@@ -521,34 +395,6 @@ mod tests {
         let mut metrics = computed.metrics;
         metrics.sort();
         check!(metrics == ["a.", "c."]);
-    }
-
-    /// A subscription whose `match` does not compile matches no client and
-    /// does not lower the interval, before and after it is cached.
-    #[test]
-    fn an_unparsable_match_matches_no_client() {
-        let img = img_with("bad", &[
-            ConfigEntry {
-                key: "metrics",
-                value: "*",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: "1000",
-            },
-            ConfigEntry {
-                key: "match",
-                value: "client_id=(",
-            },
-        ]);
-        let subscriptions = Subscriptions::from_image(&img);
-        check!(
-            subscriptions.compute(&attrs(), config::INTERVAL_MS_DEFAULT)
-                == Ok(ComputedSubscription {
-                    metrics: vec![],
-                    push_interval_ms: config::INTERVAL_MS_DEFAULT,
-                })
-        );
     }
 
     /// A selector that runs the matcher past its backtrack limit fails the
@@ -629,79 +475,192 @@ mod tests {
         };
         check!(id1 != subscription_id(&s3, a.client_instance_id));
     }
-    type MetricsSubscriptionConfig = (String, Vec<(String, String)>);
 
-    #[derive(serde::Deserialize)]
-    struct SubscriptionInput {
-        subscriptions: Vec<MetricsSubscriptionConfig>,
-        client_id: String,
-        software_name: String,
+    /// A comma-separated list of metric prefixes, as a scenario writes the
+    /// metrics a client receives.
+    struct MetricPrefixes(Vec<String>);
+
+    impl FromStr for MetricPrefixes {
+        type Err = Infallible;
+
+        fn from_str(text: &str) -> Result<Self, Self::Err> {
+            Ok(Self(text.split(", ").map(String::from).collect()))
+        }
     }
-    #[derive(Default)]
+
+    /// The client-metrics subscriptions a scenario configures, by name, and
+    /// what the broker computes for the client.
     struct MetricsSubscription {
-        image: Option<MetadataImage>,
-        client: Option<ClientAttributes>,
-        computed: Option<ComputedSubscription>,
+        subscriptions: BTreeMap<String, BTreeMap<String, String>>,
+        computed: Given<ComputedSubscription>,
     }
+
+    impl MetricsSubscription {
+        fn configure(&mut self, name: String, key: &str, value: impl Into<String>) {
+            self.subscriptions
+                .entry(name)
+                .or_default()
+                .insert(key.to_owned(), value.into());
+        }
+
+        /// Computes the subscription the configured subscriptions give
+        /// `client`.
+        fn compute_for(&mut self, client: &ClientAttributes) {
+            let mut image = MetadataImage::new(Uuid::nil());
+            for (name, configs) in &self.subscriptions {
+                image.apply(&MetadataRecord::V1ClientMetricsConfig(
+                    ClientMetricsConfigRecord {
+                        name: name.clone(),
+                        configs: configs.clone(),
+                    },
+                ));
+            }
+            self.computed.set(compute_subscription(&image, client));
+        }
+
+        /// What the client receives, its metrics sorted: the image keeps the
+        /// subscriptions in no defined order, as Kafka's map does, so the
+        /// union has none either.
+        fn received(&self) -> ComputedSubscription {
+            let mut received = self.computed.get().clone();
+            received.metrics.sort();
+            received
+        }
+    }
+
     #[rstest::fixture]
     fn metrics_subscription() -> MetricsSubscription {
-        // No metadata or compiled subscription is shared between clients.
-        MetricsSubscription::default()
-    }
-    #[rstest_bdd_macros::given("client metrics subscriptions and client attributes {input}")]
-    fn subscription_metadata(metrics_subscription: &mut MetricsSubscription, input: String) {
-        let input: SubscriptionInput = serde_json::from_str(&input).expect("subscription inputs");
-        let mut image = MetadataImage::new(Uuid::nil());
-        for (name, configs) in input.subscriptions {
-            image.apply(&MetadataRecord::V1ClientMetricsConfig(
-                ClientMetricsConfigRecord {
-                    name,
-                    configs: configs.into_iter().collect(),
-                },
-            ));
+        MetricsSubscription {
+            subscriptions: BTreeMap::new(),
+            computed: Given::new(
+                "computed",
+                "When client <client> running <software> asks for its metrics subscription",
+            ),
         }
-        metrics_subscription.image = Some(image);
-        metrics_subscription.client = Some(ClientAttributes {
-            client_id: input.client_id,
-            software_name: input.software_name,
-            ..attrs()
-        });
     }
-    #[rstest_bdd_macros::when("the broker computes the client's metrics subscription")]
-    fn compute_client_subscription(metrics_subscription: &mut MetricsSubscription) {
-        metrics_subscription.computed = Some(compute_subscription(
-            metrics_subscription
-                .image
-                .as_ref()
-                .expect("subscription metadata"),
-            metrics_subscription
-                .client
-                .as_ref()
-                .expect("client attributes"),
-        ));
+
+    #[krabka_bdd::given("a subscription {name} selects metrics {metrics}")]
+    fn subscription_selects(
+        metrics_subscription: &mut MetricsSubscription,
+        name: String,
+        metrics: String,
+    ) {
+        metrics_subscription.configure(name, config::KEY_METRICS, metrics);
     }
-    #[rstest_bdd_macros::then(
-        "the client receives metrics {metrics} at interval {interval} milliseconds"
+
+    #[krabka_bdd::given(
+        "a subscription {name} pushes metrics {metrics} every {interval} milliseconds"
     )]
-    fn client_subscription(
-        metrics_subscription: &MetricsSubscription,
+    fn subscription_pushes(
+        metrics_subscription: &mut MetricsSubscription,
+        name: String,
         metrics: String,
         interval: i32,
     ) {
-        let metrics: Vec<String> = serde_json::from_str(&metrics).expect("expected metrics");
+        metrics_subscription.configure(name.clone(), config::KEY_METRICS, metrics);
+        metrics_subscription.configure(name, config::KEY_INTERVAL_MS, interval.to_string());
+    }
+
+    #[krabka_bdd::given(
+        "a subscription {name} pushes an empty metrics list every {interval} milliseconds"
+    )]
+    fn subscription_pushes_nothing(
+        metrics_subscription: &mut MetricsSubscription,
+        name: String,
+        interval: i32,
+    ) {
+        subscription_pushes(metrics_subscription, name, String::new(), interval);
+    }
+
+    #[krabka_bdd::given(
+        "a subscription {name} sets only a push interval of {interval} milliseconds"
+    )]
+    fn subscription_sets_interval(
+        metrics_subscription: &mut MetricsSubscription,
+        name: String,
+        interval: i32,
+    ) {
+        metrics_subscription.configure(name, config::KEY_INTERVAL_MS, interval.to_string());
+    }
+
+    #[krabka_bdd::given("the subscription {name} matches clients by {selector}")]
+    fn subscription_matches(
+        metrics_subscription: &mut MetricsSubscription,
+        name: String,
+        selector: String,
+    ) {
+        metrics_subscription.configure(name, config::KEY_MATCH, selector);
+    }
+
+    #[krabka_bdd::when("client {client} running {software} asks for its metrics subscription")]
+    fn client_asks(
+        metrics_subscription: &mut MetricsSubscription,
+        client: String,
+        software: String,
+    ) {
+        metrics_subscription.compute_for(&ClientAttributes {
+            client_id: client,
+            software_name: software,
+            ..attrs()
+        });
+    }
+
+    /// A client attribute that a `match` selector names, by Kafka's key.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum ClientAttribute {
+        #[step_param("client_software_version")]
+        SoftwareVersion,
+        #[step_param("client_source_address")]
+        SourceAddress,
+        #[step_param("client_source_port")]
+        SourcePort,
+    }
+
+    #[krabka_bdd::when("a client with {attribute} {value} asks for its metrics subscription")]
+    fn client_with_attribute_asks(
+        metrics_subscription: &mut MetricsSubscription,
+        attribute: ClientAttribute,
+        value: String,
+    ) {
+        let mut client = attrs();
+        match attribute {
+            ClientAttribute::SoftwareVersion => client.software_version = value,
+            ClientAttribute::SourceAddress => client.source_address = value,
+            ClientAttribute::SourcePort => {
+                client.source_port = value.parse().expect("a source port is a number");
+            }
+        }
+        metrics_subscription.compute_for(&client);
+    }
+
+    #[krabka_bdd::then("the client receives metrics {metrics} every {interval} milliseconds")]
+    fn client_receives(
+        metrics_subscription: &MetricsSubscription,
+        metrics: MetricPrefixes,
+        interval: i32,
+    ) {
         assert!(
-            metrics_subscription
-                .computed
-                .as_ref()
-                .expect("computed subscription")
-                == &ComputedSubscription {
-                    metrics,
+            metrics_subscription.received()
+                == ComputedSubscription {
+                    metrics: metrics.0,
                     push_interval_ms: interval,
                 }
         );
     }
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/client_metrics/manager/subscription.feature",
+
+    #[krabka_bdd::then("the client receives no metrics every {interval} milliseconds")]
+    fn client_receives_nothing(metrics_subscription: &MetricsSubscription, interval: i32) {
+        assert!(
+            metrics_subscription.received()
+                == ComputedSubscription {
+                    metrics: Vec::new(),
+                    push_interval_ms: interval,
+                }
+        );
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/client_metrics/manager",
         fixtures = [metrics_subscription: MetricsSubscription],
     );
 }

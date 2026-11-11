@@ -1,8 +1,10 @@
 //! Tests for the approve/withdraw decision.
 //!
-//! These cover the list an approval appends to and the three checks that keep
-//! the rule a two-person rule. The child modules cover the proposal
-//! lifecycle, the operator signature, and the counts one request reports.
+//! These cover the record a first approval builds. The order approvals keep,
+//! and the three checks that keep the rule a two-person rule, are checked over
+//! the wire, in `tests/features/migrated/tests/break_glass/two_person_rule.feature`.
+//! The child modules cover the proposal lifecycle, the operator signature, and
+//! the counts one request reports.
 
 use {
     super::*,
@@ -10,7 +12,7 @@ use {
         break_glass::gate::tests::{NOW_MS, approval, config, proposal},
         operator_keys::OperatorKeys,
     },
-    assert2::{assert, check},
+    assert2::check,
     krabka_metadata::{BreakGlassAction, BreakGlassApproval, BreakGlassProposalRecord},
 };
 
@@ -62,68 +64,6 @@ fn a_second_principal_adds_an_approval_to_the_list() {
         ..stored
     };
     check!(updated == expected);
-}
-
-#[test]
-fn an_approval_appends_to_the_list_it_found() {
-    let config = config();
-    let policy = BreakGlassPolicy::new(&config);
-    let stored = approved_by_bob();
-
-    let updated = decide(
-        policy,
-        &OperatorKeys::default(),
-        &stored,
-        &attempt("User:carol"),
-    )
-    .expect("a third principal may approve");
-
-    let names: Vec<&str> = updated
-        .approvals
-        .iter()
-        .map(|a| a.principal.as_str())
-        .collect();
-    check!(names == ["User:bob", "User:carol"]);
-}
-
-#[test]
-fn the_three_checks_that_make_it_a_two_person_rule() {
-    let config = config();
-    let policy = BreakGlassPolicy::new(&config);
-    let with_bob = BreakGlassProposalRecord {
-        approvals: vec![approval("User:bob")],
-        ..pending()
-    };
-    let cases = [
-        (
-            "the proposer approves their own proposal",
-            pending(),
-            "User:alice",
-            codes::BREAK_GLASS_DUPLICATE_APPROVER,
-        ),
-        (
-            "an approver approves twice",
-            with_bob,
-            "User:bob",
-            codes::BREAK_GLASS_DUPLICATE_APPROVER,
-        ),
-        (
-            "a principal outside the set approves",
-            pending(),
-            "User:mallory",
-            codes::BREAK_GLASS_NOT_AN_APPROVER,
-        ),
-    ];
-    for (label, stored, principal, expected) in cases {
-        let outcome = decide(
-            policy,
-            &OperatorKeys::default(),
-            &stored,
-            &attempt(principal),
-        );
-        assert!(let Err(refusal) = outcome, "case {label}");
-        check!(refusal.code == expected, "case {label}");
-    }
 }
 
 // ── the proposal lifecycle ───────────────────────────────────────

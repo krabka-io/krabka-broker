@@ -190,6 +190,8 @@ BDD loop in that guide: formulate the scenario, see it fail, then make it pass. 
 are the pinned stable toolchain, `cargo +nightly fmt`, forbidden `unsafe`, and
 `clippy::pedantic`.
 
+The [BDD observation guide](docs/style_guides/bdd_style_guide.md) supplements the Gherkin guide with typed results, independent expected values, read-only waits, and simulation limits. Use `krabka_bdd::scenarios!` for new and migrated features. Keep the trigger in When and compare observations in Then; follow the Gherkin guide for prerequisite context and journeys.
+
 Do not make style-only sweeps across untouched files. Bring a file into line
 with the guides only when you already edit it. Keep the tidy-up proportionate to
 the change.

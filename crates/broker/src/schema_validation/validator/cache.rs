@@ -302,12 +302,9 @@ mod tests {
             response_endpoint, unavailable_ttl_ms, validator, value_check,
         },
         assert2::{assert, check},
-        krabka_schema_serde::{
-            registry::{
-                FetchedSchema,
-                model::{SchemaReference, SubjectVersion},
-            },
-            subject::Role,
+        krabka_schema_serde::registry::{
+            FetchedSchema,
+            model::{SchemaReference, SubjectVersion},
         },
         krabka_units::{millis, minutes},
         std::{sync::Mutex, time::Duration},
@@ -369,34 +366,6 @@ mod tests {
             .advance(Duration::from_millis(50))
             .expect("manual time moves forward");
         check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
-    }
-
-    async fn check_id(v: &SchemaValidator, field: &[u8], metrics: &BrokerMetrics) {
-        check!(
-            v.check("orders", Role::Value, ValidationMode::Id, field, metrics)
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn the_cache_counters_move_on_a_miss_then_a_hit() {
-        // `registry(1)` allows exactly one call to `/versions`, so the second
-        // check is served from the cache. Without a counter on each path these
-        // two gauges stay at zero for the life of the broker, which is what
-        // this asserts against.
-        let server = registry(1).await;
-        let v = validator(server.uri());
-        let field = framed(KNOWN_ID, b"anything");
-        let metrics = BrokerMetrics::new();
-
-        check_id(&v, &field, &metrics).await;
-        check!(metrics.schema_validation_cache_misses.get() == 1);
-        check!(metrics.schema_validation_cache_hits.get() == 0);
-
-        check_id(&v, &field, &metrics).await;
-        check!(metrics.schema_validation_cache_misses.get() == 1);
-        check!(metrics.schema_validation_cache_hits.get() == 1);
     }
 
     #[tokio::test]

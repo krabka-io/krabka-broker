@@ -1,13 +1,14 @@
 //! Tests for the operator-signature gate.
 //!
-//! A thaw needs a signature whatever `freeze.require_signature` says, a freeze
-//! needs one when that setting is on, and a signature the request carries is
-//! verified whether or not the action needed it.
+//! A freeze needs a signature when `freeze.require_signature` is on, and a
+//! signature the request carries is verified whether or not the action needed
+//! it. That a thaw needs one whatever the setting says is checked over the
+//! wire, in `tests/features/migrated/tests/topic_freeze/operator_signature.feature`.
 
 use {
     super::{
         super::checks::{FreezeEnv, check_signature, is_signed, prepare, record_of},
-        ALICE, ALICE_KEY, ALICE_NAME, AliceKeyConfiguration, PROPOSAL, alice_key_configuration,
+        ALICE, ALICE_KEY, ALICE_NAME, AliceKeyConfiguration, alice_key_configuration,
         freeze_fixture, freeze_request, image, sign, with_alice_freeze_env,
     },
     crate::{
@@ -20,10 +21,7 @@ use {
     },
     assert2::check,
     krabka_metadata::{PatternType, TopicFreezeRecord},
-    krabka_protocol::{
-        krabka::freeze::{PATTERN_TYPE_LITERAL, SetTopicFreezeRequest},
-        primitives::uuid::Uuid as ProtocolUuid,
-    },
+    krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -157,43 +155,6 @@ fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature
         );
         let outcome = check_signature(&env, &record, None);
         check_signature_outcome(outcome, expected, label);
-    }
-}
-
-#[test]
-fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
-    let AliceKeyConfiguration {
-        dir: _dir,
-        config: base,
-        ..
-    } = alice_key_configuration();
-    let fixture = freeze_fixture(image(&[("orders", PatternType::Literal)]));
-    let ctx = fixture.context();
-
-    for requirement in [
-        SignatureRequirement::Optional,
-        SignatureRequirement::Required,
-    ] {
-        let config = signature_requirement(&base, requirement);
-        let env = FreezeEnv {
-            config: &config,
-            image: &fixture.image,
-            ctx: &ctx,
-        };
-        let record = record_of(
-            &SetTopicFreezeRequest {
-                frozen: false,
-                proposal_id: ProtocolUuid(PROPOSAL.into_bytes()),
-                ..freeze_request("orders", PATTERN_TYPE_LITERAL)
-            },
-            PatternType::Literal,
-            ALICE,
-        );
-        let outcome = check_signature(&env, &record, None);
-        check!(
-            outcome.err().map(|r| r.code) == Some(codes::OPERATOR_SIGNATURE_REQUIRED),
-            "signature requirement = {requirement:?}"
-        );
     }
 }
 

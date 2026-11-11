@@ -287,24 +287,10 @@ mod tests {
 
         // `start_broker` self-registers as broker 1 with a dynamic
         // 127.0.0.1 host/port, so the broker list is compared by content
-        // (as `broker_endpoint_response_preserves_non_default_fields` does)
         // rather than as a whole struct against a literal.
         check_cluster_data(&broker, &resp);
         assert!(resp.brokers.len() == 2);
         broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn broker_endpoint_response_preserves_non_default_fields() {
-        let (broker_handle, broker) = seeded_broker(Arc::new(AllowAllAuthorizer)).await;
-        admin_request_identity!(ctx);
-
-        let resp = handle(&broker, request(false), VERSION, &ctx)
-            .await
-            .expect("handle");
-
-        check_cluster_data(&broker, &resp);
-        broker_handle.broker.shutdown().await;
     }
 
     #[derive(Default)]
@@ -444,7 +430,7 @@ mod tests {
 
     /// KIP-430: the bitfield is filled only when the request opts in. Without
     /// the flag the field keeps the `i32::MIN` "not present" sentinel, which
-    /// `broker_endpoint_response_preserves_non_default_fields` pins; with it,
+    /// `a_principal_without_describe_still_gets_full_cluster_data` pins; with it,
     /// the response carries the operations the principal actually holds on the
     /// singleton `Cluster` resource.
     #[tokio::test]

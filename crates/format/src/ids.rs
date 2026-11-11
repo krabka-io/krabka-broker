@@ -430,9 +430,14 @@ mod tests {
     }
     #[rstest_bdd_macros::then("all generated UUIDs avoid their reserved values and leading dashes")]
     fn generated_uuid_rules(uuid_rules: &UuidRulesScenario) {
-        check!(uuid_rules.plain.len() == 5000);
-        check!(uuid_rules.clusters.len() == 500);
-        check!(uuid_rules.directories.len() == 500);
+        let (plain_count, wrapper_count) = uuid_rules.sample_sizes;
+        check!(
+            (
+                uuid_rules.plain.len(),
+                uuid_rules.clusters.len(),
+                uuid_rules.directories.len()
+            ) == (plain_count, wrapper_count, wrapper_count)
+        );
         for plain in &uuid_rules.plain {
             check!(!is_reserved(*plain));
             check!(!encode(*plain).starts_with('-'));

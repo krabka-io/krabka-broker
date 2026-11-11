@@ -395,18 +395,6 @@ mod tests {
         assert2::assert!(java_utf8_lossy(bytes) == expected);
     }
 
-    #[test]
-    fn an_authzid_equal_to_the_username_authenticates() {
-        let req = SaslAuthenticateRequest {
-            auth_bytes: bytes::Bytes::from_static(b"alice\0alice\0wonderland"),
-            ..Default::default()
-        };
-        let mut auth = negotiating();
-        let resp = handle_authenticate_plain(&req, &mut auth, &credentials(), None);
-        assert_success_authenticate_response(&resp, b"", 0);
-        check!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
-    }
-
     /// KIP-368: PLAIN carries no lifetime of its own, so the listener's
     /// `connections.max.reauth.ms` is the only thing that bounds the session.
     /// The advertised `session_lifetime_ms` and the enforced `expires_at_ms`

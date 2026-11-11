@@ -10,6 +10,7 @@ Krabka writes prose in plain, direct technical English. The [prose style guide](
 | :--- | :--- |
 | [Prose Style](prose_style_guide.md) | Plain technical English: one term per concept, active voice, `must` against `should`, and what is exempt. |
 | [Code Style](code_style_guide.md) | General Rust conventions: toolchain, formatting, linting, naming, imports, error handling, wire-format safety, async, tests. |
+| [BDD Observations](bdd_style_guide.md) | Typed results, independent expected values, async observations, simulation limits, and wrapper execution. Supplements the Gherkin guide. |
 | [Rustdoc](rustdoc_style_guide.md) | Doc-comment conventions for the public API. |
 | [README](readme_style_guide.md) | Per-crate `README.md` structure and content. |
 | [Design Docs](design_doc_style_guide.md) | Architectural design documents: the "why". |

@@ -154,7 +154,12 @@ pub fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::codes::UNSUPPORTED_VERSION, assert2::assert};
+    use {
+        super::*,
+        crate::codes::UNSUPPORTED_VERSION,
+        assert2::assert,
+        std::{num::ParseIntError, str::FromStr},
+    };
 
     fn image_with_finalized_level(
         feature: &str,
@@ -172,51 +177,139 @@ mod tests {
         image
     }
 
-    #[test]
-    fn feature_enabled_treats_absence_as_disabled() {
-        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        assert!(!feature_enabled(&image, "group.version", 1)); // absent → disabled
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: "group.version".into(),
-            level: 1,
-        }));
-        assert!(feature_enabled(&image, "group.version", 1)); // present at 1 → enabled
+    /// The level a scenario finalizes a feature at, or `none` for an image
+    /// that finalizes no level of it.
+    #[derive(Debug, Clone, Copy)]
+    struct FinalizedLevel(Option<i16>);
+
+    impl FromStr for FinalizedLevel {
+        type Err = ParseIntError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            if value == "none" {
+                Ok(Self(None))
+            } else {
+                value.parse().map(|level| Self(Some(level)))
+            }
+        }
     }
 
-    /// Kafka enables share groups at share.version 1 and the DLQ at 2.
-    #[yare::parameterized(
-        unfinalized = { None, false, false },
-        level_zero = { Some(0), false, false },
-        level_one = { Some(1), true, false },
-        level_two = { Some(2), true, true },
-    )]
-    fn share_group_and_dlq_gates_follow_the_finalized_share_version(
-        finalized: Option<i16>,
-        groups: bool,
-        dlq: bool,
-    ) {
-        let image = image_with_finalized_level(SHARE_VERSION, finalized);
-        assert2::assert!(share_groups_enabled(&image) == groups, "{finalized:?}");
-        assert2::assert!(share_dlq_supported(&image) == dlq, "{finalized:?}");
+    /// The share-group gates that are open: KIP-932's share groups and
+    /// KIP-1191's dead-letter queue.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum ShareGates {
+        None,
+        ShareGroups,
+        ShareGroupsAndDeadLetter,
     }
 
-    /// KIP-1276's gate: an image with no `metadata.version` is judged against
-    /// the bootstrap level, 4.4-IV2, which admits CIDR hosts; a finalized
-    /// level admits them only from 4.4-IV1.
-    #[yare::parameterized(
-        unfinalized = { None, true },
-        bootstrap_level = { Some(LATEST_PRODUCTION_METADATA_VERSION), true },
-        below_minimum = { Some(CIDR_ACL_HOST_MIN_LEVEL - 1), false },
-        at_minimum = { Some(CIDR_ACL_HOST_MIN_LEVEL), true },
-    )]
-    fn cidr_hosts_supported_follows_the_finalized_metadata_version(
-        finalized: Option<i16>,
-        want: bool,
-    ) {
-        let image = image_with_finalized_level(METADATA_VERSION, finalized);
-        assert2::assert!(cidr_hosts_supported(&image) == want, "{finalized:?}");
+    /// Whether the broker accepts a CIDR range as an ACL host.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum CidrHosts {
+        Accepted,
+        Refused,
     }
+
+    /// What a `metadata.version` gate answers an API.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_bdd::StepParam)]
+    enum GateAnswer {
+        #[step_param("ok")]
+        Admitted,
+        UnsupportedVersion,
+    }
+
+    /// An image with one feature finalized, and what the gates read from it.
+    struct FeatureGateScenario {
+        image: krabka_bdd::Given<MetadataImage>,
+        share_gates: krabka_bdd::Given<ShareGates>,
+        cidr_hosts: krabka_bdd::Given<CidrHosts>,
+        gate: krabka_bdd::Given<Result<(), i16>>,
+    }
+
+    #[rstest::fixture]
+    fn feature_gates() -> FeatureGateScenario {
+        FeatureGateScenario {
+            image: krabka_bdd::Given::new("image", "Given an image finalizes <feature> at <level>"),
+            share_gates: krabka_bdd::Given::new(
+                "share_gates",
+                "When the broker reads its share-group gates",
+            ),
+            cidr_hosts: krabka_bdd::Given::new(
+                "cidr_hosts",
+                "When the broker reads its CIDR ACL host gate",
+            ),
+            gate: krabka_bdd::Given::new(
+                "gate",
+                "When an API that needs metadata.version 11 checks its gate",
+            ),
+        }
+    }
+
+    #[krabka_bdd::given("an image finalizes share.version at {level}")]
+    fn share_version_finalized(feature_gates: &mut FeatureGateScenario, level: FinalizedLevel) {
+        feature_gates
+            .image
+            .set(image_with_finalized_level(SHARE_VERSION, level.0));
+    }
+
+    #[krabka_bdd::given("an image finalizes metadata.version at {level}")]
+    fn metadata_version_finalized(feature_gates: &mut FeatureGateScenario, level: FinalizedLevel) {
+        feature_gates
+            .image
+            .set(image_with_finalized_level(METADATA_VERSION, level.0));
+    }
+
+    #[krabka_bdd::when("the broker reads its share-group gates")]
+    fn read_share_gates(feature_gates: &mut FeatureGateScenario) {
+        let image = feature_gates.image.get();
+        let gates = match (share_groups_enabled(image), share_dlq_supported(image)) {
+            (false, false) => ShareGates::None,
+            (true, false) => ShareGates::ShareGroups,
+            (true, true) => ShareGates::ShareGroupsAndDeadLetter,
+            (false, true) => panic!("the dead-letter queue is open without share groups"),
+        };
+        feature_gates.share_gates.set(gates);
+    }
+
+    #[krabka_bdd::when("the broker reads its CIDR ACL host gate")]
+    fn read_cidr_gate(feature_gates: &mut FeatureGateScenario) {
+        let hosts = if cidr_hosts_supported(feature_gates.image.get()) {
+            CidrHosts::Accepted
+        } else {
+            CidrHosts::Refused
+        };
+        feature_gates.cidr_hosts.set(hosts);
+    }
+
+    #[krabka_bdd::when("an API that needs metadata.version 11 checks its gate")]
+    fn check_metadata_version_gate(feature_gates: &mut FeatureGateScenario) {
+        let answer = require_feature(feature_gates.image.get(), METADATA_VERSION, 11);
+        feature_gates.gate.set(answer);
+    }
+
+    #[krabka_bdd::then("the open share-group gates are {gates}")]
+    fn open_share_gates(feature_gates: &FeatureGateScenario, gates: ShareGates) {
+        assert!(*feature_gates.share_gates.get() == gates);
+    }
+
+    #[krabka_bdd::then("CIDR ACL hosts are {support}")]
+    fn cidr_host_support(feature_gates: &FeatureGateScenario, support: CidrHosts) {
+        assert!(*feature_gates.cidr_hosts.get() == support);
+    }
+
+    #[krabka_bdd::then("the gate answers {outcome}")]
+    fn gate_answer(feature_gates: &FeatureGateScenario, outcome: GateAnswer) {
+        let expected = match outcome {
+            GateAnswer::Admitted => Ok(()),
+            GateAnswer::UnsupportedVersion => Err(UNSUPPORTED_VERSION),
+        };
+        assert!(*feature_gates.gate.get() == expected);
+    }
+
+    krabka_bdd::scenarios!(
+        "tests/features/feature_gates",
+        fixtures = [feature_gates: FeatureGateScenario],
+    );
 
     #[derive(Default)]
     struct MetadataTransition {
@@ -350,30 +443,6 @@ mod tests {
             supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
                 .iter()
                 .any(|f| f.name == STREAMS_VERSION && f.min_version == 0 && f.max_version == 1)
-        );
-    }
-
-    #[test]
-    fn require_feature_is_permissive_on_unfinalized() {
-        let image = MetadataImage::new(uuid::Uuid::nil());
-        assert!(require_feature(&image, METADATA_VERSION, 11).is_ok());
-    }
-
-    #[yare::parameterized(
-        above_level = { 11, Err(UNSUPPORTED_VERSION) },
-        at_level = { 10, Ok(()) },
-        below_level = { 7, Ok(()) },
-    )]
-    fn require_feature_gates_below_level(required_level: i16, want: Result<(), i16>) {
-        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: METADATA_VERSION.to_owned(),
-            level: 10,
-        }));
-        assert2::assert!(
-            require_feature(&image, METADATA_VERSION, required_level) == want,
-            "level {required_level}"
         );
     }
 

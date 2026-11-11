@@ -1,34 +1,48 @@
 Feature: Interactive consensus playground controls
-  Operator controls advance the real deterministic scheduler and expose the same
-  messages, elections and faults on the browser event timeline.
 
-  Scenario: Stepping a fresh cluster elects one leader
-    Given a fresh three-voter playground cluster
-    When the operator steps the playground through an election
-    Then the fresh cluster had three voters and no leader
-    And the playground reports one leader and an advancing event timeline
+  Rule: A three-voter cluster elects one leader
+    Scenario: Stepping a fresh cluster elects one leader
+      Given a fresh three-voter playground cluster
+      When the operator steps the playground through an election
+      Then the fresh cluster starts leaderless with three voters
+      And the playground records the elected leader on its event timeline
 
-  Scenario: A healed leader partition converges to one leader
-    Given the playground has elected a leader
-    When the operator isolates the playground leader and heals the partition
-    Then the healed playground has exactly one leader
+  Rule: A connected majority replaces an isolated leader
+    Scenario: A partitioned leader loses leadership to the majority
+      Given the playground has elected a leader
+      When the operator isolates the playground leader
+      Then the connected majority elects one replacement at a higher epoch
 
-  Scenario: Dropping a message changes the bus and records the fault
-    Given election traffic is queued in the playground
-    When the operator drops the next playground message
-    Then one queued message is removed and one drop event is recorded
+    Scenario: A healed partition retains the replacement leader
+      Given the connected majority has replaced an isolated playground leader
+      When the operator heals the playground partition
+      Then every healed voter reaches the replacement leader's epoch
 
-  Scenario: Reordering and replay expose a consistent event history
-    Given election traffic is queued in the playground
-    When the operator reorders election traffic and duplicates the next available message
-    Then playground accessors and replay faults report the same event history
+  Rule: Dropping a message removes one delivery
+    Scenario: Dropping a message changes the bus and records the fault
+      Given election traffic is queued in the playground
+      When the operator drops the next playground message
+      Then the event timeline records the removal of one queued message
 
-  Scenario: Append without an elected leader is refused
-    Given a fresh three-voter playground cluster
-    When the operator appends two records without a playground leader
-    Then the playground refuses the append without a leader
+  Rule: Reordering reverses queued delivery order
+    Scenario: Reordering delivers the queued messages back to front
+      Given election traffic is queued in the playground
+      When the operator reorders the queued election traffic
+      Then the event timeline delivers every previously queued message in reverse order
 
-  Scenario: Append is routed only to an elected leader
-    Given a playground append has been refused without a leader
-    When the operator elects a leader and appends two records
-    Then the elected playground leader gains exactly two records
+  Rule: Duplication repeats exactly one delivery
+    Scenario: Duplicating delivers the same message exactly twice
+      Given election traffic is queued in the playground
+      When the operator duplicates the next playground message
+      Then the event timeline records exactly two deliveries of the next queued message
+
+  Rule: An append requires an elected leader
+    Scenario: Append without an elected leader is refused
+      Given a fresh three-voter playground cluster
+      When the operator appends two records without a playground leader
+      Then the playground refuses the append without a leader
+
+    Scenario: The elected leader receives appended records
+      Given the playground has elected a leader
+      When the operator appends two records
+      Then the elected playground leader gains exactly two records

@@ -58,13 +58,16 @@ fn format_uuid(display: &mut DisplayScenario) {
 
 #[rstest_bdd_macros::then("both UUID wrappers delegate text and formatting to their local codec")]
 fn formatted_uuid(display: &DisplayScenario) {
-    let rendered = &display.rendered;
-    assert!(rendered[0] == "kafka-7");
-    assert!(rendered[1] == rendered[0]);
-    assert!(rendered[2] == "   kafka-7");
-    assert!(rendered[3] == "kafka-7***");
-    assert!(rendered[4] == "_kafka-7__");
-    assert!(rendered[5] == "kafka");
+    let text = format!("kafka-{}", display.cluster.0);
+    let expected = [
+        text.clone(),
+        format!("kafka-{}", display.directory.0),
+        format!("{text:>10}"),
+        format!("{text:*<10}"),
+        format!("{text:_^10}"),
+        format!("{text:.5}"),
+    ];
+    assert!(display.rendered == expected);
 }
 
 krabka_bdd::scenarios!(
@@ -79,12 +82,12 @@ struct CodecScenario {
     parsed_directory: Option<Result<DirectoryId, KafkaUuidError>>,
     wrong_prefix: Option<Result<ClusterId, KafkaUuidError>>,
     wrong_number: Option<Result<DirectoryId, KafkaUuidError>>,
-    cluster_json: String,
-    directory_json: String,
-    decoded_cluster: Option<Result<ClusterId, String>>,
-    decoded_directory: Option<Result<DirectoryId, String>>,
-    numeric_json: Option<Result<ClusterId, String>>,
-    malformed_json: Option<Result<DirectoryId, String>>,
+    cluster_json: Option<Result<String, serde_json::Error>>,
+    directory_json: Option<Result<String, serde_json::Error>>,
+    decoded_cluster: Option<Result<ClusterId, serde_json::Error>>,
+    decoded_directory: Option<Result<DirectoryId, serde_json::Error>>,
+    numeric_json: Option<Result<ClusterId, serde_json::Error>>,
+    malformed_json: Option<Result<DirectoryId, serde_json::Error>>,
 }
 
 #[rstest::fixture]
@@ -96,8 +99,8 @@ fn codec() -> CodecScenario {
         parsed_directory: None,
         wrong_prefix: None,
         wrong_number: None,
-        cluster_json: String::new(),
-        directory_json: String::new(),
+        cluster_json: None,
+        directory_json: None,
         decoded_cluster: None,
         decoded_directory: None,
         numeric_json: None,
@@ -113,43 +116,45 @@ fn uuid_values(codec: &mut CodecScenario, cluster: u32, directory: u32) {
 
 #[rstest_bdd_macros::when("UUID strings and JSON are encoded and decoded")]
 fn uuid_codecs(codec: &mut CodecScenario) {
-    codec.parsed_cluster = Some("kafka-7".parse());
-    codec.parsed_directory = Some("kafka-9".parse());
+    let cluster_text = format!("kafka-{}", codec.cluster.0);
+    let directory_text = format!("kafka-{}", codec.directory.0);
+    codec.parsed_cluster = Some(cluster_text.parse());
+    codec.parsed_directory = Some(directory_text.parse());
     codec.wrong_prefix = Some("hyphenated".parse());
     codec.wrong_number = Some("kafka-many".parse());
-    codec.cluster_json = serde_json::to_string(&codec.cluster).expect("cluster UUID JSON");
-    codec.directory_json = serde_json::to_string(&codec.directory).expect("directory UUID JSON");
-    codec.decoded_cluster =
-        Some(serde_json::from_str(r#""kafka-7""#).map_err(|error| error.to_string()));
-    codec.decoded_directory =
-        Some(serde_json::from_str(r#""kafka-9""#).map_err(|error| error.to_string()));
-    codec.numeric_json = Some(serde_json::from_str("7").map_err(|error| error.to_string()));
-    codec.malformed_json =
-        Some(serde_json::from_str(r#""kafka-many""#).map_err(|error| error.to_string()));
+    codec.cluster_json = Some(serde_json::to_string(&codec.cluster));
+    codec.directory_json = Some(serde_json::to_string(&codec.directory));
+    codec.decoded_cluster = Some(serde_json::from_str(&format!("\"{cluster_text}\"")));
+    codec.decoded_directory = Some(serde_json::from_str(&format!("\"{directory_text}\"")));
+    codec.numeric_json = Some(serde_json::from_str("7"));
+    codec.malformed_json = Some(serde_json::from_str(r#""kafka-many""#));
 }
 
 #[rstest_bdd_macros::then("UUID strings and JSON retain their values and local codec errors")]
 fn codec_results(codec: &CodecScenario) {
-    assert!(codec.parsed_cluster == Some(Ok(ClusterId(7))));
-    assert!(codec.parsed_directory == Some(Ok(DirectoryId(9))));
+    assert!(codec.parsed_cluster == Some(Ok(codec.cluster)));
+    assert!(codec.parsed_directory == Some(Ok(codec.directory)));
     assert!(codec.wrong_prefix == Some(Err("expected Kafka UUID")));
     assert!(codec.wrong_number == Some(Err("invalid Kafka UUID")));
-    assert!(codec.cluster_json == r#""kafka-7""#);
-    assert!(codec.directory_json == r#""kafka-9""#);
-    assert!(codec.decoded_cluster == Some(Ok(ClusterId(7))));
-    assert!(codec.decoded_directory == Some(Ok(DirectoryId(9))));
+    assert!(let Some(Ok(cluster_json)) = codec.cluster_json.as_ref());
+    assert!(let Some(Ok(directory_json)) = codec.directory_json.as_ref());
     assert!(
-        codec
-            .numeric_json
-            .as_ref()
-            .expect("numeric JSON decoded")
-            .is_err()
+        (cluster_json, directory_json)
+            == (
+                &format!("\"kafka-{}\"", codec.cluster.0),
+                &format!("\"kafka-{}\"", codec.directory.0)
+            )
     );
-    let error = codec
-        .malformed_json
-        .as_ref()
-        .expect("malformed JSON decoded")
-        .as_ref()
-        .unwrap_err();
-    assert!(error.starts_with("invalid Kafka UUID"));
+    assert!(let Some(Ok(decoded_cluster)) = codec.decoded_cluster.as_ref());
+    assert!(let Some(Ok(decoded_directory)) = codec.decoded_directory.as_ref());
+    assert!((*decoded_cluster, *decoded_directory) == (codec.cluster, codec.directory));
+    assert!(let Some(Err(numeric_error)) = codec.numeric_json.as_ref());
+    assert!(numeric_error.is_data());
+    assert!(let Some(Err(malformed_error)) = codec.malformed_json.as_ref());
+    assert!(malformed_error.is_data());
+    assert!(
+        malformed_error
+            .to_string()
+            .starts_with("invalid Kafka UUID")
+    );
 }

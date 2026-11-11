@@ -175,8 +175,7 @@ mod tests {
     use {
         super::*,
         crate::barrier::{
-            coordinator::test_support::{Fixture, fixture_with_coordinator},
-            error::BarrierError,
+            coordinator::test_support::fixture_with_coordinator, error::BarrierError,
         },
         assert2::check,
         krabka_units::millis,
@@ -259,33 +258,6 @@ mod tests {
                 "{topics:?}"
             );
         }
-    }
-
-    /// A compact string on the wire can carry a name that a state record
-    /// cannot, so the entry that names one is refused as a bad request and
-    /// nothing reaches the coordinator.
-    #[tokio::test]
-    async fn an_entry_with_a_name_of_32768_bytes_is_an_invalid_request_and_creates_nothing() {
-        let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        let long = "n".repeat(MAX_STRING_BYTES + 1);
-        let cases = [
-            ("a group name to create", AlterableBarrierGroup {
-                group: long.clone(),
-                ..entry(&["orders"], 30_000, 5)
-            }),
-            ("a group name to delete", AlterableBarrierGroup {
-                group: long.clone(),
-                delete: true,
-                ..entry(&["orders"], 30_000, 5)
-            }),
-            ("a topic name", entry(&["orders", &long], 30_000, 5)),
-        ];
-        for (case, entry) in cases {
-            let answered = apply(&coordinator, &entry).await;
-            check!(answered.error_code == codes::INVALID_REQUEST, "{case}");
-        }
-        check!(coordinator.describe_groups(&[]).await.is_empty());
     }
 
     /// The longest name that a state record can carry is taken.

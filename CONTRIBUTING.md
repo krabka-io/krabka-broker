@@ -22,32 +22,15 @@ cargo nextest run --workspace
 cargo test --workspace --doc
 ```
 
-Behavior scenarios use `rstest-bdd`: keep the specification in the crate's
-`tests/features/` directory and implement Given, When, and Then steps with
-`rstest-bdd-macros`. Use fresh `rstest` fixtures for state shared between steps
-and keep assertions in Then steps. Each scenario must describe real
-preconditions where needed, the operation under test, and its observable
-outcome. Given steps construct those preconditions; When steps perform the
-operation; Then steps compare the observed result against the specification.
-Wrapping an existing test body in a Then step does not make it a BDD specification.
+Behavior scenarios follow the [Gherkin style guide](docs/style_guides/gherkin_style_guide.md). It defines formulation, BRIEF, rules, capability folders, tags, journeys, and step definitions. Use `krabka_bdd::scenarios!` for new and migrated features, with the wrapper's step attributes and scenario-scoped `rstest` fixtures.
 
 Group related examples under `Rule:` headings. The pinned macro patch includes rule scenarios in test discovery and preserves their backgrounds and tags. Check test discovery when you add or restructure a feature, and confirm that each example runs.
 
-Group scenarios by capability and reuse domain-specific steps. Use `Examples`
-to show actual inputs and expected outcomes, rather than opaque case names
-that select hidden Rust test bodies. Use data tables for structured
-expectations. Keep typed fixtures local to the scenario and avoid mutable
-global state or assertion steps that also drive the behavior under test.
-Use `rstest_bdd_macros::scenarios!` to bind cohesive synchronous features with
-shared fixtures to the ordinary test harness, including nextest. Individual
-`#[scenario]` bindings are appropriate when async steps, Tokio runtime settings,
-platform conditions, or awaited cleanup need a custom test function. In
-rstest-bdd 0.6, the bulk macro's runtime option does not support async steps.
+The [BDD observation guide](docs/style_guides/bdd_style_guide.md) supplements those conventions with a typed fixture example, independent expected values, asynchronous observations, and simulation scope. Use `krabka_bdd::Given<T>` for state slots and `Attempt<T, E>` for expected negative-path results. Then steps compare observations without repeating or changing the operation under test.
 
-Add feature files and the crate's `Cargo.toml` to Bazel `compile_data`. The
-macros read these files at compile time; Bazel supplies the manifest directory.
-Preserve existing Tokio runtime settings and external-service requirements
-when migrating async scenarios.
+The wrapper awaits async steps on one runtime for the whole scenario and runs its after hooks on failure. Preserve Tokio runtime settings, platform conditions, external-service requirements, ignored tests, and cleanup when migrating scenarios. Add feature files and the crate's `Cargo.toml` to Bazel `compile_data`. Touch the Rust binding file when adding a feature to a directory the macro reads, so Cargo sees the new input.
+
+Run `aspect check-gherkin` for feature changes. Remove resolved entries from the existing Gherkin baseline; fix new findings instead of adding exemptions. The Gherkin guide describes the wrapper's lint and runtime checks.
 
 Add or update the smallest test that proves the change. Run the Docker suites
 only when the change affects a container boundary:
@@ -133,6 +116,25 @@ traffic from a second process, so no client work reaches the profile. Each
 example's module comment lists the environment variables it reads.
 
 ## Special Test Tiers
+
+### Turmoil KRaft tests
+
+The `kraft_turmoil` suite runs three real async KRaft controllers with [Turmoil](https://github.com/tokio-rs/turmoil) TCP sockets and virtual Tokio time. It checks election and metadata replication, minority-write refusal during a partition, recovery after the partition heals, and leader crash/restart. The outline rows use fixed seeds 1, 7, and 42 from [`kraft_turmoil.feature`](crates/raft/tests/features/kraft_turmoil/kraft_turmoil.feature). Add rows there to exercise more network schedules.
+
+```sh
+bazel test //crates/raft:kraft_turmoil_test
+cargo test --locked -p krabka-raft --test kraft_turmoil
+```
+
+The suite is included in the normal Bazel and Cargo test discovery. It needs no Docker daemon or external broker. Its synchronous wrapper steps drive Turmoil's own runtimes; keep those steps synchronous to avoid a nested Tokio `block_on`. For a replay that also seeds Tokio's task scheduling and `select!` decisions, compile with Tokio's unstable test support:
+
+```sh
+RUSTFLAGS="--cfg tokio_unstable" cargo test --locked -p krabka-raft --test kraft_turmoil
+```
+
+Turmoil controls the network and timers. The controllers use real temporary directories, and a restarted host opens the same directory. These tests cover recovery of acknowledged writes; they do not simulate torn writes, disk failures, TLS, or the production Kafka connection protocol.
+
+### External services and mutation testing
 
 The ignored integration tests need their external service or Kafka oracle.
 Run the applicable test with `-- --ignored`. The full Bazel Docker lane is the

@@ -839,6 +839,7 @@ jobs:
       rust: ${{ steps.scope.outputs.rust }}
       kubernetes: ${{ steps.scope.outputs.kubernetes }}
       proofs: ${{ steps.scope.outputs.proofs }}
+      kafka44: ${{ steps.scope.outputs.kafka44 }}
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -1697,6 +1698,15 @@ jobs:
   # a push to `main` runs coverage unconditionally. Neither indulgence can hide
   # a broken selection, because a `select` failure is read here on its own
   # account.
+  rustsec:
+    if: github.event_name != 'schedule'
+    uses: ./.github/workflows/security.yml
+
+  kafka44:
+    needs: select
+    if: github.event_name != 'schedule' && needs.select.outputs.kafka44 == 'true'
+    uses: ./.github/workflows/kafka44-evidence.yml
+
   gate:
     name: gate
     # Mergeability: pull requests, and the pushes to `main` that follow them.
@@ -1707,6 +1717,8 @@ jobs:
       - ci
       - coverage
       - supply-chain
+      - rustsec
+      - kafka44
       - cargo
       - wasm
       - checks
@@ -1719,27 +1731,10 @@ jobs:
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
-      - name: require every dependency to have succeeded
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
-          unmet="$(
-            jq -r '
-              ["cargo", "coverage", "docker", "kubernetes", "proofs", "wasm"] as $may_skip
-              | to_entries[]
-              | . as $dep
-              | select($dep.value.result != "success")
-              | select(($dep.value.result == "skipped" and ($may_skip | index($dep.key)) != null) | not)
-              | "  \($dep.key): \($dep.value.result)"
-            ' <<<"${NEEDS}"
-          )"
-          if [ -n "${unmet}" ]; then
-            printf 'Gate failed. These jobs did not succeed:\n%s\n' "${unmet}" >&2
-            exit 1
-          fi
-          echo 'Gate passed: every job that gates a merge succeeded.'
+      - uses: krabka-io/tooling/actions/gate@1fb9d942c2def2fcfa20c19ed8ae8a7d8f220f65
+        with:
+          results: ${{ toJSON(needs) }}
+          allow-skipped: cargo,coverage,docker,kubernetes,proofs,wasm,kafka44
 
   # The scheduled lanes' only reader.
   #

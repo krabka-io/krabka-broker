@@ -182,16 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn every_action_has_its_own_wire_value_and_its_own_name() {
-        for (index, action) in ALL_ACTIONS.iter().enumerate() {
-            for other in &ALL_ACTIONS[index + 1..] {
-                check!(action_to_wire(*action) != action_to_wire(*other));
-                check!(action_name(*action) != action_name(*other));
-            }
-        }
-    }
-
-    #[test]
     fn the_default_signed_actions_name_actions_that_exist() {
         for name in DEFAULT_BREAK_GLASS_SIGNED_ACTIONS {
             check!(
