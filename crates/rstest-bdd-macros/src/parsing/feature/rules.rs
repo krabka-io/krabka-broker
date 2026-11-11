@@ -142,7 +142,7 @@ mod tests {
             scenario(&feature, "inside").tags,
             ["@rule_tag", "@scenario_tag"]
         );
-        assert!(scenario(&feature, "plain").tags.is_empty());
+        assert_eq!(scenario(&feature, "plain").tags, Vec::<String>::new());
     }
 
     #[test]
