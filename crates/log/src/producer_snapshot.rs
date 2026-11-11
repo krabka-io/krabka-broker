@@ -591,6 +591,8 @@ mod tests {
     use {
         super::*,
         crate::{io::FileIo, test_support::TempPath},
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::DataTableRow,
         std::{
             io,
             io::ErrorKind,
@@ -664,16 +666,41 @@ mod tests {
             ..ProducerSnapshotScenario::default()
         }
     }
+    #[derive(DataTableRow)]
+    struct ProducerSnapshotRow {
+        producer: i64,
+        epoch: i16,
+        sequence: i32,
+        offset: i64,
+        delta: i32,
+        timestamp: i64,
+        coordinator: i32,
+        transaction: String,
+    }
+
     #[rstest_bdd_macros::given("producer snapshot entries")]
     fn producer_snapshot_entries(
         producer_snapshot: &mut ProducerSnapshotScenario,
-        datatable: Vec<Vec<String>>,
+        #[datatable] rows: Rows<ProducerSnapshotRow>,
     ) {
-        producer_snapshot.entries = datatable.into_iter().skip(1).map(|row| {
-        let [producer, epoch, sequence, offset, delta, timestamp, coordinator, transaction] = row.as_slice() else { panic!("producer epoch sequence offset delta timestamp coordinator and transaction columns required") };
-        let producer_id = ProducerId(producer.parse().expect("producer ID"));
-        (producer_id, ProducerSnapshotEntry { producer_id, producer_epoch: epoch.parse().expect("producer epoch"), last_sequence: sequence.parse().expect("last sequence"), last_offset: Offset(offset.parse().expect("last offset")), offset_delta: delta.parse().expect("offset delta"), timestamp: timestamp.parse().expect("timestamp"), coordinator_epoch: coordinator.parse().expect("coordinator epoch"), current_txn_first_offset: (transaction != "none").then(|| Offset(transaction.parse().expect("first transaction offset"))) })
-    }).collect();
+        producer_snapshot.entries = rows
+            .into_iter()
+            .map(|row| {
+                let producer_id = ProducerId(row.producer);
+                let current_txn_first_offset = (row.transaction != "none")
+                    .then(|| Offset(row.transaction.parse().expect("first transaction offset")));
+                (producer_id, ProducerSnapshotEntry {
+                    producer_id,
+                    producer_epoch: row.epoch,
+                    last_sequence: row.sequence,
+                    last_offset: Offset(row.offset),
+                    offset_delta: row.delta,
+                    timestamp: row.timestamp,
+                    coordinator_epoch: row.coordinator,
+                    current_txn_first_offset,
+                })
+            })
+            .collect();
     }
     #[rstest_bdd_macros::when("the Kafka v1 snapshot is written and read at exclusive offset 102")]
     fn round_trip_producer_snapshot(producer_snapshot: &mut ProducerSnapshotScenario) {
@@ -708,11 +735,13 @@ mod tests {
         "the marker-only entry uses Kafka's unknown-offset sequence and timestamp sentinels"
     )]
     fn marker_only_snapshot_fields(producer_snapshot: &ProducerSnapshotScenario) {
+        let (producer_id, producer_epoch) =
+            producer_snapshot.producer.expect("marker producer given");
         assert2::assert!(
             producer_snapshot.marker
                 == Some(ProducerSnapshotEntry {
-                    producer_id: ProducerId(7),
-                    producer_epoch: 0,
+                    producer_id,
+                    producer_epoch,
                     last_sequence: -1,
                     last_offset: Offset(-1),
                     offset_delta: 0,

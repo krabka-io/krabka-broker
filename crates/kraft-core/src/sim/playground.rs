@@ -119,8 +119,8 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        krabka_bdd::{Given, given, then, when},
         rstest::fixture,
-        rstest_bdd_macros::{given, then, when},
     };
 
     fn step_until<F: Fn(&Sim) -> bool>(sim: &mut Sim, max: usize, done: F) {
@@ -139,40 +139,70 @@ mod tests {
             .map_or(0, |node| node.log_len)
     }
 
-    #[derive(Default)]
     struct Playground {
-        sim: Option<Sim>,
-        initial: Option<SimSnapshot>,
-        old_leader: Option<NodeId>,
+        sim: Given<Sim>,
+        initial: Given<SimSnapshot>,
+        old_leader: Given<(NodeId, u64)>,
+        partitioned: Given<SimSnapshot>,
+        queued_messages: Vec<(u64, u64, String)>,
         queued_before: usize,
         steps_before: usize,
-        dropped: Option<bool>,
-        reordered: Option<usize>,
-        duplicated: Option<bool>,
-        appended: Option<bool>,
+        dropped: Given<bool>,
+        reordered: Given<usize>,
+        duplicated: Given<bool>,
+        appended: Given<bool>,
         log_before: usize,
         log_after: usize,
     }
 
     impl Playground {
-        fn sim(&mut self) -> &mut Sim { self.sim.as_mut().expect("a playground cluster was given") }
+        fn sim(&mut self) -> &mut Sim { self.sim.get_mut() }
 
-        fn observed(&self) -> &Sim { self.sim.as_ref().expect("a playground cluster was given") }
+        fn observed(&self) -> &Sim { self.sim.get() }
     }
 
     #[fixture]
     fn playground() -> Playground {
         Playground {
-            sim: None,
-            ..Playground::default()
+            sim: Given::new("cluster", "Given a fresh three-voter playground cluster"),
+            initial: Given::new(
+                "initial state",
+                "Given a fresh three-voter playground cluster",
+            ),
+            old_leader: Given::new(
+                "initial leader",
+                "Given the playground has elected a leader",
+            ),
+            partitioned: Given::new(
+                "partitioned state",
+                "When the operator isolates the playground leader",
+            ),
+            queued_messages: Vec::new(),
+            queued_before: 0,
+            steps_before: 0,
+            dropped: Given::new(
+                "dropped message",
+                "When the operator drops the next playground message",
+            ),
+            reordered: Given::new(
+                "reordered messages",
+                "When the operator reorders the queued election traffic",
+            ),
+            duplicated: Given::new(
+                "duplicated message",
+                "When the operator duplicates the next playground message",
+            ),
+            appended: Given::new("append result", "When the operator appends two records"),
+            log_before: 0,
+            log_after: 0,
         }
     }
 
     #[given("a fresh three-voter playground cluster")]
     fn fresh_cluster(playground: &mut Playground) {
         let sim = Sim::new(&[NodeId(1), NodeId(2), NodeId(3)]);
-        playground.initial = Some(sim.snapshot());
-        playground.sim = Some(sim);
+        playground.initial.set(sim.snapshot());
+        playground.sim.set(sim);
     }
 
     #[when("the operator steps the playground through an election")]
@@ -185,41 +215,97 @@ mod tests {
     fn elected_cluster(playground: &mut Playground) {
         fresh_cluster(playground);
         elect_leader(playground);
-        playground.old_leader = Some(playground.observed().leaders()[0]);
+        let snapshot = playground.observed().snapshot();
+        let leader = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.role == "Leader")
+            .expect("an elected leader");
+        playground.old_leader.set((NodeId(leader.id), leader.epoch));
     }
 
-    #[then("the fresh cluster had three voters and no leader")]
+    #[then("the fresh cluster starts leaderless with three voters")]
     fn initial_cluster(playground: &Playground) {
-        let initial = playground
-            .initial
-            .as_ref()
-            .expect("initial state was captured");
+        let initial = playground.initial.get();
         assert!((initial.leaders.is_empty(), initial.nodes.len()) == (true, 3));
+        check!(initial.clock_ms == 0);
+        check!(playground.observed().voter_ids() == vec![NodeId(1), NodeId(2), NodeId(3)]);
     }
 
-    #[then("the playground reports one leader and an advancing event timeline")]
+    #[then("the playground records the elected leader on its event timeline")]
     fn stable_snapshot(playground: &Playground) {
         let sim = playground.observed();
         assert!(sim.leaders().len() == 1);
         let snap = sim.snapshot();
         check!((snap.leaders.len(), snap.clock_ms > 0, snap.step_count > 0) == (1, true, true));
+        check!(sim.clock_ms() == snap.clock_ms);
     }
 
-    #[when("the operator isolates the playground leader and heals the partition")]
-    fn partition_then_heal(playground: &mut Playground) {
-        let old = playground.old_leader.expect("the playground had a leader");
+    #[when("the operator isolates the playground leader")]
+    fn partition_leader(playground: &mut Playground) {
+        let (old, _) = *playground.old_leader.get();
         playground.sim().partition(old);
         step_until(playground.sim(), 10_000, |sim| {
             sim.leaders().iter().any(|&leader| leader != old)
         });
         playground.sim().run_until_stable(10_000);
+        playground.partitioned.set(playground.observed().snapshot());
+    }
+
+    #[given("the connected majority has replaced an isolated playground leader")]
+    fn replaced_leader(playground: &mut Playground) {
+        elected_cluster(playground);
+        partition_leader(playground);
+    }
+
+    fn replacement_leaders(playground: &Playground) -> Vec<(u64, u64)> {
+        playground
+            .partitioned
+            .get()
+            .nodes
+            .iter()
+            .filter(|node| !node.partitioned && node.role == "Leader")
+            .map(|node| (node.id, node.epoch))
+            .collect()
+    }
+
+    #[then("the connected majority elects one replacement at a higher epoch")]
+    fn replacement_leader(playground: &Playground) {
+        let (old, old_epoch) = *playground.old_leader.get();
+        let leaders = replacement_leaders(playground);
+        assert!(leaders.len() == 1);
+        let (replacement, epoch) = leaders[0];
+        assert!(replacement != old.0);
+        assert!(epoch > old_epoch);
+        let snapshot = playground.partitioned.get();
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.id == old.0 && node.partitioned)
+        );
+    }
+
+    #[when("the operator heals the playground partition")]
+    fn heal_partition(playground: &mut Playground) {
+        let (old, _) = *playground.old_leader.get();
         playground.sim().heal(old);
         playground.sim().run_until_stable(10_000);
     }
 
-    #[then("the healed playground has exactly one leader")]
+    #[then("every healed voter reaches the replacement leader's epoch")]
     fn healed_leader(playground: &Playground) {
-        assert!(playground.observed().leaders().len() == 1);
+        let leaders = replacement_leaders(playground);
+        assert!(leaders.len() == 1);
+        let (replacement, epoch) = leaders[0];
+        let snapshot = playground.observed().snapshot();
+        assert!(snapshot.leaders == vec![replacement]);
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .all(|node| !node.partitioned && node.epoch == epoch)
+        );
     }
 
     #[given("election traffic is queued in the playground")]
@@ -227,81 +313,105 @@ mod tests {
         fresh_cluster(playground);
         while playground.observed().in_flight().is_empty() && playground.sim().step_once() {}
         playground.queued_before = playground.observed().in_flight().len();
+        playground.queued_messages = playground
+            .observed()
+            .in_flight()
+            .into_iter()
+            .map(|message| (message.src, message.dst, message.event))
+            .collect();
         playground.steps_before = playground.observed().steps().len();
     }
 
     #[when("the operator drops the next playground message")]
     fn drop_message(playground: &mut Playground) {
-        playground.dropped = Some(playground.sim().drop_next());
+        let dropped = playground.sim().drop_next();
+        playground.dropped.set(dropped);
     }
 
-    #[then("one queued message is removed and one drop event is recorded")]
+    #[then("the event timeline records the removal of one queued message")]
     fn recorded_drop(playground: &Playground) {
         let sim = playground.observed();
         assert!(playground.queued_before > 0);
-        check!(playground.dropped == Some(true));
+        check!(*playground.dropped.get());
         check!(sim.in_flight().len() == playground.queued_before - 1);
         check!(sim.steps().len() == playground.steps_before + 1);
         let last = sim.steps().last().expect("drop action was recorded");
         assert!(matches!(last.action, TraceAction::Drop { .. }));
     }
 
-    #[when("the operator reorders election traffic and duplicates the next available message")]
-    fn replay_faults(playground: &mut Playground) {
-        playground.reordered = Some(playground.sim().reorder());
-        playground.sim().run_until_stable(10_000);
-        while playground.observed().in_flight().is_empty() && playground.sim().step_once() {}
-        if !playground.observed().in_flight().is_empty() {
-            playground.duplicated = Some(playground.sim().duplicate_next());
-        }
+    #[when("the operator reorders the queued election traffic")]
+    fn reorder_messages(playground: &mut Playground) {
+        let reordered = playground.sim().reorder();
+        playground.reordered.set(reordered);
     }
 
-    #[then("playground accessors and replay faults report the same event history")]
-    fn consistent_faults(playground: &Playground) {
-        let sim = playground.observed();
-        let initial = playground
-            .initial
-            .as_ref()
-            .expect("initial state was captured");
-        assert!(sim.voter_ids() == vec![NodeId(1), NodeId(2), NodeId(3)]);
-        assert!(initial.clock_ms == 0);
-        assert!(playground.queued_before > 0);
-        assert!(playground.reordered.is_some_and(|count| count >= 1));
-        assert!(sim.clock_ms() > 0);
-        if let Some(duplicated) = playground.duplicated {
-            assert!(duplicated);
-        }
+    fn delivered_messages(playground: &Playground) -> Vec<(u64, u64, String)> {
+        playground.observed().steps()[playground.steps_before..]
+            .iter()
+            .filter_map(|step| match &step.action {
+                TraceAction::Deliver { src, dst, event } => Some((*src, *dst, event.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[then("the event timeline delivers every previously queued message in reverse order")]
+    fn reversed_deliveries(playground: &Playground) {
+        let expected: Vec<_> = playground.queued_messages.iter().rev().cloned().collect();
+        assert!(
+            playground.queued_before >= 2,
+            "reordering needs at least two queued messages"
+        );
+        assert!(*playground.reordered.get() == playground.queued_before);
+        assert!(delivered_messages(playground) == expected);
+    }
+
+    #[when("the operator duplicates the next playground message")]
+    fn duplicate_message(playground: &mut Playground) {
+        let duplicated = playground.sim().duplicate_next();
+        playground.duplicated.set(duplicated);
+    }
+
+    #[then("the event timeline records exactly two deliveries of the next queued message")]
+    fn duplicated_delivery(playground: &Playground) {
+        let first = playground
+            .queued_messages
+            .first()
+            .expect("election traffic was queued");
+        assert!(*playground.duplicated.get());
+        assert!(delivered_messages(playground) == vec![first.clone(), first.clone()]);
+        let remaining: Vec<_> = playground
+            .observed()
+            .in_flight()
+            .into_iter()
+            .map(|message| (message.src, message.dst, message.event))
+            .collect();
+        assert!(remaining.starts_with(&playground.queued_messages[1..]));
     }
 
     #[when("the operator appends two records without a playground leader")]
     fn append_without_leader(playground: &mut Playground) {
-        playground.appended = Some(playground.sim().append(2));
-    }
-
-    #[given("a playground append has been refused without a leader")]
-    fn refused_append(playground: &mut Playground) {
-        fresh_cluster(playground);
-        append_without_leader(playground);
-        append_refused(playground);
+        let appended = playground.sim().append(2);
+        playground.appended.set(appended);
     }
 
     #[then("the playground refuses the append without a leader")]
     fn append_refused(playground: &Playground) {
-        assert!(playground.appended == Some(false));
+        assert!(!*playground.appended.get());
     }
 
-    #[when("the operator elects a leader and appends two records")]
+    #[when("the operator appends two records")]
     fn append_to_leader(playground: &mut Playground) {
-        elect_leader(playground);
         let leader = playground.observed().leaders()[0];
         playground.log_before = log_len(playground.observed(), leader);
-        playground.appended = Some(playground.sim().append(2));
+        let appended = playground.sim().append(2);
+        playground.appended.set(appended);
         playground.log_after = log_len(playground.observed(), leader);
     }
 
     #[then("the elected playground leader gains exactly two records")]
     fn appended_records(playground: &Playground) {
-        assert!(playground.appended == Some(true));
+        assert!(*playground.appended.get());
         assert!(playground.log_after == playground.log_before + 2);
     }
 

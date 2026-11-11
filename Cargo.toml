@@ -314,6 +314,8 @@ tracing = "0.1"
 tracing-core = "0.1"
 tracing-opentelemetry = { version = "0.34", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# KRaft integration tests only. Pin the pre-1.0 simulation API for replay.
+turmoil = "=0.7.2"
 # `std` turns on XXH3's runtime AVX2 (x86_64) dispatch.
 twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64"] }
 uuid = { version = "1", features = ["v4", "serde"] }

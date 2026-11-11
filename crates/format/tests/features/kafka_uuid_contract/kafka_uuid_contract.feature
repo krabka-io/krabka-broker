@@ -53,10 +53,15 @@ Feature: Kafka UUID text and reservation contracts
       | a nonzero high word                   | 1    | 0                    | false   | false     |
       | a nonzero high word with low word one | 1    | 1                    | false   | false     |
 
-  Scenario: Random UUIDs avoid Kafka's reserved identities and command-line ambiguity
-    Given random UUID sample sizes 5000 plain and 500 for each wrapper
+  Scenario Outline: Random UUIDs avoid Kafka's reserved identities and command-line ambiguity
+    Given random UUID sample sizes <plain> plain and <wrappers> for each wrapper
     When the random UUID samples are generated
     Then all generated UUIDs avoid their reserved values and leading dashes
+
+    Examples:
+      | case                               | plain | wrappers |
+      | a large sample across UUID domains | 5000  | 500      |
+      | independently sized UUID samples   | 1     | 2        |
 
   Scenario: Every leading byte is classified consistently with Kafka base64
     Given UUIDs spanning every possible leading byte

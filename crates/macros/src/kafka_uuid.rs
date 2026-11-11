@@ -50,12 +50,16 @@ pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, crate::meta::compact, assert2::assert, moxy::ast::ItemStruct};
+    use {
+        super::expand,
+        assert2::assert,
+        moxy::ast::{ItemStruct, ParseError},
+    };
 
     #[derive(Default)]
     struct UuidDeriveScenario {
         source: String,
-        expansion: Option<Result<String, String>>,
+        expansion: Option<Result<(), ParseError>>,
     }
 
     #[rstest::fixture]
@@ -63,11 +67,6 @@ mod tests {
         UuidDeriveScenario {
             ..UuidDeriveScenario::default()
         }
-    }
-
-    #[rstest_bdd_macros::given("UUID wrapper source {source}")]
-    fn wrapper_source(uuid_derive: &mut UuidDeriveScenario, source: String) {
-        uuid_derive.source = source;
     }
 
     #[rstest_bdd_macros::given("a UUID wrapper declared as")]
@@ -79,38 +78,18 @@ mod tests {
     fn derive_uuid(uuid_derive: &mut UuidDeriveScenario) {
         let source = &uuid_derive.source;
         let item: ItemStruct = moxy::parse!({ source }).expect("valid Rust struct source");
-        uuid_derive.expansion = Some(
-            expand(item)
-                .map(|output| compact(&output))
-                .map_err(|error| error.to_string()),
-        );
+        uuid_derive.expansion = Some(expand(item).map(drop));
     }
 
-    #[rstest_bdd_macros::then("the wrapper shape is rejected")]
-    fn reject_wrapper(uuid_derive: &UuidDeriveScenario) {
-        assert!(
-            uuid_derive
-                .expansion
-                .as_ref()
-                .expect("derive expanded")
-                .is_err(),
-            "{}",
-            uuid_derive.source
-        );
-    }
-
-    #[rstest_bdd_macros::then("the wrapper implements Display FromStr Serialize and Deserialize")]
-    fn wrapper_traits(uuid_derive: &UuidDeriveScenario) {
-        let output = uuid_derive
+    #[rstest_bdd_macros::then("the wrapper shape is rejected with {message}")]
+    fn reject_wrapper(uuid_derive: &UuidDeriveScenario, message: String) {
+        let error = uuid_derive
             .expansion
             .as_ref()
             .expect("derive expanded")
             .as_ref()
-            .expect("supported wrapper");
-        assert!(output.contains("DisplayforId"));
-        assert!(output.contains("FromStrforId"));
-        assert!(output.contains("SerializeforId"));
-        assert!(output.contains("Deserialize<'de>forId"));
+            .expect_err("unsupported wrapper rejected");
+        assert!(error.to_string() == message, "{}", uuid_derive.source);
     }
 
     krabka_bdd::scenarios!(
