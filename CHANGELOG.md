@@ -23,6 +23,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
 ### Added
 
 - `krabka_bdd::scenarios!` binds one `.feature` file as well as a directory, runs `runtime = "tokio-current-thread-paused"` on a paused clock, and generates an `@docker` scenario as `#[ignore = "requires Docker"]` for `--config=docker` to run with `--ignored`.

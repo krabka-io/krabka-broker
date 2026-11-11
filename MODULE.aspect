@@ -2,9 +2,9 @@ use_task("sbom.axl", "sbom")
 
 axl_archive_dep(
     name = "krabka_tooling",
-    urls = ["https://github.com/krabka-io/tooling/releases/download/v0.1.0/tooling-0.1.0.tar.gz"],
-    integrity = "sha512-YAL9fZI1Y/dapZ6xsdG9uQuUO6lGXwyNhvNP9kZSUajDo8EoqveQicy6GAX5x+0/fjGgfn1c5AgiHBDinKQOoQ==",
-    strip_prefix = "tooling-0.1.0",
+    urls = ["https://github.com/krabka-io/tooling/releases/download/v0.1.1/tooling-0.1.1.tar.gz"],
+    integrity = "sha512-VCAczyTPvumqYuCiERtoKWwMp8wuTRi5lpPTBwTXaRUTvRjVujMOlhedpzFODu9mRvvJD0uMoK26HrQsDwxqBw==",
+    strip_prefix = "tooling-0.1.1",
     auto_use_tasks = True,
     dev = True,
 )

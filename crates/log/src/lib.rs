@@ -62,7 +62,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-log/1.1.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-log/1.2.0")]
 
 mod barrier_marker;
 mod compact;

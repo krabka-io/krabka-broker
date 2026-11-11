@@ -34,18 +34,18 @@ krabka-client-admin = { version = "0.8.0" }
 # The client security policy, and the timeout an admin call ends with.
 krabka-client-core = { version = "0.8.0" }
 # `epoch_ms`, the clock a capture directory is named by.
-krabka-log = { version = "1.1.5", path = "../log" }
+krabka-log = { version = "1.2.0", path = "../log" }
 # The archive the capture is written to is the archive `krabka restore` reads,
 # so the backend mapping is the object-store layer the restore uses, not the
 # broker's TOML config: a backup runs beside a broker, and a restore runs when
 # there is none.
-krabka-object-store = { version = "1.1.5", path = "../object-store", features = ["clap"] }
-krabka-remote-storage = { version = "1.1.5", path = "../remote-storage" }
-krabka-remote-storage-topic = { version = "1.1.5", path = "../remote-storage-topic" }
+krabka-object-store = { version = "1.2.0", path = "../object-store", features = ["clap"] }
+krabka-remote-storage = { version = "1.2.0", path = "../remote-storage" }
+krabka-remote-storage-topic = { version = "1.2.0", path = "../remote-storage-topic" }
 # Decodes a format-time metadata checkpoint to tell a plain format, which
 # holds no topic, from a restore's seeded one, and reads a checkpoint's age.
 krabka-metadata = { version = "0.8.0" }
-krabka-raft = { version = "1.1.5", path = "../raft" }
+krabka-raft = { version = "1.2.0", path = "../raft" }
 # `--command-config`, the Kafka client properties file every operator CLI reads.
 krabka-cli-connection = { path = "../cli-connection" }
 
@@ -64,7 +64,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 # `cli_main!` writes the binary's `main`.
-krabka-macros = { version = "1.1.5", path = "../macros" }
+krabka-macros = { version = "1.2.0", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

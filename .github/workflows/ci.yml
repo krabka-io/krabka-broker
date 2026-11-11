@@ -1719,27 +1719,10 @@ jobs:
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
-      - name: require every dependency to have succeeded
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
-          unmet="$(
-            jq -r '
-              ["cargo", "coverage", "docker", "kubernetes", "proofs", "wasm"] as $may_skip
-              | to_entries[]
-              | . as $dep
-              | select($dep.value.result != "success")
-              | select(($dep.value.result == "skipped" and ($may_skip | index($dep.key)) != null) | not)
-              | "  \($dep.key): \($dep.value.result)"
-            ' <<<"${NEEDS}"
-          )"
-          if [ -n "${unmet}" ]; then
-            printf 'Gate failed. These jobs did not succeed:\n%s\n' "${unmet}" >&2
-            exit 1
-          fi
-          echo 'Gate passed: every job that gates a merge succeeded.'
+      - uses: krabka-io/tooling/actions/gate@1fb9d942c2def2fcfa20c19ed8ae8a7d8f220f65
+        with:
+          results: ${{ toJSON(needs) }}
+          allow-skipped: cargo,coverage,docker,kubernetes,proofs,wasm
 
   # The scheduled lanes' only reader.
   #
