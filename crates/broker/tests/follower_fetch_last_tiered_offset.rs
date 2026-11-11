@@ -61,7 +61,7 @@ use {
     },
     std::{
         collections::BTreeMap,
-        panic::AssertUnwindSafe,
+        panic::{AssertUnwindSafe, resume_unwind},
         path::Path,
         sync::Arc,
         time::{Duration, Instant},
@@ -181,7 +181,7 @@ async fn tiered_topic_setup_accepts_an_existing_matching_topic() {
         broker.shutdown().await;
     }
     if let Err(panic) = result {
-        std::panic::resume_unwind(panic);
+        resume_unwind(panic);
     }
 }
 
