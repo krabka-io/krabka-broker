@@ -342,6 +342,8 @@ For parallel work, give each subagent one macro family and its callers. Keep sha
 
 ## Tests
 
+Follow the [Gherkin style guide](gherkin_style_guide.md) for behavior scenarios and the `krabka-bdd` wrapper. The [BDD observation guide](bdd_style_guide.md) supplements it with typed results, independent expected values, asynchronous observations, and simulation limits.
+
 Where a test lives depends on what it needs to reach:
 
 - **Integration tests — the default for public behaviour.** If a test exercises a crate's public API, put it in the crate's `tests/` directory, a sibling of `src/`. These compile as separate crates and can see only the public surface, which keeps them honest about what the crate actually exposes.

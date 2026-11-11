@@ -1270,10 +1270,6 @@ crates/broker/tests/features/migrated/tests/produce_verbatim_passthrough/passthr
 crates/broker/tests/features/migrated/tests/produce_verbatim_passthrough/passthrough.feature	one-when	scenario `Producer LZ4 compression survives the verbatim append and Fetch` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/producer_leader_routing.feature	max-steps	scenario `A bootstrap producer stores writes on every partition leader` has 6 steps, and at most 5 are allowed	1
 crates/broker/tests/features/migrated/tests/producer_leader_routing.feature	one-when	scenario `A bootstrap producer stores writes on every partition leader` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/quorum.feature	max-steps	scenario `leader kill recovers` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/tests/quorum.feature	no-background	the feature has a `Background`	1
-crates/broker/tests/features/migrated/tests/quorum.feature	one-when	scenario `create topic on any node propagates` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/quorum.feature	one-when	scenario `leader kill recovers` has 3 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/raft_sasl.feature	one-when	scenario `controller listener sasl denies unauthorized principal` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/raft_sasl.feature	one-when	scenario `controller listener sasl plaintext rejects mismatched creds` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/recompression.feature	case-column	the Examples table starts with column `codec`, not `case`	1

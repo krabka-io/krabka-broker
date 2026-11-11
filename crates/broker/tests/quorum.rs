@@ -25,8 +25,10 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::assert,
+    futures_util::{StreamExt as _, stream::FuturesUnordered},
     krabka_broker::{BrokerConfig, BrokerHandle},
-    std::collections::HashSet,
+    std::{collections::BTreeMap, time::Duration},
+    tokio::time,
 };
 
 mod support;
@@ -46,82 +48,197 @@ async fn wait_for_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) {
     }
 }
 
-fn controller_leaders(
-    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
-) -> HashSet<krabka_broker::NodeId> {
+fn controller_views(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) -> ControllerViews {
     cluster
         .iter()
-        .filter_map(|(handle, _, _)| handle.controller_leader_id())
+        .map(|(handle, config, _)| (config.node_id, handle.controller_leader_id()))
         .collect()
 }
 
+#[derive(Debug)]
+enum ControllerObservationError {
+    TimedOut(ControllerViews),
+    WatchClosed(ControllerViews),
+}
+
+async fn observe_controller_agreement(
+    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
+    departed: Option<NodeId>,
+) -> Result<ControllerViews, ControllerObservationError> {
+    let mut watches: Vec<_> = cluster
+        .iter()
+        .map(|(handle, config, _)| (config.node_id, handle.watch_leader_for_test()))
+        .collect();
+    let mut last_views = controller_views(cluster);
+    let observed = time::timeout(Duration::from_secs(120), async {
+        loop {
+            last_views = watches
+                .iter_mut()
+                .map(|(node, watch)| (*node, *watch.borrow_and_update()))
+                .collect();
+            if let Some(leader) = last_views.values().find_map(|leader| *leader)
+                && leader != NodeId(0)
+                && Some(leader) != departed
+                && last_views.contains_key(&leader)
+                && last_views.len() == cluster.len()
+                && last_views.values().all(|view| *view == Some(leader))
+            {
+                return Ok(last_views.clone());
+            }
+            let mut changes: FuturesUnordered<_> = watches
+                .iter_mut()
+                .map(|(_, watch)| watch.changed())
+                .collect();
+            match changes.next().await {
+                Some(Ok(())) => {}
+                Some(Err(_)) | None => {
+                    return Err(ControllerObservationError::WatchClosed(last_views.clone()));
+                }
+            }
+        }
+    })
+    .await;
+    observed.unwrap_or(Err(ControllerObservationError::TimedOut(last_views)))
+}
+
 use {
+    krabka_bdd::{Given, Outcome, ScenarioSpec, World, given, then, when},
     krabka_broker::NodeId,
     krabka_protocol::owned::metadata_response::MetadataResponse,
     rstest::fixture,
-    rstest_bdd_macros::{given, scenario, then, when},
     tokio::sync::MutexGuard,
 };
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+type ControllerViews = BTreeMap<NodeId, Option<NodeId>>;
 
-#[derive(Default)]
 struct MetadataQuorum {
-    cluster: Cluster,
-    guard: Option<MutexGuard<'static, ()>>,
-    killed: Option<NodeId>,
-    retired_directory: Option<TempDir>,
-    leaders: Option<HashSet<NodeId>>,
-    creates: Vec<i16>,
-    metadata: Option<MetadataResponse>,
+    cluster: Given<Cluster>,
+    guard: Given<MutexGuard<'static, ()>>,
+    killed: Given<NodeId>,
+    retired_directory: Given<TempDir>,
+    leaders: Given<Result<ControllerViews, ControllerObservationError>>,
+    creates: Given<Vec<i16>>,
+    metadata: Given<MetadataResponse>,
+}
+
+impl World for MetadataQuorum {
+    async fn after(&mut self, _scenario: &ScenarioSpec, _outcome: &Outcome) {
+        if self.cluster.is_set() {
+            shutdown_cluster(self.cluster.take()).await;
+        }
+    }
 }
 
 #[fixture]
 fn metadata_quorum() -> MetadataQuorum {
-    // Every quorum scenario owns its members and retains observed wire results.
-    MetadataQuorum::default()
+    MetadataQuorum {
+        cluster: Given::new(
+            "metadata quorum",
+            "Given three brokers share a static metadata voter set",
+        ),
+        guard: Given::new(
+            "cluster execution slot",
+            "Given three brokers share a static metadata voter set",
+        ),
+        killed: Given::new(
+            "departed controller",
+            "When the elected metadata controller is shut down",
+        ),
+        retired_directory: Given::new(
+            "departed controller log",
+            "When the elected metadata controller is shut down",
+        ),
+        leaders: Given::new(
+            "controller observations",
+            "When all metadata voters observe their elected controller",
+        ),
+        creates: Given::new("topic creation results", "When a client creates a topic"),
+        metadata: Given::new(
+            "topic metadata",
+            "When a client reads committed topic metadata",
+        ),
+    }
 }
 
 #[given("three brokers share a static metadata voter set")]
 async fn metadata_voters(metadata_quorum: &mut MetadataQuorum) {
-    metadata_quorum.guard = Some(cluster_lock().lock().await);
-    metadata_quorum.cluster = support::start_n_node_with_retry(3).await;
+    metadata_quorum.guard.set(cluster_lock().lock().await);
+    metadata_quorum
+        .cluster
+        .set(support::start_n_node_with_retry(3).await);
 }
 
-#[given("all three metadata voters have observed a controller leader")]
+#[given("a three-broker metadata quorum has elected a controller")]
+async fn ready_metadata_quorum(metadata_quorum: &mut MetadataQuorum) {
+    metadata_voters(metadata_quorum).await;
+    controller_ready(metadata_quorum).await;
+}
+
+#[given("topic prop has been created with three partitions through a metadata voter")]
+async fn existing_propagated_topic(metadata_quorum: &mut MetadataQuorum) {
+    create_on_voter(metadata_quorum, "prop".into(), 3, 0).await;
+}
+
+#[given("the metadata quorum has recovered from a controller shutdown")]
+async fn recovered_metadata_quorum(metadata_quorum: &mut MetadataQuorum) {
+    ready_metadata_quorum(metadata_quorum).await;
+    stop_controller(metadata_quorum).await;
+    if let Err(error) = metadata_quorum.leaders.get() {
+        panic!("the metadata quorum did not recover before topic creation: {error:?}");
+    }
+}
+
 async fn controller_ready(metadata_quorum: &MetadataQuorum) {
-    wait_for_leader(&metadata_quorum.cluster).await;
+    wait_for_leader(metadata_quorum.cluster.get()).await;
 }
 
 #[given("every voter has registered all three brokers")]
 async fn voters_registered(metadata_quorum: &MetadataQuorum) {
-    for (broker, _, _) in &metadata_quorum.cluster {
+    for (broker, _, _) in metadata_quorum.cluster.get() {
         broker.wait_until_brokers_registered(3).await;
     }
 }
 
 #[when("all metadata voters observe their elected controller")]
 async fn observe_election(metadata_quorum: &mut MetadataQuorum) {
-    wait_for_leader(&metadata_quorum.cluster).await;
-    metadata_quorum.leaders = Some(controller_leaders(&metadata_quorum.cluster));
+    metadata_quorum
+        .leaders
+        .set(observe_controller_agreement(metadata_quorum.cluster.get(), None).await);
 }
 
-#[then("every surviving voter agrees on one nonzero controller")]
+#[then("every surviving voter reports the same surviving nonzero controller")]
 fn elected_controller(metadata_quorum: &MetadataQuorum) {
-    let leaders = metadata_quorum
-        .leaders
-        .as_ref()
-        .expect("controller views observed");
+    let observation = metadata_quorum.leaders.get();
+    let leaders = match observation {
+        Ok(views) => views,
+        Err(ControllerObservationError::TimedOut(views)) => {
+            panic!("controller agreement timed out with complete voter observations: {views:?}");
+        }
+        Err(ControllerObservationError::WatchClosed(views)) => {
+            panic!("controller leader watch closed before agreement: {views:?}");
+        }
+    };
+    let leader = leaders
+        .values()
+        .find_map(|leader| *leader)
+        .expect("at least one voter reported a controller");
+    assert!(leader != NodeId(0));
     assert!(
-        leaders.len() == 1 && !leaders.contains(&NodeId(0)),
-        "leader not converged: {leaders:?}"
+        leaders.contains_key(&leader),
+        "the elected controller is a surviving voter: {leaders:?}"
     );
-    if let Some(killed) = metadata_quorum.killed {
-        assert!(
-            !leaders.contains(&killed),
-            "removed leader remains elected: {leaders:?}"
-        );
-    }
+    let expected: BTreeMap<_, _> = metadata_quorum
+        .cluster
+        .get()
+        .iter()
+        .map(|(_, config, _)| (config.node_id, Some(leader)))
+        .collect();
+    assert!(
+        leaders == &expected,
+        "every surviving voter must report the same controller"
+    );
+    assert!(!metadata_quorum.killed.is_set() || *metadata_quorum.killed.get() != leader);
 }
 
 #[when("a client creates topic {topic} with {partitions} partitions through voter index {index}")]
@@ -132,7 +249,10 @@ async fn create_on_voter(
     index: usize,
 ) {
     let client = connect_client(
-        metadata_quorum.cluster[index].1.listen_addr.to_string(),
+        metadata_quorum.cluster.get()[index]
+            .1
+            .listen_addr
+            .to_string(),
         None,
     )
     .await;
@@ -142,7 +262,9 @@ async fn create_on_voter(
         ))
         .await
         .unwrap();
-    metadata_quorum.creates.push(response.topics[0].error_code);
+    metadata_quorum
+        .creates
+        .set(vec![response.topics[0].error_code]);
     client.close();
 }
 
@@ -150,6 +272,7 @@ async fn create_on_voter(
 async fn create_on_follower(metadata_quorum: &mut MetadataQuorum) {
     let index = metadata_quorum
         .cluster
+        .get()
         .iter()
         .position(|(broker, config, _)| broker.controller_leader_id() != Some(config.node_id))
         .expect("metadata follower");
@@ -159,20 +282,26 @@ async fn create_on_follower(metadata_quorum: &mut MetadataQuorum) {
 #[then("the latest topic creation succeeds")]
 fn quorum_topic_created(metadata_quorum: &MetadataQuorum) {
     assert!(
-        metadata_quorum.creates.last() == Some(&0),
+        metadata_quorum.creates.get().last() == Some(&0),
         "{:?}",
-        metadata_quorum.creates
+        metadata_quorum.creates.get()
     );
 }
 
 #[when("a client reads metadata through voter index 2 after prop reaches its image")]
 async fn propagated_topic_metadata(metadata_quorum: &mut MetadataQuorum) {
-    metadata_quorum.cluster[2]
+    metadata_quorum.cluster.get()[2]
         .0
         .wait_until_partition_present("prop", 0)
         .await;
-    let client = connect_client(metadata_quorum.cluster[2].1.listen_addr.to_string(), None).await;
-    metadata_quorum.metadata = Some(client.send(topic_metadata_request(None)).await.unwrap());
+    let client = connect_client(
+        metadata_quorum.cluster.get()[2].1.listen_addr.to_string(),
+        None,
+    )
+    .await;
+    metadata_quorum
+        .metadata
+        .set(client.send(topic_metadata_request(None)).await.unwrap());
     client.close();
 }
 
@@ -181,8 +310,7 @@ fn propagated_topic(metadata_quorum: &MetadataQuorum) {
     assert!(
         metadata_quorum
             .metadata
-            .as_ref()
-            .expect("metadata read")
+            .get()
             .topics
             .iter()
             .any(|topic| topic.name.as_deref() == Some("prop")),
@@ -194,33 +322,32 @@ fn propagated_topic(metadata_quorum: &MetadataQuorum) {
 async fn stop_controller(metadata_quorum: &mut MetadataQuorum) {
     let index = metadata_quorum
         .cluster
+        .get()
         .iter()
         .position(|(broker, config, _)| broker.controller_leader_id() == Some(config.node_id))
         .expect("self-identified controller");
-    let (broker, config, directory) = metadata_quorum.cluster.remove(index);
-    metadata_quorum.killed = Some(config.node_id);
-    metadata_quorum.retired_directory = Some(directory);
+    let (broker, config, directory) = metadata_quorum.cluster.get_mut().remove(index);
+    metadata_quorum.killed.set(config.node_id);
+    metadata_quorum.retired_directory.set(directory);
     broker.shutdown().await;
+    replace_controller(metadata_quorum).await;
 }
 
-#[when("the surviving voters elect a replacement controller")]
 async fn replace_controller(metadata_quorum: &mut MetadataQuorum) {
-    for (broker, _, _) in &metadata_quorum.cluster {
-        support::await_controller_replacement(
-            broker,
-            metadata_quorum.killed.expect("removed controller"),
-            "no new leader within 30s after kill",
+    metadata_quorum.leaders.set(
+        observe_controller_agreement(
+            metadata_quorum.cluster.get(),
+            Some(*metadata_quorum.killed.get()),
         )
-        .await;
-    }
-    metadata_quorum.leaders = Some(controller_leaders(&metadata_quorum.cluster));
+        .await,
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
 #[when("clients concurrently create topic race through all three voters")]
 async fn concurrent_topic_requests(metadata_quorum: &mut MetadataQuorum) {
     let mut clients = Vec::new();
-    for (_, config, _) in &metadata_quorum.cluster {
+    for (_, config, _) in metadata_quorum.cluster.get() {
         clients.push(connect_client(config.listen_addr.to_string(), None).await);
     }
     let mut joins = Vec::new();
@@ -234,89 +361,37 @@ async fn concurrent_topic_requests(metadata_quorum: &mut MetadataQuorum) {
                 .unwrap()
         }));
     }
+    let mut results = Vec::new();
     for join in joins {
-        metadata_quorum
-            .creates
-            .push(join.await.unwrap().topics[0].error_code);
+        results.push(join.await.unwrap().topics[0].error_code);
     }
-    for (broker, _, _) in &metadata_quorum.cluster {
+    metadata_quorum.creates.set(results);
+    for (broker, _, _) in metadata_quorum.cluster.get() {
         broker.wait_until_partition_present("race", 0).await;
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-#[then("exactly one race creation succeeds and the other two report TOPIC_ALREADY_EXISTS")]
+#[then("the race returns one success plus two TOPIC_ALREADY_EXISTS refusals")]
 fn one_creation_wins(metadata_quorum: &MetadataQuorum) {
-    let zero = metadata_quorum
-        .creates
-        .iter()
-        .filter(|code| **code == 0)
-        .count();
-    let already = metadata_quorum
-        .creates
-        .iter()
-        .filter(|code| **code == 36)
-        .count();
-    assert!(metadata_quorum.creates.len() == 3);
-    assert!(
-        zero == 1,
-        "exactly one winner, got zero={zero} already={already}"
-    );
-    assert!(
-        already == 2,
-        "two losers see TOPIC_ALREADY_EXISTS, got zero={zero} already={already}"
-    );
+    let mut codes = metadata_quorum.creates.get().clone();
+    codes.sort_unstable();
+    assert!(codes == vec![0, 36, 36]);
 }
 
-#[scenario(
-    path = "tests/features/migrated/tests/quorum.feature",
-    name = "three node cluster elects leader"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_node_cluster_elects_leader(metadata_quorum: MetadataQuorum) {
-    shutdown_cluster(take(&mut metadata_quorum.cluster)).await;
-    drop(metadata_quorum);
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/quorum.feature",
-    name = "create topic on any node propagates"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn create_topic_on_any_node_propagates(metadata_quorum: MetadataQuorum) {
-    shutdown_cluster(take(&mut metadata_quorum.cluster)).await;
-    drop(metadata_quorum);
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/quorum.feature",
-    name = "leader kill recovers"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn leader_kill_recovers(metadata_quorum: MetadataQuorum) {
-    shutdown_cluster(take(&mut metadata_quorum.cluster)).await;
-    drop(metadata_quorum);
-}
-
-#[scenario(
-    path = "tests/features/migrated/tests/quorum.feature",
-    name = "follower forwards create topic"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_forwards_create_topic(metadata_quorum: MetadataQuorum) {
-    shutdown_cluster(take(&mut metadata_quorum.cluster)).await;
-    drop(metadata_quorum);
-}
+krabka_bdd::scenarios!(
+    "tests/features/migrated/tests/quorum.feature",
+    fixtures = [metadata_quorum: MetadataQuorum],
+    world = metadata_quorum,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);
 
 #[cfg(not(target_os = "macos"))]
-#[scenario(
-    path = "tests/features/migrated/tests/quorum.feature",
-    name = "concurrent topic creates one wins"
-)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_topic_creates_one_wins(metadata_quorum: MetadataQuorum) {
-    shutdown_cluster(take(&mut metadata_quorum.cluster)).await;
-    drop(metadata_quorum);
-}
-
-use std::mem::take;
+krabka_bdd::scenarios!(
+    "tests/features/metadata_quorum/concurrent_creation.feature",
+    fixtures = [metadata_quorum: MetadataQuorum],
+    world = metadata_quorum,
+    runtime = "tokio-multi-thread",
+    workers = 4,
+);

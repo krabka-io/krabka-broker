@@ -187,7 +187,9 @@ mod tests {
             TransactionIndex, check_sample_indexes, sample_data, sample_metadata as metadata,
         },
         assert2::{assert, check},
-        std::io,
+        rstest_bdd::datatable::Rows,
+        rstest_bdd_macros::DataTableRow,
+        std::{collections::BTreeMap, io},
     };
 
     /// A local tiered store, the directories around it, and one segment's metadata.
@@ -355,6 +357,7 @@ mod tests {
     struct LocalCopyScenario {
         fixture: Option<LocalFixture>,
         data: Option<LogSegmentData>,
+        copied: Option<Result<Option<CustomMetadata>, RemoteStorageError>>,
     }
     #[rstest::fixture]
     fn local_copy() -> LocalCopyScenario {
@@ -362,6 +365,7 @@ mod tests {
         LocalCopyScenario {
             fixture,
             data: None,
+            copied: None,
         }
     }
 
@@ -381,17 +385,32 @@ mod tests {
             .fixture
             .as_ref()
             .expect("a source segment was given");
-        fixture
-            .store
-            .copy_log_segment_data(
-                &fixture.metadata,
-                local_copy.data.as_ref().expect("index files were given"),
-            )
-            .expect("copy segment artifacts");
+        local_copy.copied = Some(fixture.store.copy_log_segment_data(
+            &fixture.metadata,
+            local_copy.data.as_ref().expect("index files were given"),
+        ));
     }
 
-    #[rstest_bdd_macros::then("the Kafka tiered partition contains segment artifact {suffix}")]
-    fn copied_local_artifact(local_copy: &LocalCopyScenario, suffix: String) {
+    #[derive(DataTableRow)]
+    struct CopiedArtifact {
+        suffix: String,
+        contents: String,
+    }
+
+    #[rstest_bdd_macros::then(
+        "the Kafka tiered partition contains exactly these segment artifacts"
+    )]
+    fn copied_local_artifacts(
+        local_copy: &LocalCopyScenario,
+        #[datatable] rows: Rows<CopiedArtifact>,
+    ) {
+        let custom_metadata = local_copy
+            .copied
+            .as_ref()
+            .expect("segment copy was attempted")
+            .as_ref()
+            .expect("segment artifacts copied");
+        check!(custom_metadata.is_none());
         let fixture = local_copy
             .fixture
             .as_ref()
@@ -400,14 +419,27 @@ mod tests {
             .remote
             .path()
             .join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
-        check!(
-            partition
-                .join(format!(
-                    "00000000000000000000-AAAAAAAAAAAAAAAAAAAACg{suffix}"
-                ))
-                .is_file(),
-            "missing Kafka layout artifact {suffix}"
-        );
+        let expected: BTreeMap<_, _> = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    partition.join(format!(
+                        "00000000000000000000-AAAAAAAAAAAAAAAAAAAACg{}",
+                        row.suffix
+                    )),
+                    row.contents.into_bytes(),
+                )
+            })
+            .collect();
+        let actual: BTreeMap<_, _> = fs::read_dir(&partition)
+            .expect("Kafka tiered partition exists")
+            .map(|entry| {
+                let path = entry.expect("segment artifact directory entry").path();
+                let contents = fs::read(&path).expect("copied segment artifact is readable");
+                (path, contents)
+            })
+            .collect();
+        check!(actual == expected);
     }
 
     krabka_bdd::scenarios!(
