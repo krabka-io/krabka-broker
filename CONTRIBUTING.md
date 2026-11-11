@@ -31,6 +31,8 @@ outcome. Given steps construct those preconditions; When steps perform the
 operation; Then steps compare the observed result against the specification.
 Wrapping an existing test body in a Then step does not make it a BDD specification.
 
+Group related examples under `Rule:` headings. The pinned macro patch includes rule scenarios in test discovery and preserves their backgrounds and tags. Check test discovery when you add or restructure a feature, and confirm that each example runs.
+
 Group scenarios by capability and reuse domain-specific steps. Use `Examples`
 to show actual inputs and expected outcomes, rather than opaque case names
 that select hidden Rust test bodies. Use data tables for structured

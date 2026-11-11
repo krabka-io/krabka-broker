@@ -1584,10 +1584,6 @@ crates/broker/tests/features/migrated/tests/unit/consumer_group.feature	one-when
 crates/broker/tests/features/migrated/tests/unit/discovery.feature	one-when	scenario `find coordinator creates the offsets topic then returns self` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/unit/idempotent_produce.feature	one-when	scenario `idempotent produce dedups duplicate batch` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/unit/idempotent_produce.feature	one-when	scenario `out of order returns 45` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/unit/produce_fetch.feature	max-steps	scenario `produce assigns base offsets` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/tests/unit/produce_fetch.feature	max-steps	scenario `produce then fetch round trip` has 6 steps, and at most 5 are allowed	1
-crates/broker/tests/features/migrated/tests/unit/produce_fetch.feature	one-when	scenario `produce assigns base offsets` has 2 `When` steps, and exactly one is allowed	1
-crates/broker/tests/features/migrated/tests/unit/produce_fetch.feature	one-when	scenario `produce then fetch round trip` has 2 `When` steps, and exactly one is allowed	1
 crates/broker/tests/features/migrated/tests/unit/producer_id.feature	first-person	step `a client initializes transactional producer my-tid` uses the first-person word `my`	1
 crates/broker/tests/features/migrated/tests/unit/producer_id.feature	first-person	step `the client first looks up the transaction coordinator for my-tid` uses the first-person word `my`	1
 crates/broker/tests/features/migrated/tests/unit/producer_id.feature	first-person	step `the transaction coordinator for my-tid is ready` uses the first-person word `my`	1
