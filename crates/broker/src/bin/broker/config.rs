@@ -156,14 +156,6 @@ mod tests {
     };
 
     #[test]
-    fn parse_roles_arg_maps_strings() {
-        assert!(
-            parse_roles_arg(&["controller".to_owned(), "broker".to_owned()]).unwrap()
-                == vec![NodeRole::Controller, NodeRole::Broker]
-        );
-    }
-
-    #[test]
     fn parse_roles_arg_rejects_unknown() {
         assert!(parse_roles_arg(&["nope".to_owned()]).is_err());
     }

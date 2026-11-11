@@ -6,7 +6,7 @@ use {
     crate::{
         features::ELR_VERSION,
         handlers::update_features::test_support::{
-            elr_update, metadata_update, min_isr_config_record, named_update, validate_only,
+            elr_update, min_isr_config_record, named_update, validate_only,
         },
         test_support::broker_registration,
     },
@@ -24,7 +24,6 @@ const LOCAL: LocalController = LocalController {
 };
 const UPGRADE: i8 = 1;
 const SAFE: i8 = 2;
-const UNSAFE: i8 = 3;
 
 #[derive(derive_more::From, derive_more::Into)]
 /// The advertised feature ranges are wire data, including unsupported levels.
@@ -96,6 +95,9 @@ struct FeaturePlanningScenario {
     result: Option<Result<UpdatePlan, UpdateError>>,
     static_min_isr: i32,
     safety: Option<Vec<MetadataRecord>>,
+    /// Whether the local controller runs with
+    /// `unstable.feature.versions.enable` set.
+    unstable: bool,
 }
 #[rstest::fixture]
 fn feature_planning() -> FeaturePlanningScenario {
@@ -150,12 +152,23 @@ fn planning_remote_broker(feature_planning: &mut FeaturePlanningScenario, range:
             .call(),
     );
 }
+#[krabka_bdd::given("unstable.feature.versions.enable is set on the local controller")]
+fn unstable_local_controller(feature_planning: &mut FeaturePlanningScenario) {
+    feature_planning.unstable = true;
+}
 #[rstest_bdd_macros::when("the local controller plans the validate-only feature request")]
 fn plan_requested_features(feature_planning: &mut FeaturePlanningScenario) {
     feature_planning.result = Some(plan_updates(
         &validate_only(feature_planning.updates.clone()),
         feature_planning.image.as_ref().unwrap(),
-        LOCAL,
+        LocalController {
+            unstable_features: if feature_planning.unstable {
+                UnstableFeatureVersions::Enabled
+            } else {
+                UnstableFeatureVersions::Disabled
+            },
+            ..LOCAL
+        },
     ));
 }
 #[rstest_bdd_macros::then(
@@ -204,6 +217,33 @@ fn check_feature_plan_refusal(
     reason: String,
 ) {
     assert!(feature_planning.result.as_ref().unwrap() == &Err(invalid(&feature, level, &reason)));
+}
+#[krabka_bdd::then("feature {feature} level {level} is refused for want of a downgrade type")]
+fn check_missing_downgrade_type(
+    feature_planning: &FeaturePlanningScenario,
+    feature: String,
+    level: i16,
+) {
+    let reason = "Can't downgrade the version of this feature without setting the upgrade type to \
+                  either safe or unsafe downgrade.";
+    assert!(feature_planning.result.as_ref().unwrap() == &Err(invalid(&feature, level, reason)));
+}
+#[krabka_bdd::then(
+    "the metadata.version downgrade from {current} to {target} is refused because {reason}"
+)]
+fn check_metadata_downgrade_refusal(
+    feature_planning: &FeaturePlanningScenario,
+    current: i16,
+    target: i16,
+    reason: String,
+) {
+    let expected = UpdateError {
+        code: codes::INVALID_UPDATE_VERSION,
+        message: format!(
+            "Unsupported metadata.version downgrade from {current} to {target}. {reason}"
+        ),
+    };
+    assert!(feature_planning.result.as_ref().unwrap() == &Err(expected));
 }
 #[rstest_bdd_macros::given(
     "ELR is disabled with cluster minimum ISR {cluster} broker {broker} minimum ISR {value} and static minimum ISR {static_value}"
@@ -255,59 +295,14 @@ fn check_elr_safety_records(feature_planning: &FeaturePlanningScenario, records:
     };
     assert!(feature_planning.safety.as_ref().unwrap() == &expected);
 }
-rstest_bdd_macros::scenarios!("tests/features/handler_feature_planning",fixtures=[feature_planning:FeaturePlanningScenario]);
+krabka_bdd::scenarios!(
+    "tests/features/handler_feature_planning",
+    fixtures = [feature_planning: FeaturePlanningScenario],
+);
 
 /// A version 0 row carries `AllowDowngrade` rather than `UpgradeType`, and
 /// Kafka reads the `UpgradeType` default, UPGRADE, so the flag never
 /// authorizes a downgrade.
-/// A Kafka trunk `metadata.version` (34) is past what the local
-/// controller supports unless `unstable.feature.versions.enable` is set, and
-/// is refused with `QuorumFeatures.reasonNotSupported`'s text. With the flag
-/// set, the unstable level is accepted.
-#[yare::parameterized(
-    released_44_iv0 = {
-        LOCAL,
-        31,
-        Ok(plan(vec![feature_record("metadata.version", 31)], &["metadata.version"])),
-    },
-    released_44_iv1 = {
-        LOCAL,
-        32,
-        Ok(plan(vec![feature_record("metadata.version", 32)], &["metadata.version"])),
-    },
-    latest_stable_level = {
-        LOCAL,
-        33,
-        Ok(plan(vec![feature_record("metadata.version", 33)], &["metadata.version"])),
-    },
-    first_unstable_level_is_refused = {
-        LOCAL,
-        34,
-        Err(invalid("metadata.version", 34, "Local controller 1 only supports versions 7-33")),
-    },
-    enabled_unstable_level = {
-        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
-        34,
-        Ok(plan(vec![feature_record("metadata.version", 34)], &["metadata.version"])),
-    },
-)]
-fn an_unstable_metadata_version_needs_unstable_feature_versions(
-    local: LocalController,
-    level: i16,
-    expected: Result<UpdatePlan, UpdateError>,
-) {
-    let image = image(&[FeatureLevel {
-        name: "metadata.version",
-        level: 30,
-    }]);
-    let request = validate_only(vec![metadata_update(level, UPGRADE)]);
-    assert2::assert!(
-        plan_updates(&request, &image, local) == expected,
-        "{:?} level {level}",
-        local.unstable_features
-    );
-}
-
 #[test]
 fn version_zero_allow_downgrade_is_read_as_upgrade() {
     let request = UpdateFeaturesRequest {
@@ -338,96 +333,6 @@ fn version_zero_allow_downgrade_is_read_as_upgrade() {
                  to either safe or unsafe downgrade.",
             ))
     );
-}
-
-/// The first failing entry in Kafka's `HashMap` order names the error, and
-/// the valid rows ahead of it write nothing.
-#[test]
-fn the_first_failure_in_map_order_fails_the_whole_request() {
-    let image = image(&[FeatureLevel {
-        name: "metadata.version",
-        level: 25,
-    }]);
-    let request = validate_only(vec![
-        named_update("share.version", 9, UPGRADE),
-        named_update("group.version", 9, UPGRADE),
-    ]);
-    assert!(
-        plan_updates(&request, &image, LOCAL)
-            == Err(invalid(
-                "group.version",
-                9,
-                "Local controller 1 only supports versions 0-1",
-            ))
-    );
-}
-
-/// krabka-io/krabka-broker#781: Kafka's `didMetadataChange` walk decides a
-/// `metadata.version` downgrade, whatever the downgrade type, and an accepted
-/// downgrade writes only its feature record.
-#[test]
-fn metadata_version_downgrades_follow_did_metadata_change() {
-    let refused = |current: i16, target: i16, reason: &str| {
-        Err(UpdateError {
-            code: codes::INVALID_UPDATE_VERSION,
-            message: format!(
-                "Unsupported metadata.version downgrade from {current} to {target}. {reason}"
-            ),
-        })
-    };
-    let lossy = "Refusing to perform the requested downgrade because it might delete metadata \
-                 information.";
-    let unsafe_reason = "Unsafe metadata downgrade is not supported in this version.";
-    let accepted = |target: i16| {
-        Ok(plan(vec![feature_record("metadata.version", target)], &[
-            "metadata.version",
-        ]))
-    };
-    let cases = [
-        (25, 24, SAFE, accepted(24)),
-        (25, 24, UNSAFE, accepted(24)),
-        (25, 22, SAFE, refused(25, 22, lossy)),
-        (25, 17, UNSAFE, refused(25, 17, unsafe_reason)),
-        (17, 15, UNSAFE, refused(17, 15, unsafe_reason)),
-        // 3.6-IV1 (13) changed metadata, so leaving it is lossy; 3.6-IV0
-        // (12) did not.
-        (13, 12, SAFE, refused(13, 12, lossy)),
-        (12, 11, SAFE, accepted(11)),
-        (29, 24, SAFE, accepted(24)),
-        (30, 29, SAFE, refused(30, 29, lossy)),
-        (
-            25,
-            24,
-            UPGRADE,
-            Err(invalid(
-                "metadata.version",
-                24,
-                "Can't downgrade the version of this feature without setting the upgrade type \
-                 to either safe or unsafe downgrade.",
-            )),
-        ),
-        (
-            25,
-            6,
-            SAFE,
-            Err(invalid(
-                "metadata.version",
-                6,
-                "Local controller 1 only supports versions 7-33",
-            )),
-        ),
-    ];
-    for (current, target, upgrade_type, expected) in cases {
-        let image = image(&[FeatureLevel {
-            name: "metadata.version",
-            level: current,
-        }]);
-        let request = validate_only(vec![metadata_update(target, upgrade_type)]);
-        assert!(
-            plan_updates(&request, &image, LOCAL) == expected,
-            "{current} -> {target} type {upgrade_type}"
-        );
-    }
 }
 
 /// An image at 4.3-IV0, with `eligible.leader.replicas.version` finalized at

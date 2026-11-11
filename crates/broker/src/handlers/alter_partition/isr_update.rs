@@ -410,7 +410,25 @@ mod tests {
             }
         };
         assert2::check!(isr_update.response.as_ref().unwrap() == &expected);
-        assert2::check!(isr_update.changes.len() == usize::from(code == codes::NONE));
+        if code == codes::NONE {
+            // The staged record moves this partition to the proposed ISR at
+            // the epoch the response reports.
+            let record = only_partition_change(&isr_update.changes);
+            assert2::check!(
+                (record.partition, record.isr.clone(), record.partition_epoch)
+                    == (
+                        7,
+                        expected
+                            .isr
+                            .iter()
+                            .map(|&id| NodeId(u64::try_from(id).expect("a replica id")))
+                            .collect::<Vec<_>>(),
+                        12
+                    )
+            );
+        } else {
+            assert2::check!(isr_update.changes.is_empty());
+        }
     }
     #[rstest_bdd_macros::scenario(
         path = "tests/features/handler_isr_validation/isr.feature",
@@ -498,41 +516,6 @@ mod tests {
                 },
             ],
         )
-    }
-
-    fn response_for_non_default_partition(
-        image: &krabka_metadata::MetadataImage,
-        changes: &mut Vec<MetadataRecord>,
-        leader_epoch: i32,
-    ) -> RespPartitionData {
-        handle_partition()
-            .image(image)
-            .changes(changes)
-            .partition(7)
-            .leader_epoch(leader_epoch)
-            .new_isr(&[WireBrokerId(2), WireBrokerId(4)])
-            .call()
-    }
-
-    #[test]
-    fn success_response_preserves_non_default_partition_fields() {
-        let image = non_default_partition_image();
-        let mut changes = Vec::new();
-        let resp = response_for_non_default_partition(&image, &mut changes, 9);
-
-        let expected = krabka_broker_macros::tagged_wire!(RespPartitionData {
-            partition_index: 7,
-            error_code: codes::NONE,
-            leader_id: 2,
-            leader_epoch: 9,
-            isr: vec![2, 4],
-            leader_recovery_state: 0,
-            partition_epoch: 12,
-        });
-        assert!(resp == expected);
-        let record = only_partition_change(&changes);
-        assert!(record.partition == 7);
-        assert!(record.partition_epoch == 12);
     }
 
     /// Two proposals built from the same ISR: the leader shrinks to `[1]`,

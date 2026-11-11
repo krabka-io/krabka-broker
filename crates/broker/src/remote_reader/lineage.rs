@@ -193,7 +193,11 @@ fn epoch_map(entries: &[(i32, LogOffset)]) -> BTreeMap<LeaderEpoch, LogOffset> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        krabka_bdd::{Given, given, then, when},
+    };
 
     /// Kafka's `RemoteLogManagerTest.testBuildFilteredLeaderEpochMap`.
     #[test]
@@ -220,168 +224,84 @@ mod tests {
         }
     }
 
-    /// One `isRemoteSegmentWithinLeaderEpochs` case: the segment's epochs and
-    /// end offset, the log end offset, and the answer.
-    struct Case {
-        label: &'static str,
-        segment_epochs: &'static [(i32, LogOffset)],
-        segment_end: LogOffset,
-        log_end_offset: LogOffset,
-        want: bool,
-    }
-
-    fn run(leader_epochs: &[(i32, LogOffset)], cases: &[Case]) {
-        let leader_epochs = epoch_map(leader_epochs);
-        let actual: Vec<(&str, bool)> = cases
-            .iter()
-            .map(|case| {
-                (
-                    case.label,
-                    segment_within_leader_epochs(
-                        &epoch_map(case.segment_epochs),
-                        case.segment_end,
-                        case.log_end_offset,
-                        &leader_epochs,
-                    ),
-                )
-            })
-            .collect();
-        let expected: Vec<(&str, bool)> =
-            cases.iter().map(|case| (case.label, case.want)).collect();
-        check!(actual == expected);
-    }
-
-    #[derive(Default)]
     struct RemoteSegmentLineage {
-        leader: Option<BTreeMap<LeaderEpoch, LogOffset>>,
-        segment: Option<BTreeMap<LeaderEpoch, LogOffset>>,
-        segment_end: Option<LogOffset>,
-        log_end: Option<LogOffset>,
-        within_lineage: Option<bool>,
+        leader: Given<BTreeMap<LeaderEpoch, LogOffset>>,
+        log_end: Given<LogOffset>,
+        segment: Given<BTreeMap<LeaderEpoch, LogOffset>>,
+        segment_end: Given<LogOffset>,
+        within_lineage: Given<bool>,
     }
 
     #[rstest::fixture]
     fn remote_segment_lineage() -> RemoteSegmentLineage {
-        // Candidate remote segments are judged against their own leader history.
-        RemoteSegmentLineage::default()
+        const LEADER: &str =
+            "Given the leader epoch starts are JSON <epochs> with leader log end <end>";
+        const SEGMENT: &str =
+            "And a remote segment has epoch starts JSON <epochs> with inclusive end offset <end>";
+        RemoteSegmentLineage {
+            leader: Given::new("leader", LEADER),
+            log_end: Given::new("log_end", LEADER),
+            segment: Given::new("segment", SEGMENT),
+            segment_end: Given::new("segment_end", SEGMENT),
+            within_lineage: Given::new(
+                "within_lineage",
+                "When the remote reader checks whether the segment belongs to the leader history",
+            ),
+        }
     }
 
-    #[rstest_bdd_macros::given(
-        "the leader epoch starts are JSON {epochs} and the leader log end is {end}"
-    )]
+    /// Epoch starts written as JSON `[[epoch, start], ..]`.
+    fn epochs_json(epochs: &str) -> BTreeMap<LeaderEpoch, LogOffset> {
+        let epochs: Vec<(i32, LogOffset)> =
+            serde_json::from_str(epochs).expect("explicit epoch start offsets");
+        epoch_map(&epochs)
+    }
+
+    #[given("the leader epoch starts are JSON {epochs} with leader log end {end}")]
     fn supplied_remote_leader_lineage(
         remote_segment_lineage: &mut RemoteSegmentLineage,
         epochs: String,
         end: LogOffset,
     ) {
-        let epochs: Vec<(i32, LogOffset)> =
-            serde_json::from_str(&epochs).expect("explicit leader epoch offsets");
-        remote_segment_lineage.leader = Some(epoch_map(&epochs));
-        remote_segment_lineage.log_end = Some(end);
+        remote_segment_lineage.leader.set(epochs_json(&epochs));
+        remote_segment_lineage.log_end.set(end);
     }
 
-    #[rstest_bdd_macros::given(
-        "a remote segment has epoch starts JSON {epochs} and inclusive end offset {end}"
-    )]
+    #[given("a remote segment has epoch starts JSON {epochs} with inclusive end offset {end}")]
     fn supplied_remote_segment_lineage(
         remote_segment_lineage: &mut RemoteSegmentLineage,
         epochs: String,
         end: LogOffset,
     ) {
-        let epochs: Vec<(i32, LogOffset)> =
-            serde_json::from_str(&epochs).expect("explicit segment epoch offsets");
-        remote_segment_lineage.segment = Some(epoch_map(&epochs));
-        remote_segment_lineage.segment_end = Some(end);
+        remote_segment_lineage.segment.set(epochs_json(&epochs));
+        remote_segment_lineage.segment_end.set(end);
     }
 
-    #[rstest_bdd_macros::when(
-        "the remote reader checks whether the segment belongs to the leader history"
-    )]
+    #[when("the remote reader checks whether the segment belongs to the leader history")]
     fn check_remote_segment_lineage(remote_segment_lineage: &mut RemoteSegmentLineage) {
-        remote_segment_lineage.within_lineage = Some(segment_within_leader_epochs(
-            remote_segment_lineage
-                .segment
-                .as_ref()
-                .expect("remote segment epochs were given"),
-            remote_segment_lineage
-                .segment_end
-                .expect("remote segment end was given"),
-            remote_segment_lineage
-                .log_end
-                .expect("leader log end was given"),
-            remote_segment_lineage
-                .leader
-                .as_ref()
-                .expect("leader history was given"),
-        ));
+        let within = segment_within_leader_epochs(
+            remote_segment_lineage.segment.get(),
+            *remote_segment_lineage.segment_end.get(),
+            *remote_segment_lineage.log_end.get(),
+            remote_segment_lineage.leader.get(),
+        );
+        remote_segment_lineage.within_lineage.set(within);
     }
 
-    #[rstest_bdd_macros::then("the remote segment belongs to the current leader lineage")]
+    #[then("the remote segment belongs to the current leader lineage")]
     fn matching_remote_segment_lineage(remote_segment_lineage: &RemoteSegmentLineage) {
-        check!(remote_segment_lineage.within_lineage == Some(true));
+        check!(*remote_segment_lineage.within_lineage.get());
     }
 
-    #[rstest_bdd_macros::then(
-        "the remote segment is refused as outside the current leader lineage"
-    )]
+    #[then("the remote segment is refused as outside the current leader lineage")]
     fn diverging_remote_segment_lineage(remote_segment_lineage: &RemoteSegmentLineage) {
-        check!(remote_segment_lineage.within_lineage == Some(false));
+        check!(!*remote_segment_lineage.within_lineage.get());
     }
 
-    rstest_bdd_macros::scenarios!(
-        "tests/features/migrated/src/remote_reader/lineage.feature",
-        fixtures = [remote_segment_lineage: RemoteSegmentLineage]
+    krabka_bdd::scenarios!(
+        "tests/features/migrated/src/remote_reader",
+        fixtures = [remote_segment_lineage: RemoteSegmentLineage],
     );
-
-    /// Kafka's
-    /// `RemoteLogManagerTest.testRemoteSegmentWithinLeaderEpochsForOverlappingSegments`.
-    #[test]
-    fn an_overlapping_segment_is_judged_from_the_first_epoch_the_lineage_holds() {
-        run(&[(7, 51), (9, 100)], &[
-            Case {
-                label: "starts in an epoch the lineage cut off, then follows it",
-                segment_epochs: &[(5, 14), (7, 15), (9, 100)],
-                segment_end: 150,
-                log_end_offset: 210,
-                want: true,
-            },
-            Case {
-                label: "every epoch is below the lineage",
-                segment_epochs: &[(2, 5), (3, 6)],
-                segment_end: 7,
-                log_end_offset: 210,
-                want: false,
-            },
-            Case {
-                label: "an epoch past the lineage's last",
-                segment_epochs: &[(7, 15), (9, 100), (10, 200)],
-                segment_end: 250,
-                log_end_offset: 210,
-                want: false,
-            },
-            Case {
-                label: "an epoch the lineage does not hold",
-                segment_epochs: &[(8, 75)],
-                segment_end: 100,
-                log_end_offset: 210,
-                want: false,
-            },
-            Case {
-                label: "a next epoch that starts elsewhere",
-                segment_epochs: &[(7, 15), (9, 101)],
-                segment_end: 150,
-                log_end_offset: 210,
-                want: false,
-            },
-            Case {
-                label: "starts before its epoch's start",
-                segment_epochs: &[(9, 99)],
-                segment_end: 150,
-                log_end_offset: 210,
-                want: false,
-            },
-        ]);
-    }
 
     /// The two states where krabka's lineage says nothing about a segment
     /// that `Fetch` serves, beside the plain port.

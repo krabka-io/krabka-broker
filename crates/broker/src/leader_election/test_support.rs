@@ -20,6 +20,8 @@ use {
     krabka_raft::NodeId,
     std::{
         collections::{BTreeMap, HashSet},
+        num::ParseIntError,
+        str::FromStr,
         sync::Arc,
         time::Duration,
     },
@@ -185,6 +187,40 @@ pub fn no_witnesses() -> HashSet<NodeId> { HashSet::new() }
 
 /// Mark `ids` as data-bearing witnesses.
 pub fn witnesses(ids: &[u64]) -> HashSet<NodeId> { ids.iter().copied().map(NodeId).collect() }
+
+/// A list of broker ids as a scenario writes it: `1,3,2` in order, or `none`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Brokers(pub Vec<u64>);
+
+impl Brokers {
+    /// The brokers in the order the scenario lists them.
+    pub fn nodes(&self) -> Vec<NodeId> { self.0.iter().copied().map(NodeId).collect() }
+
+    /// The brokers as a set, for liveness and witness lookups.
+    pub fn set(&self) -> HashSet<NodeId> { witnesses(&self.0) }
+
+    /// The brokers as the `i32` ids an eligible-leader-replica set holds.
+    pub fn elr_ids(&self) -> Vec<i32> {
+        self.0
+            .iter()
+            .map(|&id| i32::try_from(id).expect("a broker id that fits an ELR entry"))
+            .collect()
+    }
+}
+
+impl FromStr for Brokers {
+    type Err = ParseIntError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text == "none" {
+            return Ok(Self::default());
+        }
+        text.split(',')
+            .map(|id| id.trim().parse())
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+}
 
 /// Register `ids` as brokers and publish `broker.witness=true` for each
 /// one, which is the path the real broker takes at registration. Use this

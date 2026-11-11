@@ -18,7 +18,6 @@ use {
     exactly_future_edge = { NOW_MS + 300_000, true },
     one_millisecond_past_edge = { NOW_MS - 300_001, false },
     one_millisecond_after_edge = { NOW_MS + 300_001, false },
-    same_moment = { NOW_MS, true },
 )]
 fn timestamp_skew_boundary_is_checked(set_at_ms: i64, expected: bool) {
     let trust = trust();

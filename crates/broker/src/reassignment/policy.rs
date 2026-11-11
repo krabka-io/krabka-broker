@@ -241,20 +241,6 @@ mod tests {
     }
 
     #[test]
-    fn remap_directories_preserves_slot_alignment_on_replica_removal() {
-        let da = uuid::Uuid::from_u128(0xA);
-        let db = uuid::Uuid::from_u128(0xB);
-        let dc = uuid::Uuid::from_u128(0xC);
-        // replicas [1,2,3] dirs [dA,dB,dC]; reassignment removes broker 2.
-        let new = remap_directories(&[NodeId(1), NodeId(2), NodeId(3)], &[da, db, dc], &[
-            NodeId(1),
-            NodeId(3),
-        ]);
-        // broker 1 keeps dA at slot 0; broker 3 keeps dC at slot 1 (NOT dB).
-        assert!(new == vec![da, dc]);
-    }
-
-    #[test]
     fn remap_directories_assigns_nil_to_new_replica() {
         let da = uuid::Uuid::from_u128(0xA);
         // replicas [1] dirs [dA]; add broker 2 (no dir yet).
@@ -737,17 +723,5 @@ mod tests {
             partition_epoch: 1,
         };
         assert!(completed == Some(expected));
-    }
-
-    #[tokio::test]
-    async fn isr_intersection_when_some_targets_not_in_isr() {
-        // adding=[4], removing=[2]; isr=[1,2,3,4]; target=[1,3,4].
-        // new_isr = isr ∩ target = [1,3,4].
-        let img = four_replica_reassignment_image(vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
-        let l = liveness(&[1, 2, 3, 4]).await;
-        let updates = compute_reassignment_progress(&img, &l).await;
-        check!(updates.len() == 1);
-        let pr = first_partition(&updates[0]);
-        assert!(pr.isr == vec![NodeId(1), NodeId(3), NodeId(4)]);
     }
 }

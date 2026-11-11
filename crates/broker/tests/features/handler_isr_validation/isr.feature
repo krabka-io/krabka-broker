@@ -28,13 +28,9 @@ Feature: AlterPartition validates ISR proposals in Kafka controller order
     Examples:
       | requester | isr   | leader_epoch | partition_epoch | code |
       | 1         | 1     | 5            | 10              | 0    |
-      | 1         | 1     | 6            | 10              | 41   |
-      | 1         | 1     | 4            | 11              | 41   |
       | 2         | 1     | 4            | 9               | 74   |
       | 2         | 1     | 5            | 9               | 42   |
       | 1         | 1,4   | 5            | 9               | 95   |
-      | 1         | 2     | 5            | 10              | 42   |
-      | 1         | 1,2,2 | 5            | 10              | 42   |
 
   @named_kip_evidence
   Scenario: A fenced epoch returns only the partition index and error

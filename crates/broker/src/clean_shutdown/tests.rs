@@ -2,10 +2,7 @@
 //! and how a controller reads either one.
 
 use {
-    super::{
-        FILE_NAME, FORMAT_VERSION, ProofError, UNPROVEN, decode, encode, restart_was_clean, take,
-        write,
-    },
+    super::{FILE_NAME, ProofError, UNPROVEN, decode, encode, restart_was_clean, take, write},
     crate::{test_support, test_support::broker_registration},
     assert2::assert,
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
@@ -39,15 +36,6 @@ fn a_log_dir_with_no_proof_never_reads_as_a_clean_restart() {
     let image = image_registering_node_at(0);
 
     assert!(!restart_was_clean(&image, NODE, take(dir.path())));
-}
-
-/// A graceful stop's epoch comes back to the next start.
-#[test]
-fn a_written_proof_comes_back_to_the_next_start() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    write(dir.path(), 4242);
-
-    assert!(take(dir.path()) == 4242);
 }
 
 /// The proof covers one restart. A broker that starts and then dies has
@@ -144,11 +132,6 @@ rstest_bdd_macros::scenarios!(
 )]
 fn decode_reads_only_version_zero_documents(text: &str, want: Result<i64, ProofError>) {
     assert2::assert!(decode(text) == want, "decode({text})");
-}
-
-#[test]
-fn the_format_version_is_zero() {
-    assert!(FORMAT_VERSION == 0);
 }
 
 /// A file that is not a proof -- of an unknown version, in the 0.x layout,

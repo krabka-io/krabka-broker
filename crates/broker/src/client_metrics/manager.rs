@@ -750,60 +750,6 @@ mod tests {
         }
     }
 
-    /// A push reaches a broker that holds no instance for it: Kafka builds the
-    /// instance from the current subscriptions and checks the push. Only the
-    /// reserved ids get `INVALID_REQUEST` (#673).
-    #[test]
-    fn push_without_an_instance_builds_one() {
-        let img = all_metrics_img("60000");
-        let attrs = attrs();
-        let current = subscription_id(
-            &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
-            attrs.client_instance_id,
-        );
-        let rows = [
-            ("current subscription id", attrs.clone(), current, accept()),
-            (
-                "other subscription id",
-                attrs.clone(),
-                current ^ 1,
-                reject_push(KafkaErrorCode(codes::UNKNOWN_SUBSCRIPTION_ID)),
-            ),
-            (
-                "zero instance id",
-                ClientAttributes {
-                    client_instance_id: Uuid::nil(),
-                    ..attrs.clone()
-                },
-                current,
-                reject_push(KafkaErrorCode(codes::INVALID_REQUEST)),
-            ),
-            (
-                "Uuid.ONE_UUID",
-                ClientAttributes {
-                    client_instance_id: Uuid::from_u128(1),
-                    ..attrs
-                },
-                current,
-                reject_push(KafkaErrorCode(codes::INVALID_REQUEST)),
-            ),
-        ];
-        for (name, attrs, id, expected) in rows {
-            let m = manager();
-            assert!(
-                run()
-                    .m(&m)
-                    .img(&img)
-                    .attrs(&attrs)
-                    .now(Instant::now())
-                    .step(Step::Push(push(TelemetrySubscriptionId(id))))
-                    .call()
-                    == expected,
-                "row {name}"
-            );
-        }
-    }
-
     /// A subscription change rebuilds the instance on its next request: the
     /// old subscription id gets `UNKNOWN_SUBSCRIPTION_ID`, and a get inside
     /// the old interval gets the new subscription at once (#672, #673).

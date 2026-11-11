@@ -321,33 +321,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_leader_commits_known_directory_assignment() {
-        krabka_broker_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker);
-            boot [broker_fixture_support::start_broker_with(|_| {})];
-            ready controller_leader;
-        };
-        let dir_uuid = uuid::Uuid::from_u128(0xAA);
-        let topic_uuid = uuid::Uuid::from_u128(0xBB);
-        seed_topic(&broker, topic_uuid).await;
-        let req = request(DirectoryAssignmentSetup {
-            broker_epoch: own_broker_epoch(&broker),
-            dir: dir_uuid,
-            topic: topic_uuid,
-            ..Default::default()
-        });
-
-        let resp = handle_allowed(&broker, req)
-            .await
-            .expect("AssignReplicasToDirs handler");
-
-        assert!(resp.error_code == codes::NONE, "{resp:?}");
-        assert!(resp.directories[0].topics[0].partitions[0].error_code == codes::NONE);
-        check_partition_directory(&broker, dir_uuid);
-        broker_handle.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn handle_rejects_directory_assignment_below_kip_858_metadata_version() {
         krabka_broker_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);

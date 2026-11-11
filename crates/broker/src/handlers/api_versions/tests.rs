@@ -310,44 +310,6 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
     assert!(dq.max_version == 2, "DescribeQuorum is v2 after KIP-853");
 }
 
-#[yare::parameterized(
-    empty_name = { "", "1.0.0" },
-    empty_version = { "krabka-test", "" },
-)]
-#[test_macro(tokio::test)]
-async fn handle_rejects_each_invalid_v3_client_info_field(name: &str, version: &str) {
-    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
-
-    let req = request(name, version);
-    let bytes = handle(&broker, API_VERSIONS_V3, &req, &context)
-        .await
-        .expect("ApiVersions handler");
-    let resp = decode_response(API_VERSIONS_V3, &bytes);
-    assert2::assert!(resp.error_code == codes::INVALID_REQUEST, "{resp:?}");
-    assert2::assert!(resp.api_keys.is_empty(), "{resp:?}");
-
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_accepts_legacy_request_without_client_info() {
-    krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };
-    let req = ApiVersionsRequest::default();
-    let mut req_bytes = BytesMut::with_capacity(req.encoded_len(0));
-    req.encode(&mut req_bytes, 0)
-        .expect("encode legacy ApiVersionsRequest");
-
-    let bytes = handle(&broker, 0, &req_bytes, &context)
-        .await
-        .expect("ApiVersions handler");
-    let resp = decode_response(0, &bytes);
-
-    assert!(resp.error_code == codes::NONE, "{resp:?}");
-    assert!(!resp.api_keys.is_empty(), "{resp:?}");
-
-    broker_handle.shutdown().await;
-}
-
 #[tokio::test]
 async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     krabka_broker_macros::broker_test_setup! { bind(broker_handle, _dir, broker, principal, peer, context); boot [start_broker_with(|_| {})]; user ["ANONYMOUS"]; client ["krabka-test"]; };

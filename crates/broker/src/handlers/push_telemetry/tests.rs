@@ -320,12 +320,13 @@ async fn check_subscribed_telemetry(telemetry_push: &mut TelemetryPushScenario, 
 #[tokio::test]
 async fn push_after_get_follows_kafkas_payload_checks(
     telemetry_push: TelemetryPushScenario,
+    case: String,
     unstable: bool,
     payload: String,
     compression: i8,
     code: i16,
 ) {
-    let _ = (telemetry_push, unstable, payload, compression, code);
+    let _ = (telemetry_push, case, unstable, payload, compression, code);
 }
 
 /// A push for an instance this broker does not hold: Kafka builds the

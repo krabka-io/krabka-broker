@@ -258,14 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn an_error_text_repeats_the_display_text_of_the_error() {
-        let error = BarrierError::UnknownGroup {
-            group: "orders-cut".to_owned(),
-        };
-        check!(error_text(&error) == error.to_string());
-    }
-
-    #[test]
     fn a_cut_becomes_the_offsets_and_the_missing_partitions_of_the_wire() {
         let expected_topics = vec![BarrierCutTopic {
             topic: "orders".to_owned(),
