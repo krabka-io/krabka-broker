@@ -839,6 +839,7 @@ jobs:
       rust: ${{ steps.scope.outputs.rust }}
       kubernetes: ${{ steps.scope.outputs.kubernetes }}
       proofs: ${{ steps.scope.outputs.proofs }}
+      kafka44: ${{ steps.scope.outputs.kafka44 }}
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -1701,6 +1702,11 @@ jobs:
     if: github.event_name != 'schedule'
     uses: ./.github/workflows/security.yml
 
+  kafka44:
+    needs: select
+    if: github.event_name != 'schedule' && needs.select.outputs.kafka44 == 'true'
+    uses: ./.github/workflows/kafka44-evidence.yml
+
   gate:
     name: gate
     # Mergeability: pull requests, and the pushes to `main` that follow them.
@@ -1712,6 +1718,7 @@ jobs:
       - coverage
       - supply-chain
       - rustsec
+      - kafka44
       - cargo
       - wasm
       - checks
@@ -1727,7 +1734,7 @@ jobs:
       - uses: krabka-io/tooling/actions/gate@1fb9d942c2def2fcfa20c19ed8ae8a7d8f220f65
         with:
           results: ${{ toJSON(needs) }}
-          allow-skipped: cargo,coverage,docker,kubernetes,proofs,wasm
+          allow-skipped: cargo,coverage,docker,kubernetes,proofs,wasm,kafka44
 
   # The scheduled lanes' only reader.
   #
