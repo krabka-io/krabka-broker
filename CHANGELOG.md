@@ -23,6 +23,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
 ### Added
 
 - `krabka_bdd::scenarios!` binds one `.feature` file as well as a directory, runs `runtime = "tokio-current-thread-paused"` on a paused clock, and generates an `@docker` scenario as `#[ignore = "requires Docker"]` for `--config=docker` to run with `--ignored`.
@@ -2692,7 +2694,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.2.0
 [1.1.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.5
 [1.1.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.4
 [1.1.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.1.3

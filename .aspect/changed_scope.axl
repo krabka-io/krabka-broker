@@ -1,6 +1,6 @@
 """Decide which of CI's path-scoped jobs a change needs.
 
-It answers three questions, one `GITHUB_OUTPUT` line each:
+It answers four questions, one `GITHUB_OUTPUT` line each:
 
 - `rust`: whether the change reaches the Rust build or its test inputs. CI
   uses it to skip the Cargo and wasm Clippy lanes on documentation-only pull
@@ -13,6 +13,9 @@ It answers three questions, one `GITHUB_OUTPUT` line each:
 - `proofs`: whether the change reaches what the Creusot proofs read, the
   proved crate, its in-workspace dependency, the proof sessions and the proof
   image. Anything else cannot invalidate a proof.
+
+- `kafka44`: whether the change reaches the released Kafka oracle evidence
+  tools, their qualification records, or their workflow.
 
 `container-suites` separately answers which container suites a change needs.
 A wrong answer here could omit a useful run, so the rules are deliberately
@@ -151,8 +154,12 @@ def touches_proofs(paths):
     """Whether any of `paths` can change what the Creusot proofs prove."""
     return _touches(paths, PROOFS_FILES, PROOFS_PREFIXES)
 
+def touches_kafka44(paths):
+    """Whether the change reaches the released Kafka oracle evidence inputs."""
+    return _touches(paths, [CI_WORKFLOW, ".github/workflows/kafka44-evidence.yml", ".aspect/changed_scope.axl", ".aspect/changed_scope_test.axl"], [".aspect/kafka44", "tools/kafka44/", "qualification/"])
+
 # The scopes, in the order the task prints them.
-SCOPES = ["rust", "kubernetes", "proofs"]
+SCOPES = ["rust", "kubernetes", "proofs", "kafka44"]
 
 def decide(base_resolved, paths):
     """Which scoped jobs should run, given a diff that may not exist.
@@ -172,6 +179,7 @@ def decide(base_resolved, paths):
         "rust": touches_rust(paths),
         "kubernetes": touches_kubernetes(paths),
         "proofs": touches_proofs(paths),
+        "kafka44": touches_kafka44(paths),
     }
 
 def _changed(ctx, base):

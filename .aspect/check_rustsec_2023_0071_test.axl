@@ -13,7 +13,7 @@ def _dep(name, version, kind = None):
 # reached only by its reviewed parents. Every case is a mutation of this.
 _VERSIONS = {
     "krabka-broker": "1.0.0",
-    "krabka-security": "0.8.0",
+    "krabka-security": "0.8.1",
     "picky": "7.0.0-rc.27",
     "rsa": "0.10.0-rc.18",
     "sspi": "0.23.1",
@@ -82,7 +82,14 @@ def _test_a_version_change_is_reported(_ctx):
 def _test_a_security_crate_version_change_is_reported(_ctx):
     versions = _with(_VERSIONS, "krabka-security", "0.9.0")
     check_eq("problems", problems(_metadata(versions = versions)), [
-        "krabka-security changed from reviewed 0.8.0 to 0.9.0; " +
+        "krabka-security changed from reviewed 0.8.1 to 0.9.0; " +
+        "review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_an_unreviewed_security_patch_is_reported(_ctx):
+    versions = _with(_VERSIONS, "krabka-security", "0.8.2")
+    check_eq("problems", problems(_metadata(versions = versions)), [
+        "krabka-security changed from reviewed 0.8.1 to 0.8.2; " +
         "review RUSTSEC-2023-0071 reachability",
     ])
 
@@ -127,6 +134,7 @@ check_rustsec_2023_0071_tests = suite("check-rustsec-2023-0071", [
     _test_an_explicit_normal_kind_is_a_normal_edge,
     _test_a_version_change_is_reported,
     _test_a_security_crate_version_change_is_reported,
+    _test_an_unreviewed_security_patch_is_reported,
     _test_a_new_rsa_parent_is_reported,
     _test_a_new_sspi_parent_is_reported,
     _test_a_lost_parent_is_reported,
