@@ -252,8 +252,13 @@ fn render_wrapper_function(
 
     match wrapper_kind {
         WrapperKind::Sync => {
-            let unwind_handling =
-                generate_sync_unwind_handling(&path, call_expr, &prepared.fixture_guards, &exec_err, &panic_err);
+            let unwind_handling = generate_sync_unwind_handling(
+                &path,
+                call_expr,
+                &prepared.fixture_guards,
+                &exec_err,
+                &panic_err,
+            );
             let fragments = WrapperCodeFragments {
                 path: &path,
                 expect_attr: &expect_attr,
@@ -263,8 +268,13 @@ fn render_wrapper_function(
             generate_sync_wrapper_quote(identifiers, prepared, fragments)
         }
         WrapperKind::Async => {
-            let unwind_handling =
-                async_wrapper::generate_unwind_handling(&path, call_expr, &prepared.fixture_guards, &exec_err, &panic_err);
+            let unwind_handling = async_wrapper::generate_unwind_handling(
+                &path,
+                call_expr,
+                &prepared.fixture_guards,
+                &exec_err,
+                &panic_err,
+            );
             let fragments = WrapperCodeFragments {
                 path: &path,
                 expect_attr: &expect_attr,

@@ -2,6 +2,8 @@
 
 #[path = "missing_examples_tests.rs"]
 mod missing_examples_tests;
+#[path = "rule_tests.rs"]
+mod rule_tests;
 #[path = "step_extraction_tests.rs"]
 mod step_extraction_tests;
 #[path = "support.rs"]
