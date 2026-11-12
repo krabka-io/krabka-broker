@@ -322,14 +322,12 @@ crate.annotation(
     patches = ["//bazel/patches:opentelemetry-0.33.1-rustdoc-root.patch"],
     version = "0.33.1",
 )
-
 crate.annotation(
     crate = "tokio",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:tokio-1.54.1-rustdoc-root.patch"],
     version = "1.54.1",
 )
-
 crate.annotation(
     crate = "tracing-subscriber",
     patch_args = ["-p1"],
