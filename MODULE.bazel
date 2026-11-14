@@ -284,6 +284,57 @@ crate.from_cargo(
     platform_triples = PLATFORM_TRIPLES,
 )
 
+# Stable rustdoc needs dependency roots and qualified macro documentation links.
+# These exact-version patches change documentation only, not runtime behavior.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "krabka_doc_roots",
+    build_file_content = 'exports_files(glob(["patches/rustdoc/*.patch"]))',
+    sha256 = "17a6ba990d324d4b1294587b4039ead8aab8b44aaf4173f950480724f96dbe7b",
+    strip_prefix = "tooling-de8015a2ae144099980c6a508ef57b6809f40dfb",
+    urls = ["https://github.com/krabka-io/tooling/archive/de8015a2ae144099980c6a508ef57b6809f40dfb.tar.gz"],
+)
+
+crate.annotation(
+    crate = "tracing",
+    patch_args = ["-p1"],
+    patches = ["@krabka_doc_roots//:patches/rustdoc/tracing-0.1.44.patch"],
+    version = "0.1.44",
+)
+crate.annotation(
+    crate = "tracing-core",
+    patch_args = ["-p1"],
+    patches = ["@krabka_doc_roots//:patches/rustdoc/tracing-core-0.1.36.patch"],
+    version = "0.1.36",
+)
+crate.annotation(
+    crate = "yansi",
+    patch_args = ["-p1"],
+    patches = ["@krabka_doc_roots//:patches/rustdoc/yansi-1.0.1.patch"],
+    version = "1.0.1",
+)
+
+# The shared set targets opentelemetry 0.32; this lockfile uses 0.33.1.
+crate.annotation(
+    crate = "opentelemetry",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:opentelemetry-0.33.1-rustdoc-root.patch"],
+    version = "0.33.1",
+)
+crate.annotation(
+    crate = "tokio",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:tokio-1.54.1-rustdoc-root.patch"],
+    version = "1.54.1",
+)
+crate.annotation(
+    crate = "tracing-subscriber",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:tracing-subscriber-0.3.23-rustdoc-root.patch"],
+    version = "0.3.23",
+)
+
 # rules_rs_mutants deliberately ships no cargo-mutants binary: every consumer
 # builds one from its own lockfile so the sweep and the build agree on a
 # version. `//tools/mutants` is that lockfile.

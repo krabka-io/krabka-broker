@@ -1,0 +1,19 @@
+# Exact rustdoc page and absent script request. Keep real assets.
+krabka-bdd-cli/krabka_bdd_cli/fs/trait.FileSystem.html	../../trait.impl/krabka_bdd_cli/fs/trait.FileSystem.js
+krabka-bdd/krabka_bdd/driver/trait.Action.html	../../trait.impl/krabka_bdd/driver/trait.Action.js
+krabka-bdd/krabka_bdd/driver/trait.Driver.html	../../trait.impl/krabka_bdd/driver/trait.Driver.js
+krabka-bdd/krabka_bdd/overrides/trait.Overrides.html	../../trait.impl/krabka_bdd/overrides/trait.Overrides.js
+krabka-bdd/krabka_bdd/table/trait.TableRow.html	../../trait.impl/krabka_bdd/table/trait.TableRow.js
+krabka-bdd/krabka_bdd/trait.World.html	../trait.impl/krabka_bdd/world/trait.World.js
+krabka-broker/krabka_broker/health/trait.MetadataProgress.html	../../trait.impl/krabka_broker/health/trait.MetadataProgress.js
+krabka-broker/krabka_broker/share_partition/trait.DlqSink.html	../../trait.impl/krabka_broker/share_partition/dlq/trait.DlqSink.js
+krabka-kraft-core/krabka_kraft_core/simulation_support/trait.PartitionMessage.html	../../trait.impl/krabka_kraft_core/simulation_support/trait.PartitionMessage.js
+krabka-kraft-core/krabka_kraft_core/types/trait.LogView.html	../../trait.impl/krabka_kraft_core/types/trait.LogView.js
+krabka-log/krabka_log/trait.StampSource.html	../trait.impl/krabka_log/stamp_source/trait.StampSource.js
+krabka-log/krabka_log/trait.WriteBack.html	../trait.impl/krabka_log/io/trait.WriteBack.js
+krabka-raft/krabka_raft/handshake/trait.ControllerApiVersions.html	../../trait.impl/krabka_raft/handshake/trait.ControllerApiVersions.js
+krabka-raft/krabka_raft/handshake/trait.RaftListenerHandshake.html	../../trait.impl/krabka_raft/handshake/trait.RaftListenerHandshake.js
+krabka-raft/krabka_raft/trait.ControllerAdminRouter.html	../trait.impl/krabka_raft/config/routing/trait.ControllerAdminRouter.js
+krabka-raft/krabka_raft/trait.RaftShardRouter.html	../trait.impl/krabka_raft/config/routing/trait.RaftShardRouter.js
+krabka-raft/krabka_raft/trait.RegistrationAdmission.html	../trait.impl/krabka_raft/config/routing/trait.RegistrationAdmission.js
+krabka-remote-storage-topic/krabka_remote_storage_topic/log/trait.AssignmentHandle.html	../../trait.impl/krabka_remote_storage_topic/log/trait.AssignmentHandle.js

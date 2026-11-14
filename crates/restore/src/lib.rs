@@ -183,7 +183,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
 ///
 /// **Testing seam.** A drill passes an `open` that wraps the archive in a
 /// misbehaving store, such as a
-/// [`FaultInjectingStore`](krabka_object_store::fault::FaultInjectingStore).
+/// [`FaultInjectingStore`](../../krabka-object-store/krabka_object_store/fault/struct.FaultInjectingStore.html).
 /// The arguments and the target are checked before `open` runs, as in
 /// [`restore`].
 ///
