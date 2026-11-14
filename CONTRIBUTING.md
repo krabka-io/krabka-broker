@@ -24,6 +24,8 @@ cargo test --workspace --doc
 
 Behavior scenarios follow the [Gherkin style guide](docs/style_guides/gherkin_style_guide.md). It defines formulation, BRIEF, rules, capability folders, tags, journeys, and step definitions. Use `krabka_bdd::scenarios!` for new and migrated features, with the wrapper's step attributes and scenario-scoped `rstest` fixtures.
 
+Group related examples under `Rule:` headings. The pinned macro patch includes rule scenarios in test discovery and preserves their backgrounds and tags. Check test discovery when you add or restructure a feature, and confirm that each example runs.
+
 The [BDD observation guide](docs/style_guides/bdd_style_guide.md) supplements those conventions with a typed fixture example, independent expected values, asynchronous observations, and simulation scope. Use `krabka_bdd::Given<T>` for state slots and `Attempt<T, E>` for expected negative-path results. Then steps compare observations without repeating or changing the operation under test.
 
 The wrapper awaits async steps on one runtime for the whole scenario and runs its after hooks on failure. Preserve Tokio runtime settings, platform conditions, external-service requirements, ignored tests, and cleanup when migrating scenarios. Add feature files and the crate's `Cargo.toml` to Bazel `compile_data`. Touch the Rust binding file when adding a feature to a directory the macro reads, so Cargo sees the new input.
