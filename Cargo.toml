@@ -234,7 +234,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "logs"] }
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
-prometheus-client = "0.25"
+prometheus-client = "0.26"
 proptest = "1"
 # The `.feature` parser `krabka-bdd-macros` lints with, at the version the
 # rstest-bdd macros parse with.
