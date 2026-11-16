@@ -759,7 +759,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5c97450e79c7c565302dd92e86b08823b47550fcb4fc5ce910194d1b087a1a3"
 dependencies = [
- "prost 0.14.5",
+ "prost 0.14.6",
  "prost-types 0.14.4",
  "tonic",
  "tonic-prost",
@@ -774,7 +774,7 @@ dependencies = [
  "base64 0.22.1",
  "bollard-buildkit-proto",
  "bytes",
- "prost 0.14.5",
+ "prost 0.14.6",
  "serde",
  "serde_json",
  "serde_repr",
@@ -3892,7 +3892,7 @@ dependencies = [
  "pbkdf2",
  "prometheus-client",
  "proptest",
- "prost 0.14.5",
+ "prost 0.14.6",
  "prost-reflect",
  "protox-parse 0.10.0",
  "qubit-clock",
@@ -4657,7 +4657,7 @@ dependencies = [
  "bytes",
  "jsonschema 0.58.6",
  "krabka-units",
- "prost 0.14.5",
+ "prost 0.14.6",
  "prost-reflect",
  "protox-parse 0.9.0",
  "reqwest 0.13.5",
@@ -5808,7 +5808,7 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
- "prost 0.14.5",
+ "prost 0.14.6",
  "reqwest 0.13.5",
  "thiserror 2.0.21",
  "tokio",
@@ -5824,7 +5824,7 @@ checksum = "d576f5dddc3299341bcd85a04be17b2564844c0c9563214f02d85f2524d1afae"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
- "prost 0.14.5",
+ "prost 0.14.6",
  "tonic",
  "tonic-prost",
 ]
@@ -6524,7 +6524,7 @@ dependencies = [
  "flate2",
  "num",
  "paste",
- "prost 0.14.5",
+ "prost 0.14.6",
 ]
 
 [[package]]
@@ -6723,9 +6723,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.14.5"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9f016da56b311cff4659f5e7335c4d5fda5ca86cae4f48b8ce1cf3335246a7d"
+checksum = "3ef0b569d1d907ab3a28596aee62cf1f61dacb0529a4bedcd8e7460e2d5228b4"
 dependencies = [
  "bytes",
  "prost-derive 0.14.6",
@@ -6772,7 +6772,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad9c5423459fa2f729b8d9235fab810aa29628b171467744fc86d21460ad70d"
 dependencies = [
  "anyhow",
- "itertools 0.15.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -6784,7 +6784,7 @@ version = "0.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01b80ea363c31af2de2b92e3c07ed1156628f7838c4afb4df75ee78a37fedbd1"
 dependencies = [
- "prost 0.14.5",
+ "prost 0.14.6",
  "prost-types 0.14.4",
 ]
 
@@ -6803,7 +6803,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
- "prost 0.14.5",
+ "prost 0.14.6",
 ]
 
 [[package]]
@@ -8900,7 +8900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba464054e2226f182a34489b8b079bf4c6e3e7ab5fd7fc30e024f24aa92a484"
 dependencies = [
  "bytes",
- "prost 0.14.5",
+ "prost 0.14.6",
  "tonic",
 ]
 
@@ -8910,7 +8910,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccbb6c31deb8e99dcdf87df19c5289b7838a600da74a8224baa671e52fe7c5ad"
 dependencies = [
- "prost 0.14.5",
+ "prost 0.14.6",
  "prost-types 0.14.4",
  "tonic",
 ]
