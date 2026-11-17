@@ -193,7 +193,7 @@ rcgen = { workspace = true }
 # `zerocopy` feature gates the sendfile wrapper; 0.31 matches the version already
 # in Cargo.lock. NOT pulled on Linux or Windows.
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "freebsd", target_os = "dragonfly"))'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
+nix = { version = "0.32", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
 # `time` for the thread CPU clock that a test bounds instead of wall-clock time.
