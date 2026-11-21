@@ -291,9 +291,9 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_archive(
     name = "krabka_doc_roots",
     build_file_content = 'exports_files(glob(["patches/rustdoc/*.patch"]))',
-    sha256 = "17a6ba990d324d4b1294587b4039ead8aab8b44aaf4173f950480724f96dbe7b",
-    strip_prefix = "tooling-de8015a2ae144099980c6a508ef57b6809f40dfb",
-    urls = ["https://github.com/krabka-io/tooling/archive/de8015a2ae144099980c6a508ef57b6809f40dfb.tar.gz"],
+    sha256 = "ab8d36151e994123612212da7ee074787558385971dca7ab3d1b11c6d88cc7b8",
+    strip_prefix = "tooling-cb7e5babd1112ced97bf7231ac9b6f690971ce33",
+    urls = ["https://github.com/krabka-io/tooling/archive/cb7e5babd1112ced97bf7231ac9b6f690971ce33.tar.gz"],
 )
 
 crate.annotation(
