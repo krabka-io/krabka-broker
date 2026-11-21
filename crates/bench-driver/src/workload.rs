@@ -23,9 +23,9 @@ use {
         },
     },
     anyhow::{Context, Result},
-    chrono::Utc,
     futures::{FutureExt, StreamExt, stream::FuturesUnordered},
     hdrhistogram::Histogram,
+    jiff::Timestamp,
     krabka_client_consumer::{AutoOffsetReset, Consumer},
     krabka_client_core::{
         ClientFrameMax, ConnectionDispatchQueueCapacity,
@@ -347,7 +347,8 @@ impl TlsParams {
 pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     // One reading of the wall clock, kept at both scales. The nanosecond form
     // is what a consumer compares a record's embedded send stamp against.
-    let started_ns = nonnegative_i64_to_u64(Utc::now().timestamp_nanos_opt().unwrap_or_default());
+    let started_ns =
+        nonnegative_i64_to_u64(i64::try_from(Timestamp::now().as_nanosecond()).unwrap_or_default());
     let wallclock_start = saturating_u64_to_i64(started_ns / 1_000_000);
     let t_start = Instant::now();
 
@@ -446,7 +447,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         },
     );
 
-    let wallclock_end = Utc::now().timestamp_millis();
+    let wallclock_end = Timestamp::now().as_millisecond();
     let ResourceCapture {
         resource,
         broker_samples,
@@ -1182,7 +1183,7 @@ impl<'a> ProducerObservations<'a> {
                     // healthy cluster and is not a recovery.
                     let killed_at = self.shared.kill_at.load(Ordering::Relaxed);
                     if killed_at > 0 {
-                        let now_ms = nonnegative_i64_to_u64(Utc::now().timestamp_millis());
+                        let now_ms = nonnegative_i64_to_u64(Timestamp::now().as_millisecond());
                         if self.output.recovery_unix_ms == 0 && now_ms >= killed_at {
                             self.output.recovery_unix_ms = now_ms;
                         }
@@ -1192,7 +1193,7 @@ impl<'a> ProducerObservations<'a> {
                     }
                 }
                 if self.shared.first_ack.load(Ordering::Relaxed) == 0 {
-                    let now_ms = nonnegative_i64_to_u64(Utc::now().timestamp_millis());
+                    let now_ms = nonnegative_i64_to_u64(Timestamp::now().as_millisecond());
                     let _ = self.shared.first_ack.compare_exchange(
                         0,
                         now_ms,
@@ -1507,8 +1508,9 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
         }
         match consumer.poll(poll_timeout).await {
             Ok(records) => {
-                let now_ns =
-                    nonnegative_i64_to_u64(Utc::now().timestamp_nanos_opt().unwrap_or_default());
+                let now_ns = nonnegative_i64_to_u64(
+                    i64::try_from(Timestamp::now().as_nanosecond()).unwrap_or_default(),
+                );
                 let phase = stop.load(Ordering::Relaxed);
                 for r in records {
                     if let Some(val) = &r.value {
