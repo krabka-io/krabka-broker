@@ -1,4 +1,4 @@
-//! Proc macros behind [`krabka-bdd`](../krabka_bdd/index.html).
+//! Proc macros behind [`krabka-bdd`](../../krabka-bdd/krabka_bdd/index.html).
 //!
 //! Use them through `krabka-bdd`, which re-exports them next to the runtime
 //! types their expansions name. Among its macros:

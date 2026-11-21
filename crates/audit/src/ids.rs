@@ -5,7 +5,7 @@
 //! `set_depth(bytes, count)`, is then a compile error and not a silent
 //! corruption. See the [newtype guidance] in the style guide.
 //!
-//! [newtype guidance]: ../../../docs/style_guides/code_style_guide.md
+//! [newtype guidance]: https://github.com/krabka-io/krabka-broker/blob/main/docs/style_guides/code_style_guide.md
 
 use {
     derive_more::{Add, AddAssign, Display, From, Into},
