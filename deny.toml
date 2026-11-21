@@ -10,6 +10,12 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
+    # chrono is unmaintained, not a reported exploitable vulnerability.
+    # object_store 0.14 exposes DateTime<Utc> in its public metadata API and
+    # still requires chrono after its humantime migration (upstream #908).
+    # No patched release exists. Remove this exception when object_store
+    # migrates its timestamp API; the benchmark driver uses jiff directly.
+    "RUSTSEC-2026-0543",
     # RSA "Marvin" timing side-channel. Pulled in transitively by `picky`
     # (a hard dependency of the vendored `sspi` Kerberos stack). Our GSSAPI
     # path is auth-only over AES keytab keys and performs no RSA private-key
@@ -68,6 +74,8 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
+    # Reviewed humantime removal, pinned in Cargo.toml (upstream #908).
+    "https://github.com/apache/arrow-rs-object-store",
     "https://github.com/testcontainers/testcontainers-rs",
     "https://github.com/tokio-rs/loom",
     # Pinned upstream i18n-config fix for the archived basic-toml parser.

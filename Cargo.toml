@@ -334,6 +334,9 @@ krabka-units = "0.8.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
+# Reviewed duration-parser migration, apache/arrow-rs-object-store#908.
+# Drop this pin when a released object_store includes the humantime removal.
+object_store = { git = "https://github.com/apache/arrow-rs-object-store", rev = "67985f7e58ee8246d9f2771e9f52665f97171869" }
 # Maintenance-only advisory remediation; retain exact reviewed upstream revisions.
 testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs", rev = "dba4383d9bdbaed68d499f6e3ba933a289ba0a4a" }
 loom = { git = "https://github.com/tokio-rs/loom", rev = "acaa24a94cdd7c182e87d1ca05ffcab830cceb60" }
