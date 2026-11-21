@@ -40,9 +40,10 @@ permissions:
 
 # One deployment at a time. A push that lands while one is in flight waits
 # rather than cancelling it, so the site never ends between two versions.
+# Superseded PR verification runs can be cancelled; they never deploy.
 concurrency:
   group: pages-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
@@ -101,7 +102,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: krabka-io/tooling
-          ref: fd30652ceeae95fa7ee8288aa105bce6f109904f
+          ref: cb7e5babd1112ced97bf7231ac9b6f690971ce33
           path: .docs-packaging
           sparse-checkout: actions/upload-rustdoc-pages
           persist-credentials: false
@@ -125,7 +126,7 @@ jobs:
 
       # Check uploaded bytes. External destinations remain unchecked.
       - name: Verify final archive links and assets
-        run: python3 .docs-packaging/actions/upload-rustdoc-pages/archive_links.py "${RUNNER_TEMP}/artifact.tar"
+        run: python3 .docs-packaging/actions/upload-rustdoc-pages/archive_links.py "${RUNNER_TEMP}/artifact.tar" --site-url https://krabka-io.github.io/krabka-broker/
 
   deploy:
     # Only main may publish to production Pages.
