@@ -407,21 +407,18 @@ mod authorize_by_resource_type {
         }
     }
 
-    #[rstest_bdd_macros::given("a WRITE allow ACL for topic {grant}")]
-    fn resource_grant(resource_authorization: &mut ResourceAuthorizationScenario, grant: String) {
-        resource_authorization
-            .image
-            .apply(&MetadataRecord::V1AccessControlEntry(
-                topic_acl().op(AclOperation::Write).name(&grant).call(),
-            ));
-    }
-
-    #[rstest_bdd_macros::given("a WRITE deny ACL with {pattern} topic pattern {name}")]
-    fn resource_denial(
+    #[rstest_bdd_macros::given("a WRITE {permission} ACL with {pattern} topic pattern {name}")]
+    fn resource_acl(
         resource_authorization: &mut ResourceAuthorizationScenario,
+        permission: String,
         pattern: String,
         name: String,
     ) {
+        let permission = match permission.as_str() {
+            "allow" => PermissionType::Allow,
+            "deny" => PermissionType::Deny,
+            _ => panic!("unknown ACL permission {permission}"),
+        };
         let pattern = match pattern.as_str() {
             "literal" => PatternType::Literal,
             "prefixed" => PatternType::Prefixed,
@@ -431,7 +428,7 @@ mod authorize_by_resource_type {
             .image
             .apply(&MetadataRecord::V1AccessControlEntry(
                 topic_acl()
-                    .permission(PermissionType::Deny)
+                    .permission(permission)
                     .op(AclOperation::Write)
                     .pattern(pattern)
                     .name(&name)

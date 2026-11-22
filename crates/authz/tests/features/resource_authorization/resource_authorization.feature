@@ -1,15 +1,56 @@
 Feature: Topic authorization by resource type
-  Scenario Outline: Deny ACLs cover only the granted topic names they match
-    Given a WRITE allow ACL for topic <grant>
-    And a WRITE deny ACL with <pattern> topic pattern <denied_name>
-    When Alice requests WRITE authorization by topic resource type
-    Then topic resource authorization is <decision>
 
-    Examples:
-      | case                                        | grant  | pattern  | denied_name | decision |
-      | a literal deny of the granted name          | orders | literal  | orders      | denied   |
-      | a prefix the granted name starts with       | orders | prefixed | ord         | denied   |
-      | a prefix longer than the granted name       | orders | prefixed | orders-     | allowed  |
-      | a literal deny of one name under a wildcard | *      | literal  | hardcode    | allowed  |
-      | a prefix deny under a wildcard grant        | *      | prefixed | hard        | allowed  |
-      | a literal deny of the wildcard itself       | *      | literal  | *           | denied   |
+  Rule: Topic WRITE authorization requires a grant
+    Scenario: Alice has no topic grants
+      When Alice requests WRITE authorization by topic resource type
+      Then topic resource authorization is denied
+
+    Scenario: One topic grant is sufficient
+      Given a WRITE allow ACL with literal topic pattern orders
+      When Alice requests WRITE authorization by topic resource type
+      Then topic resource authorization is allowed
+
+  Rule: A denial defeats a literal grant only when it covers the granted name
+    Scenario Outline: A literal grant survives unrelated denials
+      Given a WRITE allow ACL with literal topic pattern orders
+      And a WRITE deny ACL with <pattern> topic pattern <denied_name>
+      When Alice requests WRITE authorization by topic resource type
+      Then topic resource authorization is <decision>
+
+      Examples:
+        | case              | pattern  | denied_name | decision |
+        | exact name        | literal  | orders      | denied   |
+        | different name    | literal  | invoices    | allowed  |
+        | containing prefix | prefixed | ord         | denied   |
+        | longer prefix     | prefixed | orders-     | allowed  |
+        | every topic       | literal  | *           | denied   |
+
+  Rule: A denial defeats a prefix grant only when it covers the whole prefix
+    Scenario Outline: A prefix grant survives exclusions of particular topics
+      Given a WRITE allow ACL with prefixed topic pattern orders-
+      And a WRITE deny ACL with <pattern> topic pattern <denied_name>
+      When Alice requests WRITE authorization by topic resource type
+      Then topic resource authorization is <decision>
+
+      Examples:
+        | case                    | pattern  | denied_name     | decision |
+        | equal prefix            | prefixed | orders-         | denied   |
+        | containing prefix       | prefixed | ord             | denied   |
+        | narrower prefix         | prefixed | orders-private- | allowed  |
+        | exact prefix name       | literal  | orders-         | allowed  |
+        | one topic in the prefix | literal  | orders-private  | allowed  |
+        | unrelated prefix        | prefixed | invoices-       | allowed  |
+        | every topic             | literal  | *               | denied   |
+
+  Rule: A wildcard grant is defeated only by a wildcard denial
+    Scenario Outline: A wildcard grant survives exclusions of particular names
+      Given a WRITE allow ACL with literal topic pattern *
+      And a WRITE deny ACL with <pattern> topic pattern <denied_name>
+      When Alice requests WRITE authorization by topic resource type
+      Then topic resource authorization is <decision>
+
+      Examples:
+        | case                       | pattern  | denied_name | decision |
+        | Kafka's initial probe name | literal  | hardcode    | allowed  |
+        | prefix of that probe name  | prefixed | hard        | allowed  |
+        | every topic                | literal  | *           | denied   |
