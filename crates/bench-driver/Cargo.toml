@@ -47,7 +47,7 @@ bon = { workspace = true }
 assert2 = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+jiff = { version = "1.0", default-features = false, features = ["std"] }
 clap = { workspace = true, features = ["env"] }
 krabka-client-admin = { version = "0.8.0" }
 krabka-client-consumer = { version = "0.8.0" }
