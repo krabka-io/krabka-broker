@@ -16,7 +16,7 @@ use {
         scenario::{FailoverSpec, Stack},
     },
     anyhow::{Context, Result, anyhow},
-    chrono::Utc,
+    jiff::Timestamp,
     k8s_openapi::api::core::v1::Pod,
     krabka_client_core::{
         Client as KafkaClient, ClientFrameMax, ConnectionDispatchQueueCapacity,
@@ -204,7 +204,7 @@ where
     };
     let deletion = match delete(client, leader_id).await {
         Ok(pod) => {
-            let at_ms = nonnegative_i64_to_u64(Utc::now().timestamp_millis());
+            let at_ms = nonnegative_i64_to_u64(Timestamp::now().as_millisecond());
             kill_at.store(at_ms, Ordering::SeqCst);
             info!(%pod, "failover: killed broker");
             Ok(KillEvidence { pod, at_ms })
