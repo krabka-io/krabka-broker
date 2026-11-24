@@ -2,11 +2,11 @@
 set -euo pipefail
 
 readonly creusot_release="$(cat /opt/creusot-version)"
-readonly creusot_commit="65349025c67e69fcd7479f1f420fa5904f69bc27"
+readonly creusot_commit="fd4d85b2c237ef93147e99f6a0c04acfc89a6a17"
 readonly creusot_source="/opt/creusot"
 readonly output_tar="$1"
 
-if [[ "${creusot_release}" != "v0.14.0" ]]; then
+if [[ "${creusot_release}" != "v0.15.0" ]]; then
   echo "update the immutable Creusot commit for ${creusot_release}" >&2
   exit 1
 fi
