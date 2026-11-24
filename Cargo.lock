@@ -190,7 +190,32 @@ version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "312c1ea69e5fe9966e0029fb95aca8790100b85aff4f0d3b00a9337c74069a9c"
 dependencies = [
- "apache-avro-derive",
+ "apache-avro-derive 0.22.0",
+ "bigdecimal",
+ "bon",
+ "digest 0.11.3",
+ "log",
+ "miniz_oxide",
+ "num-bigint",
+ "ouroboros",
+ "quad-rand",
+ "rand 0.10.4",
+ "regex-lite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "apache-avro"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99df1cb179dda2bed7b366b43b6a319349e4c0e920e287f09b285f852db6884e"
+dependencies = [
+ "apache-avro-derive 0.23.0",
  "bigdecimal",
  "bon",
  "digest 0.11.3",
@@ -222,6 +247,20 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "uuid",
+]
+
+[[package]]
+name = "apache-avro-derive"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e965c4cafba0c52d33a5cfa423a105b724211763db30b68fd70dee2c3aa8bb3"
+dependencies = [
+ "darling 0.24.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "serde_json",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3862,7 +3901,7 @@ dependencies = [
 name = "krabka-broker"
 version = "1.2.0"
 dependencies = [
- "apache-avro",
+ "apache-avro 0.23.0",
  "arc-swap",
  "assert2",
  "async-trait",
@@ -4687,7 +4726,7 @@ name = "krabka-schema-serde"
 version = "0.4.4"
 source = "git+https://github.com/krabka-io/krabka-schema-registry?rev=672b83b90f44eda68d671b0a303e416f025c8dd2#672b83b90f44eda68d671b0a303e416f025c8dd2"
 dependencies = [
- "apache-avro",
+ "apache-avro 0.22.0",
  "assert2",
  "bytes",
  "jsonschema 0.58.6",
