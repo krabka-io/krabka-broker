@@ -5396,9 +5396,9 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 
 [[package]]
 name = "moxy"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "073f8d41e12e6c5112274624f9549daf81dfaa53d0121a72926a15d352b0e89f"
+checksum = "0c3074cf293f6b769079d5d37a9a0ab789423a0c1ffc53d0f2810843151a0672"
 dependencies = [
  "moxy-ast",
  "moxy-macros",
@@ -5408,24 +5408,24 @@ dependencies = [
 
 [[package]]
 name = "moxy-ast"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef5b94be2331641f6b62c65153d00f28f5ab8e9ae47d3079bb700e420315f7e8"
+checksum = "f65382ae06ed850777a4490f92534371e7880b4df3cdccf102a68424e12f11f7"
 dependencies = [
  "moxy-token",
 ]
 
 [[package]]
 name = "moxy-build"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05bc74b59a92c15c84573b78a44e0032838a9f04ceeeb9e9009ce46532e0ea37"
+checksum = "5c3480d8fe25fc5df65ce49548cae181bae08c0c6aec1edadbca43ff22740d3d"
 
 [[package]]
 name = "moxy-diagnostic"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95dc2fe17890c5c5395f3e6c8e3f94bb479c16d948ad69cbd7f925b3d792f1c"
+checksum = "7b777f79183b86e572bbf25af59be05d5b7ceb6608cf9a53992241218ccc0a6f"
 dependencies = [
  "moxy-ast",
  "moxy-build",
@@ -5434,9 +5434,9 @@ dependencies = [
 
 [[package]]
 name = "moxy-fmt"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "038a1c26db85781a52835c53fd979134c70d60b497e0a9284ff5010d5bf130dc"
+checksum = "3ad5ccb6dc83ef7fd21e7918d88deb5560b8d31eedbd029924d9fef82e7a9c5a"
 dependencies = [
  "moxy-ast",
  "moxy-token",
@@ -5444,9 +5444,9 @@ dependencies = [
 
 [[package]]
 name = "moxy-macros"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "940cc2bf7893ca291da28ab3412a3577bd67df0e98be8c32b371d137528a9e89"
+checksum = "eb99bf9182c5b18d984cf006be80a994f483a22ec24afca905fcc0f381388039"
 dependencies = [
  "moxy-ast",
  "moxy-diagnostic",
@@ -5457,9 +5457,9 @@ dependencies = [
 
 [[package]]
 name = "moxy-template"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f43ec8af3dbfe703fab75372ad6fb557644fddacd1ee9bbb672048fc15689671"
+checksum = "796a45ffc611e9a7aa9450207921f38d7ffc68b633408830abd97e4693e1e0a3"
 dependencies = [
  "moxy-ast",
  "moxy-token",
@@ -5467,9 +5467,9 @@ dependencies = [
 
 [[package]]
 name = "moxy-token"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b27d1e1748e0789f87b2172e52c15278f614ea2bea78857cecc1be29cccdb73"
+checksum = "65f0f501a33d4febfddde1130eebf96367aeb59266cb368cdf6cb14593e39491"
 dependencies = [
  "moxy-build",
  "unicode-ident",
