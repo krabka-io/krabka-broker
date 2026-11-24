@@ -365,13 +365,21 @@ mod tests {
     #[yare::parameterized(
         avro_datum = { ORDER_AVRO, &[0x02, b'a'] },
         avro_trailing_bytes = { ORDER_AVRO, &[0x02, b'a', 0xFF] },
-        avro_truncated = { ORDER_AVRO, &[0x02] },
         avro_unparseable_schema = { "{not avro}", &[0x02, b'a'] },
     )]
     fn avro_without_references_answers_as_the_uncached_check_does(schema: &str, body: &[u8]) {
         let cached = validate_twice(SchemaKind::Avro, schema, body);
         let uncached = validate_body(SchemaKind::Avro, schema, &[], body);
         check!(format!("{cached:?}") == format!("{uncached:?}"));
+    }
+
+    #[test]
+    fn avro_truncated_body_is_rejected() {
+        let result = validate_twice(SchemaKind::Avro, ORDER_AVRO, &[0x02]);
+        check!(
+            matches!(result, Err(SchemaSerdeError::Deserialize(_))),
+            "{result:?}"
+        );
     }
 
     #[yare::parameterized(
