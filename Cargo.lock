@@ -5435,9 +5435,9 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 
 [[package]]
 name = "moxy"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c3074cf293f6b769079d5d37a9a0ab789423a0c1ffc53d0f2810843151a0672"
+checksum = "bef197c76e38fcb7812fc090da3a0ac745f4c7a9067786280febbe1ba86213bf"
 dependencies = [
  "moxy-ast",
  "moxy-macros",
